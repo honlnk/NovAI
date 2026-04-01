@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-mono: "SFMono-Regular", "Menlo", "Monaco", monospace;
+  --color-ink-950: #13212f;
+  --color-ink-700: #546170;
+  --color-ink-500: #788392;
+  --color-clay-600: #a5482c;
+  --color-clay-700: #7d341e;
+  --color-clay-100: rgba(165, 72, 44, 0.1);
+  --color-paper-50: #fcfbf7;
+  --color-paper-100: #fffaf0;
+  --color-paper-200: rgba(255, 252, 245, 0.82);
+  --color-paper-300: rgba(247, 241, 229, 0.88);
+}

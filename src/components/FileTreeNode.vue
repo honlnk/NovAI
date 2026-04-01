@@ -32,7 +32,7 @@ function onSelect(path: string) {
 
     <button
       v-else
-      class="tree-item"
+      class="tree-item text-sm font-medium"
       :class="{ active: node.path === selectedPath }"
       type="button"
       @click="onSelect(node.path)"

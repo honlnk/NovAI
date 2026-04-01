@@ -25,12 +25,12 @@ const embeddingFields = [
 </script>
 
 <template>
-  <main class="page page-settings">
+  <main class="page page-settings text-ink-950">
     <section class="settings-shell">
       <header class="settings-header">
         <div>
           <p class="page-eyebrow">项目设置</p>
-          <h1>先把模型配置和项目默认参数放到稳定位置</h1>
+          <h1 class="max-w-4xl">先把模型配置和项目默认参数放到稳定位置</h1>
           <p>
             当前项目：<strong>{{ currentProjectName }}</strong> · ID：<strong>{{ props.projectId }}</strong>
           </p>
@@ -47,8 +47,12 @@ const embeddingFields = [
             <span class="muted-text">首批表单骨架</span>
           </div>
           <label v-for="field in llmFields" :key="field.label" class="form-field">
-            <span>{{ field.label }}</span>
-            <input type="text" :placeholder="field.placeholder" />
+            <span class="text-sm font-medium">{{ field.label }}</span>
+            <input
+              class="shadow-sm outline-none transition focus:border-clay-600 focus:ring-4 focus:ring-clay-100"
+              type="text"
+              :placeholder="field.placeholder"
+            />
           </label>
           <div class="form-actions">
             <button class="ghost-button" type="button">测试连接</button>
@@ -62,8 +66,12 @@ const embeddingFields = [
             <span class="muted-text">首批表单骨架</span>
           </div>
           <label v-for="field in embeddingFields" :key="field.label" class="form-field">
-            <span>{{ field.label }}</span>
-            <input type="text" :placeholder="field.placeholder" />
+            <span class="text-sm font-medium">{{ field.label }}</span>
+            <input
+              class="shadow-sm outline-none transition focus:border-clay-600 focus:ring-4 focus:ring-clay-100"
+              type="text"
+              :placeholder="field.placeholder"
+            />
           </label>
           <div class="form-actions">
             <button class="ghost-button" type="button">测试连接</button>
