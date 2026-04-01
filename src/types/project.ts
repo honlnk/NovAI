@@ -1,0 +1,69 @@
+export type ProjectSummary = {
+  id: string
+  name: string
+  updatedAt: string
+  chapterCount: number
+  wordCount: number
+}
+
+export type RecentProject = ProjectSummary
+
+export type TreeNode = {
+  name: string
+  path: string
+  kind: 'file' | 'directory'
+  children?: TreeNode[]
+}
+
+export type ProjectConfig = {
+  version: number
+  project: {
+    name: string
+    createdAt: string
+    updatedAt: string
+  }
+  llm: {
+    baseUrl: string
+    apiKey: string
+    model: string
+  }
+  embedding: {
+    baseUrl: string
+    apiKey: string
+    model: string
+  }
+  settings: {
+    generationRecentChapters: number
+    ragCandidateLimit: number
+    proofreadDefaultChapters: number
+    organizeDefaultChapters: number
+    conversationTokenLimit: number
+    compressionKeepRecentTurns: number
+  }
+}
+
+export type ProjectManifest = {
+  version: number
+  projectId: string
+  createdAt: string
+  lastOpenedAt: string
+}
+
+export type ProjectSnapshot = {
+  id: string
+  name: string
+  rootName: string
+  handle: FileSystemDirectoryHandle
+  config: ProjectConfig
+  manifest: ProjectManifest
+  tree: TreeNode[]
+  metadata: RecentProject
+}
+
+export type ProjectFileContent = {
+  path: string
+  name: string
+  content: string
+  format: 'markdown' | 'json' | 'text'
+  updatedAt: string
+}

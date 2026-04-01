@@ -1,0 +1,30 @@
+{
+  "name": "novai",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.21.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "commitlint": "commitlint --edit",
+    "prepare": "husky",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "pinia": "^3.0.4",
+    "vue": "^3.5.13",
+    "vue-router": "^5.0.4"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.5.0",
+    "@commitlint/config-conventional": "^20.5.0",
+    "commitlint-plugin-function-rules": "^4.3.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "husky": "^9.1.7",
+    "typescript": "^6.0.2",
+    "vite": "^6.2.0",
+    "vue-tsc": "^3.2.6"
+  }
+}
