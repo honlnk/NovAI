@@ -4,17 +4,20 @@ import { computed, reactive, ref } from 'vue'
 import { testEmbeddingConnection } from '../core/embedding/client'
 import {
   createProject,
+  findFirstReadableFile,
   inspectProject,
   isFileSystemAccessSupported,
   pickProjectDirectory,
+  readProjectFile,
   readSystemPrompt,
   repairProject,
+  rescanProject,
   writeChapterFile,
   writeProjectConfig,
   writeSystemPrompt,
 } from '../core/fs/project-fs'
 import { testLlmConnection, streamChatCompletion } from '../core/llm/client'
-import type { ProjectConfig, ProjectInspection, ProjectSnapshot } from '../types/project'
+import type { ProjectConfig, ProjectFileContent, ProjectInspection, ProjectSnapshot, TreeNode } from '../types/project'
 
 const projectName = ref('我的测试小说')
 const currentProject = ref<ProjectSnapshot | null>(null)
@@ -30,6 +33,7 @@ const instruction = ref('写一段测试内容：主角深夜走进废弃藏书�
 const chapterFileName = ref('chapter-test.md')
 const result = ref('')
 const lastSavedChapterPath = ref('')
+const activeFile = ref<ProjectFileContent | null>(null)
 
 const configDraft = reactive<ProjectConfig>({
   version: 1,
@@ -61,6 +65,8 @@ const configDraft = reactive<ProjectConfig>({
 const canRepair = computed(() => pendingHandle.value && inspection.value && !inspection.value.canLoad)
 const projectLabel = computed(() => currentProject.value?.rootName ?? inspection.value?.rootName ?? '未选择项目')
 const configPreview = computed(() => JSON.stringify(configDraft, null, 2))
+const readableFiles = computed(() => flattenReadableFiles(currentProject.value?.tree ?? []))
+const groupedReadableFiles = computed(() => groupReadableFiles(readableFiles.value))
 
 function applyConfigDraft(config: ProjectConfig) {
   configDraft.version = config.version
@@ -225,6 +231,7 @@ async function onSaveChapter() {
     lastSavedChapterPath.value = `chapters/${savedName}`
     chapterFileName.value = savedName
     generationStatus.value = `已保存章节：${savedName}`
+    await refreshProjectFiles(`chapters/${savedName}`)
   }, '保存章节失败')
 }
 
@@ -234,7 +241,54 @@ async function activateProject(snapshot: ProjectSnapshot, message: string) {
   inspection.value = await inspectProject(snapshot.handle)
   applyConfigDraft(snapshot.config)
   systemPrompt.value = await readSystemPrompt(snapshot.handle)
+  await openInitialFile(snapshot)
   status.value = message
+}
+
+async function onOpenFile(path: string) {
+  if (!currentProject.value) {
+    status.value = '请先创建或打开项目'
+    return
+  }
+
+  await runTask(async () => {
+    activeFile.value = await readProjectFile(currentProject.value!, path)
+    status.value = `已打开文件：${path}`
+  }, '读取文件失败')
+}
+
+async function refreshProjectFiles(preferredPath?: string) {
+  if (!currentProject.value) {
+    return
+  }
+
+  const nextTree = await rescanProject(currentProject.value)
+  currentProject.value = {
+    ...currentProject.value,
+    tree: nextTree,
+  }
+
+  const nextPath =
+    preferredPath ||
+    activeFile.value?.path ||
+    findFirstReadableFile(nextTree)
+
+  if (nextPath) {
+    activeFile.value = await readProjectFile(currentProject.value, nextPath)
+  } else {
+    activeFile.value = null
+  }
+}
+
+async function openInitialFile(snapshot: ProjectSnapshot) {
+  const firstReadablePath = findFirstReadableFile(snapshot.tree)
+
+  if (!firstReadablePath) {
+    activeFile.value = null
+    return
+  }
+
+  activeFile.value = await readProjectFile(snapshot, firstReadablePath)
 }
 
 async function runTask(action: () => Promise<void>, fallback: string) {
@@ -252,6 +306,51 @@ async function runTask(action: () => Promise<void>, fallback: string) {
   } finally {
     isBusy.value = false
   }
+}
+
+function flattenReadableFiles(tree: TreeNode[]) {
+  const files: Array<{ path: string; name: string }> = []
+  const stack = [...tree]
+
+  while (stack.length > 0) {
+    const node = stack.shift()
+
+    if (!node) {
+      continue
+    }
+
+    if (node.kind === 'file' && /\.(md|json|txt)$/i.test(node.name)) {
+      files.push({
+        path: node.path,
+        name: node.name,
+      })
+      continue
+    }
+
+    if (node.children?.length) {
+      stack.unshift(...node.children)
+    }
+  }
+
+  return files
+}
+
+function groupReadableFiles(files: Array<{ path: string; name: string }>) {
+  const groups = new Map<string, Array<{ path: string; name: string }>>()
+
+  for (const file of files) {
+    const groupName = file.path.includes('/') ? file.path.split('/')[0] : 'root'
+    const group = groups.get(groupName) ?? []
+    group.push(file)
+    groups.set(groupName, group)
+  }
+
+  return Array.from(groups.entries())
+    .map(([groupName, items]) => ({
+      groupName,
+      items: items.sort((left, right) => left.path.localeCompare(right.path, 'zh-Hans-CN')),
+    }))
+    .sort((left, right) => left.groupName.localeCompare(right.groupName, 'zh-Hans-CN'))
 }
 </script>
 
@@ -336,6 +435,11 @@ async function runTask(action: () => Promise<void>, fallback: string) {
     </section>
 
     <section>
+      <h2>Result</h2>
+      <pre>{{ result || '还没有结果' }}</pre>
+    </section>
+
+    <section>
       <h2>章节写入</h2>
       <label>
         <span>章节文件名</span>
@@ -346,8 +450,30 @@ async function runTask(action: () => Promise<void>, fallback: string) {
     </section>
 
     <section>
-      <h2>Result</h2>
-      <pre>{{ result || '还没有结果' }}</pre>
+      <h2>项目文档</h2>
+      <p>{{ readableFiles.length > 0 ? `共加载 ${readableFiles.length} 个可预览文件` : '当前项目还没有可预览文件' }}</p>
+      <div v-if="readableFiles.length > 0">
+        <div v-for="group in groupedReadableFiles" :key="group.groupName">
+          <h3>{{ group.groupName }}</h3>
+          <div>
+            <button
+              v-for="file in group.items"
+              :key="file.path"
+              type="button"
+              @click="onOpenFile(file.path)"
+            >
+              {{ file.name }} ({{ file.path }})
+            </button>
+          </div>
+        </div>
+      </div>
     </section>
+
+    <section>
+      <h2>文件预览</h2>
+      <p>{{ activeFile ? activeFile.path : '还没有打开文件' }}</p>
+      <pre>{{ activeFile ? activeFile.content : '当前没有可预览的文件内容' }}</pre>
+    </section>
+
   </main>
 </template>
