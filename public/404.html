@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redirecting...</title>
+    <script>
+      (() => {
+        const redirectTarget = `${window.location.origin}/?p=${encodeURIComponent(
+          window.location.pathname + window.location.search + window.location.hash,
+        )}`
+
+        window.location.replace(redirectTarget)
+      })()
+    </script>
+  </head>
+  <body></body>
+</html>
