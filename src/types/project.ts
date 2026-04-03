@@ -49,6 +49,23 @@ export type ProjectManifest = {
   lastOpenedAt: string
 }
 
+export type ProjectIssue =
+  | 'missing-config'
+  | 'invalid-config'
+  | 'missing-manifest'
+  | 'invalid-manifest'
+  | 'missing-prompts-system'
+  | 'missing-prompts-scenes'
+  | 'missing-chapters'
+  | 'missing-elements'
+  | 'missing-internal-directory'
+
+export type ProjectInspection = {
+  rootName: string
+  issues: ProjectIssue[]
+  canLoad: boolean
+}
+
 export type ProjectSnapshot = {
   id: string
   name: string
