@@ -236,6 +236,7 @@ async function onSaveChapter() {
 }
 
 async function activateProject(snapshot: ProjectSnapshot, message: string) {
+  // 项目一旦激活，就把测试页需要的状态一次性同步过来，避免每块区域各自再读一遍文件。
   currentProject.value = snapshot
   pendingHandle.value = snapshot.handle
   inspection.value = await inspectProject(snapshot.handle)
@@ -274,6 +275,7 @@ async function refreshProjectFiles(preferredPath?: string) {
     findFirstReadableFile(nextTree)
 
   if (nextPath) {
+    // 保存章节后优先打开新文件；否则尽量维持当前预览文件不跳走。
     activeFile.value = await readProjectFile(currentProject.value, nextPath)
   } else {
     activeFile.value = null
@@ -339,6 +341,7 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
   const groups = new Map<string, Array<{ path: string; name: string }>>()
 
   for (const file of files) {
+    // 测试页只做最粗粒度分组，按顶层目录展示就足够定位文件来源。
     const groupName = file.path.includes('/') ? file.path.split('/')[0] : 'root'
     const group = groups.get(groupName) ?? []
     group.push(file)

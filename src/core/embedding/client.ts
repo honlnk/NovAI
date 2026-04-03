@@ -2,6 +2,10 @@ import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonRespo
 
 import type { ModelConnectionInput, ModelConnectionResult } from '../../types/ai'
 
+/**
+ * 使用 OpenAI 兼容的 `/models` 接口测试 Embedding 配置是否可用。
+ * 第一版先只验证“服务可达 + 鉴权通过”，不引入真实向量请求。
+ */
 export async function testEmbeddingConnection(
   input: Omit<ModelConnectionInput, 'kind'>,
 ): Promise<ModelConnectionResult> {
@@ -15,6 +19,7 @@ export async function testEmbeddingConnection(
   }
 
   try {
+    // 测试连接先走最轻量的 models 接口，避免第一版就被具体 embedding 输入格式卡住。
     const response = await fetch(`${baseUrl}/models`, {
       method: 'GET',
       headers: createJsonHeaders(input.apiKey),

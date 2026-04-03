@@ -7,6 +7,10 @@ import type {
   ModelConnectionResult,
 } from '../../types/ai'
 
+/**
+ * 使用 OpenAI 兼容的 `/models` 接口测试 LLM 配置是否可用。
+ * 返回值已经整理成适合直接展示给用户的结果结构。
+ */
 export async function testLlmConnection(
   input: Omit<ModelConnectionInput, 'kind'>,
 ): Promise<ModelConnectionResult> {
@@ -45,6 +49,10 @@ export async function testLlmConnection(
   }
 }
 
+/**
+ * 发起一次最小化的流式对话生成，并把底层 SSE 数据适配成统一事件流。
+ * 调用方只需要监听 `start / delta / finish / error`，无需关心原始 chunk 格式。
+ */
 export async function streamChatCompletion(
   input: LlmStreamInput,
   onEvent: (event: LlmStreamEvent) => void,
@@ -111,6 +119,7 @@ export async function streamChatCompletion(
     }
 
     buffer += decoder.decode(value, { stream: true })
+    // OpenAI 兼容流通常以空行分隔事件，这里先按事件块切开，再逐行解析 data。
     const chunks = buffer.split('\n\n')
     buffer = chunks.pop() ?? ''
 
@@ -175,6 +184,7 @@ function extractDeltaText(payload: unknown) {
       }
 
       if (Array.isArray(content)) {
+        // 一些兼容实现会把内容拆成富文本片段数组，这里只抽取 text 片段并拼回纯文本。
         return content
           .map((item) => {
             if (
