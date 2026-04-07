@@ -6,13 +6,35 @@ export function normalizeBaseUrl(baseUrl: string) {
 }
 
 /**
+ * 开发环境通过 Vite 代理转发第三方模型请求，避免浏览器直连时的 CORS 限制。
+ */
+export function resolveApiUrl(baseUrl: string, path: string) {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+
+  if (shouldUseDevProxy(normalizedBaseUrl)) {
+    return `/api-proxy${normalizedPath}`
+  }
+
+  return `${normalizedBaseUrl}${normalizedPath}`
+}
+
+/**
  * 创建默认的 JSON 请求头，并附带 Bearer 鉴权。
  */
-export function createJsonHeaders(apiKey: string) {
-  return {
+export function createJsonHeaders(apiKey: string, baseUrl?: string) {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey.trim()}`,
   }
+
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl ?? '')
+
+  if (shouldUseDevProxy(normalizedBaseUrl)) {
+    headers['x-target-base'] = normalizedBaseUrl
+  }
+
+  return headers
 }
 
 /**
@@ -53,4 +75,12 @@ export function extractErrorMessage(payload: unknown, fallback: string) {
   }
 
   return fallback
+}
+
+function shouldUseDevProxy(baseUrl: string) {
+  if (!baseUrl) {
+    return false
+  }
+
+  return typeof window !== 'undefined' && import.meta.env.DEV
 }

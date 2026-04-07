@@ -32,13 +32,24 @@ export type ProjectConfig = {
     apiKey: string
     model: string
   }
+  rerank: {
+    enabled: boolean
+    baseUrl: string
+    apiKey: string
+    model: string
+    mode: 'text' | 'multimodal'
+    topN: number
+  }
   settings: {
     generationRecentChapters: number
     ragCandidateLimit: number
+    ragContextMaxItems: number
     proofreadDefaultChapters: number
     organizeDefaultChapters: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
+    embeddingTextVersion: number
+    enableBackgroundIndexing: boolean
   }
 }
 

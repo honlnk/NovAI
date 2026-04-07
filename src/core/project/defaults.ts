@@ -23,13 +23,24 @@ export const DEFAULT_CONFIG = {
     apiKey: '',
     model: '',
   },
+  rerank: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+    mode: 'text',
+    topN: 8,
+  },
   settings: {
     generationRecentChapters: 3,
     ragCandidateLimit: 20,
+    ragContextMaxItems: 8,
     proofreadDefaultChapters: 3,
     organizeDefaultChapters: 10,
     conversationTokenLimit: 12000,
     compressionKeepRecentTurns: 5,
+    embeddingTextVersion: 1,
+    enableBackgroundIndexing: true,
   },
 } as const
 

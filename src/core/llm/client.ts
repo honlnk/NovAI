@@ -1,4 +1,4 @@
-import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse } from '../ai/shared'
+import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse, resolveApiUrl } from '../ai/shared'
 
 import type {
   LlmStreamEvent,
@@ -26,7 +26,7 @@ export async function testLlmConnection(
   try {
     const response = await fetch(`${baseUrl}/models`, {
       method: 'GET',
-      headers: createJsonHeaders(input.apiKey),
+      headers: createJsonHeaders(input.apiKey, baseUrl),
     })
 
     if (!response.ok) {
@@ -79,9 +79,9 @@ export async function streamChatCompletion(
     content: input.instruction.trim(),
   })
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch(resolveApiUrl(baseUrl, '/chat/completions'), {
     method: 'POST',
-    headers: createJsonHeaders(input.apiKey),
+    headers: createJsonHeaders(input.apiKey, baseUrl),
     body: JSON.stringify({
       model: input.model.trim(),
       stream: true,

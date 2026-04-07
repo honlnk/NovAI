@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
+import { testRerankConnection } from '../core/ai/rerank-client'
 import { testEmbeddingConnection } from '../core/embedding/client'
+import { extractElementsFromChapter } from '../core/elements/extractor'
 import {
   createProject,
   findFirstReadableFile,
@@ -16,8 +18,15 @@ import {
   writeProjectConfig,
   writeSystemPrompt,
 } from '../core/fs/project-fs'
+import { buildGenerationContextDraft, selectFinalContextItems } from '../core/rag/context'
+import { explainRetrievalCandidates } from '../core/rag/explain'
+import { buildProjectIndex, getProjectIndexMeta } from '../core/rag/indexer'
+import { rerankRetrievalCandidates } from '../core/rag/rerank'
+import { searchRagCandidates } from '../core/rag/search'
 import { testLlmConnection, streamChatCompletion } from '../core/llm/client'
+import type { ElementExtractionResult } from '../types/elements'
 import type { ProjectConfig, ProjectFileContent, ProjectInspection, ProjectSnapshot, TreeNode } from '../types/project'
+import type { GenerationContextDraft, ProjectIndexMeta, RetrievalExplanation } from '../types/rag'
 
 const projectName = ref('我的测试小说')
 const currentProject = ref<ProjectSnapshot | null>(null)
@@ -34,6 +43,14 @@ const chapterFileName = ref('chapter-test.md')
 const result = ref('')
 const lastSavedChapterPath = ref('')
 const activeFile = ref<ProjectFileContent | null>(null)
+const rerankStatus = ref('还没有测试 Rerank 连接。')
+const indexStatusMessage = ref('还没有读取索引状态。')
+const ragStatus = ref('还没有执行 RAG 调试流程。')
+const extractionStatus = ref('还没有执行要素提取预览。')
+const projectIndexMeta = ref<ProjectIndexMeta | null>(null)
+const ragDraft = ref<GenerationContextDraft | null>(null)
+const retrievalExplanations = ref<RetrievalExplanation[]>([])
+const extractionPreview = ref<ElementExtractionResult | null>(null)
 
 const configDraft = reactive<ProjectConfig>({
   version: 1,
@@ -52,13 +69,24 @@ const configDraft = reactive<ProjectConfig>({
     apiKey: '',
     model: '',
   },
+  rerank: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+    mode: 'text',
+    topN: 8,
+  },
   settings: {
     generationRecentChapters: 3,
     ragCandidateLimit: 20,
+    ragContextMaxItems: 8,
     proofreadDefaultChapters: 3,
     organizeDefaultChapters: 10,
     conversationTokenLimit: 12000,
     compressionKeepRecentTurns: 5,
+    embeddingTextVersion: 1,
+    enableBackgroundIndexing: true,
   },
 })
 
@@ -67,12 +95,17 @@ const projectLabel = computed(() => currentProject.value?.rootName ?? inspection
 const configPreview = computed(() => JSON.stringify(configDraft, null, 2))
 const readableFiles = computed(() => flattenReadableFiles(currentProject.value?.tree ?? []))
 const groupedReadableFiles = computed(() => groupReadableFiles(readableFiles.value))
+const indexMetaPreview = computed(() => JSON.stringify(projectIndexMeta.value, null, 2))
+const ragDraftPreview = computed(() => JSON.stringify(ragDraft.value, null, 2))
+const extractionPreviewText = computed(() => JSON.stringify(extractionPreview.value, null, 2))
+const retrievalExplanationPreview = computed(() => JSON.stringify(retrievalExplanations.value, null, 2))
 
 function applyConfigDraft(config: ProjectConfig) {
   configDraft.version = config.version
   configDraft.project = { ...config.project }
   configDraft.llm = { ...config.llm }
   configDraft.embedding = { ...config.embedding }
+  configDraft.rerank = { ...config.rerank }
   configDraft.settings = { ...config.settings }
 }
 
@@ -129,6 +162,7 @@ async function onSaveConfig() {
       },
       llm: { ...configDraft.llm },
       embedding: { ...configDraft.embedding },
+      rerank: { ...configDraft.rerank },
       settings: { ...configDraft.settings },
     })
 
@@ -172,6 +206,16 @@ async function onTestEmbedding() {
     model: configDraft.embedding.model,
   })
   connectionStatus.value = checked.message
+}
+
+async function onTestRerank() {
+  rerankStatus.value = '正在测试 Rerank 连接...'
+  const checked = await testRerankConnection({
+    baseUrl: configDraft.rerank.baseUrl,
+    apiKey: configDraft.rerank.apiKey,
+    model: configDraft.rerank.model,
+  })
+  rerankStatus.value = checked.message
 }
 
 async function onGenerate() {
@@ -233,6 +277,109 @@ async function onSaveChapter() {
     generationStatus.value = `已保存章节：${savedName}`
     await refreshProjectFiles(`chapters/${savedName}`)
   }, '保存章节失败')
+}
+
+async function onInspectIndexMeta() {
+  if (!currentProject.value) {
+    indexStatusMessage.value = '请先创建或打开项目'
+    return
+  }
+
+  await runTask(async () => {
+    projectIndexMeta.value = await getProjectIndexMeta(currentProject.value!.id)
+    indexStatusMessage.value = projectIndexMeta.value
+      ? `已读取索引状态：${projectIndexMeta.value.status}`
+      : '当前项目还没有索引元信息'
+  }, '读取索引状态失败')
+}
+
+async function onBuildIndexSkeleton() {
+  if (!currentProject.value) {
+    indexStatusMessage.value = '请先创建或打开项目'
+    return
+  }
+
+  await runTask(async () => {
+    const built = await buildProjectIndex(currentProject.value!, {
+      projectId: currentProject.value!.id,
+      reason: 'manual-rebuild',
+    })
+    projectIndexMeta.value = await getProjectIndexMeta(currentProject.value!.id)
+    indexStatusMessage.value = built.message
+  }, '触发索引构建失败')
+}
+
+async function onRunRagDemo() {
+  if (!currentProject.value) {
+    ragStatus.value = '请先创建或打开项目'
+    return
+  }
+
+  await runTask(async () => {
+    ragStatus.value = '正在执行 RAG 调试流程...'
+
+    const retrieval = await searchRagCandidates({
+      projectId: currentProject.value!.id,
+      query: instruction.value.trim(),
+      topK: configDraft.settings.ragCandidateLimit,
+    }, configDraft)
+
+    const reranked = await rerankRetrievalCandidates(
+      configDraft,
+      instruction.value.trim(),
+      retrieval.candidates,
+    )
+
+    const finalItems = selectFinalContextItems(
+      reranked,
+      configDraft.settings.ragContextMaxItems,
+    )
+
+    ragDraft.value = buildGenerationContextDraft({
+      query: instruction.value.trim(),
+      retrievedCandidates: retrieval.candidates,
+      rerankedCandidates: reranked,
+      finalContextItems: finalItems,
+    })
+
+    retrievalExplanations.value = [
+      ...explainRetrievalCandidates(retrieval.candidates, 'recall'),
+      ...explainRetrievalCandidates(reranked, 'rerank'),
+      ...explainRetrievalCandidates(finalItems, 'final-context'),
+    ]
+
+    ragStatus.value = retrieval.candidates.length > 0
+      ? `RAG 调试完成，当前召回 ${retrieval.candidates.length} 条候选`
+      : 'RAG 调试完成：当前索引为空，暂时没有可召回候选'
+  }, '执行 RAG 调试失败')
+}
+
+async function onPreviewElementExtraction() {
+  const chapterMarkdown = result.value.trim() || activeFile.value?.content || ''
+
+  if (!chapterMarkdown) {
+    extractionStatus.value = '请先生成章节结果，或先打开一个可预览文件'
+    return
+  }
+
+  await runTask(async () => {
+    extractionPreview.value = await extractElementsFromChapter({
+      chapterMarkdown,
+      chapterPath: activeFile.value?.path || lastSavedChapterPath.value || '',
+      systemPrompt: systemPrompt.value,
+    })
+
+    const total =
+      extractionPreview.value.characters.length +
+      extractionPreview.value.locations.length +
+      extractionPreview.value.timeline.length +
+      extractionPreview.value.plots.length +
+      extractionPreview.value.worldbuilding.length
+
+    extractionStatus.value = total > 0
+      ? `要素提取预览完成，共得到 ${total} 条候选`
+      : '要素提取预览完成：当前仍是占位结果'
+  }, '执行要素提取预览失败')
 }
 
 async function activateProject(snapshot: ProjectSnapshot, message: string) {
@@ -409,6 +556,45 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
         <span>Embedding 模型</span>
         <input v-model="configDraft.embedding.model" type="text" style="width: 100%" />
       </label>
+      <label>
+        <span>Rerank 启用</span>
+        <input v-model="configDraft.rerank.enabled" type="checkbox" />
+      </label>
+      <label>
+        <span>Rerank API 地址</span>
+        <input v-model="configDraft.rerank.baseUrl" type="text" style="width: 100%" />
+      </label>
+      <label>
+        <span>Rerank API Key</span>
+        <input v-model="configDraft.rerank.apiKey" type="text" style="width: 100%" />
+      </label>
+      <label>
+        <span>Rerank 模型</span>
+        <input v-model="configDraft.rerank.model" type="text" style="width: 100%" />
+      </label>
+      <label>
+        <span>Rerank 模式</span>
+        <select v-model="configDraft.rerank.mode" style="width: 100%">
+          <option value="text">text</option>
+          <option value="multimodal">multimodal</option>
+        </select>
+      </label>
+      <label>
+        <span>Rerank TopN</span>
+        <input v-model.number="configDraft.rerank.topN" type="number" min="1" style="width: 100%" />
+      </label>
+      <label>
+        <span>RAG 最终上下文条数</span>
+        <input v-model.number="configDraft.settings.ragContextMaxItems" type="number" min="1" style="width: 100%" />
+      </label>
+      <label>
+        <span>Embedding 模板版本</span>
+        <input v-model.number="configDraft.settings.embeddingTextVersion" type="number" min="1" style="width: 100%" />
+      </label>
+      <label>
+        <span>后台索引更新</span>
+        <input v-model="configDraft.settings.enableBackgroundIndexing" type="checkbox" />
+      </label>
       <button type="button" :disabled="isBusy || !currentProject" @click="onSaveConfig">保存配置</button>
       <pre>{{ configPreview }}</pre>
     </section>
@@ -416,8 +602,10 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
     <section>
       <h2>连接测试</h2>
       <p>{{ connectionStatus }}</p>
+      <p>{{ rerankStatus }}</p>
       <button type="button" @click="onTestLlm">测试 LLM</button>
       <button type="button" @click="onTestEmbedding">测试 Embedding</button>
+      <button type="button" @click="onTestRerank">测试 Rerank</button>
     </section>
 
     <section>
@@ -450,6 +638,31 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
       </label>
       <button type="button" :disabled="isBusy || !currentProject || isStreaming" @click="onSaveChapter">保存到 chapters</button>
       <p>{{ lastSavedChapterPath || '还没有保存章节文件' }}</p>
+    </section>
+
+    <section>
+      <h2>索引状态</h2>
+      <p>{{ indexStatusMessage }}</p>
+      <button type="button" :disabled="isBusy || !currentProject" @click="onInspectIndexMeta">读取索引状态</button>
+      <button type="button" :disabled="isBusy || !currentProject" @click="onBuildIndexSkeleton">触发索引构建</button>
+      <pre>{{ indexMetaPreview || '还没有索引状态数据' }}</pre>
+    </section>
+
+    <section>
+      <h2>RAG 调试</h2>
+      <p>{{ ragStatus }}</p>
+      <button type="button" :disabled="isBusy || !currentProject" @click="onRunRagDemo">执行 RAG 调试</button>
+      <h3>上下文草稿</h3>
+      <pre>{{ ragDraftPreview || '还没有 RAG 草稿数据' }}</pre>
+      <h3>命中解释</h3>
+      <pre>{{ retrievalExplanationPreview || '还没有命中解释数据' }}</pre>
+    </section>
+
+    <section>
+      <h2>要素提取预览</h2>
+      <p>{{ extractionStatus }}</p>
+      <button type="button" :disabled="isBusy" @click="onPreviewElementExtraction">执行要素提取预览</button>
+      <pre>{{ extractionPreviewText || '还没有要素提取结果' }}</pre>
     </section>
 
     <section>
