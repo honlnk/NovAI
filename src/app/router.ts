@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import SessionTestView from '../views/SessionTestView.vue'
 import TestLabView from '../views/TestLabView.vue'
 
 export const router = createRouter({
@@ -13,6 +14,11 @@ export const router = createRouter({
       path: '/test',
       name: 'test',
       component: TestLabView,
+    },
+    {
+      path: '/session-test',
+      name: 'session-test',
+      component: SessionTestView,
     },
   ],
 })
