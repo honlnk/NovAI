@@ -32,13 +32,24 @@ export type ProjectConfig = {
     apiKey: string
     model: string
   }
+  rerank: {
+    enabled: boolean
+    baseUrl: string
+    apiKey: string
+    model: string
+    mode: 'text' | 'multimodal'
+    topN: number
+  }
   settings: {
     generationRecentChapters: number
     ragCandidateLimit: number
+    ragContextMaxItems: number
     proofreadDefaultChapters: number
     organizeDefaultChapters: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
+    embeddingTextVersion: number
+    enableBackgroundIndexing: boolean
   }
 }
 
@@ -47,6 +58,23 @@ export type ProjectManifest = {
   projectId: string
   createdAt: string
   lastOpenedAt: string
+}
+
+export type ProjectIssue =
+  | 'missing-config'
+  | 'invalid-config'
+  | 'missing-manifest'
+  | 'invalid-manifest'
+  | 'missing-prompts-system'
+  | 'missing-prompts-scenes'
+  | 'missing-chapters'
+  | 'missing-elements'
+  | 'missing-internal-directory'
+
+export type ProjectInspection = {
+  rootName: string
+  issues: ProjectIssue[]
+  canLoad: boolean
 }
 
 export type ProjectSnapshot = {
