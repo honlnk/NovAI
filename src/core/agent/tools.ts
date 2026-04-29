@@ -3,6 +3,7 @@ import {
   editFileTool,
   readFileTool,
 } from '../tools/file-tools'
+import { listDirectoryTool } from '../tools/directory-tools'
 
 import type {
   AgentToolName,
@@ -13,6 +14,7 @@ import type {
   CreateFileOutput,
   EditFileInput,
   EditFileOutput,
+  ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
   ToolDefinition,
@@ -142,9 +144,48 @@ export function createAgentTools(): AgentRunnableToolMap {
         return createFileTool.summarizeOutput(output)
       },
     },
+    ListDirectory: {
+      name: 'ListDirectory',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ListDirectory',
+          description: '查看当前小说项目中某个目录的直接文件结构；不读取文件内容。',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: '可选，项目内目录相对路径；不传则查看项目根目录。',
+              },
+              showHidden: {
+                type: 'boolean',
+                description: '是否显示以 . 开头的隐藏文件或目录。默认 false。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: listDirectoryTool,
+      formatResult(output: ListDirectoryOutput) {
+        const lines = output.entries.map((entry) => {
+          const marker = entry.kind === 'directory' ? '[dir]' : '[file]'
+          return `${marker} ${entry.path}`
+        })
+
+        return [
+          listDirectoryTool.summarizeOutput(output),
+          '',
+          lines.join('\n') || '目录为空',
+        ].join('\n')
+      },
+    },
   }
 }
 
 export function isAgentToolName(value: string): value is AgentToolName {
-  return value === 'ReadFile' || value === 'EditFile' || value === 'CreateFile'
+  return value === 'ReadFile' || value === 'EditFile' || value === 'CreateFile' || value === 'ListDirectory'
 }
