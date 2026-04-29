@@ -12,7 +12,9 @@ import {
   repairProject,
   rescanProject,
 } from '../core/fs/project-fs'
-import { runChatTurn } from '../core/chat/session'
+import {
+  runChatTurn,
+} from '../core/chat/session'
 import { useChatStore } from '../stores/chat'
 
 import type { ProjectConfig, ProjectFileContent, ProjectInspection, ProjectSnapshot, TreeNode } from '../types/project'
@@ -87,6 +89,13 @@ const errorMessages = computed(() =>
 )
 const contextMessages = computed(() =>
   (chatStore.session?.messages ?? []).filter((message) => message.kind === 'context-summary'),
+)
+const agentMessageCount = computed(() => chatStore.session?.agentMessages?.length ?? 0)
+const toolCallCount = computed(() =>
+  (chatStore.session?.messages ?? []).filter((message) => message.kind === 'tool-call').length,
+)
+const toolResultCount = computed(() =>
+  (chatStore.session?.messages ?? []).filter((message) => message.kind === 'tool-result').length,
 )
 
 async function onCreateProject() {
@@ -353,18 +362,19 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
                 <textarea v-model="instruction" rows="6" cols="60" />
               </label>
               <div>
-                <button :disabled="isBusy" @click="onRunTurn">运行一轮</button>
+                <button :disabled="isBusy" @click="onRunTurn">发送给 Agent</button>
               </div>
             </div>
           </td>
 
           <td width="30%" valign="top">
-            <h2>本轮状态</h2>
+            <h2>Agent 状态</h2>
             <p>默认目标：{{ currentTargetLabel }}</p>
             <p>会话状态：{{ chatStore.session?.status ?? 'idle' }}</p>
-            <p>任务类型：{{ chatStore.session?.lastTaskType ?? '未判定' }}</p>
+            <p>Agent 消息：{{ agentMessageCount }}</p>
+            <p>工具调用：{{ toolCallCount }}</p>
+            <p>工具结果：{{ toolResultCount }}</p>
             <p>最近写回：{{ chatStore.session?.lastWrittenPath ?? '暂无' }}</p>
-            <p>RAG 候选：{{ chatStore.session?.lastRagResult?.total ?? 0 }}</p>
 
             <h3>上下文摘要</h3>
             <div v-if="contextMessages.length === 0">
@@ -401,8 +411,8 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
               </li>
             </ul>
 
-            <h3>当前草稿</h3>
-            <pre>{{ chatStore.session?.currentDraftText || '本轮还没有生成内容' }}</pre>
+            <h3>模型流式输出</h3>
+            <pre>{{ chatStore.session?.currentDraftText || '本轮还没有模型输出' }}</pre>
 
             <h3>当前文件预览</h3>
             <pre>{{ activeFile?.content || '请先打开一个文件' }}</pre>

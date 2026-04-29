@@ -1,7 +1,8 @@
 import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
+import type { AgentMessage } from '../core/agent/messages'
 
-export type ChatToolName = 'FileRead' | 'FileWrite' | 'FileEdit' | 'Bash' | 'RagSearch'
+export type ChatToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'Bash' | 'RagSearch'
 
 export type UserTextMessage = {
   id: string
@@ -82,16 +83,35 @@ export type ChatTargetContext = {
   derivedFrom: 'preview' | 'selection' | 'explicit-user-intent'
 }
 
-export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'error'
+export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
+
+export type PendingFileChange =
+  | {
+      id: string
+      type: 'edit'
+      path: string
+      oldText: string
+      newText: string
+      createdAt: string
+    }
+  | {
+      id: string
+      type: 'create'
+      path: string
+      content: string
+      createdAt: string
+    }
 
 export type ChatSessionState = {
   sessionId: string
   projectId: string
   messages: ChatMessage[]
+  agentMessages?: AgentMessage[]
   status: ChatSessionStatus
   currentDraftText: string
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
+  pendingFileChange?: PendingFileChange
   lastWrittenPath?: string
   lastTaskType?: 'read-only' | 'edit-target' | 'create-chapter'
 }
