@@ -1,12 +1,14 @@
-import { streamChatCompletion } from '../llm/client'
 import { readProjectTextFile } from '../fs/project-fs'
+import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
+import { query } from '../agent/query'
+import { createAgentTools } from '../agent/tools'
 
 import { deriveChatTargetFromPath } from './target'
 import {
   createToolRuntimeContext,
-  fileEditTool,
-  fileReadTool,
-  fileWriteTool,
+  createFileTool,
+  editFileTool,
+  readFileTool,
   ragSearchTool,
 } from './tools'
 
@@ -16,8 +18,10 @@ import type {
   ChatTargetContext,
   ChatTurnInput,
   ChatTurnResult,
+  PendingFileChange,
   ToolDefinition,
 } from '../../types/chat'
+import type { AgentMessage } from '../agent/messages'
 
 type SessionEvent =
   | { type: 'message'; message: ChatMessage }
@@ -26,6 +30,12 @@ type SessionEvent =
 type RunChatTurnOptions = {
   session: ChatSessionState
   input: ChatTurnInput
+  onEvent?: (event: SessionEvent) => void
+}
+
+type ConfirmPendingFileChangeOptions = {
+  session: ChatSessionState
+  input: Pick<ChatTurnInput, 'project' | 'config'>
   onEvent?: (event: SessionEvent) => void
 }
 
@@ -50,12 +60,12 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     status: 'running',
     currentDraftText: '',
     lastWrittenPath: undefined,
+    pendingFileChange: undefined,
   }
 
   const target = deriveChatTargetFromPath(input.activeFilePath)
   session.currentTarget = target
-  const taskType = analyzeTurnMode(input.instruction, target)
-  session.lastTaskType = taskType
+  session.lastTaskType = undefined
 
   pushMessage(session, createUserMessage(input.instruction), onEvent)
   pushMessage(session, createContextSummary(target), onEvent)
@@ -65,104 +75,82 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       id: createId('message'),
       role: 'system',
       kind: 'context-summary',
-      summary: summarizeTurnMode(taskType),
+      summary: '本轮任务类型：Agent Loop，由模型根据上下文自主决定是否读写文件',
       createdAt: new Date().toISOString(),
     },
     onEvent,
   )
 
-  const runtime = createToolRuntimeContext({
-    project: input.project,
-    config: input.config,
-    target,
-    session,
-  })
-
-  let targetFileContent = ''
-  let targetPath = taskType === 'read-only'
-    ? target?.primaryPath
-    : resolveWritePath(input.project, target, taskType)
-  const recentChapters = await loadRecentChapters(
-    input.project,
-    input.config.settings.generationRecentChapters,
-    target?.type === 'chapter' ? target.primaryPath : undefined,
-  )
-
-  if ((taskType === 'edit-target' || taskType === 'read-only') && target?.primaryPath) {
-    const readOutput = await callTool(fileReadTool, { path: target.primaryPath }, runtime, session, onEvent)
-    targetFileContent = readOutput.content
-    targetPath = target.primaryPath
-  }
-
-  if (recentChapters.length > 0) {
-    pushMessage(
-      session,
-      {
-        id: createId('message'),
-        role: 'system',
-        kind: 'context-summary',
-        summary: `已补充近期章节上下文：${recentChapters.map((item) => item.path).join('、')}`,
-        createdAt: new Date().toISOString(),
-      },
-      onEvent,
-    )
-  }
-
-  if (shouldUseRag(input.instruction, target)) {
-    const ragResult = await callTool(
-      ragSearchTool,
-      {
-        query: input.instruction,
-        topK: input.config.settings.ragContextMaxItems,
-      },
-      runtime,
-      session,
-      onEvent,
-    )
-    session.lastRagResult = ragResult
-    pushMessage(
-      session,
-      {
-        id: createId('message'),
-        role: 'system',
-        kind: 'context-summary',
-        summary: summarizeRagContext(ragResult),
-        createdAt: new Date().toISOString(),
-      },
-      onEvent,
-    )
-  } else {
-    session.lastRagResult = null
-  }
-
-  const prompt = buildUserPrompt({
+  const agentMessages = buildAgentMessages({
+    previousMessages: session.agentMessages,
     instruction: input.instruction,
+    systemPrompt: input.systemPrompt,
+    project: input.project,
     target,
-    targetFileContent,
-    recentChapters,
-    ragSummary: summarizeRag(session.lastRagResult),
   })
-
-  pushMessage(session, createAssistantText('正在根据当前目标和上下文生成本轮结果。'), onEvent)
-
-  let generatedText = ''
+  const tools = createAgentTools()
 
   try {
-    generatedText = await streamChatCompletion(
-      {
-        baseUrl: input.config.llm.baseUrl,
-        apiKey: input.config.llm.apiKey,
-        model: input.config.llm.model,
-        systemPrompt: input.systemPrompt,
-        instruction: prompt,
-      },
-      (event) => {
-        if (event.type === 'delta') {
+    session.agentMessages = await query({
+      config: input.config,
+      project: input.project,
+      messages: agentMessages,
+      tools,
+      onEvent(event) {
+        if (event.type === 'assistant-delta') {
           session.currentDraftText += event.text
           onEvent?.({ type: 'draft', text: session.currentDraftText })
+          return
+        }
+
+        if (event.type === 'assistant-message') {
+          if (event.message.content.trim()) {
+            pushMessage(session, createAssistantText(event.message.content.trim()), onEvent)
+          }
+          return
+        }
+
+        if (event.type === 'tool-call') {
+          pushMessage(
+            session,
+            {
+              id: createId('message'),
+              role: 'system',
+              kind: 'tool-call',
+              toolName: event.call.name,
+              inputSummary: event.inputSummary,
+              createdAt: new Date().toISOString(),
+            },
+            onEvent,
+          )
+          return
+        }
+
+        if (event.type === 'tool-result') {
+          if (
+            event.ok &&
+            (event.call.name === 'EditFile' || event.call.name === 'CreateFile') &&
+            typeof event.call.input.path === 'string'
+          ) {
+            session.lastWrittenPath = event.call.input.path
+          }
+
+          pushMessage(
+            session,
+            {
+              id: createId('message'),
+              role: 'system',
+              kind: 'tool-result',
+              toolName: event.call.name,
+              ok: event.ok,
+              resultSummary: event.resultSummary,
+              createdAt: new Date().toISOString(),
+            },
+            onEvent,
+          )
         }
       },
-    )
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : '模型生成失败'
     session.status = 'error'
@@ -170,59 +158,16 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     throw error
   }
 
-  session.currentDraftText = generatedText.trim()
-  onEvent?.({ type: 'draft', text: session.currentDraftText })
-
-  if (taskType === 'read-only') {
-    pushMessage(
-      session,
-      {
-        id: createId('message'),
-        role: 'assistant',
-        kind: 'action-summary',
-        summary: targetPath
-          ? `已完成只读分析，未修改文件。分析目标：${targetPath}`
-          : '已完成项目级只读分析，未修改任何文件。',
-        targetPath,
-        relatedPaths: session.lastRagResult?.candidates.slice(0, 3).map((item) => item.sourcePath) ?? [],
-        createdAt: new Date().toISOString(),
-      },
-      onEvent,
-    )
-
-    session.status = 'waiting-user'
-
-    return {
-      session,
-      target,
-      writtenPath: undefined,
-    }
-  }
-
-  if (!targetPath) {
-    const message = '当前任务需要写文件，但没有可用的目标路径'
-    session.status = 'error'
-    pushErrorMessage(session, message, false, onEvent)
-    throw new Error(message)
-  }
-
-  if (taskType === 'edit-target' && target?.primaryPath) {
-    await callTool(fileEditTool, { path: targetPath, content: session.currentDraftText }, runtime, session, onEvent)
-  } else {
-    await callTool(fileWriteTool, { path: targetPath, content: session.currentDraftText }, runtime, session, onEvent)
-  }
-
-  session.lastWrittenPath = targetPath
-
   pushMessage(
     session,
     {
       id: createId('message'),
       role: 'assistant',
       kind: 'action-summary',
-      summary: `已完成本轮处理，并写回 ${targetPath}`,
-      targetPath,
-      relatedPaths: session.lastRagResult?.candidates.slice(0, 3).map((item) => item.sourcePath) ?? [],
+      summary: session.lastWrittenPath
+        ? `本轮 Agent Loop 完成，已写回 ${session.lastWrittenPath}`
+        : '本轮 Agent Loop 完成，未写入文件。',
+      targetPath: session.lastWrittenPath,
       createdAt: new Date().toISOString(),
     },
     onEvent,
@@ -233,7 +178,160 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   return {
     session,
     target,
-    writtenPath: targetPath,
+    writtenPath: session.lastWrittenPath,
+  }
+}
+
+function buildAgentMessages(input: {
+  previousMessages?: AgentMessage[]
+  instruction: string
+  systemPrompt: string
+  project: ChatTurnInput['project']
+  target: ChatTargetContext | null
+}): AgentMessage[] {
+  const nextUserMessage: AgentMessage = {
+    role: 'user',
+    content: buildAgentUserContext({
+      instruction: input.instruction,
+      project: input.project,
+      target: input.target,
+    }),
+  }
+
+  if (input.previousMessages?.length) {
+    return [...input.previousMessages, nextUserMessage]
+  }
+
+  return [
+    {
+      role: 'system',
+      content: buildAgentSystemPrompt(input.systemPrompt),
+    },
+    nextUserMessage,
+  ]
+}
+
+export async function confirmPendingFileChange(
+  options: ConfirmPendingFileChangeOptions,
+): Promise<ChatTurnResult> {
+  const { input, onEvent } = options
+  const session: ChatSessionState = {
+    ...options.session,
+    status: 'running',
+  }
+  const pendingFileChange = session.pendingFileChange
+
+  if (!pendingFileChange) {
+    const message = '当前没有等待确认的文件变更'
+    session.status = 'error'
+    pushErrorMessage(session, message, true, onEvent)
+    throw new Error(message)
+  }
+
+  const runtime = createToolRuntimeContext({
+    project: input.project,
+    config: input.config,
+    target: session.currentTarget,
+    session,
+  })
+
+  if (pendingFileChange.type === 'edit') {
+    await callTool(
+      editFileTool,
+      {
+        path: pendingFileChange.path,
+        oldText: pendingFileChange.oldText,
+        newText: pendingFileChange.newText,
+      },
+      runtime,
+      session,
+      onEvent,
+    )
+  } else {
+    await callTool(
+      createFileTool,
+      {
+        path: pendingFileChange.path,
+        content: pendingFileChange.content,
+      },
+      runtime,
+      session,
+      onEvent,
+    )
+  }
+
+  session.lastWrittenPath = pendingFileChange.path
+  session.pendingFileChange = undefined
+
+  pushMessage(
+    session,
+    {
+      id: createId('message'),
+      role: 'assistant',
+      kind: 'action-summary',
+      summary: `已确认并写回 ${pendingFileChange.path}`,
+      targetPath: pendingFileChange.path,
+      relatedPaths: session.lastRagResult?.candidates.slice(0, 3).map((item) => item.sourcePath) ?? [],
+      createdAt: new Date().toISOString(),
+    },
+    onEvent,
+  )
+
+  session.status = 'waiting-user'
+
+  return {
+    session,
+    target: session.currentTarget,
+    writtenPath: pendingFileChange.path,
+  }
+}
+
+export function discardPendingFileChange(session: ChatSessionState): ChatSessionState {
+  if (!session.pendingFileChange) {
+    return session
+  }
+
+  return {
+    ...session,
+    status: 'waiting-user',
+    pendingFileChange: undefined,
+    messages: [
+      ...session.messages,
+      {
+        id: createId('message'),
+        role: 'assistant',
+        kind: 'action-summary',
+        summary: `已放弃 ${session.pendingFileChange.path} 的待写入草稿。`,
+        targetPath: session.pendingFileChange.path,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  }
+}
+
+function createPendingFileChange(input: {
+  taskType: Exclude<TurnMode, 'read-only'>
+  targetPath: string
+  targetFileContent: string
+  draftText: string
+}): PendingFileChange {
+  if (input.taskType === 'edit-target') {
+    return {
+      id: createId('pending-change'),
+      type: 'edit',
+      path: input.targetPath,
+      oldText: input.targetFileContent,
+      newText: input.draftText,
+      createdAt: new Date().toISOString(),
+    }
+  }
+
+  return {
+    id: createId('pending-change'),
+    type: 'create',
+    path: input.targetPath,
+    content: input.draftText,
+    createdAt: new Date().toISOString(),
   }
 }
 

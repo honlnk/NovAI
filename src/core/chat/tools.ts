@@ -1,41 +1,23 @@
-import { readProjectTextFile, writeProjectTextFile } from '../fs/project-fs'
 import { searchRagCandidates } from '../rag/search'
+import {
+  createFileTool as coreCreateFileTool,
+  editFileTool as coreEditFileTool,
+  readFileTool as coreReadFileTool,
+} from '../tools/file-tools'
 
 import type {
   ToolDefinition,
   ToolRuntimeContext,
 } from '../../types/chat'
 import type { RetrievalResult } from '../../types/rag'
-
-export type FileReadInput = {
-  path: string
-}
-
-export type FileReadOutput = {
-  path: string
-  content: string
-}
-
-export type FileWriteInput = {
-  path: string
-  content: string
-}
-
-export type FileWriteOutput = {
-  path: string
-  contentLength: number
-  created: boolean
-}
-
-export type FileEditInput = {
-  path: string
-  content: string
-}
-
-export type FileEditOutput = {
-  path: string
-  contentLength: number
-}
+import type {
+  CreateFileInput,
+  CreateFileOutput,
+  EditFileInput,
+  EditFileOutput,
+  ReadFileInput,
+  ReadFileOutput,
+} from '../tools/types'
 
 export type RagSearchInput = {
   query: string
@@ -50,105 +32,37 @@ function asObject(input: unknown) {
   return input as Record<string, unknown>
 }
 
-export const fileReadTool: ToolDefinition<FileReadInput, FileReadOutput> = {
-  name: 'FileRead',
-  description: '读取项目中的文本文件',
-  validateInput(input) {
-    const value = asObject(input)
-
-    if (typeof value.path !== 'string' || !value.path.trim()) {
-      throw new Error('FileRead 需要有效的 path')
-    }
-
-    return {
-      path: value.path.trim(),
-    }
-  },
+export const readFileTool: ToolDefinition<ReadFileInput, ReadFileOutput> = {
+  name: 'ReadFile',
+  description: coreReadFileTool.description,
+  validateInput: coreReadFileTool.validateInput,
   async call(input, context) {
-    const content = await readProjectTextFile(context.project.handle, input.path)
-
-    return {
-      path: input.path,
-      content,
-    }
+    return coreReadFileTool.run(input, { project: context.project })
   },
-  summarizeInput(input) {
-    return `读取 ${input.path}`
-  },
-  summarizeOutput(output) {
-    return `已读取 ${output.path}，共 ${output.content.length} 个字符`
-  },
+  summarizeInput: coreReadFileTool.summarizeInput,
+  summarizeOutput: coreReadFileTool.summarizeOutput,
 }
 
-export const fileWriteTool: ToolDefinition<FileWriteInput, FileWriteOutput> = {
-  name: 'FileWrite',
-  description: '写入项目中的文本文件',
-  validateInput(input) {
-    const value = asObject(input)
-
-    if (typeof value.path !== 'string' || !value.path.trim()) {
-      throw new Error('FileWrite 需要有效的 path')
-    }
-
-    if (typeof value.content !== 'string') {
-      throw new Error('FileWrite 需要字符串 content')
-    }
-
-    return {
-      path: value.path.trim(),
-      content: value.content,
-    }
-  },
+export const editFileTool: ToolDefinition<EditFileInput, EditFileOutput> = {
+  name: 'EditFile',
+  description: coreEditFileTool.description,
+  validateInput: coreEditFileTool.validateInput,
   async call(input, context) {
-    await writeProjectTextFile(context.project.handle, input.path, input.content)
-
-    return {
-      path: input.path,
-      contentLength: input.content.length,
-      created: true,
-    }
+    return coreEditFileTool.run(input, { project: context.project })
   },
-  summarizeInput(input) {
-    return `写入 ${input.path}`
-  },
-  summarizeOutput(output) {
-    return `已写入 ${output.path}，共 ${output.contentLength} 个字符`
-  },
+  summarizeInput: coreEditFileTool.summarizeInput,
+  summarizeOutput: coreEditFileTool.summarizeOutput,
 }
 
-export const fileEditTool: ToolDefinition<FileEditInput, FileEditOutput> = {
-  name: 'FileEdit',
-  description: '覆盖修改已有文本文件',
-  validateInput(input) {
-    const value = asObject(input)
-
-    if (typeof value.path !== 'string' || !value.path.trim()) {
-      throw new Error('FileEdit 需要有效的 path')
-    }
-
-    if (typeof value.content !== 'string') {
-      throw new Error('FileEdit 需要字符串 content')
-    }
-
-    return {
-      path: value.path.trim(),
-      content: value.content,
-    }
-  },
+export const createFileTool: ToolDefinition<CreateFileInput, CreateFileOutput> = {
+  name: 'CreateFile',
+  description: coreCreateFileTool.description,
+  validateInput: coreCreateFileTool.validateInput,
   async call(input, context) {
-    await writeProjectTextFile(context.project.handle, input.path, input.content)
-
-    return {
-      path: input.path,
-      contentLength: input.content.length,
-    }
+    return coreCreateFileTool.run(input, { project: context.project })
   },
-  summarizeInput(input) {
-    return `修改 ${input.path}`
-  },
-  summarizeOutput(output) {
-    return `已更新 ${output.path}，共 ${output.contentLength} 个字符`
-  },
+  summarizeInput: coreCreateFileTool.summarizeInput,
+  summarizeOutput: coreCreateFileTool.summarizeOutput,
 }
 
 export const ragSearchTool: ToolDefinition<RagSearchInput, RetrievalResult> = {
