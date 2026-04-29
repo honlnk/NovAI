@@ -42,7 +42,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'ReadFile',
-          description: '读取当前小说项目中的文本文件，返回带行号的内容。',
+          description: '读取当前小说项目中的 .md、.json、.txt 文本文件，返回带行号的内容；默认最多读取 2000 行。',
           parameters: {
             type: 'object',
             properties: {
@@ -53,12 +53,12 @@ export function createAgentTools(): AgentRunnableToolMap {
               offset: {
                 type: 'integer',
                 minimum: 1,
-                description: '可选，从第几行开始读取，默认 1。',
+                description: '可选，从第几行开始读取，默认 1。已知目标片段或继续读取长文件时使用。',
               },
               limit: {
                 type: 'integer',
                 minimum: 1,
-                description: '可选，最多读取多少行。',
+                description: '可选，最多读取多少行；默认 2000。长文件应使用 offset/limit 分段读取。',
               },
             },
             required: ['path'],
@@ -68,11 +68,15 @@ export function createAgentTools(): AgentRunnableToolMap {
       },
       core: readFileTool,
       formatResult(output: ReadFileOutput) {
-        return [
+        const notice = output.notice ? `<system-reminder>${output.notice}</system-reminder>` : ''
+        const body = output.numberedContent || output.content
+        const sections = [
           readFileTool.summarizeOutput(output),
-          '',
-          output.numberedContent || output.content,
-        ].join('\n')
+          notice,
+          body ? `\n${body}` : '',
+        ]
+
+        return sections.filter(Boolean).join('\n')
       },
     },
     EditFile: {

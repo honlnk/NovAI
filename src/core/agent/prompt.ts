@@ -21,7 +21,7 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '- 保持中文输出，除非用户明确要求其他语言。',
     '',
     '工具使用规则：',
-    '- ReadFile 用于读取 .md、.json、.txt 文件。',
+    '- ReadFile 用于读取 .md、.json、.txt 文件，返回带行号内容；默认最多读取 2000 行。长文件或已知目标位置时，使用 offset/limit 分段读取。',
     '- EditFile 用于精确替换已有文件中的片段。oldText 必须来自已读取的文件内容，尽量提供足够上下文避免误替换。',
     '- CreateFile 用于创建不存在的新文件；目标已存在时会失败。',
     '- ListDirectory 用于查看某个目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。',

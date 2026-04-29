@@ -258,6 +258,11 @@ export async function readProjectTextFile(rootHandle: FileSystemDirectoryHandle,
   return readText(rootHandle, path)
 }
 
+export async function getProjectTextFile(rootHandle: FileSystemDirectoryHandle, path: string) {
+  const fileHandle = await resolveFileHandle(rootHandle, path)
+  return fileHandle.getFile()
+}
+
 /**
  * 按相对路径写入项目中的任意文本文件。
  * 路径上的中间目录会自动创建。

@@ -51,6 +51,10 @@ export type ReadFileOutput = {
   endLine: number
   totalLines: number
   truncated: boolean
+  empty: boolean
+  offsetBeyondEnd: boolean
+  fileSizeBytes: number
+  notice?: string
 }
 
 export type EditFileInput = {
