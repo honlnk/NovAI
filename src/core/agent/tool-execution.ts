@@ -17,6 +17,11 @@ export async function executeAgentTool(input: {
   if (!tool) {
     const content = `未知工具：${input.call.name}`
     input.onEvent?.({
+      type: 'tool-call',
+      call: input.call,
+      inputSummary: `调用未知工具：${input.call.name}`,
+    })
+    input.onEvent?.({
       type: 'tool-result',
       call: input.call,
       ok: false,
@@ -37,6 +42,11 @@ export async function executeAgentTool(input: {
     validatedInput = tool.core.validateInput(input.call.input)
   } catch (error) {
     const message = error instanceof Error ? error.message : `${tool.name} 参数校验失败`
+    input.onEvent?.({
+      type: 'tool-call',
+      call: input.call,
+      inputSummary: `调用 ${tool.name}（参数校验失败）`,
+    })
     input.onEvent?.({
       type: 'tool-result',
       call: input.call,
