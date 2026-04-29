@@ -3,13 +3,15 @@ import {
   editFileTool,
   readFileTool,
 } from './file-tools'
-import { listDirectoryTool } from './directory-tools'
+import { findFilesTool, listDirectoryTool } from './directory-tools'
 import type {
   CoreToolName,
   CreateFileInput,
   CreateFileOutput,
   EditFileInput,
   EditFileOutput,
+  FindFilesInput,
+  FindFilesOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -27,6 +29,8 @@ export type {
   CreateFileOutput,
   EditFileInput,
   EditFileOutput,
+  FindFilesInput,
+  FindFilesOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -42,6 +46,7 @@ type ToolOutputMap = {
   EditFile: EditFileOutput
   CreateFile: CreateFileOutput
   ListDirectory: ListDirectoryOutput
+  FindFiles: FindFilesOutput
 }
 
 const tools = {
@@ -49,6 +54,7 @@ const tools = {
   EditFile: editFileTool,
   CreateFile: createFileTool,
   ListDirectory: listDirectoryTool,
+  FindFiles: findFilesTool,
 } satisfies Record<CoreToolName, ToolDefinition<CoreToolName, unknown, unknown>>
 
 export function getCoreTools() {

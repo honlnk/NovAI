@@ -3,7 +3,7 @@ import {
   editFileTool,
   readFileTool,
 } from '../tools/file-tools'
-import { listDirectoryTool } from '../tools/directory-tools'
+import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 
 import type {
   AgentToolName,
@@ -14,6 +14,7 @@ import type {
   CreateFileOutput,
   EditFileInput,
   EditFileOutput,
+  FindFilesOutput,
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
@@ -183,9 +184,59 @@ export function createAgentTools(): AgentRunnableToolMap {
         ].join('\n')
       },
     },
+    FindFiles: {
+      name: 'FindFiles',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'FindFiles',
+          description: '按 glob 模式递归查找当前小说项目中的文件路径；不读取文件内容。',
+          parameters: {
+            type: 'object',
+            properties: {
+              pattern: {
+                type: 'string',
+                description: '必填，glob 文件匹配模式，例如 **/*.md、chapters/*.md、**/*来信*.md。',
+              },
+              path: {
+                type: 'string',
+                description: '可选，项目内目录相对路径；不传则从项目根目录查找。',
+              },
+              includeHidden: {
+                type: 'boolean',
+                description: '是否包含以 . 开头的隐藏文件或目录。默认 false。',
+              },
+              limit: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 500,
+                description: '可选，最多返回多少个匹配文件，默认 100，最大 500。',
+              },
+            },
+            required: ['pattern'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: findFilesTool,
+      formatResult(output: FindFilesOutput) {
+        return [
+          findFilesTool.summarizeOutput(output),
+          '',
+          output.filenames.length ? output.filenames.join('\n') : 'No files found',
+          output.truncated ? '\n(结果已截断，请使用更具体的 path 或 pattern。)' : '',
+        ].join('\n').trim()
+      },
+    },
   }
 }
 
 export function isAgentToolName(value: string): value is AgentToolName {
-  return value === 'ReadFile' || value === 'EditFile' || value === 'CreateFile' || value === 'ListDirectory'
+  return value === 'ReadFile'
+    || value === 'EditFile'
+    || value === 'CreateFile'
+    || value === 'ListDirectory'
+    || value === 'FindFiles'
 }

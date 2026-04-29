@@ -1,6 +1,6 @@
 import type { ProjectSnapshot } from '../../types/project'
 
-export type CoreToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'ListDirectory'
+export type CoreToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'ListDirectory' | 'FindFiles'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
@@ -94,4 +94,19 @@ export type ListDirectoryEntry = {
 export type ListDirectoryOutput = {
   path: string
   entries: ListDirectoryEntry[]
+}
+
+export type FindFilesInput = {
+  pattern: string
+  path?: string
+  includeHidden?: boolean
+  limit?: number
+}
+
+export type FindFilesOutput = {
+  pattern: string
+  path: string
+  filenames: string[]
+  numFiles: number
+  truncated: boolean
 }
