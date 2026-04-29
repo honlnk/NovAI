@@ -1,4 +1,4 @@
-export type AgentToolName = 'ReadFile' | 'EditFile' | 'CreateFile'
+export type AgentToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'ListDirectory' | 'FindFiles'
 
 export type AgentToolCall = {
   id: string

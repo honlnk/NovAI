@@ -11,6 +11,11 @@ import type { AgentRunnableToolMap } from './tools'
 const DEFAULT_MAX_TURNS = 8
 
 export type AgentQueryEvent =
+  | { type: 'query-step-start'; step: number }
+  | { type: 'model-start'; step: number }
+  | { type: 'model-finish'; step: number; toolCallCount: number; finishReason?: string }
+  | { type: 'tool-batch-start'; step: number; toolCallCount: number }
+  | { type: 'tool-batch-finish'; step: number; toolResultCount: number }
   | { type: 'assistant-delta'; text: string }
   | { type: 'assistant-message'; message: AgentAssistantMessage }
   | ToolExecutionEvent
@@ -28,6 +33,11 @@ export async function query(input: {
   const maxTurns = input.maxTurns ?? DEFAULT_MAX_TURNS
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
+    const step = turn + 1
+
+    input.onEvent?.({ type: 'query-step-start', step })
+    input.onEvent?.({ type: 'model-start', step })
+
     const assistantResponse = await streamAgentCompletion(
       {
         baseUrl: input.config.llm.baseUrl,
@@ -43,6 +53,13 @@ export async function query(input: {
       },
     )
 
+    input.onEvent?.({
+      type: 'model-finish',
+      step,
+      toolCallCount: assistantResponse.toolCalls.length,
+      finishReason: assistantResponse.finishReason,
+    })
+
     const assistantMessage: AgentAssistantMessage = {
       role: 'assistant',
       content: assistantResponse.content,
@@ -57,11 +74,23 @@ export async function query(input: {
       return messages
     }
 
+    input.onEvent?.({
+      type: 'tool-batch-start',
+      step,
+      toolCallCount: assistantResponse.toolCalls.length,
+    })
+
     const toolResults = await runAgentTools({
       calls: assistantResponse.toolCalls,
       project: input.project,
       tools: input.tools,
       onEvent: input.onEvent,
+    })
+
+    input.onEvent?.({
+      type: 'tool-batch-finish',
+      step,
+      toolResultCount: toolResults.length,
     })
 
     messages = [...messages, ...toolResults]

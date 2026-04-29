@@ -148,17 +148,19 @@ function toOpenAiMessage(message: AgentMessage) {
   }
 
   if (message.role === 'assistant') {
+    const toolCalls = message.toolCalls?.map((toolCall) => ({
+      id: toolCall.id,
+      type: 'function',
+      function: {
+        name: toolCall.name,
+        arguments: JSON.stringify(toolCall.input),
+      },
+    }))
+
     return {
       role: 'assistant',
       content: message.content || null,
-      tool_calls: message.toolCalls?.map((toolCall) => ({
-        id: toolCall.id,
-        type: 'function',
-        function: {
-          name: toolCall.name,
-          arguments: JSON.stringify(toolCall.input),
-        },
-      })),
+      ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
     }
   }
 

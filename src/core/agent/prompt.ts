@@ -14,6 +14,8 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '- 对已有文件动手前，先使用 ReadFile 读取相关内容。',
     '- 修改已有文件时，优先使用 EditFile 做精确替换；不要在没有读过原文时盲目改写。',
     '- 新建章节、设定或提示词文件时，使用 CreateFile。',
+    '- 不确定某个目录的直接结构时，先使用 ListDirectory 查看目录，不要为了探索目录而批量读取文件。',
+    '- 需要按文件名、路径模式查找文件时，使用 FindFiles；找到候选文件后再用 ReadFile 精读。',
     '- 聊天回复用于说明你做了什么、为什么这么做、下一步建议是什么；不要把完整长篇正文当作唯一结果留在聊天里。',
     '- 如果缺少目标路径或上下文，先说明你需要什么，或先读取项目中最相关的文件。',
     '- 保持中文输出，除非用户明确要求其他语言。',
@@ -22,6 +24,8 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '- ReadFile 用于读取 .md、.json、.txt 文件。',
     '- EditFile 用于精确替换已有文件中的片段。oldText 必须来自已读取的文件内容，尽量提供足够上下文避免误替换。',
     '- CreateFile 用于创建不存在的新文件；目标已存在时会失败。',
+    '- ListDirectory 用于查看某个目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。',
+    '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、chapters/*.md、**/*来信*.md。它不会读取文件正文。',
     '- 可以连续使用多个工具完成任务。完成工具调用后，继续根据工具结果判断是否还需要下一步。',
     '- 完成任务后，用简短自然语言总结变更，不要重复输出整个文件。',
   ].join('\n')
@@ -42,33 +46,6 @@ export function buildAgentUserContext(input: {
     `当前项目：${input.project.name}`,
     `默认目标：${target}`,
     '',
-    '项目文件：',
-    listReadableFiles(input.project).join('\n') || '- 暂无可读文本文件',
-    '',
     '请按照系统要求，通过工具读取或修改文件。若任务已经完成，请直接总结。若需要写文件，直接调用合适的文件工具。',
   ].join('\n')
-}
-
-function listReadableFiles(project: ProjectSnapshot) {
-  const files: string[] = []
-  const stack = [...project.tree]
-
-  while (stack.length > 0) {
-    const node = stack.shift()
-
-    if (!node) {
-      continue
-    }
-
-    if (node.kind === 'file' && /\.(md|json|txt)$/i.test(node.name)) {
-      files.push(`- ${node.path}`)
-      continue
-    }
-
-    if (node.children?.length) {
-      stack.unshift(...node.children)
-    }
-  }
-
-  return files.sort((left, right) => left.localeCompare(right, 'zh-Hans-CN'))
 }

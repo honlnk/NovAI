@@ -2,6 +2,8 @@ import { readProjectTextFile } from '../fs/project-fs'
 import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
 import { query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
+import { createLogId, writeAgentLog } from '../logging/agent-log'
+import type { AgentQueryEvent } from '../agent/query'
 
 import { deriveChatTargetFromPath } from './target'
 import {
@@ -66,6 +68,20 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   const target = deriveChatTargetFromPath(input.activeFilePath)
   session.currentTarget = target
   session.lastTaskType = undefined
+  const runId = createLogId('run')
+
+  void writeAgentLog(input.project, {
+    sessionId: session.sessionId,
+    runId,
+    level: 'info',
+    event: 'agent_run_start',
+    message: 'Agent 开始处理用户输入',
+    data: {
+      instruction: input.instruction,
+      activeFilePath: input.activeFilePath,
+      target,
+    },
+  })
 
   pushMessage(session, createUserMessage(input.instruction), onEvent)
   pushMessage(session, createContextSummary(target), onEvent)
@@ -97,6 +113,13 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       messages: agentMessages,
       tools,
       onEvent(event) {
+        logAgentQueryEvent({
+          project: input.project,
+          session,
+          runId,
+          event,
+        })
+
         if (event.type === 'assistant-delta') {
           session.currentDraftText += event.text
           onEvent?.({ type: 'draft', text: session.currentDraftText })
@@ -154,6 +177,13 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   } catch (error) {
     const message = error instanceof Error ? error.message : '模型生成失败'
     session.status = 'error'
+    void writeAgentLog(input.project, {
+      sessionId: session.sessionId,
+      runId,
+      level: 'error',
+      event: 'agent_run_error',
+      message,
+    })
     pushErrorMessage(session, message, true, onEvent)
     throw error
   }
@@ -175,10 +205,149 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
 
   session.status = 'waiting-user'
 
+  void writeAgentLog(input.project, {
+    sessionId: session.sessionId,
+    runId,
+    level: 'info',
+    event: 'agent_run_finish',
+    message: session.lastWrittenPath
+      ? `Agent 本轮完成并写回 ${session.lastWrittenPath}`
+      : 'Agent 本轮完成，未写入文件',
+    data: {
+      writtenPath: session.lastWrittenPath,
+      agentMessageCount: session.agentMessages?.length ?? 0,
+    },
+  })
+
   return {
     session,
     target,
     writtenPath: session.lastWrittenPath,
+  }
+}
+
+function logAgentQueryEvent(input: {
+  project: ChatTurnInput['project']
+  session: ChatSessionState
+  runId: string
+  event: AgentQueryEvent
+}) {
+  const base = {
+    sessionId: input.session.sessionId,
+    runId: input.runId,
+  }
+
+  if (input.event.type === 'query-step-start') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'query_step_start',
+      message: `Query Step ${input.event.step} 开始`,
+      data: { step: input.event.step },
+    })
+    return
+  }
+
+  if (input.event.type === 'model-start') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'model_start',
+      message: `第 ${input.event.step} 轮模型调用开始`,
+      data: { step: input.event.step },
+    })
+    return
+  }
+
+  if (input.event.type === 'model-finish') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'model_finish',
+      message: `第 ${input.event.step} 轮模型调用结束，返回 ${input.event.toolCallCount} 个工具调用`,
+      data: input.event,
+    })
+    return
+  }
+
+  if (input.event.type === 'assistant-message') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'assistant_message',
+      message: input.event.message.toolCalls?.length
+        ? `Assistant 返回文本并请求 ${input.event.message.toolCalls.length} 个工具调用`
+        : 'Assistant 返回文本',
+      data: {
+        content: input.event.message.content,
+        toolCalls: input.event.message.toolCalls,
+      },
+    })
+    return
+  }
+
+  if (input.event.type === 'tool-batch-start') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'tool_batch_start',
+      message: `第 ${input.event.step} 轮开始执行 ${input.event.toolCallCount} 个工具调用`,
+      data: input.event,
+    })
+    return
+  }
+
+  if (input.event.type === 'tool-call') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'tool_call',
+      message: input.event.inputSummary,
+      data: {
+        id: input.event.call.id,
+        name: input.event.call.name,
+        input: input.event.call.input,
+      },
+    })
+    return
+  }
+
+  if (input.event.type === 'tool-result') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: input.event.ok ? 'info' : 'error',
+      event: 'tool_result',
+      message: input.event.resultSummary,
+      data: {
+        id: input.event.call.id,
+        name: input.event.call.name,
+        ok: input.event.ok,
+      },
+    })
+    return
+  }
+
+  if (input.event.type === 'tool-batch-finish') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'tool_batch_finish',
+      message: `第 ${input.event.step} 轮工具执行结束`,
+      data: input.event,
+    })
+    return
+  }
+
+  if (input.event.type === 'done') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'query_done',
+      message: 'Query Loop 完成',
+      data: {
+        messageCount: input.event.messages.length,
+      },
+    })
   }
 }
 
