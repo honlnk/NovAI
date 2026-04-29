@@ -44,33 +44,6 @@ export function buildAgentUserContext(input: {
     `当前项目：${input.project.name}`,
     `默认目标：${target}`,
     '',
-    '项目文件：',
-    listReadableFiles(input.project).join('\n') || '- 暂无可读文本文件',
-    '',
     '请按照系统要求，通过工具读取或修改文件。若任务已经完成，请直接总结。若需要写文件，直接调用合适的文件工具。',
   ].join('\n')
-}
-
-function listReadableFiles(project: ProjectSnapshot) {
-  const files: string[] = []
-  const stack = [...project.tree]
-
-  while (stack.length > 0) {
-    const node = stack.shift()
-
-    if (!node) {
-      continue
-    }
-
-    if (node.kind === 'file' && /\.(md|json|txt)$/i.test(node.name)) {
-      files.push(`- ${node.path}`)
-      continue
-    }
-
-    if (node.children?.length) {
-      stack.unshift(...node.children)
-    }
-  }
-
-  return files.sort((left, right) => left.localeCompare(right, 'zh-Hans-CN'))
 }
