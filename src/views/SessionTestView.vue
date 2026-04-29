@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import {
   createProject,
   findFirstReadableFile,
   inspectProject,
   isFileSystemAccessSupported,
+  loadProjectFromHandle,
   pickProjectDirectory,
   readProjectFile,
   readSystemPrompt,
@@ -15,15 +16,27 @@ import {
 import {
   runChatTurn,
 } from '../core/chat/session'
+import { writeAgentLog } from '../core/logging/agent-log'
+import {
+  forgetLastProject,
+  hasProjectPermission,
+  readLastProject,
+  requestProjectPermission,
+  saveLastProject,
+  toLastProjectSummary,
+} from '../core/project/recent-projects'
 import { useChatStore } from '../stores/chat'
 
 import type { ProjectConfig, ProjectFileContent, ProjectInspection, ProjectSnapshot, TreeNode } from '../types/project'
+import type { LastProjectRecord, LastProjectSummary } from '../core/project/recent-projects'
 
 const projectName = ref('我的测试小说')
 const currentProject = ref<ProjectSnapshot | null>(null)
 const pendingHandle = ref<FileSystemDirectoryHandle | null>(null)
 const inspection = ref<ProjectInspection | null>(null)
 const activeFile = ref<ProjectFileContent | null>(null)
+const lastProjectRecord = ref<LastProjectRecord | null>(null)
+const lastProjectSummary = ref<LastProjectSummary | null>(null)
 const status = ref('这里用于验证第一阶段会话引擎。')
 const instruction = ref('把这一章结尾改得更紧张一点，并保持悬疑感。')
 const systemPrompt = ref('你是一名长篇小说写作助手，输出中文 Markdown。')
@@ -70,6 +83,7 @@ const configDraft = reactive<ProjectConfig>({
 
 const projectLabel = computed(() => currentProject.value?.rootName ?? inspection.value?.rootName ?? '未选择项目')
 const canRepair = computed(() => pendingHandle.value && inspection.value && !inspection.value.canLoad)
+const canRestoreLastProject = computed(() => Boolean(lastProjectRecord.value && !currentProject.value))
 const groupedReadableFiles = computed(() => groupReadableFiles(flattenReadableFiles(currentProject.value?.tree ?? [])))
 const currentTargetLabel = computed(() => {
   if (!chatStore.currentTarget) {
@@ -98,9 +112,43 @@ const toolResultCount = computed(() =>
   (chatStore.session?.messages ?? []).filter((message) => message.kind === 'tool-result').length,
 )
 
+onMounted(() => {
+  void initializeLastProject()
+})
+
+async function initializeLastProject() {
+  if (!isFileSystemAccessSupported()) {
+    return
+  }
+
+  try {
+    const record = await readLastProject()
+
+    if (!record) {
+      return
+    }
+
+    lastProjectRecord.value = record
+    lastProjectSummary.value = toLastProjectSummary(record)
+
+    if (await hasProjectPermission(record.handle)) {
+      await restoreLastProject(false)
+      return
+    }
+
+    status.value = `检测到上次项目「${record.name}」，可点击“恢复上次项目”继续。`
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '读取最近项目记录失败'
+  }
+}
+
 async function onCreateProject() {
   await runTask(async () => {
     const snapshot = await createProject(projectName.value.trim() || '我的测试小说')
+    await logProjectEvent(snapshot, 'project_created', `创建项目「${snapshot.name}」`, {
+      rootName: snapshot.rootName,
+    })
+    await rememberProject(snapshot)
     await activateProject(snapshot, `已创建并打开项目「${snapshot.name}」`)
   }, '创建项目失败')
 }
@@ -114,6 +162,10 @@ async function onOpenProject() {
 
     if (inspection.value.canLoad) {
       const snapshot = await repairProject(handle)
+      await logProjectEvent(snapshot, 'project_opened', `打开项目「${snapshot.name}」`, {
+        rootName: snapshot.rootName,
+      })
+      await rememberProject(snapshot)
       await activateProject(snapshot, `已打开项目「${snapshot.name}」`)
       return
     }
@@ -130,8 +182,37 @@ async function onRepairProject() {
 
   await runTask(async () => {
     const snapshot = await repairProject(pendingHandle.value!)
+    await logProjectEvent(snapshot, 'project_repaired', `修复项目结构「${snapshot.name}」`, {
+      rootName: snapshot.rootName,
+    })
+    await rememberProject(snapshot)
     await activateProject(snapshot, `已修复并打开项目「${snapshot.name}」`)
   }, '修复项目失败')
+}
+
+async function onRestoreLastProject() {
+  await runTask(async () => {
+    await restoreLastProject(true)
+  }, '恢复上次项目失败')
+}
+
+async function onForgetLastProject() {
+  await runTask(async () => {
+    const summary = lastProjectSummary.value
+
+    await forgetLastProject()
+    lastProjectRecord.value = null
+    lastProjectSummary.value = null
+
+    if (currentProject.value) {
+      await logProjectEvent(currentProject.value, 'project_forget_last', '忘记浏览器中的上次项目记录', {
+        forgottenProjectId: summary?.projectId,
+        forgottenProjectName: summary?.name,
+      })
+    }
+
+    status.value = '已忘记上次项目记录'
+  }, '忘记上次项目失败')
 }
 
 async function onOpenFile(path: string) {
@@ -143,8 +224,37 @@ async function onOpenFile(path: string) {
   await runTask(async () => {
     activeFile.value = await readProjectFile(currentProject.value!, path)
     chatStore.syncDefaultTarget(currentProject.value!.id, activeFile.value?.path)
+    await logProjectEvent(currentProject.value!, 'project_file_opened', `打开项目文件 ${path}`, {
+      path,
+      format: activeFile.value.format,
+      updatedAt: activeFile.value.updatedAt,
+    })
     status.value = `已打开文件：${path}`
   }, '打开文件失败')
+}
+
+async function onCloseProject() {
+  const project = currentProject.value
+
+  if (!project) {
+    status.value = '当前没有打开的项目'
+    return
+  }
+
+  await runTask(async () => {
+    await logProjectEvent(project, 'project_closed', `关闭项目「${project.name}」`, {
+      activeFilePath: activeFile.value?.path,
+      messageCount: chatStore.session?.messages.length ?? 0,
+      agentMessageCount: chatStore.session?.agentMessages?.length ?? 0,
+    })
+
+    currentProject.value = null
+    pendingHandle.value = null
+    inspection.value = null
+    activeFile.value = null
+    chatStore.resetSession()
+    status.value = `已关闭项目「${project.name}」`
+  }, '关闭项目失败')
 }
 
 async function onRunTurn() {
@@ -192,7 +302,84 @@ async function activateProject(snapshot: ProjectSnapshot, message: string) {
   chatStore.resetSession(snapshot.id)
   await openInitialFile(snapshot)
   chatStore.syncDefaultTarget(snapshot.id, activeFile.value?.path)
+  await logProjectEvent(snapshot, 'project_activated', `激活项目「${snapshot.name}」`, {
+    rootName: snapshot.rootName,
+    activeFilePath: activeFile.value?.path,
+    readableFileCount: flattenReadableFiles(snapshot.tree).length,
+  })
   status.value = message
+}
+
+async function restoreLastProject(shouldRequestPermission: boolean) {
+  const record = lastProjectRecord.value ?? await readLastProject()
+
+  if (!record) {
+    status.value = '没有可恢复的上次项目记录'
+    return
+  }
+
+  lastProjectRecord.value = record
+  lastProjectSummary.value = toLastProjectSummary(record)
+
+  const hasPermission = shouldRequestPermission
+    ? await requestProjectPermission(record.handle)
+    : await hasProjectPermission(record.handle)
+
+  if (!hasPermission) {
+    status.value = `没有「${record.name}」的目录权限，请点击恢复按钮授权，或重新打开项目。`
+    return
+  }
+
+  try {
+    const snapshot = await loadProjectFromHandle(record.handle)
+
+    await logProjectEvent(snapshot, 'project_restored', `恢复上次项目「${snapshot.name}」`, {
+      rootName: snapshot.rootName,
+      rememberedAt: record.lastOpenedAt,
+      requestedPermission: shouldRequestPermission,
+    })
+    await activateProject(snapshot, `已恢复上次项目「${snapshot.name}」`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '恢复上次项目失败'
+
+    if (await hasProjectPermission(record.handle)) {
+      const fallbackSnapshot = await tryLoadProjectForFailureLog(record.handle)
+
+      if (fallbackSnapshot) {
+        await logProjectEvent(fallbackSnapshot, 'project_restore_failed', message, {
+          rootName: record.rootName,
+          rememberedAt: record.lastOpenedAt,
+        })
+      }
+    }
+
+    throw error
+  }
+}
+
+async function rememberProject(snapshot: ProjectSnapshot) {
+  const record = await saveLastProject({
+    projectId: snapshot.id,
+    name: snapshot.name,
+    rootName: snapshot.rootName,
+    handle: snapshot.handle,
+  })
+
+  lastProjectRecord.value = record
+  lastProjectSummary.value = toLastProjectSummary(record)
+
+  await logProjectEvent(snapshot, 'project_remembered', `记住最近项目「${snapshot.name}」`, {
+    rootName: snapshot.rootName,
+    lastOpenedAt: record.lastOpenedAt,
+  })
+}
+
+async function tryLoadProjectForFailureLog(handle: FileSystemDirectoryHandle) {
+  try {
+    return await loadProjectFromHandle(handle)
+  } catch {
+    return null
+  }
 }
 
 async function refreshProjectFiles(preferredPath?: string) {
@@ -206,11 +393,30 @@ async function refreshProjectFiles(preferredPath?: string) {
     tree: nextTree,
   }
 
+  await logProjectEvent(currentProject.value, 'project_rescanned', `重新扫描项目「${currentProject.value.name}」`, {
+    preferredPath,
+    readableFileCount: flattenReadableFiles(nextTree).length,
+  })
+
   const nextPath = preferredPath || activeFile.value?.path || findFirstReadableFile(nextTree)
   if (nextPath) {
     activeFile.value = await readProjectFile(currentProject.value, nextPath)
     chatStore.syncDefaultTarget(currentProject.value.id, activeFile.value?.path)
   }
+}
+
+async function logProjectEvent(
+  project: ProjectSnapshot,
+  event: string,
+  message: string,
+  data?: unknown,
+) {
+  await writeAgentLog(project, {
+    level: 'info',
+    event,
+    message,
+    data,
+  })
 }
 
 async function openInitialFile(snapshot: ProjectSnapshot) {
@@ -314,8 +520,15 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
       </label>
       <button :disabled="isBusy" @click="onCreateProject">创建项目</button>
       <button :disabled="isBusy" @click="onOpenProject">打开项目</button>
+      <button :disabled="isBusy || !currentProject" @click="onCloseProject">关闭项目</button>
+      <button :disabled="isBusy || !canRestoreLastProject" @click="onRestoreLastProject">恢复上次项目</button>
+      <button :disabled="isBusy || !lastProjectSummary" @click="onForgetLastProject">忘记上次项目</button>
       <button v-if="canRepair" :disabled="isBusy" @click="onRepairProject">修复项目结构</button>
     </div>
+
+    <p v-if="lastProjectSummary">
+      上次项目：{{ lastProjectSummary.name }}（{{ lastProjectSummary.rootName }}）
+    </p>
 
     <table width="100%">
       <tbody>

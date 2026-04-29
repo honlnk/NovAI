@@ -23,6 +23,7 @@ const REQUIRED_DIRECTORY_PATHS = [
   'prompts',
   'prompts/scenes',
   '.novel',
+  '.novel/logs',
 ] as const
 
 /**
@@ -50,6 +51,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await ensureDirectory(rootHandle, 'elements/worldbuilding')
   await ensureDirectory(rootHandle, 'prompts/scenes')
   await ensureDirectory(rootHandle, '.novel')
+  await ensureDirectory(rootHandle, '.novel/logs')
 
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
