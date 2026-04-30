@@ -1,6 +1,13 @@
 import type { ProjectSnapshot } from '../../types/project'
 
-export type CoreToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'ListDirectory' | 'FindFiles'
+export type CoreToolName =
+  | 'ReadFile'
+  | 'EditFile'
+  | 'CreateFile'
+  | 'RenameFile'
+  | 'DeleteFile'
+  | 'ListDirectory'
+  | 'FindFiles'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
@@ -82,6 +89,28 @@ export type CreateFileOutput = {
   contentLength: number
   linesAdded: number
   created: true
+}
+
+export type RenameFileInput = {
+  fromPath: string
+  toPath: string
+}
+
+export type RenameFileOutput = {
+  fromPath: string
+  toPath: string
+  contentLength: number
+}
+
+export type DeleteFileInput = {
+  path: string
+}
+
+export type DeleteFileOutput = {
+  path: string
+  trashPath: string
+  contentLength: number
+  linesRemoved: number
 }
 
 export type ListDirectoryInput = {

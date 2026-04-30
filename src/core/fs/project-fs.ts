@@ -275,6 +275,22 @@ export async function writeProjectTextFile(
   await writeText(rootHandle, path, content)
 }
 
+export async function moveProjectTextFile(
+  rootHandle: FileSystemDirectoryHandle,
+  fromPath: string,
+  toPath: string,
+) {
+  const content = await readText(rootHandle, fromPath)
+  await writeText(rootHandle, toPath, content)
+  await removeFile(rootHandle, fromPath)
+
+  return content
+}
+
+export async function removeProjectFile(rootHandle: FileSystemDirectoryHandle, path: string) {
+  await removeFile(rootHandle, path)
+}
+
 /**
  * 读取项目中的 `prompts/system.md`。
  */
@@ -493,6 +509,18 @@ async function readText(rootHandle: FileSystemDirectoryHandle, path: string) {
   const fileHandle = await resolveFileHandle(rootHandle, path)
   const file = await fileHandle.getFile()
   return file.text()
+}
+
+async function removeFile(rootHandle: FileSystemDirectoryHandle, path: string) {
+  const segments = path.split('/').filter(Boolean)
+  const fileName = segments.pop()
+
+  if (!fileName) {
+    throw new Error(`Invalid file path: ${path}`)
+  }
+
+  const parentHandle = await resolveDirectoryHandle(rootHandle, segments.join('/'))
+  await parentHandle.removeEntry(fileName)
 }
 
 async function ensureFileHandle(rootHandle: FileSystemDirectoryHandle, path: string) {

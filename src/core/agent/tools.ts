@@ -1,7 +1,9 @@
 import {
   createFileTool,
+  deleteFileTool,
   editFileTool,
   readFileTool,
+  renameFileTool,
 } from '../tools/file-tools'
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 
@@ -12,12 +14,16 @@ import type {
 import type {
   CreateFileInput,
   CreateFileOutput,
+  DeleteFileInput,
+  DeleteFileOutput,
   EditFileInput,
   EditFileOutput,
   FindFilesOutput,
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
+  RenameFileInput,
+  RenameFileOutput,
   ToolDefinition,
 } from '../tools/types'
 
@@ -149,6 +155,64 @@ export function createAgentTools(): AgentRunnableToolMap {
         return createFileTool.summarizeOutput(output)
       },
     },
+    RenameFile: {
+      name: 'RenameFile',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RenameFile',
+          description: '重命名或移动当前小说项目中的单个文本文件；目标路径已存在时会失败。',
+          parameters: {
+            type: 'object',
+            properties: {
+              fromPath: {
+                type: 'string',
+                description: '要移动或重命名的项目内相对路径；必须是已存在的 .md、.json 或 .txt 文件。',
+              },
+              toPath: {
+                type: 'string',
+                description: '新的项目内相对路径；父目录不存在时会自动创建，目标文件不能已存在。',
+              },
+            },
+            required: ['fromPath', 'toPath'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: renameFileTool,
+      formatResult(output: RenameFileOutput) {
+        return renameFileTool.summarizeOutput(output)
+      },
+    },
+    DeleteFile: {
+      name: 'DeleteFile',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'DeleteFile',
+          description: '将当前小说项目中的单个文本文件移入回收站；不会直接永久删除。',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: '要移入回收站的项目内相对路径；必须是已存在的 .md、.json 或 .txt 文件。',
+              },
+            },
+            required: ['path'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: deleteFileTool,
+      formatResult(output: DeleteFileOutput) {
+        return deleteFileTool.summarizeOutput(output)
+      },
+    },
     ListDirectory: {
       name: 'ListDirectory',
       isReadOnly: true,
@@ -241,6 +305,8 @@ export function isAgentToolName(value: string): value is AgentToolName {
   return value === 'ReadFile'
     || value === 'EditFile'
     || value === 'CreateFile'
+    || value === 'RenameFile'
+    || value === 'DeleteFile'
     || value === 'ListDirectory'
     || value === 'FindFiles'
 }

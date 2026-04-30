@@ -1,6 +1,8 @@
 import {
   getProjectTextFile,
+  moveProjectTextFile,
   readProjectTextFile,
+  removeProjectFile,
   writeProjectTextFile,
 } from '../fs/project-fs'
 
@@ -8,10 +10,14 @@ import { assertTextFilePath, isNotFoundError, normalizeProjectPath } from './pat
 import type {
   CreateFileInput,
   CreateFileOutput,
+  DeleteFileInput,
+  DeleteFileOutput,
   EditFileInput,
   EditFileOutput,
   ReadFileInput,
   ReadFileOutput,
+  RenameFileInput,
+  RenameFileOutput,
   ToolDefinition,
 } from './types'
 
@@ -212,12 +218,118 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
   },
 }
 
+export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, RenameFileOutput> = {
+  name: 'RenameFile',
+  description: '重命名或移动当前小说项目中的单个文本文件；目标路径已存在时会失败。',
+  validateInput(input) {
+    const value = asRecord(input)
+    const fromPath = normalizeProjectPath(readString(value.fromPath, 'RenameFile.fromPath'))
+    const toPath = normalizeProjectPath(readString(value.toPath, 'RenameFile.toPath'))
+
+    assertMutableDocumentPath(fromPath, 'RenameFile.fromPath')
+    assertMutableDocumentPath(toPath, 'RenameFile.toPath')
+
+    if (fromPath === toPath) {
+      throw new Error('RenameFile.fromPath 和 RenameFile.toPath 不能相同')
+    }
+
+    return {
+      fromPath,
+      toPath,
+    }
+  },
+  async run(input, runtime) {
+    const content = await readProjectTextFile(runtime.project.handle, input.fromPath)
+
+    try {
+      await readProjectTextFile(runtime.project.handle, input.toPath)
+      throw new Error(`目标文件已存在：${input.toPath}；RenameFile 不会覆盖已有文件，请换一个新路径`)
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+    }
+
+    await moveProjectTextFile(runtime.project.handle, input.fromPath, input.toPath)
+
+    return {
+      fromPath: input.fromPath,
+      toPath: input.toPath,
+      contentLength: content.length,
+    }
+  },
+  summarizeInput(input) {
+    return `将 ${input.fromPath} 重命名或移动到 ${input.toPath}`
+  },
+  summarizeOutput(output) {
+    return `已将 ${output.fromPath} 移动到 ${output.toPath}，共 ${output.contentLength} 个字符`
+  },
+}
+
+export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, DeleteFileOutput> = {
+  name: 'DeleteFile',
+  description: '将当前小说项目中的单个文本文件移入回收站；不会直接永久删除。',
+  validateInput(input) {
+    const value = asRecord(input)
+    const path = normalizeProjectPath(readString(value.path, 'DeleteFile.path'))
+
+    assertMutableDocumentPath(path, 'DeleteFile.path')
+
+    return {
+      path,
+    }
+  },
+  async run(input, runtime) {
+    const content = await readProjectTextFile(runtime.project.handle, input.path)
+    const trashPath = createTrashPath(input.path)
+
+    await writeProjectTextFile(runtime.project.handle, trashPath, content)
+    await removeProjectFile(runtime.project.handle, input.path)
+
+    return {
+      path: input.path,
+      trashPath,
+      contentLength: content.length,
+      linesRemoved: countLines(content),
+    }
+  },
+  summarizeInput(input) {
+    return `删除 ${input.path}`
+  },
+  summarizeOutput(output) {
+    return `已将 ${output.path} 移入回收站 ${output.trashPath}，原文件共 ${output.linesRemoved} 行，${output.contentLength} 个字符`
+  },
+}
+
 function asRecord(input: unknown) {
   if (!input || typeof input !== 'object') {
     throw new Error('工具输入必须是对象')
   }
 
   return input as Record<string, unknown>
+}
+
+function assertMutableDocumentPath(path: string, label: string) {
+  assertTextFilePath(path)
+
+  if (path === 'novel.config.json' || path.startsWith('.novel/')) {
+    throw new Error(`${label} 不能指向项目配置或 .novel 内部文件`)
+  }
+}
+
+function createTrashPath(path: string) {
+  const now = new Date()
+  const stamp = [
+    now.getFullYear(),
+    `${now.getMonth() + 1}`.padStart(2, '0'),
+    `${now.getDate()}`.padStart(2, '0'),
+    `${now.getHours()}`.padStart(2, '0'),
+    `${now.getMinutes()}`.padStart(2, '0'),
+    `${now.getSeconds()}`.padStart(2, '0'),
+    Math.random().toString(36).slice(2, 8),
+  ].join('-')
+
+  return `.novel/trash/${stamp}/${path}`
 }
 
 function readString(value: unknown, label: string) {
