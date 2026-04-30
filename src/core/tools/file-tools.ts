@@ -18,6 +18,10 @@ import type {
 const DEFAULT_READ_LIMIT = 2000
 const MAX_READ_LIMIT = 2000
 const MAX_FULL_READ_BYTES = 512 * 1024
+const LEFT_SINGLE_CURLY_QUOTE = '‘'
+const RIGHT_SINGLE_CURLY_QUOTE = '’'
+const LEFT_DOUBLE_CURLY_QUOTE = '“'
+const RIGHT_DOUBLE_CURLY_QUOTE = '”'
 
 export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOutput> = {
   name: 'ReadFile',
@@ -102,7 +106,7 @@ export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOut
 
 export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOutput> = {
   name: 'EditFile',
-  description: '用精确文本替换的方式修改当前小说项目中的已有文本文件。',
+  description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；修改前应先读取目标文件。',
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeProjectPath(readString(value.path, 'EditFile.path'))
@@ -126,34 +130,25 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
     const currentContent = await readProjectTextFile(runtime.project.handle, input.path)
 
     if (!input.oldText) {
-      if (currentContent.length > 0) {
-        throw new Error('EditFile.oldText 不能为空；新增文件请使用 CreateFile，覆盖非空文件请提供原文')
-      }
-
-      await writeProjectTextFile(runtime.project.handle, input.path, input.newText)
-
-      return {
-        path: input.path,
-        occurrences: 1,
-        contentLength: input.newText.length,
-        linesAdded: countLines(input.newText),
-        linesRemoved: 0,
-      }
+      throw new Error('EditFile.oldText 不能为空；新增文件请使用 CreateFile，修改已有文件请先 ReadFile 并提供要替换的原文片段')
     }
 
-    const occurrences = countOccurrences(currentContent, input.oldText)
+    const actualOldText = findActualText(currentContent, input.oldText)
 
-    if (occurrences === 0) {
-      throw new Error(`在 ${input.path} 中没有找到要替换的原文`)
+    if (!actualOldText) {
+      throw new Error(`在 ${input.path} 中没有找到要替换的原文；请先用 ReadFile 读取最新内容，确认 oldText 与文件内容完全一致，且不要包含行号前缀`)
     }
+
+    const occurrences = countOccurrences(currentContent, actualOldText)
 
     if (occurrences > 1 && !input.replaceAll) {
-      throw new Error(`在 ${input.path} 中找到 ${occurrences} 处匹配；请提供更精确的 oldText，或启用 replaceAll`)
+      throw new Error(`在 ${input.path} 中找到 ${occurrences} 处匹配；如需全部替换请启用 replaceAll。如只改其中一处，请直接把目标行与相邻上一行或下一行一起放进 oldText，组成唯一片段后再试`)
     }
 
+    const actualNewText = preserveQuoteStyle(input.oldText, actualOldText, input.newText)
     const nextContent = input.replaceAll
-      ? currentContent.split(input.oldText).join(input.newText)
-      : currentContent.replace(input.oldText, input.newText)
+      ? currentContent.split(actualOldText).join(actualNewText)
+      : currentContent.replace(actualOldText, actualNewText)
 
     await writeProjectTextFile(runtime.project.handle, input.path, nextContent)
 
@@ -161,8 +156,8 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       path: input.path,
       occurrences: input.replaceAll ? occurrences : 1,
       contentLength: nextContent.length,
-      linesAdded: countLines(input.newText) - countLines(input.oldText),
-      linesRemoved: Math.max(countLines(input.oldText) - countLines(input.newText), 0),
+      linesAdded: countLines(actualNewText) - countLines(actualOldText),
+      linesRemoved: Math.max(countLines(actualOldText) - countLines(actualNewText), 0),
     }
   },
   summarizeInput(input) {
@@ -298,6 +293,70 @@ function countOccurrences(source: string, needle: string) {
   }
 
   return source.split(needle).length - 1
+}
+
+function findActualText(source: string, searchText: string) {
+  if (source.includes(searchText)) {
+    return searchText
+  }
+
+  const normalizedSource = normalizeQuotes(source)
+  const normalizedSearchText = normalizeQuotes(searchText)
+  const startIndex = normalizedSource.indexOf(normalizedSearchText)
+
+  if (startIndex === -1) {
+    return null
+  }
+
+  return source.slice(startIndex, startIndex + searchText.length)
+}
+
+function normalizeQuotes(text: string) {
+  return text
+    .split(LEFT_SINGLE_CURLY_QUOTE).join("'")
+    .split(RIGHT_SINGLE_CURLY_QUOTE).join("'")
+    .split(LEFT_DOUBLE_CURLY_QUOTE).join('"')
+    .split(RIGHT_DOUBLE_CURLY_QUOTE).join('"')
+}
+
+function preserveQuoteStyle(oldText: string, actualOldText: string, newText: string) {
+  if (oldText === actualOldText) {
+    return newText
+  }
+
+  let nextText = newText
+
+  if (actualOldText.includes(LEFT_DOUBLE_CURLY_QUOTE) || actualOldText.includes(RIGHT_DOUBLE_CURLY_QUOTE)) {
+    nextText = applyCurlyDoubleQuotes(nextText)
+  }
+
+  if (actualOldText.includes(LEFT_SINGLE_CURLY_QUOTE) || actualOldText.includes(RIGHT_SINGLE_CURLY_QUOTE)) {
+    nextText = applyCurlySingleQuotes(nextText)
+  }
+
+  return nextText
+}
+
+function applyCurlyDoubleQuotes(text: string) {
+  return replaceStraightQuotes(text, '"', LEFT_DOUBLE_CURLY_QUOTE, RIGHT_DOUBLE_CURLY_QUOTE)
+}
+
+function applyCurlySingleQuotes(text: string) {
+  return replaceStraightQuotes(text, "'", LEFT_SINGLE_CURLY_QUOTE, RIGHT_SINGLE_CURLY_QUOTE)
+}
+
+function replaceStraightQuotes(text: string, straightQuote: string, leftQuote: string, rightQuote: string) {
+  let open = true
+
+  return Array.from(text).map((char) => {
+    if (char !== straightQuote) {
+      return char
+    }
+
+    const quote = open ? leftQuote : rightQuote
+    open = !open
+    return quote
+  }).join('')
 }
 
 function countLines(content: string) {

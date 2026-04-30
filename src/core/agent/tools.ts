@@ -87,7 +87,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'EditFile',
-          description: '用精确文本替换的方式修改当前小说项目中的已有文本文件。',
+          description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；调用前必须先 ReadFile 读取目标内容。',
           parameters: {
             type: 'object',
             properties: {
@@ -97,7 +97,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               oldText: {
                 type: 'string',
-                description: '要替换的原文，必须与文件中内容精确匹配。',
+                description: '要替换的原文，必须来自 ReadFile 返回内容；不要包含行号前缀，保留原文缩进。必须非空。重复文本只改一处时，用目标行加相邻行组成唯一片段。',
               },
               newText: {
                 type: 'string',
@@ -105,7 +105,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               replaceAll: {
                 type: 'boolean',
-                description: '是否替换所有匹配项。默认 false。',
+                description: '是否替换所有匹配项。默认 false；oldText 匹配多处时，如需全部替换才设为 true。',
               },
             },
             required: ['path', 'oldText', 'newText'],
