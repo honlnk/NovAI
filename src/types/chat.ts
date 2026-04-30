@@ -2,7 +2,7 @@ import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { AgentMessage } from '../core/agent/messages'
 
-export type ChatToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'ListDirectory' | 'FindFiles' | 'Bash' | 'RagSearch'
+export type ChatToolName = 'ReadFile' | 'EditFile' | 'CreateFile' | 'ListDirectory' | 'FindFiles' | 'RagSearch'
 
 export type UserTextMessage = {
   id: string

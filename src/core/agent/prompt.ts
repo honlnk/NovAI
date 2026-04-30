@@ -24,7 +24,7 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '- ReadFile 用于读取 .md、.json、.txt 文件，返回带行号内容；默认最多读取 2000 行。长文件或已知目标位置时，使用 offset/limit 分段读取。',
     '- EditFile 用于精确替换已有文件中的片段。oldText 必须来自 ReadFile 结果，但不要包含行号前缀；保留原文缩进，尽量提供足够上下文避免误替换。重复文本只改一处时，直接用目标行加相邻上一行或下一行组成唯一 oldText。新增文件请用 CreateFile。',
     '- CreateFile 用于创建不存在的新文件；目标已存在时会失败。不要用它覆盖已有文件，已有文件请先 ReadFile 再 EditFile。',
-    '- ListDirectory 用于查看某个目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。',
+    '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。目录不存在时，如果目标是新建文件，可以直接用 CreateFile。',
     '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、chapters/*.md、**/*来信*.md。它不会读取文件正文。',
     '- 可以连续使用多个工具完成任务。完成工具调用后，继续根据工具结果判断是否还需要下一步。',
     '- 完成任务后，用简短自然语言总结变更，不要重复输出整个文件。',
