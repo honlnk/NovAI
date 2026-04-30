@@ -38,7 +38,7 @@ NovAI 的思路是换一条路：
 - `prompts/system.md` 读取与保存
 - 章节文件写入 `chapters/`
 - 测试页中的项目文档分组与原文预览
-- `ReadFile / EditFile / CreateFile` 三个基础文件工具
+- `ReadFile / EditFile / CreateFile / RenameFile / DeleteFile / ListDirectory / FindFiles` 项目文件工具
 - OpenAI-compatible `tools / tool_calls` 解析
 - 工具结果回灌模型后的多轮 Query Loop
 - 项目级 JSONL 日志 `.novel/logs/agent.log.jsonl`
@@ -48,6 +48,7 @@ NovAI 的思路是换一条路：
 尚未完整落地的核心能力包括：
 
 - 写工具执行前确认
+- `readFileState` 与文件过期写入保护
 - 要素抽取
 - Embedding 向量化与 RAG 检索
 - 近期章节上下文拼装
