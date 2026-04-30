@@ -80,6 +80,7 @@ export type CreateFileInput = {
 export type CreateFileOutput = {
   path: string
   contentLength: number
+  linesAdded: number
   created: true
 }
 

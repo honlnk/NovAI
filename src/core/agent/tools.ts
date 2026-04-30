@@ -126,17 +126,17 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'CreateFile',
-          description: '在当前小说项目中新建文本文件；如果目标已存在会失败。',
+          description: '在当前小说项目中新建文本文件；中间目录会自动创建，目标已存在时会失败。已有文件请用 EditFile 修改。',
           parameters: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: '项目内相对路径。',
+                description: '项目内相对路径；父目录不存在时会自动创建。',
               },
               content: {
                 type: 'string',
-                description: '新文件完整内容。',
+                description: '新文件完整内容；不要用于覆盖已有文件。',
               },
             },
             required: ['path', 'content'],
