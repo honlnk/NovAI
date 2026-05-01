@@ -1,4 +1,4 @@
-import { normalizeProjectDirectoryPath } from './path'
+import { isNotFoundError, normalizeProjectDirectoryPath } from './path'
 import type {
   FindFilesInput,
   FindFilesOutput,
@@ -25,7 +25,18 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
   },
   async run(input, runtime) {
     const directoryPath = input.path ?? ''
-    const directoryHandle = await resolveDirectoryHandle(runtime.project.handle, directoryPath)
+    let directoryHandle: FileSystemDirectoryHandle
+
+    try {
+      directoryHandle = await resolveDirectoryHandle(runtime.project.handle, directoryPath)
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+
+      throw new Error(getMissingDirectoryMessage(directoryPath))
+    }
+
     const entries: ListDirectoryEntry[] = []
 
     for await (const entry of directoryHandle.values()) {
@@ -58,6 +69,12 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
     const target = output.path || '项目根目录'
     return `已查看 ${target}，共 ${output.entries.length} 个条目`
   },
+}
+
+function getMissingDirectoryMessage(path: string) {
+  const target = path || '项目根目录'
+
+  return `目录不存在：${target}。如果你要新建文件，不需要先创建目录，直接使用 CreateFile 写入目标文件即可，父目录会自动创建；如果你要查找已有文件，请先查看上级目录，或使用 FindFiles 按文件名/路径模式查找。`
 }
 
 export const findFilesTool: ToolDefinition<'FindFiles', FindFilesInput, FindFilesOutput> = {

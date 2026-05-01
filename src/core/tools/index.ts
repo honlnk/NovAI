@@ -1,13 +1,17 @@
 import {
   createFileTool,
+  deleteFileTool,
   editFileTool,
   readFileTool,
+  renameFileTool,
 } from './file-tools'
 import { findFilesTool, listDirectoryTool } from './directory-tools'
 import type {
   CoreToolName,
   CreateFileInput,
   CreateFileOutput,
+  DeleteFileInput,
+  DeleteFileOutput,
   EditFileInput,
   EditFileOutput,
   FindFilesInput,
@@ -16,6 +20,8 @@ import type {
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
+  RenameFileInput,
+  RenameFileOutput,
   ToolCall,
   ToolDefinition,
   ToolExecution,
@@ -27,6 +33,8 @@ export type {
   CoreToolName,
   CreateFileInput,
   CreateFileOutput,
+  DeleteFileInput,
+  DeleteFileOutput,
   EditFileInput,
   EditFileOutput,
   FindFilesInput,
@@ -35,6 +43,8 @@ export type {
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
+  RenameFileInput,
+  RenameFileOutput,
   ToolCall,
   ToolExecution,
   ToolResult,
@@ -45,6 +55,8 @@ type ToolOutputMap = {
   ReadFile: ReadFileOutput
   EditFile: EditFileOutput
   CreateFile: CreateFileOutput
+  RenameFile: RenameFileOutput
+  DeleteFile: DeleteFileOutput
   ListDirectory: ListDirectoryOutput
   FindFiles: FindFilesOutput
 }
@@ -53,6 +65,8 @@ const tools = {
   ReadFile: readFileTool,
   EditFile: editFileTool,
   CreateFile: createFileTool,
+  RenameFile: renameFileTool,
+  DeleteFile: deleteFileTool,
   ListDirectory: listDirectoryTool,
   FindFiles: findFilesTool,
 } satisfies Record<CoreToolName, ToolDefinition<CoreToolName, unknown, unknown>>

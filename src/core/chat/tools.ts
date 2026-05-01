@@ -97,31 +97,6 @@ export const ragSearchTool: ToolDefinition<RagSearchInput, RetrievalResult> = {
   },
 }
 
-export const bashTool: ToolDefinition<{ command: string }, { output: string }> = {
-  name: 'Bash',
-  description: '第一阶段保留占位，后续再接真实命令执行',
-  validateInput(input) {
-    const value = asObject(input)
-
-    if (typeof value.command !== 'string' || !value.command.trim()) {
-      throw new Error('Bash 需要有效的 command')
-    }
-
-    return {
-      command: value.command.trim(),
-    }
-  },
-  async call() {
-    throw new Error('第一阶段 Session Lab 还未接入真实 Bash 工具')
-  },
-  summarizeInput(input) {
-    return `执行命令：${input.command}`
-  },
-  summarizeOutput(output) {
-    return output.output
-  },
-}
-
 export function createToolRuntimeContext(context: ToolRuntimeContext): ToolRuntimeContext {
   return context
 }

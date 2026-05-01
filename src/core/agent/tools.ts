@@ -1,7 +1,9 @@
 import {
   createFileTool,
+  deleteFileTool,
   editFileTool,
   readFileTool,
+  renameFileTool,
 } from '../tools/file-tools'
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 
@@ -12,12 +14,16 @@ import type {
 import type {
   CreateFileInput,
   CreateFileOutput,
+  DeleteFileInput,
+  DeleteFileOutput,
   EditFileInput,
   EditFileOutput,
   FindFilesOutput,
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
+  RenameFileInput,
+  RenameFileOutput,
   ToolDefinition,
 } from '../tools/types'
 
@@ -42,7 +48,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'ReadFile',
-          description: '读取当前小说项目中的文本文件，返回带行号的内容。',
+          description: '读取当前小说项目中的 .md、.json、.txt 文本文件，返回带行号的内容；默认最多读取 2000 行。',
           parameters: {
             type: 'object',
             properties: {
@@ -53,12 +59,12 @@ export function createAgentTools(): AgentRunnableToolMap {
               offset: {
                 type: 'integer',
                 minimum: 1,
-                description: '可选，从第几行开始读取，默认 1。',
+                description: '可选，从第几行开始读取，默认 1。已知目标片段或继续读取长文件时使用。',
               },
               limit: {
                 type: 'integer',
                 minimum: 1,
-                description: '可选，最多读取多少行。',
+                description: '可选，最多读取多少行；默认 2000。长文件应使用 offset/limit 分段读取。',
               },
             },
             required: ['path'],
@@ -68,11 +74,15 @@ export function createAgentTools(): AgentRunnableToolMap {
       },
       core: readFileTool,
       formatResult(output: ReadFileOutput) {
-        return [
+        const notice = output.notice ? `<system-reminder>${output.notice}</system-reminder>` : ''
+        const body = output.numberedContent || output.content
+        const sections = [
           readFileTool.summarizeOutput(output),
-          '',
-          output.numberedContent || output.content,
-        ].join('\n')
+          notice,
+          body ? `\n${body}` : '',
+        ]
+
+        return sections.filter(Boolean).join('\n')
       },
     },
     EditFile: {
@@ -83,7 +93,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'EditFile',
-          description: '用精确文本替换的方式修改当前小说项目中的已有文本文件。',
+          description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；调用前必须先 ReadFile 读取目标内容。',
           parameters: {
             type: 'object',
             properties: {
@@ -93,7 +103,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               oldText: {
                 type: 'string',
-                description: '要替换的原文，必须与文件中内容精确匹配。',
+                description: '要替换的原文，必须来自 ReadFile 返回内容；不要包含行号前缀，保留原文缩进。必须非空。重复文本只改一处时，用目标行加相邻行组成唯一片段。',
               },
               newText: {
                 type: 'string',
@@ -101,7 +111,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               replaceAll: {
                 type: 'boolean',
-                description: '是否替换所有匹配项。默认 false。',
+                description: '是否替换所有匹配项。默认 false；oldText 匹配多处时，如需全部替换才设为 true。',
               },
             },
             required: ['path', 'oldText', 'newText'],
@@ -122,17 +132,17 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'CreateFile',
-          description: '在当前小说项目中新建文本文件；如果目标已存在会失败。',
+          description: '在当前小说项目中新建文本文件；中间目录会自动创建，目标已存在时会失败。已有文件请用 EditFile 修改。',
           parameters: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: '项目内相对路径。',
+                description: '项目内相对路径；父目录不存在时会自动创建。',
               },
               content: {
                 type: 'string',
-                description: '新文件完整内容。',
+                description: '新文件完整内容；不要用于覆盖已有文件。',
               },
             },
             required: ['path', 'content'],
@@ -143,6 +153,64 @@ export function createAgentTools(): AgentRunnableToolMap {
       core: createFileTool,
       formatResult(output: CreateFileOutput) {
         return createFileTool.summarizeOutput(output)
+      },
+    },
+    RenameFile: {
+      name: 'RenameFile',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RenameFile',
+          description: '重命名或移动当前小说项目中的单个文本文件；目标路径已存在时会失败。',
+          parameters: {
+            type: 'object',
+            properties: {
+              fromPath: {
+                type: 'string',
+                description: '要移动或重命名的项目内相对路径；必须是已存在的 .md、.json 或 .txt 文件。',
+              },
+              toPath: {
+                type: 'string',
+                description: '新的项目内相对路径；父目录不存在时会自动创建，目标文件不能已存在。',
+              },
+            },
+            required: ['fromPath', 'toPath'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: renameFileTool,
+      formatResult(output: RenameFileOutput) {
+        return renameFileTool.summarizeOutput(output)
+      },
+    },
+    DeleteFile: {
+      name: 'DeleteFile',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'DeleteFile',
+          description: '将当前小说项目中的单个文本文件移入回收站；不会直接永久删除。',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: '要移入回收站的项目内相对路径；必须是已存在的 .md、.json 或 .txt 文件。',
+              },
+            },
+            required: ['path'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: deleteFileTool,
+      formatResult(output: DeleteFileOutput) {
+        return deleteFileTool.summarizeOutput(output)
       },
     },
     ListDirectory: {
@@ -237,6 +305,8 @@ export function isAgentToolName(value: string): value is AgentToolName {
   return value === 'ReadFile'
     || value === 'EditFile'
     || value === 'CreateFile'
+    || value === 'RenameFile'
+    || value === 'DeleteFile'
     || value === 'ListDirectory'
     || value === 'FindFiles'
 }

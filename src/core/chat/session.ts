@@ -158,6 +158,14 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
             session.lastWrittenPath = event.call.input.path
           }
 
+          if (
+            event.ok &&
+            event.call.name === 'RenameFile' &&
+            typeof event.call.input.toPath === 'string'
+          ) {
+            session.lastWrittenPath = event.call.input.toPath
+          }
+
           pushMessage(
             session,
             {
