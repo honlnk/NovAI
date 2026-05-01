@@ -2,40 +2,103 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import {
+  closeProject,
   createProject,
-  findFirstReadableFile,
-  isFileSystemAccessSupported,
+  forgetLastProject,
+  getLastProjectSummary,
+  isProjectAccessSupported,
   openProject,
-  readProjectFile,
-  rescanProject,
-} from '../core/fs/project-fs'
-import type { ProjectFileContent, ProjectSnapshot, RecentProject } from '../types/project'
+  restoreLastProject,
+} from '../services/project-service'
+import {
+  readFile,
+  refreshFiles,
+} from '../services/file-service'
+import type {
+  FileContentView,
+  LastProjectSummaryView,
+  ProjectConfigView,
+  ProjectFileNodeView,
+  ProjectView,
+} from '../services/types'
+import type { RecentProject } from '../types/project'
 
 export const useProjectStore = defineStore('project', () => {
-  const currentProject = ref<ProjectSnapshot | null>(null)
+  const currentProject = ref<ProjectView | null>(null)
   const recentProjects = ref<RecentProject[]>([])
-  const activeFile = ref<ProjectFileContent | null>(null)
+  const activeFile = ref<FileContentView | null>(null)
+  const lastProjectSummary = ref<LastProjectSummaryView | null>(null)
   const isBusy = ref(false)
   const errorMessage = ref('')
   const statusMessage = ref('等待选择小说项目')
 
   const isReady = computed(() => currentProject.value !== null)
+  const isFileSystemSupported = computed(() => isProjectAccessSupported())
 
   async function createNewProject(projectName: string) {
     return runProjectAction(async () => {
-      const snapshot = await createProject(projectName)
-      setCurrentProject(snapshot)
-      statusMessage.value = `已创建项目「${snapshot.name}」`
-      return snapshot
+      const project = await createProject(projectName)
+      await setCurrentProject(project)
+      statusMessage.value = `已创建项目「${project.name}」`
+      return project
     })
   }
 
   async function openExistingProject() {
     return runProjectAction(async () => {
-      const snapshot = await openProject()
-      setCurrentProject(snapshot)
-      statusMessage.value = `已打开项目「${snapshot.name}」`
-      return snapshot
+      const project = await openProject()
+      await setCurrentProject(project)
+      statusMessage.value = `已打开项目「${project.name}」`
+      return project
+    })
+  }
+
+  async function restoreLastOpenedProject() {
+    return runProjectAction(async () => {
+      const project = await restoreLastProject()
+
+      if (!project) {
+        statusMessage.value = '没有可恢复的上次项目，或目录权限尚未授权'
+        return null
+      }
+
+      await setCurrentProject(project)
+      statusMessage.value = `已恢复上次项目「${project.name}」`
+      return project
+    })
+  }
+
+  async function loadLastProjectSummary() {
+    try {
+      lastProjectSummary.value = await getLastProjectSummary()
+      return lastProjectSummary.value
+    } catch (error) {
+      errorMessage.value = toMessage(error, '读取最近项目记录失败')
+      return null
+    }
+  }
+
+  async function forgetLastOpenedProject() {
+    return runProjectAction(async () => {
+      await forgetLastProject()
+      lastProjectSummary.value = null
+      statusMessage.value = '已忘记上次项目记录'
+    })
+  }
+
+  async function closeCurrentProject() {
+    if (!currentProject.value) {
+      statusMessage.value = '当前没有打开的项目'
+      return
+    }
+
+    const project = currentProject.value
+
+    await runProjectAction(async () => {
+      await closeProject(project.id)
+      currentProject.value = null
+      activeFile.value = null
+      statusMessage.value = `已关闭项目「${project.name}」`
     })
   }
 
@@ -47,7 +110,7 @@ export const useProjectStore = defineStore('project', () => {
     errorMessage.value = ''
 
     try {
-      activeFile.value = await readProjectFile(currentProject.value, path)
+      activeFile.value = await readFile(currentProject.value.id, path)
       return activeFile.value
     } catch (error) {
       errorMessage.value = toMessage(error, '读取文件失败')
@@ -63,36 +126,45 @@ export const useProjectStore = defineStore('project', () => {
     errorMessage.value = ''
 
     try {
-      currentProject.value.tree = await rescanProject(currentProject.value)
+      currentProject.value = {
+        ...currentProject.value,
+        files: await refreshFiles(currentProject.value.id),
+      }
       statusMessage.value = '文件树已刷新'
     } catch (error) {
       errorMessage.value = toMessage(error, '刷新文件树失败')
     }
   }
 
-  function setCurrentProject(snapshot: ProjectSnapshot) {
-    currentProject.value = snapshot
+  async function setCurrentProject(project: ProjectView) {
+    currentProject.value = project
     recentProjects.value = [
-      snapshot.metadata,
-      ...recentProjects.value.filter((item) => item.id !== snapshot.metadata.id),
+      toRecentProject(project),
+      ...recentProjects.value.filter((item) => item.id !== project.id),
     ].slice(0, 8)
 
-    const firstFilePath = findFirstReadableFile(snapshot.tree)
+    const firstFilePath = project.activeFilePath ?? findFirstReadableFile(project.files)
     if (firstFilePath) {
-      void openFile(firstFilePath)
+      await openFile(firstFilePath)
     } else {
       activeFile.value = null
     }
   }
 
-  async function runProjectAction<T>(action: () => Promise<T>) {
-    errorMessage.value = ''
-
-    if (!isFileSystemAccessSupported()) {
-      errorMessage.value = '当前浏览器不支持 File System Access API，请使用 Chromium 内核浏览器。'
-      return null
+  function updateCurrentProjectConfig(config: ProjectConfigView) {
+    if (!currentProject.value) {
+      return
     }
 
+    currentProject.value = {
+      ...currentProject.value,
+      name: config.project.name || currentProject.value.rootName,
+      config,
+    }
+  }
+
+  async function runProjectAction<T>(action: () => Promise<T>) {
+    errorMessage.value = ''
     isBusy.value = true
 
     try {
@@ -110,13 +182,20 @@ export const useProjectStore = defineStore('project', () => {
     currentProject,
     errorMessage,
     isBusy,
+    isFileSystemSupported,
     isReady,
+    lastProjectSummary,
     recentProjects,
     statusMessage,
+    closeCurrentProject,
     createNewProject,
+    forgetLastOpenedProject,
+    loadLastProjectSummary,
     openExistingProject,
     openFile,
     refreshTree,
+    restoreLastOpenedProject,
+    updateCurrentProjectConfig,
   }
 })
 
@@ -126,4 +205,48 @@ function toMessage(error: unknown, fallback: string) {
   }
 
   return fallback
+}
+
+function findFirstReadableFile(tree: ProjectFileNodeView[]): string | null {
+  const stack = [...tree]
+
+  while (stack.length > 0) {
+    const current = stack.shift()
+
+    if (!current) {
+      continue
+    }
+
+    if (current.kind === 'file' && /\.(md|json|txt)$/i.test(current.name)) {
+      return current.path
+    }
+
+    if (current.children?.length) {
+      stack.unshift(...current.children)
+    }
+  }
+
+  return null
+}
+
+function toRecentProject(project: ProjectView): RecentProject {
+  return {
+    id: project.id,
+    name: project.name,
+    updatedAt: project.config.project.updatedAt,
+    chapterCount: countChapterFiles(project.files),
+    wordCount: 0,
+  }
+}
+
+function countChapterFiles(nodes: ProjectFileNodeView[]): number {
+  return nodes.reduce((total, node) => {
+    if (node.kind === 'file') {
+      return node.path.startsWith('chapters/') && node.name.endsWith('.md')
+        ? total + 1
+        : total
+    }
+
+    return total + countChapterFiles(node.children ?? [])
+  }, 0)
 }

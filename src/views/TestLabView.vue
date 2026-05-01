@@ -1,37 +1,26 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
-import { testRerankConnection } from '../core/ai/rerank-client'
-import { testEmbeddingConnection } from '../core/embedding/client'
-import { extractElementsFromChapter } from '../core/elements/extractor'
+import { previewElementExtraction } from '../services/element-service'
+import { writeChapter } from '../services/file-service'
+import { streamGeneration } from '../services/generation-service'
 import {
-  createProject,
-  findFirstReadableFile,
-  inspectProject,
-  isFileSystemAccessSupported,
-  pickProjectDirectory,
-  readProjectFile,
-  readSystemPrompt,
-  repairProject,
-  rescanProject,
-  writeChapterFile,
-  writeProjectConfig,
-  writeSystemPrompt,
-} from '../core/fs/project-fs'
-import { buildGenerationContextDraft, selectFinalContextItems } from '../core/rag/context'
-import { explainRetrievalCandidates } from '../core/rag/explain'
-import { buildProjectIndex, getProjectIndexMeta } from '../core/rag/indexer'
-import { rerankRetrievalCandidates } from '../core/rag/rerank'
-import { searchRagCandidates } from '../core/rag/search'
-import { testLlmConnection, streamChatCompletion } from '../core/llm/client'
-import type { ElementExtractionResult } from '../types/elements'
-import type { ProjectConfig, ProjectFileContent, ProjectInspection, ProjectSnapshot, TreeNode } from '../types/project'
-import type { GenerationContextDraft, ProjectIndexMeta, RetrievalExplanation } from '../types/rag'
+  inspectIndex,
+  rebuildIndex,
+  runRagDebug,
+} from '../services/rag-service'
+import { useProjectStore } from '../stores/project'
+import { useSettingsStore } from '../stores/settings'
+import type {
+  ElementExtractionResultView,
+  GenerationContextDraftView,
+  ProjectConfigView,
+  ProjectFileNodeView,
+  ProjectIndexMetaView,
+  RetrievalExplanationView,
+} from '../services/types'
 
 const projectName = ref('我的测试小说')
-const currentProject = ref<ProjectSnapshot | null>(null)
-const pendingHandle = ref<FileSystemDirectoryHandle | null>(null)
-const inspection = ref<ProjectInspection | null>(null)
 const status = ref('这里先作为 AI 功能测试页使用。')
 const connectionStatus = ref('还没有测试连接。')
 const generationStatus = ref('还没有开始生成。')
@@ -42,17 +31,18 @@ const instruction = ref('写一段测试内容：主角深夜走进废弃藏书�
 const chapterFileName = ref('chapter-test.md')
 const result = ref('')
 const lastSavedChapterPath = ref('')
-const activeFile = ref<ProjectFileContent | null>(null)
 const rerankStatus = ref('还没有测试 Rerank 连接。')
 const indexStatusMessage = ref('还没有读取索引状态。')
 const ragStatus = ref('还没有执行 RAG 调试流程。')
 const extractionStatus = ref('还没有执行要素提取预览。')
-const projectIndexMeta = ref<ProjectIndexMeta | null>(null)
-const ragDraft = ref<GenerationContextDraft | null>(null)
-const retrievalExplanations = ref<RetrievalExplanation[]>([])
-const extractionPreview = ref<ElementExtractionResult | null>(null)
+const projectIndexMeta = ref<ProjectIndexMetaView | null>(null)
+const ragDraft = ref<GenerationContextDraftView | null>(null)
+const retrievalExplanations = ref<RetrievalExplanationView[]>([])
+const extractionPreview = ref<ElementExtractionResultView | null>(null)
+const projectStore = useProjectStore()
+const settingsStore = useSettingsStore()
 
-const configDraft = reactive<ProjectConfig>({
+const configDraft = reactive<ProjectConfigView>({
   version: 1,
   project: {
     name: '',
@@ -90,17 +80,18 @@ const configDraft = reactive<ProjectConfig>({
   },
 })
 
-const canRepair = computed(() => pendingHandle.value && inspection.value && !inspection.value.canLoad)
-const projectLabel = computed(() => currentProject.value?.rootName ?? inspection.value?.rootName ?? '未选择项目')
+const currentProject = computed(() => projectStore.currentProject)
+const activeFile = computed(() => projectStore.activeFile)
+const projectLabel = computed(() => currentProject.value?.rootName ?? '未选择项目')
 const configPreview = computed(() => JSON.stringify(configDraft, null, 2))
-const readableFiles = computed(() => flattenReadableFiles(currentProject.value?.tree ?? []))
+const readableFiles = computed(() => flattenReadableFiles(currentProject.value?.files ?? []))
 const groupedReadableFiles = computed(() => groupReadableFiles(readableFiles.value))
 const indexMetaPreview = computed(() => JSON.stringify(projectIndexMeta.value, null, 2))
 const ragDraftPreview = computed(() => JSON.stringify(ragDraft.value, null, 2))
 const extractionPreviewText = computed(() => JSON.stringify(extractionPreview.value, null, 2))
 const retrievalExplanationPreview = computed(() => JSON.stringify(retrievalExplanations.value, null, 2))
 
-function applyConfigDraft(config: ProjectConfig) {
+function applyConfigDraft(config: ProjectConfigView) {
   configDraft.version = config.version
   configDraft.project = { ...config.project }
   configDraft.llm = { ...config.llm }
@@ -111,40 +102,22 @@ function applyConfigDraft(config: ProjectConfig) {
 
 async function onCreateProject() {
   await runTask(async () => {
-    const snapshot = await createProject(projectName.value.trim() || '我的测试小说')
-    await activateProject(snapshot, `已创建并打开项目「${snapshot.name}」`)
+    const project = await projectStore.createNewProject(projectName.value.trim() || '我的测试小说')
+
+    if (project) {
+      await activateProjectView(`已创建并打开项目「${project.name}」`)
+    }
   }, '创建项目失败')
 }
 
 async function onOpenProject() {
   await runTask(async () => {
-    const handle = await pickProjectDirectory()
-    pendingHandle.value = handle
-    currentProject.value = null
-    inspection.value = await inspectProject(handle)
+    const project = await projectStore.openExistingProject()
 
-    if (inspection.value.canLoad) {
-      const snapshot = await repairProject(handle)
-      await activateProject(snapshot, `已打开项目「${snapshot.name}」`)
-      return
+    if (project) {
+      await activateProjectView(`已打开项目「${project.name}」`)
     }
-
-    status.value = `目录「${handle.name}」缺少必要文件，可点击“修复项目结构”补齐`
   }, '打开项目失败')
-}
-
-async function onRepairProject() {
-  const handle = pendingHandle.value
-
-  if (!handle) {
-    status.value = '请先选择一个目录'
-    return
-  }
-
-  await runTask(async () => {
-    const snapshot = await repairProject(handle)
-    await activateProject(snapshot, `已修复并打开项目「${snapshot.name}」`)
-  }, '修复项目失败')
 }
 
 async function onSaveConfig() {
@@ -154,8 +127,7 @@ async function onSaveConfig() {
   }
 
   await runTask(async () => {
-    const savedConfig = await writeProjectConfig(currentProject.value!.handle, {
-      ...configDraft,
+    const savedConfig = await settingsStore.saveConfig(currentProject.value!.id, {
       project: {
         ...configDraft.project,
         name: configDraft.project.name || currentProject.value!.rootName,
@@ -166,13 +138,11 @@ async function onSaveConfig() {
       settings: { ...configDraft.settings },
     })
 
-    applyConfigDraft(savedConfig)
-    currentProject.value = {
-      ...currentProject.value!,
-      name: savedConfig.project.name,
-      config: savedConfig,
+    if (savedConfig) {
+      applyConfigDraft(savedConfig)
+      projectStore.updateCurrentProjectConfig(savedConfig)
+      status.value = '配置已保存到 novel.config.json'
     }
-    status.value = '配置已保存到 novel.config.json'
   }, '保存配置失败')
 }
 
@@ -183,39 +153,27 @@ async function onSaveSystemPrompt() {
   }
 
   await runTask(async () => {
-    await writeSystemPrompt(currentProject.value!.handle, systemPrompt.value)
+    await settingsStore.saveSystemPrompt(currentProject.value!.id, systemPrompt.value)
     status.value = 'system.md 已保存'
   }, '保存 system prompt 失败')
 }
 
 async function onTestLlm() {
   connectionStatus.value = '正在测试 LLM 连接...'
-  const checked = await testLlmConnection({
-    baseUrl: configDraft.llm.baseUrl,
-    apiKey: configDraft.llm.apiKey,
-    model: configDraft.llm.model,
-  })
-  connectionStatus.value = checked.message
+  const checked = await settingsStore.testLlmConfig(configDraft.llm)
+  connectionStatus.value = checked?.message ?? settingsStore.errorMessage
 }
 
 async function onTestEmbedding() {
   connectionStatus.value = '正在测试 Embedding 连接...'
-  const checked = await testEmbeddingConnection({
-    baseUrl: configDraft.embedding.baseUrl,
-    apiKey: configDraft.embedding.apiKey,
-    model: configDraft.embedding.model,
-  })
-  connectionStatus.value = checked.message
+  const checked = await settingsStore.testEmbeddingConfig(configDraft.embedding)
+  connectionStatus.value = checked?.message ?? settingsStore.errorMessage
 }
 
 async function onTestRerank() {
   rerankStatus.value = '正在测试 Rerank 连接...'
-  const checked = await testRerankConnection({
-    baseUrl: configDraft.rerank.baseUrl,
-    apiKey: configDraft.rerank.apiKey,
-    model: configDraft.rerank.model,
-  })
-  rerankStatus.value = checked.message
+  const checked = await settingsStore.testRerankConfig(configDraft.rerank)
+  rerankStatus.value = checked?.message ?? settingsStore.errorMessage
 }
 
 async function onGenerate() {
@@ -224,7 +182,7 @@ async function onGenerate() {
   isStreaming.value = true
 
   try {
-    await streamChatCompletion(
+    await streamGeneration(
       {
         baseUrl: configDraft.llm.baseUrl,
         apiKey: configDraft.llm.apiKey,
@@ -271,11 +229,12 @@ async function onSaveChapter() {
   }
 
   await runTask(async () => {
-    const savedName = await writeChapterFile(currentProject.value!.handle, chapterFileName.value, result.value)
-    lastSavedChapterPath.value = `chapters/${savedName}`
-    chapterFileName.value = savedName
-    generationStatus.value = `已保存章节：${savedName}`
-    await refreshProjectFiles(`chapters/${savedName}`)
+    const savedFile = await writeChapter(currentProject.value!.id, chapterFileName.value, result.value)
+
+    lastSavedChapterPath.value = savedFile.path
+    chapterFileName.value = savedFile.name
+    generationStatus.value = `已保存章节：${savedFile.name}`
+    await refreshProjectFiles(savedFile.path)
   }, '保存章节失败')
 }
 
@@ -286,7 +245,7 @@ async function onInspectIndexMeta() {
   }
 
   await runTask(async () => {
-    projectIndexMeta.value = await getProjectIndexMeta(currentProject.value!.id)
+    projectIndexMeta.value = await inspectIndex(currentProject.value!.id)
     indexStatusMessage.value = projectIndexMeta.value
       ? `已读取索引状态：${projectIndexMeta.value.status}`
       : '当前项目还没有索引元信息'
@@ -300,11 +259,8 @@ async function onBuildIndexSkeleton() {
   }
 
   await runTask(async () => {
-    const built = await buildProjectIndex(currentProject.value!, {
-      projectId: currentProject.value!.id,
-      reason: 'manual-rebuild',
-    })
-    projectIndexMeta.value = await getProjectIndexMeta(currentProject.value!.id)
+    const built = await rebuildIndex(currentProject.value!.id)
+    projectIndexMeta.value = await inspectIndex(currentProject.value!.id)
     indexStatusMessage.value = built.message
   }, '触发索引构建失败')
 }
@@ -318,38 +274,12 @@ async function onRunRagDemo() {
   await runTask(async () => {
     ragStatus.value = '正在执行 RAG 调试流程...'
 
-    const retrieval = await searchRagCandidates({
-      projectId: currentProject.value!.id,
-      query: instruction.value.trim(),
-      topK: configDraft.settings.ragCandidateLimit,
-    }, configDraft)
+    const debug = await runRagDebug(currentProject.value!.id, instruction.value.trim())
 
-    const reranked = await rerankRetrievalCandidates(
-      configDraft,
-      instruction.value.trim(),
-      retrieval.candidates,
-    )
-
-    const finalItems = selectFinalContextItems(
-      reranked,
-      configDraft.settings.ragContextMaxItems,
-    )
-
-    ragDraft.value = buildGenerationContextDraft({
-      query: instruction.value.trim(),
-      retrievedCandidates: retrieval.candidates,
-      rerankedCandidates: reranked,
-      finalContextItems: finalItems,
-    })
-
-    retrievalExplanations.value = [
-      ...explainRetrievalCandidates(retrieval.candidates, 'recall'),
-      ...explainRetrievalCandidates(reranked, 'rerank'),
-      ...explainRetrievalCandidates(finalItems, 'final-context'),
-    ]
-
-    ragStatus.value = retrieval.candidates.length > 0
-      ? `RAG 调试完成，当前召回 ${retrieval.candidates.length} 条候选`
+    ragDraft.value = debug.draft
+    retrievalExplanations.value = debug.explanations
+    ragStatus.value = debug.recalledCount > 0
+      ? `RAG 调试完成，当前召回 ${debug.recalledCount} 条候选`
       : 'RAG 调试完成：当前索引为空，暂时没有可召回候选'
   }, '执行 RAG 调试失败')
 }
@@ -363,7 +293,7 @@ async function onPreviewElementExtraction() {
   }
 
   await runTask(async () => {
-    extractionPreview.value = await extractElementsFromChapter({
+    extractionPreview.value = await previewElementExtraction({
       chapterMarkdown,
       chapterPath: activeFile.value?.path || lastSavedChapterPath.value || '',
       systemPrompt: systemPrompt.value,
@@ -382,14 +312,18 @@ async function onPreviewElementExtraction() {
   }, '执行要素提取预览失败')
 }
 
-async function activateProject(snapshot: ProjectSnapshot, message: string) {
-  // 项目一旦激活，就把测试页需要的状态一次性同步过来，避免每块区域各自再读一遍文件。
-  currentProject.value = snapshot
-  pendingHandle.value = snapshot.handle
-  inspection.value = await inspectProject(snapshot.handle)
-  applyConfigDraft(snapshot.config)
-  systemPrompt.value = await readSystemPrompt(snapshot.handle)
-  await openInitialFile(snapshot)
+async function activateProjectView(message: string) {
+  if (!currentProject.value) {
+    return
+  }
+
+  const settings = await settingsStore.loadSettings(currentProject.value.id)
+
+  if (settings) {
+    applyConfigDraft(settings.config)
+    systemPrompt.value = settings.systemPrompt
+  }
+
   status.value = message
 }
 
@@ -400,7 +334,7 @@ async function onOpenFile(path: string) {
   }
 
   await runTask(async () => {
-    activeFile.value = await readProjectFile(currentProject.value!, path)
+    await projectStore.openFile(path)
     status.value = `已打开文件：${path}`
   }, '读取文件失败')
 }
@@ -410,38 +344,20 @@ async function refreshProjectFiles(preferredPath?: string) {
     return
   }
 
-  const nextTree = await rescanProject(currentProject.value)
-  currentProject.value = {
-    ...currentProject.value,
-    tree: nextTree,
-  }
+  await projectStore.refreshTree()
 
   const nextPath =
     preferredPath ||
     activeFile.value?.path ||
-    findFirstReadableFile(nextTree)
+    findFirstReadableFile(currentProject.value.files)
 
   if (nextPath) {
-    // 保存章节后优先打开新文件；否则尽量维持当前预览文件不跳走。
-    activeFile.value = await readProjectFile(currentProject.value, nextPath)
-  } else {
-    activeFile.value = null
+    await projectStore.openFile(nextPath)
   }
-}
-
-async function openInitialFile(snapshot: ProjectSnapshot) {
-  const firstReadablePath = findFirstReadableFile(snapshot.tree)
-
-  if (!firstReadablePath) {
-    activeFile.value = null
-    return
-  }
-
-  activeFile.value = await readProjectFile(snapshot, firstReadablePath)
 }
 
 async function runTask(action: () => Promise<void>, fallback: string) {
-  if (!isFileSystemAccessSupported()) {
+  if (!projectStore.isFileSystemSupported) {
     status.value = '当前浏览器不支持 File System Access API，请使用 Chromium 内核浏览器。'
     return
   }
@@ -457,7 +373,7 @@ async function runTask(action: () => Promise<void>, fallback: string) {
   }
 }
 
-function flattenReadableFiles(tree: TreeNode[]) {
+function flattenReadableFiles(tree: ProjectFileNodeView[]) {
   const files: Array<{ path: string; name: string }> = []
   const stack = [...tree]
 
@@ -482,6 +398,10 @@ function flattenReadableFiles(tree: TreeNode[]) {
   }
 
   return files
+}
+
+function findFirstReadableFile(tree: ProjectFileNodeView[]) {
+  return flattenReadableFiles(tree)[0]?.path ?? null
 }
 
 function groupReadableFiles(files: Array<{ path: string; name: string }>) {
@@ -517,13 +437,8 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
         <span>项目名称</span>
         <input v-model="projectName" type="text" style="width: 100%" />
       </label>
-      <p>
-        目录检查结果：
-        {{ inspection ? (inspection.canLoad ? '可直接打开' : inspection.issues.join('、')) : '还未选择目录' }}
-      </p>
       <button type="button" :disabled="isBusy" @click="onCreateProject">创建小说</button>
       <button type="button" :disabled="isBusy" @click="onOpenProject">打开小说</button>
-      <button type="button" :disabled="isBusy || !canRepair" @click="onRepairProject">修复项目结构</button>
     </section>
 
     <section>
