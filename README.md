@@ -165,6 +165,7 @@ pnpm typecheck
 - [`docs/project/项目总览.md`](./docs/project/项目总览.md)：项目阶段与目标
 - [`docs/project/MVP清单.md`](./docs/project/MVP清单.md)：MVP 范围与执行顺序
 - [`docs/project/当前进度.md`](./docs/project/当前进度.md)：开发推进情况
+- [`INTERFACE.md`](./INTERFACE.md)：当前 UI 协作接口、stores/services 使用入口
 
 ## 仓库目标
 
