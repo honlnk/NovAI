@@ -5,7 +5,7 @@ import { useChatStore } from '../stores/chat'
 import { useProjectStore } from '../stores/project'
 import { useSettingsStore } from '../stores/settings'
 
-import type { ChangedFileView, ProjectFileNodeView } from '../services/types'
+import type { ChangedFileView, ProjectFileNodeView } from '@novai/core/services/types'
 
 const projectName = ref('我的测试小说')
 const status = ref('这里用于验证第一阶段会话引擎。')

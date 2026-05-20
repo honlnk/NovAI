@@ -9,19 +9,19 @@ import {
   isProjectAccessSupported,
   openProject,
   restoreLastProject,
-} from '../services/project-service'
+} from '@novai/core/services/project-service'
 import {
   readFile,
   refreshFiles,
-} from '../services/file-service'
+} from '@novai/core/services/file-service'
 import type {
   FileContentView,
   LastProjectSummaryView,
   ProjectConfigView,
   ProjectFileNodeView,
   ProjectView,
-} from '../services/types'
-import type { RecentProject } from '../types/project'
+} from '@novai/core/services/types'
+import type { RecentProject } from '@novai/core/types/project'
 
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<ProjectView | null>(null)

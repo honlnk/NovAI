@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
-import { previewElementExtraction } from '../services/element-service'
-import { writeChapter } from '../services/file-service'
-import { streamGeneration } from '../services/generation-service'
+import { previewElementExtraction } from '@novai/core/services/element-service'
+import { writeChapter } from '@novai/core/services/file-service'
+import { streamGeneration } from '@novai/core/services/generation-service'
 import {
   inspectIndex,
   rebuildIndex,
   runRagDebug,
-} from '../services/rag-service'
+} from '@novai/core/services/rag-service'
 import { useProjectStore } from '../stores/project'
 import { useSettingsStore } from '../stores/settings'
 import type {
@@ -18,7 +18,7 @@ import type {
   ProjectFileNodeView,
   ProjectIndexMetaView,
   RetrievalExplanationView,
-} from '../services/types'
+} from '@novai/core/services/types'
 
 const projectName = ref('我的测试小说')
 const status = ref('这里先作为 AI 功能测试页使用。')

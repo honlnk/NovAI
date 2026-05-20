@@ -5,7 +5,7 @@ import {
   createSession as createAgentSession,
   deriveTargetFromPath,
   runTurn as runAgentTurn,
-} from '../services/agent-service'
+} from '@novai/core/services/agent-service'
 
 import type {
   AgentUiEvent,
@@ -14,7 +14,7 @@ import type {
   ChatTargetView,
   RunAgentTurnInput,
   RunAgentTurnResult,
-} from '../services/types'
+} from '@novai/core/services/types'
 
 export const useChatStore = defineStore('chat', () => {
   const sessionView = ref<ChatSessionView | null>(null)

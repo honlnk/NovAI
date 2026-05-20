@@ -9,7 +9,7 @@ import {
   testRerank,
   updateConfig,
   writeSystemPrompt,
-} from '../services/settings-service'
+} from '@novai/core/services/settings-service'
 import type {
   ConnectionTestResultView,
   EmbeddingConfigView,
@@ -17,7 +17,7 @@ import type {
   ProjectConfigPatch,
   ProjectConfigView,
   RerankConfigView,
-} from '../services/types'
+} from '@novai/core/services/types'
 
 export const useSettingsStore = defineStore('settings', () => {
   const config = ref<ProjectConfigView | null>(null)
