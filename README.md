@@ -24,7 +24,7 @@ NovAI 的思路是换一条路：
 
 ## 当前状态
 
-项目目前处于 MVP 早期实现阶段，正在优先验证 AI 最小可用创作闭环。
+项目目前处于 MVP 早期实现阶段，正在优先验证 Claude Code 风格的文件工具 Agent Loop。
 
 当前仓库已经完成的内容主要包括：
 
@@ -38,10 +38,17 @@ NovAI 的思路是换一条路：
 - `prompts/system.md` 读取与保存
 - 章节文件写入 `chapters/`
 - 测试页中的项目文档分组与原文预览
+- `ReadFile / EditFile / CreateFile / RenameFile / DeleteFile / ListDirectory / FindFiles` 项目文件工具
+- OpenAI-compatible `tools / tool_calls` 解析
+- 工具结果回灌模型后的多轮 Query Loop
+- 项目级 JSONL 日志 `.novel/logs/agent.log.jsonl`
+- 最近项目记忆与刷新后恢复
 - 项目规划、需求说明、UI 设计、技术架构等文档整理
 
 尚未完整落地的核心能力包括：
 
+- 写工具执行前确认
+- `readFileState` 与文件过期写入保护
 - 要素抽取
 - Embedding 向量化与 RAG 检索
 - 近期章节上下文拼装
@@ -52,7 +59,7 @@ NovAI 的思路是换一条路：
 
 当前希望优先打通这条最小闭环：
 
-`创建项目 -> 配置模型 -> 输入指令 -> 生成章节 -> 写入文件 -> 提取要素 -> 下次生成可复用要素`
+`创建项目 -> 配置模型 -> 输入指令 -> Agent 读取/修改文件 -> 写入文件 -> 提取要素 -> 下次生成可复用要素`
 
 如果这条链路成立，就能验证 NovAI 最核心的产品判断：
 
@@ -79,7 +86,9 @@ NovAI 采用“一个文件夹就是一个小说项目”的思路。当前默�
 │   └── scenes/
 │       └── scene-001.md
 └── .novel/
-    └── manifest.json
+    ├── manifest.json
+    └── logs/
+        └── agent.log.jsonl
 ```
 
 这样做的好处是：
@@ -113,9 +122,12 @@ NovAI 采用“一个文件夹就是一个小说项目”的思路。当前默�
 - 编辑并保存项目配置
 - 测试 LLM / Embedding 连通性
 - 发起流式生成
+- 通过 Agent Loop 调用文件工具
 - 保存 SYSTEM Prompt
 - 保存生成章节
 - 浏览项目中的 Markdown / JSON / 文本文档原文
+- 自动恢复最近打开的项目
+- 记录项目生命周期、模型调用和工具调用日志
 
 ## 本地开发
 
@@ -153,6 +165,7 @@ pnpm typecheck
 - [`docs/project/项目总览.md`](./docs/project/项目总览.md)：项目阶段与目标
 - [`docs/project/MVP清单.md`](./docs/project/MVP清单.md)：MVP 范围与执行顺序
 - [`docs/project/当前进度.md`](./docs/project/当前进度.md)：开发推进情况
+- [`INTERFACE.md`](./INTERFACE.md)：当前 UI 协作接口、stores/services 使用入口
 
 ## 仓库目标
 

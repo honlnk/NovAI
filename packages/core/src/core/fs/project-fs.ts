@@ -23,6 +23,7 @@ const REQUIRED_DIRECTORY_PATHS = [
   'prompts',
   'prompts/scenes',
   '.novel',
+  '.novel/logs',
 ] as const
 
 /**
@@ -50,6 +51,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await ensureDirectory(rootHandle, 'elements/worldbuilding')
   await ensureDirectory(rootHandle, 'prompts/scenes')
   await ensureDirectory(rootHandle, '.novel')
+  await ensureDirectory(rootHandle, '.novel/logs')
 
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
@@ -256,6 +258,11 @@ export async function readProjectTextFile(rootHandle: FileSystemDirectoryHandle,
   return readText(rootHandle, path)
 }
 
+export async function getProjectTextFile(rootHandle: FileSystemDirectoryHandle, path: string) {
+  const fileHandle = await resolveFileHandle(rootHandle, path)
+  return fileHandle.getFile()
+}
+
 /**
  * 按相对路径写入项目中的任意文本文件。
  * 路径上的中间目录会自动创建。
@@ -266,6 +273,22 @@ export async function writeProjectTextFile(
   content: string,
 ) {
   await writeText(rootHandle, path, content)
+}
+
+export async function moveProjectTextFile(
+  rootHandle: FileSystemDirectoryHandle,
+  fromPath: string,
+  toPath: string,
+) {
+  const content = await readText(rootHandle, fromPath)
+  await writeText(rootHandle, toPath, content)
+  await removeFile(rootHandle, fromPath)
+
+  return content
+}
+
+export async function removeProjectFile(rootHandle: FileSystemDirectoryHandle, path: string) {
+  await removeFile(rootHandle, path)
 }
 
 /**
@@ -486,6 +509,18 @@ async function readText(rootHandle: FileSystemDirectoryHandle, path: string) {
   const fileHandle = await resolveFileHandle(rootHandle, path)
   const file = await fileHandle.getFile()
   return file.text()
+}
+
+async function removeFile(rootHandle: FileSystemDirectoryHandle, path: string) {
+  const segments = path.split('/').filter(Boolean)
+  const fileName = segments.pop()
+
+  if (!fileName) {
+    throw new Error(`Invalid file path: ${path}`)
+  }
+
+  const parentHandle = await resolveDirectoryHandle(rootHandle, segments.join('/'))
+  await parentHandle.removeEntry(fileName)
 }
 
 async function ensureFileHandle(rootHandle: FileSystemDirectoryHandle, path: string) {
