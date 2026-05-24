@@ -1,6 +1,7 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
+import type { ReadFileState } from '../tools/types'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
@@ -10,6 +11,7 @@ export async function executeAgentTool(input: {
   call: AgentToolCall
   project: ProjectSnapshot
   tools: AgentRunnableToolMap
+  readFileStates?: Map<string, ReadFileState>
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage> {
   const tool = input.tools[input.call.name]
@@ -69,7 +71,10 @@ export async function executeAgentTool(input: {
   })
 
   try {
-    const output = await tool.core.run(validatedInput, { project: input.project })
+    const output = await tool.core.run(validatedInput, {
+      project: input.project,
+      readFileStates: input.readFileStates,
+    })
     const resultSummary = tool.core.summarizeOutput(output)
 
     input.onEvent?.({

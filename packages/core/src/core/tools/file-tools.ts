@@ -16,6 +16,7 @@ import type {
   EditFileOutput,
   ReadFileInput,
   ReadFileOutput,
+  ReadFileState,
   RenameFileInput,
   RenameFileOutput,
   ToolDefinition,
@@ -57,6 +58,9 @@ export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOut
     }
 
     const content = await file.text()
+    const readFileState = createReadFileState(input.path, content, file)
+    runtime.readFileStates?.set(input.path, readFileState)
+
     const lines = splitLines(content)
     const startLine = input.offset ?? 1
     const limit = input.limit ?? DEFAULT_READ_LIMIT
@@ -80,6 +84,7 @@ export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOut
       path: input.path,
       content: selectedLines.join('\n'),
       numberedContent,
+      readFileState,
       startLine,
       endLine,
       totalLines: empty ? 0 : lines.length,
@@ -118,6 +123,9 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
     const path = normalizeProjectPath(readString(value.path, 'EditFile.path'))
     const oldText = readString(value.oldText, 'EditFile.oldText')
     const newText = readString(value.newText, 'EditFile.newText')
+    const readFileState = value.readFileState === undefined
+      ? undefined
+      : readReadFileState(value.readFileState, 'EditFile.readFileState')
 
     assertTextFilePath(path)
 
@@ -130,10 +138,20 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       oldText,
       newText,
       replaceAll: typeof value.replaceAll === 'boolean' ? value.replaceAll : false,
+      readFileState,
     }
   },
   async run(input, runtime) {
-    const currentContent = await readProjectTextFile(runtime.project.handle, input.path)
+    const file = await getProjectTextFile(runtime.project.handle, input.path)
+    const currentContent = await file.text()
+    const currentState = createReadFileState(input.path, currentContent, file)
+    const expectedState = input.readFileState ?? runtime.readFileStates?.get(input.path)
+
+    if (!expectedState) {
+      throw new Error(`修改 ${input.path} 前必须先用 ReadFile 读取目标文件；工具层没有找到可校验的读取状态`)
+    }
+
+    assertFreshReadFileState(input.path, expectedState, currentState)
 
     if (!input.oldText) {
       throw new Error('EditFile.oldText 不能为空；新增文件请使用 CreateFile，修改已有文件请先 ReadFile 并提供要替换的原文片段')
@@ -157,6 +175,7 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       : currentContent.replace(actualOldText, actualNewText)
 
     await writeProjectTextFile(runtime.project.handle, input.path, nextContent)
+    runtime.readFileStates?.delete(input.path)
 
     return {
       path: input.path,
@@ -338,6 +357,59 @@ function readString(value: unknown, label: string) {
   }
 
   return value
+}
+
+function readReadFileState(value: unknown, label: string): ReadFileState {
+  const state = asRecord(value)
+  const path = normalizeProjectPath(readString(state.path, `${label}.path`))
+  const contentHash = readString(state.contentHash, `${label}.contentHash`)
+  const lastModified = readString(state.lastModified, `${label}.lastModified`)
+  const fileSizeBytes = state.fileSizeBytes
+
+  if (!Number.isInteger(fileSizeBytes) || Number(fileSizeBytes) < 0) {
+    throw new Error(`${label}.fileSizeBytes 必须是非负整数`)
+  }
+
+  return {
+    path,
+    contentHash,
+    lastModified,
+    fileSizeBytes: Number(fileSizeBytes),
+  }
+}
+
+function createReadFileState(path: string, content: string, file: File): ReadFileState {
+  return {
+    path,
+    contentHash: hashContent(content),
+    lastModified: new Date(file.lastModified).toISOString(),
+    fileSizeBytes: file.size,
+  }
+}
+
+function assertFreshReadFileState(
+  path: string,
+  expectedState: ReadFileState,
+  currentState: ReadFileState,
+) {
+  if (expectedState.path !== path) {
+    throw new Error(`EditFile.readFileState.path 与目标文件不一致：读取的是 ${expectedState.path}，准备修改的是 ${path}`)
+  }
+
+  if (expectedState.contentHash !== currentState.contentHash) {
+    throw new Error(`文件 ${path} 已在 ReadFile 之后发生变化；请重新 ReadFile 获取最新内容后再 EditFile，避免覆盖他人或其他工具的修改`)
+  }
+}
+
+function hashContent(content: string) {
+  let hash = 2166136261
+
+  for (let index = 0; index < content.length; index += 1) {
+    hash ^= content.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return `h${(hash >>> 0).toString(16)}`
 }
 
 function readOptionalPositiveInteger(value: unknown, label: string) {

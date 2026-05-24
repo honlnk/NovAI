@@ -7,6 +7,7 @@ import type {
   AgentMessage,
 } from './messages'
 import type { AgentRunnableToolMap } from './tools'
+import type { ReadFileState } from '../tools/types'
 
 const DEFAULT_MAX_TURNS = 8
 
@@ -31,6 +32,7 @@ export async function query(input: {
 }): Promise<AgentMessage[]> {
   let messages = [...input.messages]
   const maxTurns = input.maxTurns ?? DEFAULT_MAX_TURNS
+  const readFileStates = new Map<string, ReadFileState>()
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const step = turn + 1
@@ -84,6 +86,7 @@ export async function query(input: {
       calls: assistantResponse.toolCalls,
       project: input.project,
       tools: input.tools,
+      readFileStates,
       onEvent: input.onEvent,
     })
 
