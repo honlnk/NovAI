@@ -35,13 +35,13 @@ const rerankForm = ref({
 })
 
 const projectForm = ref({
-  proofreadChapterCount: 3,
-  organizeChapterCount: 10,
-  generationContextChapterCount: 3,
-  rag粗检索返回条数: 20,
-  rerank保留条数: 8,
-  对话上下文Token上限: 8000,
-  压缩保留轮数: 5,
+  proofreadDefaultChapters: 3,
+  organizeDefaultChapters: 10,
+  generationRecentChapters: 3,
+  ragCandidateLimit: 20,
+  ragContextMaxItems: 8,
+  conversationTokenLimit: 8000,
+  compressionKeepRecentTurns: 5,
 })
 
 const isTesting = ref(false)
@@ -70,6 +70,17 @@ onMounted(async () => {
         model: settingsStore.config.rerank.model ?? '',
         mode: settingsStore.config.rerank.mode ?? 'text',
         topN: settingsStore.config.rerank.topN ?? 8,
+      }
+    }
+    if (settingsStore.config.settings) {
+      projectForm.value = {
+        proofreadDefaultChapters: settingsStore.config.settings.proofreadDefaultChapters ?? 3,
+        organizeDefaultChapters: settingsStore.config.settings.organizeDefaultChapters ?? 10,
+        generationRecentChapters: settingsStore.config.settings.generationRecentChapters ?? 3,
+        ragCandidateLimit: settingsStore.config.settings.ragCandidateLimit ?? 20,
+        ragContextMaxItems: settingsStore.config.settings.ragContextMaxItems ?? 8,
+        conversationTokenLimit: settingsStore.config.settings.conversationTokenLimit ?? 8000,
+        compressionKeepRecentTurns: settingsStore.config.settings.compressionKeepRecentTurns ?? 5,
       }
     }
   }
@@ -111,6 +122,10 @@ async function handleSaveEmbedding() {
 
 async function handleSaveRerank() {
   await settingsStore.saveConfig(projectId.value, { rerank: rerankForm.value })
+}
+
+async function handleSaveProject() {
+  await settingsStore.saveConfig(projectId.value, { settings: projectForm.value })
 }
 </script>
 
@@ -309,8 +324,122 @@ async function handleSaveRerank() {
         </div>
 
         <!-- 项目设置 -->
-        <div v-if="activeTab === 'project'" class="space-y-4">
-          <p class="text-sm text-gray-500">项目设置功能开发中...</p>
+        <div v-if="activeTab === 'project'" class="space-y-6">
+          <!-- 生成设置 -->
+          <div>
+            <h3 class="mb-3 text-sm font-semibold text-gray-800">生成设置</h3>
+            <div class="space-y-4">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">生成上下文章节数</label>
+                <p class="mb-1 text-xs text-gray-500">生成时携带最近 N 章的原文作为上下文</p>
+                <input
+                  v-model.number="projectForm.generationRecentChapters"
+                  type="number"
+                  min="0"
+                  max="20"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- RAG 设置 -->
+          <div>
+            <h3 class="mb-3 text-sm font-semibold text-gray-800">RAG 设置</h3>
+            <div class="space-y-4">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">粗检索返回条数</label>
+                <p class="mb-1 text-xs text-gray-500">粗检索阶段返回的候选要素数量</p>
+                <input
+                  v-model.number="projectForm.ragCandidateLimit"
+                  type="number"
+                  min="1"
+                  max="100"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">上下文最大条数</label>
+                <p class="mb-1 text-xs text-gray-500">最终拼入生成上下文的最大要素数量</p>
+                <input
+                  v-model.number="projectForm.ragContextMaxItems"
+                  type="number"
+                  min="1"
+                  max="50"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- 对话设置 -->
+          <div>
+            <h3 class="mb-3 text-sm font-semibold text-gray-800">对话设置</h3>
+            <div class="space-y-4">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">对话上下文 Token 上限</label>
+                <p class="mb-1 text-xs text-gray-500">接近上限时触发上下文压缩</p>
+                <input
+                  v-model.number="projectForm.conversationTokenLimit"
+                  type="number"
+                  min="1000"
+                  max="200000"
+                  step="1000"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">压缩保留轮数</label>
+                <p class="mb-1 text-xs text-gray-500">上下文压缩时保留最近 N 轮对话的原文</p>
+                <input
+                  v-model.number="projectForm.compressionKeepRecentTurns"
+                  type="number"
+                  min="1"
+                  max="20"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- 校对与整理设置 -->
+          <div>
+            <h3 class="mb-3 text-sm font-semibold text-gray-800">校对与整理</h3>
+            <div class="space-y-4">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">校对默认章节数</label>
+                <p class="mb-1 text-xs text-gray-500">自动校对最近 N 章</p>
+                <input
+                  v-model.number="projectForm.proofreadDefaultChapters"
+                  type="number"
+                  min="1"
+                  max="50"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">整理默认章节数</label>
+                <p class="mb-1 text-xs text-gray-500">自动整理最近 N 章</p>
+                <input
+                  v-model.number="projectForm.organizeDefaultChapters"
+                  type="number"
+                  min="1"
+                  max="50"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- 保存按钮 -->
+          <div class="pt-2">
+            <button
+              class="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+              @click="handleSaveProject"
+            >
+              保存
+            </button>
+          </div>
         </div>
 
         <!-- 测试结果提示 -->
