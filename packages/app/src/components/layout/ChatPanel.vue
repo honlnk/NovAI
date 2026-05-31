@@ -117,6 +117,9 @@ function autoResize(event: Event) {
       class="flex-1 overflow-y-auto"
     >
       <div class="mx-auto max-w-3xl px-4 py-6">
+        <!-- 首次使用引导插槽 -->
+        <slot name="guide" />
+
         <!-- 空状态 -->
         <div
           v-if="chatStore.messages.length === 0"
