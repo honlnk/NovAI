@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { useChatStore } from '../../stores/chat'
+import MessageItem from '../chat/MessageItem.vue'
 
 defineProps<{
   projectId: string
@@ -15,6 +16,7 @@ const emit = defineEmits<{
 const chatStore = useChatStore()
 const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const isSending = ref(false)
 
 // 自动滚动到底部
@@ -32,6 +34,14 @@ watch(
   },
 )
 
+// 监听流式文本变化
+watch(
+  () => chatStore.sessionView?.currentDraftText,
+  () => {
+    scrollToBottom()
+  },
+)
+
 async function handleSend() {
   if (!inputText.value.trim() || isSending.value) return
 
@@ -39,11 +49,30 @@ async function handleSend() {
   inputText.value = ''
   isSending.value = true
 
+  // 重置 textarea 高度
+  if (textareaRef.value) {
+    textareaRef.value.style.height = 'auto'
+  }
+
   try {
     await chatStore.sendMessage(message)
   } finally {
     isSending.value = false
   }
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  // Enter 发送，Shift+Enter 换行
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    handleSend()
+  }
+}
+
+function autoResize(event: Event) {
+  const textarea = event.target as HTMLTextAreaElement
+  textarea.style.height = 'auto'
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 </script>
 
@@ -102,41 +131,26 @@ async function handleSend() {
 
         <!-- 消息列表 -->
         <div v-else class="space-y-4">
-          <div
+          <MessageItem
             v-for="message in chatStore.messages"
             :key="message.id"
-            :class="[
-              'flex gap-3',
-              message.role === 'user' ? 'justify-end' : 'justify-start',
-            ]"
+            :message="message"
+          />
+
+          <!-- 流式文本（正在生成中） -->
+          <div
+            v-if="chatStore.sessionView?.currentDraftText"
+            class="flex justify-start gap-3"
           >
-            <!-- AI 消息 -->
-            <div
-              v-if="message.role === 'assistant'"
-              class="flex max-w-[80%] gap-3"
-            >
+            <div class="flex max-w-[80%] items-start gap-3">
               <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-900 text-white">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
               </div>
-              <div class="rounded-lg bg-gray-100 px-4 py-2.5">
-                <p class="whitespace-pre-wrap text-sm text-gray-800">{{ message.text }}</p>
-              </div>
-            </div>
-
-            <!-- 用户消息 -->
-            <div
-              v-else-if="message.role === 'user'"
-              class="flex max-w-[80%] flex-row-reverse gap-3"
-            >
-              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-              </div>
-              <div class="rounded-lg bg-blue-600 px-4 py-2.5">
-                <p class="whitespace-pre-wrap text-sm text-white">{{ message.text }}</p>
+              <div class="rounded-lg rounded-tl-none bg-gray-100 px-4 py-2.5">
+                <p class="whitespace-pre-wrap text-sm text-gray-800">{{ chatStore.sessionView.currentDraftText }}</p>
+                <span class="inline-block h-4 w-0.5 animate-pulse bg-gray-400" />
               </div>
             </div>
           </div>
@@ -146,26 +160,45 @@ async function handleSend() {
 
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
-      <form
-        class="mx-auto max-w-3xl"
-        @submit.prevent="handleSend"
-      >
+      <div class="mx-auto max-w-3xl">
         <div class="flex gap-2">
-          <input
+          <textarea
+            ref="textareaRef"
             v-model="inputText"
-            class="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="输入创作指令..."
+            class="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行)"
+            rows="1"
             :disabled="isSending"
+            @keydown="handleKeydown"
+            @input="autoResize"
           />
           <button
-            type="submit"
-            class="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
+            class="self-end rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
             :disabled="!inputText.trim() || isSending"
+            @click="handleSend"
           >
-            {{ isSending ? '发送中...' : '发送' }}
+            <svg
+              v-if="isSending"
+              class="h-5 w-5 animate-spin"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <svg
+              v-else
+              class="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
           </button>
         </div>
-      </form>
+        <p class="mt-1 text-xs text-gray-500">{{ chatStore.runStatus }}</p>
+      </div>
     </div>
   </section>
 </template>
