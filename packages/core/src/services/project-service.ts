@@ -11,8 +11,10 @@ import {
 import { writeAgentLog } from '../core/logging/agent-log'
 import {
   forgetLastProject as forgetStoredLastProject,
+  forgetRecentProject as forgetStoredRecentProject,
   hasProjectPermission,
   readLastProject,
+  readRecentProjects,
   requestProjectPermission,
   saveLastProject,
   toLastProjectSummary,
@@ -91,8 +93,16 @@ export async function getLastProjectSummary(): Promise<LastProjectSummaryView | 
   return record ? toLastProjectSummary(record) : null
 }
 
+export async function getRecentProjects(): Promise<LastProjectSummaryView[]> {
+  return readRecentProjects()
+}
+
 export async function forgetLastProject(): Promise<void> {
   await forgetStoredLastProject()
+}
+
+export async function forgetRecentProject(projectId: string): Promise<void> {
+  await forgetStoredRecentProject(projectId)
 }
 
 export async function closeProject(projectId: string): Promise<void> {

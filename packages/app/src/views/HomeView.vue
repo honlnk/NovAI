@@ -11,6 +11,7 @@ const isCreating = ref(false)
 
 onMounted(async () => {
   await projectStore.loadLastProjectSummary()
+  await projectStore.loadRecentProjects()
 })
 
 async function handleOpenProject() {

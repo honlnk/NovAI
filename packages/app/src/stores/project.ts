@@ -6,6 +6,7 @@ import {
   createProject,
   forgetLastProject,
   getLastProjectSummary,
+  getRecentProjects,
   isProjectAccessSupported,
   openProject,
   restoreLastProject,
@@ -75,6 +76,23 @@ export const useProjectStore = defineStore('project', () => {
     } catch (error) {
       errorMessage.value = toMessage(error, '读取最近项目记录失败')
       return null
+    }
+  }
+
+  async function loadRecentProjects() {
+    try {
+      const summaries = await getRecentProjects()
+      recentProjects.value = summaries.map((summary) => ({
+        id: summary.projectId,
+        name: summary.name,
+        updatedAt: summary.lastOpenedAt,
+        chapterCount: 0,
+        wordCount: 0,
+      }))
+      return recentProjects.value
+    } catch (error) {
+      errorMessage.value = toMessage(error, '读取最近项目列表失败')
+      return []
     }
   }
 
@@ -191,6 +209,7 @@ export const useProjectStore = defineStore('project', () => {
     createNewProject,
     forgetLastOpenedProject,
     loadLastProjectSummary,
+    loadRecentProjects,
     openExistingProject,
     openFile,
     refreshTree,
