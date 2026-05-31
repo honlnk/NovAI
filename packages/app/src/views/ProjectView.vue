@@ -41,6 +41,15 @@ function handleOpenSettings() {
   router.push(`/project/${projectId.value}/settings`)
 }
 
+async function handleSelectFile(path: string) {
+  await projectStore.openFile(path)
+  isContentPanelOpen.value = true
+}
+
+async function handleRefreshTree() {
+  await projectStore.refreshTree()
+}
+
 function toggleSidebar() {
   isSidebarOpen.value = !isSidebarOpen.value
 }
@@ -68,9 +77,12 @@ function toggleMobileSidebar() {
       :is-open="isSidebarOpen"
       :is-mobile-open="isMobileSidebarOpen"
       :project="projectStore.currentProject"
+      :active-file-path="projectStore.activeFile?.path"
       @back-to-home="handleBackToHome"
       @open-settings="handleOpenSettings"
       @close-mobile="isMobileSidebarOpen = false"
+      @select-file="handleSelectFile"
+      @refresh-tree="handleRefreshTree"
     />
 
     <!-- 中间对话面板 -->
@@ -84,6 +96,7 @@ function toggleMobileSidebar() {
     <!-- 右侧内容面板 -->
     <ContentPanel
       :is-open="isContentPanelOpen"
+      :file="projectStore.activeFile"
       @close="isContentPanelOpen = false"
     />
   </div>

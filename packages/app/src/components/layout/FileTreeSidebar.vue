@@ -1,44 +1,21 @@
 <script setup lang="ts">
-import type { ProjectView } from '@novai/core'
+import type { ProjectFileNodeView, ProjectView } from '@novai/core/services/types'
+import TreeNode from '../file-tree/TreeNode.vue'
 
 defineProps<{
   isOpen: boolean
   isMobileOpen: boolean
   project: ProjectView | null
+  activeFilePath?: string
 }>()
 
 const emit = defineEmits<{
   backToHome: []
   openSettings: []
   closeMobile: []
+  selectFile: [path: string]
+  refreshTree: []
 }>()
-
-// 示例文件树数据（后续从 fileService 获取）
-const sampleFileTree = [
-  {
-    name: 'chapters',
-    type: 'directory' as const,
-    children: [
-      { name: '第001章-初入江湖.md', type: 'file' as const },
-      { name: '第002章-遇险.md', type: 'file' as const },
-    ],
-  },
-  {
-    name: 'elements',
-    type: 'directory' as const,
-    children: [
-      { name: 'characters', type: 'directory' as const, children: [] },
-      { name: 'locations', type: 'directory' as const, children: [] },
-    ],
-  },
-  {
-    name: 'prompts',
-    type: 'directory' as const,
-    children: [
-      { name: 'system.md', type: 'file' as const },
-    ],
-  },
-]
 </script>
 
 <template>
@@ -96,48 +73,18 @@ const sampleFileTree = [
       <div v-if="!project" class="px-2 py-4 text-center text-sm text-gray-500">
         未打开项目
       </div>
+      <div v-else-if="project.files.length === 0" class="px-2 py-4 text-center text-sm text-gray-500">
+        项目为空
+      </div>
       <div v-else class="space-y-0.5">
-        <template v-for="item in sampleFileTree" :key="item.name">
-          <!-- 目录 -->
-          <div v-if="item.type === 'directory'">
-            <button class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-gray-300 transition-colors hover:bg-white/10">
-              <svg class="h-3.5 w-3.5 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-              <svg class="h-4 w-4 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <span class="truncate">{{ item.name }}</span>
-            </button>
-            <!-- 子文件（简化版，后续实现递归） -->
-            <div v-if="item.children" class="ml-4">
-              <button
-                v-for="child in item.children"
-                :key="child.name"
-                class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
-              >
-                <svg v-if="child.type === 'file'" class="h-4 w-4 shrink-0 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <svg v-else class="h-4 w-4 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                </svg>
-                <span class="truncate">{{ child.name }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- 文件 -->
-          <button
-            v-else
-            class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
-          >
-            <svg class="h-4 w-4 shrink-0 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span class="truncate">{{ item.name }}</span>
-          </button>
-        </template>
+        <TreeNode
+          v-for="node in project.files"
+          :key="node.path"
+          :node="node"
+          :level="0"
+          :active-file-path="activeFilePath"
+          @select-file="emit('selectFile', $event)"
+        />
       </div>
     </nav>
 
