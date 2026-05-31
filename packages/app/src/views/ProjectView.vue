@@ -97,6 +97,7 @@ function toggleMobileSidebar() {
     <ContentPanel
       :is-open="isContentPanelOpen"
       :file="projectStore.activeFile"
+      :draft-text="chatStore.sessionView?.currentDraftText"
       @close="isContentPanelOpen = false"
     />
   </div>
