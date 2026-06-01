@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChatMessageView } from '@novai/core/services/types'
+import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 defineProps<{
   message: ChatMessageView
@@ -42,7 +43,7 @@ function formatTime(dateStr: string) {
         </svg>
       </div>
       <div class="rounded-lg rounded-tl-none bg-gray-100 px-4 py-2.5">
-        <p class="whitespace-pre-wrap text-sm text-gray-800">{{ message.text }}</p>
+        <MarkdownRenderer :content="message.text" />
         <p class="mt-1 text-xs text-gray-500">{{ formatTime(message.createdAt) }}</p>
       </div>
     </div>

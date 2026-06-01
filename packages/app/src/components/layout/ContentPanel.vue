@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { FileContentView } from '@novai/core/services/types'
+import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 defineProps<{
   isOpen: boolean
@@ -24,6 +25,10 @@ function getLanguageLabel(format: string) {
     case 'json': return 'JSON'
     default: return '文本'
   }
+}
+
+function shouldRenderMarkdown(format: string) {
+  return format === 'markdown'
 }
 </script>
 
@@ -92,7 +97,7 @@ function getLanguageLabel(format: string) {
           <span class="text-xs text-gray-500">正在生成...</span>
         </div>
         <div class="rounded-lg border border-blue-200 bg-blue-50 p-4">
-          <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ draftText }}</pre>
+          <MarkdownRenderer :content="draftText" />
           <span class="inline-block h-4 w-0.5 animate-pulse bg-gray-400" />
         </div>
       </div>
@@ -101,7 +106,8 @@ function getLanguageLabel(format: string) {
       <div v-else-if="file" class="space-y-3">
         <!-- 预览模式 -->
         <div v-if="viewMode === 'preview'" class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-          <pre class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
+          <MarkdownRenderer v-if="shouldRenderMarkdown(file.format)" :content="file.content" />
+          <pre v-else class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
         </div>
 
         <!-- 原始模式 -->
