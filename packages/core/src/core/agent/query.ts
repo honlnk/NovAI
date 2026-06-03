@@ -7,6 +7,7 @@ import type {
   AgentMessage,
 } from './messages'
 import type { AgentRunnableToolMap } from './tools'
+import type { ReadFileState } from '../tools/types'
 
 const DEFAULT_MAX_TURNS = 8
 
@@ -16,7 +17,6 @@ export type AgentQueryEvent =
   | { type: 'model-finish'; step: number; toolCallCount: number; finishReason?: string }
   | { type: 'tool-batch-start'; step: number; toolCallCount: number }
   | { type: 'tool-batch-finish'; step: number; toolResultCount: number }
-  | { type: 'assistant-delta'; text: string }
   | { type: 'assistant-message'; message: AgentAssistantMessage }
   | ToolExecutionEvent
   | { type: 'done'; messages: AgentMessage[] }
@@ -31,6 +31,7 @@ export async function query(input: {
 }): Promise<AgentMessage[]> {
   let messages = [...input.messages]
   const maxTurns = input.maxTurns ?? DEFAULT_MAX_TURNS
+  const readFileStates = new Map<string, ReadFileState>()
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const step = turn + 1
@@ -46,11 +47,7 @@ export async function query(input: {
         messages,
         tools: Object.values(input.tools).map((tool) => tool.schema),
       },
-      (event) => {
-        if (event.type === 'delta') {
-          input.onEvent?.({ type: 'assistant-delta', text: event.text })
-        }
-      },
+      () => {},
     )
 
     input.onEvent?.({
@@ -84,6 +81,7 @@ export async function query(input: {
       calls: assistantResponse.toolCalls,
       project: input.project,
       tools: input.tools,
+      readFileStates,
       onEvent: input.onEvent,
     })
 

@@ -27,7 +27,6 @@ import type { AgentMessage } from '../agent/messages'
 
 type SessionEvent =
   | { type: 'message'; message: ChatMessage }
-  | { type: 'draft'; text: string }
 
 type RunChatTurnOptions = {
   session: ChatSessionState
@@ -49,7 +48,6 @@ export function createChatSession(projectId: string): ChatSessionState {
     projectId,
     messages: [],
     status: 'idle',
-    currentDraftText: '',
     currentTarget: null,
     lastRagResult: null,
   }
@@ -60,7 +58,6 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   const session: ChatSessionState = {
     ...options.session,
     status: 'running',
-    currentDraftText: '',
     lastWrittenPath: undefined,
     pendingFileChange: undefined,
   }
@@ -119,12 +116,6 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
           runId,
           event,
         })
-
-        if (event.type === 'assistant-delta') {
-          session.currentDraftText += event.text
-          onEvent?.({ type: 'draft', text: session.currentDraftText })
-          return
-        }
 
         if (event.type === 'assistant-message') {
           if (event.message.content.trim()) {

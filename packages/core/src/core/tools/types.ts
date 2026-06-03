@@ -11,6 +11,7 @@ export type CoreToolName =
 
 export type ToolRuntime = {
   project: ProjectSnapshot
+  readFileStates?: Map<string, ReadFileState>
 }
 
 export type ToolCall<TName extends CoreToolName = CoreToolName, TInput = unknown> = {
@@ -54,6 +55,7 @@ export type ReadFileOutput = {
   path: string
   content: string
   numberedContent: string
+  readFileState: ReadFileState
   startLine: number
   endLine: number
   totalLines: number
@@ -64,11 +66,19 @@ export type ReadFileOutput = {
   notice?: string
 }
 
+export type ReadFileState = {
+  path: string
+  contentHash: string
+  lastModified: string
+  fileSizeBytes: number
+}
+
 export type EditFileInput = {
   path: string
   oldText: string
   newText: string
   replaceAll?: boolean
+  readFileState?: ReadFileState
 }
 
 export type EditFileOutput = {

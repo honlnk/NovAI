@@ -1,7 +1,8 @@
 const DATABASE_NAME = 'novai-projects'
-const DATABASE_VERSION = 1
+const DATABASE_VERSION = 2
 const STORE_NAME = 'recent-projects'
 const LAST_PROJECT_KEY = 'last-opened'
+const MAX_RECENT_PROJECTS = 8
 
 type PermissionMode = 'read' | 'readwrite'
 
@@ -15,7 +16,7 @@ type PersistableDirectoryHandle = FileSystemDirectoryHandle & {
 }
 
 export type LastProjectRecord = {
-  key: typeof LAST_PROJECT_KEY
+  key: typeof LAST_PROJECT_KEY | `project-${string}`
   projectId: string
   name: string
   rootName: string
@@ -31,21 +32,38 @@ export async function saveLastProject(input: {
   rootName: string
   handle: FileSystemDirectoryHandle
 }): Promise<LastProjectRecord> {
-  const record: LastProjectRecord = {
+  const database = await openDatabase()
+  const now = new Date().toISOString()
+
+  // 保存为最后一个项目
+  const lastRecord: LastProjectRecord = {
     key: LAST_PROJECT_KEY,
     projectId: input.projectId,
     name: input.name,
     rootName: input.rootName,
-    lastOpenedAt: new Date().toISOString(),
+    lastOpenedAt: now,
     handle: input.handle,
   }
 
-  const database = await openDatabase()
+  // 保存到最近项目列表
+  const recentRecord: LastProjectRecord = {
+    key: `project-${input.projectId}`,
+    projectId: input.projectId,
+    name: input.name,
+    rootName: input.rootName,
+    lastOpenedAt: now,
+    handle: input.handle,
+  }
 
-  await runStoreRequest(database, 'readwrite', (store) => store.put(record))
+  await runStoreRequest(database, 'readwrite', (store) => store.put(lastRecord))
+  await runStoreRequest(database, 'readwrite', (store) => store.put(recentRecord))
+
+  // 清理超过限制的旧记录
+  await cleanupOldProjects(database)
+
   database.close()
 
-  return record
+  return lastRecord
 }
 
 export async function readLastProject(): Promise<LastProjectRecord | null> {
@@ -60,10 +78,41 @@ export async function readLastProject(): Promise<LastProjectRecord | null> {
   return record ?? null
 }
 
+export async function readRecentProjects(): Promise<LastProjectSummary[]> {
+  const database = await openDatabase()
+  const allRecords = await runStoreRequest<LastProjectRecord[]>(
+    database,
+    'readonly',
+    (store) => store.getAll(),
+  )
+
+  database.close()
+
+  // 过滤出最近项目记录（排除 last-opened），按时间倒序
+  const recentRecords = allRecords
+    .filter((record) => record.key !== LAST_PROJECT_KEY)
+    .sort((a, b) => new Date(b.lastOpenedAt).getTime() - new Date(a.lastOpenedAt).getTime())
+    .slice(0, MAX_RECENT_PROJECTS)
+
+  return recentRecords.map((record) => ({
+    projectId: record.projectId,
+    name: record.name,
+    rootName: record.rootName,
+    lastOpenedAt: record.lastOpenedAt,
+  }))
+}
+
 export async function forgetLastProject() {
   const database = await openDatabase()
 
   await runStoreRequest(database, 'readwrite', (store) => store.delete(LAST_PROJECT_KEY))
+  database.close()
+}
+
+export async function forgetRecentProject(projectId: string) {
+  const database = await openDatabase()
+
+  await runStoreRequest(database, 'readwrite', (store) => store.delete(`project-${projectId}`))
   database.close()
 }
 
@@ -115,6 +164,27 @@ function openDatabase(): Promise<IDBDatabase> {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error('打开最近项目数据库失败'))
   })
+}
+
+async function cleanupOldProjects(database: IDBDatabase): Promise<void> {
+  const allRecords = await runStoreRequest<LastProjectRecord[]>(
+    database,
+    'readonly',
+    (store) => store.getAll(),
+  )
+
+  // 过滤出最近项目记录
+  const recentRecords = allRecords
+    .filter((record) => record.key !== LAST_PROJECT_KEY)
+    .sort((a, b) => new Date(b.lastOpenedAt).getTime() - new Date(a.lastOpenedAt).getTime())
+
+  // 删除超过限制的旧记录
+  if (recentRecords.length > MAX_RECENT_PROJECTS) {
+    const recordsToDelete = recentRecords.slice(MAX_RECENT_PROJECTS)
+    for (const record of recordsToDelete) {
+      await runStoreRequest(database, 'readwrite', (store) => store.delete(record.key))
+    }
+  }
 }
 
 function runStoreRequest<T>(

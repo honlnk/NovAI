@@ -10,6 +10,7 @@ import {
 import type {
   AgentUiEvent,
   ChangedFileView,
+  ChatMessageView,
   ChatSessionView,
   ChatTargetView,
   RunAgentTurnInput,
@@ -25,6 +26,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const currentTarget = computed(() => defaultTarget.value)
+  const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
 
   async function ensureSessionView(projectId: string) {
     if (!sessionView.value || sessionView.value.projectId !== projectId) {
@@ -88,9 +90,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
-    if (event.type !== 'assistant-delta') {
-      agentEvents.value = [...agentEvents.value, event]
-    }
+    agentEvents.value = [...agentEvents.value, event]
 
     if (event.type === 'run-start') {
       runStatus.value = 'Agent 正在执行...'
@@ -101,14 +101,6 @@ export const useChatStore = defineStore('chat', () => {
       sessionView.value = {
         ...sessionView.value,
         messages: [...sessionView.value.messages, event.message],
-      }
-      return
-    }
-
-    if (event.type === 'assistant-delta' && sessionView.value) {
-      sessionView.value = {
-        ...sessionView.value,
-        currentDraftText: event.fullText,
       }
       return
     }
@@ -132,15 +124,33 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function createSession(projectId: string) {
+    return ensureSessionView(projectId)
+  }
+
+  async function sendMessage(text: string) {
+    if (!sessionView.value) {
+      throw new Error('没有活跃的会话')
+    }
+
+    return runServiceTurn({
+      projectId: sessionView.value.projectId,
+      instruction: text,
+    })
+  }
+
   return {
     agentEvents,
     changedFiles,
+    messages,
     sessionView,
     runStatus,
     hasSessionView,
     currentTarget,
     defaultTarget,
+    createSession,
     ensureSessionView,
+    sendMessage,
     runServiceTurn,
     syncDefaultTarget,
     resetSession,
