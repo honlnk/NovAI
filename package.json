@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @novai/app dev",
-    "build": "pnpm --filter @novai/app build",
+    "build": "pnpm --filter @novai/core build && pnpm --filter @novai/app build",
     "test": "vitest run",
     "typecheck": "tsc --build",
     "commitlint": "commitlint --edit",
