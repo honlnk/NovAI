@@ -42,7 +42,7 @@ function shouldRenderMarkdown(format: string) {
   <!-- 内容面板 -->
   <aside
     :class="[
-      'flex w-80 shrink-0 flex-col border-l border-gray-200 bg-white transition-all duration-200',
+      'flex shrink-0 flex-col border-l border-gray-200 bg-white transition-all duration-200',
       'max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-50',
       isOpen ? 'w-80' : 'w-0 overflow-hidden',
       isOpen ? 'max-lg:translate-x-0' : 'max-lg:translate-x-full',
@@ -68,7 +68,7 @@ function shouldRenderMarkdown(format: string) {
           {{ viewMode === 'preview' ? '原始' : '预览' }}
         </button>
         <button
-          class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+          class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 lg:hidden"
           @click="emit('close')"
         >
           <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

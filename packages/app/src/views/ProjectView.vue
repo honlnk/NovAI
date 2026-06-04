@@ -134,6 +134,8 @@ function handleGoToSettings() {
     <!-- 中间对话面板 -->
     <ChatPanel
       :project-id="projectId"
+      :is-sidebar-open="isSidebarOpen"
+      :is-content-panel-open="isContentPanelOpen"
       @toggle-sidebar="toggleSidebar"
       @toggle-content-panel="toggleContentPanel"
       @toggle-mobile-sidebar="toggleMobileSidebar"

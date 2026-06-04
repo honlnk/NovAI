@@ -5,6 +5,8 @@ import MessageItem from '../chat/MessageItem.vue'
 
 defineProps<{
   projectId: string
+  isSidebarOpen: boolean
+  isContentPanelOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -86,8 +88,13 @@ function autoResize(event: Event) {
           class="hidden rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:block"
           @click="emit('toggleSidebar')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
+          <!-- 收起状态：显示汉堡菜单（暗示可以展开侧边栏） -->
+          <svg v-if="!isSidebarOpen" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          <!-- 展开状态：显示侧边栏收起图标 -->
+          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
           </svg>
         </button>
         <h1 class="text-base font-semibold text-gray-800">AI 对话</h1>
@@ -97,7 +104,11 @@ function autoResize(event: Event) {
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
           @click="emit('toggleContentPanel')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            class="h-5 w-5 transition-transform duration-200"
+            :class="isContentPanelOpen ? '' : 'rotate-180'"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
           </svg>
         </button>
