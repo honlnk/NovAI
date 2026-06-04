@@ -6,7 +6,6 @@ import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 defineProps<{
   isOpen: boolean
   file: FileContentView | null
-  draftText?: string
 }>()
 
 const emit = defineEmits<{
@@ -82,24 +81,12 @@ function shouldRenderMarkdown(format: string) {
     <!-- 内容区域 -->
     <div class="flex-1 overflow-y-auto p-4">
       <!-- 空状态 -->
-      <div v-if="!file && !draftText" class="flex flex-col items-center justify-center py-16">
+      <div v-if="!file" class="flex flex-col items-center justify-center py-16">
         <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
         <p class="mb-1 text-sm font-medium text-gray-400">暂无内容</p>
         <p class="text-xs text-gray-400">点击文件或等待 AI 生成</p>
-      </div>
-
-      <!-- 生成预览（流式文本） -->
-      <div v-else-if="draftText" class="space-y-3">
-        <div class="flex items-center gap-2">
-          <div class="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-          <span class="text-xs text-gray-500">正在生成...</span>
-        </div>
-        <div class="rounded-lg border border-blue-200 bg-blue-50 p-4">
-          <MarkdownRenderer :content="draftText" />
-          <span class="inline-block h-4 w-0.5 animate-pulse bg-gray-400" />
-        </div>
       </div>
 
       <!-- 文件内容 -->

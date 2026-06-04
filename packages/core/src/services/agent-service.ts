@@ -60,7 +60,6 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
 
   try {
     const systemPrompt = await readSystemPrompt(project.handle)
-    let previousDraftText = ''
     const turn = await runChatTurn({
       session: previousSession,
       input: {
@@ -71,20 +70,6 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         activeFilePath: input.activeFilePath,
       },
       onEvent(event) {
-        if (event.type === 'draft') {
-          const deltaText = event.text.startsWith(previousDraftText)
-            ? event.text.slice(previousDraftText.length)
-            : event.text
-          previousDraftText = event.text
-
-          input.onEvent?.({
-            type: 'assistant-delta',
-            text: deltaText,
-            fullText: event.text,
-          })
-          return
-        }
-
         emitMessageEvent(event.message, input.onEvent)
       },
     })
@@ -165,7 +150,6 @@ function toChatSessionView(
     projectId: session.projectId,
     status: session.status,
     messages: session.messages.map(toChatMessageView),
-    currentDraftText: session.currentDraftText,
     currentTargetPath: session.currentTarget?.primaryPath,
     lastChangedFile,
   }

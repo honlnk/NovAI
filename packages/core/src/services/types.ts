@@ -299,7 +299,6 @@ export type ChatSessionView = {
   projectId: string
   status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   messages: ChatMessageView[]
-  currentDraftText: string
   currentTargetPath?: string
   lastChangedFile?: ChangedFileView
 }
@@ -331,7 +330,6 @@ export type FileChangeConfirmationView = {
 export type AgentUiEvent =
   | { type: 'run-start'; runId: string; sessionId: string }
   | { type: 'message'; message: ChatMessageView }
-  | { type: 'assistant-delta'; text: string; fullText: string }
   | { type: 'model-start'; step: number }
   | { type: 'model-finish'; step: number; toolCallCount: number; finishReason?: string }
   | { type: 'tool-call'; toolCall: ToolCallView }

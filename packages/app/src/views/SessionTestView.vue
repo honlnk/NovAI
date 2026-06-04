@@ -388,9 +388,6 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
               </li>
             </ul>
 
-            <h3>模型流式输出</h3>
-            <pre>{{ chatStore.sessionView?.currentDraftText || '本轮还没有模型输出' }}</pre>
-
             <h3>当前文件预览</h3>
             <pre>{{ activeFile?.content || '请先打开一个文件' }}</pre>
           </td>

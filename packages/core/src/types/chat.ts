@@ -116,7 +116,6 @@ export type ChatSessionState = {
   messages: ChatMessage[]
   agentMessages?: AgentMessage[]
   status: ChatSessionStatus
-  currentDraftText: string
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
   pendingFileChange?: PendingFileChange

@@ -56,16 +56,6 @@ watch(
   },
 )
 
-// 监听 AI 生成状态，自动展开右侧面板
-watch(
-  () => chatStore.sessionView?.currentDraftText,
-  (draftText) => {
-    if (draftText && draftText.length > 0) {
-      isContentPanelOpen.value = true
-    }
-  },
-)
-
 // 监听运行状态，显示 Toast 提示
 watch(
   () => chatStore.runStatus,
@@ -162,7 +152,6 @@ function handleGoToSettings() {
     <ContentPanel
       :is-open="isContentPanelOpen"
       :file="projectStore.activeFile"
-      :draft-text="chatStore.sessionView?.currentDraftText"
       @close="isContentPanelOpen = false"
     />
 

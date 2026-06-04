@@ -90,9 +90,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
-    if (event.type !== 'assistant-delta') {
-      agentEvents.value = [...agentEvents.value, event]
-    }
+    agentEvents.value = [...agentEvents.value, event]
 
     if (event.type === 'run-start') {
       runStatus.value = 'Agent 正在执行...'
@@ -103,14 +101,6 @@ export const useChatStore = defineStore('chat', () => {
       sessionView.value = {
         ...sessionView.value,
         messages: [...sessionView.value.messages, event.message],
-      }
-      return
-    }
-
-    if (event.type === 'assistant-delta' && sessionView.value) {
-      sessionView.value = {
-        ...sessionView.value,
-        currentDraftText: event.fullText,
       }
       return
     }

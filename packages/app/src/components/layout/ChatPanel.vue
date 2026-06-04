@@ -34,13 +34,6 @@ watch(
   },
 )
 
-// 监听流式文本变化
-watch(
-  () => chatStore.sessionView?.currentDraftText,
-  () => {
-    scrollToBottom()
-  },
-)
 
 async function handleSend() {
   if (!inputText.value.trim() || isSending.value) return
@@ -140,23 +133,6 @@ function autoResize(event: Event) {
             :message="message"
           />
 
-          <!-- 流式文本（正在生成中） -->
-          <div
-            v-if="chatStore.sessionView?.currentDraftText"
-            class="flex justify-start gap-3"
-          >
-            <div class="flex max-w-[80%] items-start gap-3">
-              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-900 text-white">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <div class="rounded-lg rounded-tl-none bg-gray-100 px-4 py-2.5">
-                <p class="whitespace-pre-wrap text-sm text-gray-800">{{ chatStore.sessionView.currentDraftText }}</p>
-                <span class="inline-block h-4 w-0.5 animate-pulse bg-gray-400" />
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
