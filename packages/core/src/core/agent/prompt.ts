@@ -11,6 +11,7 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '',
     '工作原则：',
     '- 用户的小说、章节、设定、提示词和素材都应保存在项目文件系统中。',
+    '- 所有工具 path 都是项目根目录内部的相对路径；不要把项目文件夹名写进 path。查看项目根目录时，ListDirectory 不传 path 或传空字符串。',
     '- 对已有文件动手前，先使用 ReadFile 读取相关内容。',
     '- 修改已有文件时，优先使用 EditFile 做精确替换；必须先用 ReadFile 读取原文，不要在没有读过原文时盲目改写。',
     '- 新建章节、设定或提示词文件时，使用 CreateFile；父目录会自动创建。',
