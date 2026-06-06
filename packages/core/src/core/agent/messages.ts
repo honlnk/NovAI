@@ -6,6 +6,7 @@ export type AgentToolName =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'RagSearch'
 
 export type AgentToolCall = {
   id: string

@@ -8,6 +8,7 @@ export type CoreToolName =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'RagSearch'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
@@ -153,4 +154,35 @@ export type FindFilesOutput = {
   filenames: string[]
   numFiles: number
   truncated: boolean
+}
+
+export type RagSearchInput = {
+  query: string
+  topK?: number
+  finalLimit?: number
+  filters?: {
+    type?: Array<'character' | 'location' | 'timeline' | 'plot' | 'worldbuilding'>
+    tags?: string[]
+    lastUpdatedChapter?: string
+  }
+}
+
+export type RagSearchOutput = {
+  query: string
+  recalledCount: number
+  returnedCount: number
+  usedRerank: boolean
+  candidates: Array<{
+    id: string
+    sourcePath: string
+    type: 'character' | 'location' | 'timeline' | 'plot' | 'worldbuilding'
+    name: string
+    summary: string
+    retrievalText: string
+    tags: string[]
+    lastUpdatedChapter: string
+    relatedChapters: string[]
+    score?: number
+    rerankScore?: number
+  }>
 }
