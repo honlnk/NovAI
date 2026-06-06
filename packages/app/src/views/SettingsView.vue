@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { useSettingsStore } from '../stores/settings'
+import { inspectIndex, rebuildIndex } from '@novai/core/services/rag-service'
+import type { ProjectIndexMetaView } from '@novai/core/services/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -46,6 +48,9 @@ const projectForm = ref({
 
 const isTesting = ref(false)
 const testResult = ref<{ ok: boolean; message: string } | null>(null)
+const isIndexBusy = ref(false)
+const indexMeta = ref<ProjectIndexMetaView | null>(null)
+const indexStatusMessage = ref('尚未读取索引状态')
 
 onMounted(async () => {
   await settingsStore.loadSettings(projectId.value)
@@ -84,6 +89,8 @@ onMounted(async () => {
       }
     }
   }
+
+  await handleInspectIndex()
 })
 
 function handleBack() {
@@ -126,6 +133,72 @@ async function handleSaveRerank() {
 
 async function handleSaveProject() {
   await settingsStore.saveConfig(projectId.value, { settings: projectForm.value })
+}
+
+async function handleInspectIndex() {
+  isIndexBusy.value = true
+  try {
+    indexMeta.value = await inspectIndex(projectId.value)
+    indexStatusMessage.value = indexMeta.value
+      ? `当前状态：${getIndexStatusLabel(indexMeta.value.status)}`
+      : '当前项目还没有索引记录'
+  } catch (error) {
+    indexStatusMessage.value = error instanceof Error ? error.message : '读取索引状态失败'
+  } finally {
+    isIndexBusy.value = false
+  }
+}
+
+async function handleRebuildIndex() {
+  isIndexBusy.value = true
+  testResult.value = null
+  indexStatusMessage.value = '正在重建向量索引...'
+
+  try {
+    const result = await rebuildIndex(projectId.value)
+    indexMeta.value = await inspectIndex(projectId.value)
+    indexStatusMessage.value = result.message
+    testResult.value = {
+      ok: result.status === 'ready' || result.status === 'empty',
+      message: result.message,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '重建索引失败'
+    indexStatusMessage.value = message
+    testResult.value = {
+      ok: false,
+      message,
+    }
+  } finally {
+    isIndexBusy.value = false
+  }
+}
+
+function getIndexStatusLabel(status: ProjectIndexMetaView['status']) {
+  switch (status) {
+    case 'ready': return '可用'
+    case 'empty': return '空索引'
+    case 'building': return '构建中'
+    case 'rebuilding': return '重建中'
+    case 'stale': return '已过期'
+    case 'error': return '错误'
+    default: return status
+  }
+}
+
+function getIndexStatusClass(status?: ProjectIndexMetaView['status']) {
+  switch (status) {
+    case 'ready': return 'bg-green-50 text-green-700 ring-green-200'
+    case 'stale': return 'bg-amber-50 text-amber-700 ring-amber-200'
+    case 'error': return 'bg-red-50 text-red-700 ring-red-200'
+    case 'building':
+    case 'rebuilding': return 'bg-blue-50 text-blue-700 ring-blue-200'
+    default: return 'bg-gray-50 text-gray-700 ring-gray-200'
+  }
+}
+
+function formatDate(value?: string) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '暂无'
 }
 </script>
 
@@ -347,6 +420,79 @@ async function handleSaveProject() {
           <div>
             <h3 class="mb-3 text-sm font-semibold text-gray-800">RAG 设置</h3>
             <div class="space-y-4">
+              <div class="rounded-lg border border-gray-200 bg-white p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <h4 class="text-sm font-semibold text-gray-800">向量索引</h4>
+                      <span
+                        :class="[
+                          'rounded-full px-2 py-0.5 text-xs font-medium ring-1',
+                          getIndexStatusClass(indexMeta?.status),
+                        ]"
+                      >
+                        {{ indexMeta ? getIndexStatusLabel(indexMeta.status) : '未创建' }}
+                      </span>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">{{ indexStatusMessage }}</p>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-1">
+                    <button
+                      class="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40"
+                      :disabled="isIndexBusy"
+                      title="刷新索引状态"
+                      @click="handleInspectIndex"
+                    >
+                      <svg
+                        v-if="isIndexBusy"
+                        class="h-4 w-4 animate-spin"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.5 15A7 7 0 0018 18.5M18.5 9A7 7 0 006 5.5" />
+                      </svg>
+                    </button>
+                    <button
+                      class="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40"
+                      :disabled="isIndexBusy"
+                      title="重建向量索引"
+                      @click="handleRebuildIndex"
+                    >
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                  <div class="rounded-md bg-gray-50 px-3 py-2">
+                    <div class="text-gray-400">文档数</div>
+                    <div class="mt-1 font-medium text-gray-800">{{ indexMeta?.documentCount ?? 0 }}</div>
+                  </div>
+                  <div class="rounded-md bg-gray-50 px-3 py-2">
+                    <div class="text-gray-400">向量维度</div>
+                    <div class="mt-1 font-medium text-gray-800">{{ indexMeta?.embeddingDim ?? 0 }}</div>
+                  </div>
+                  <div class="rounded-md bg-gray-50 px-3 py-2">
+                    <div class="text-gray-400">Embedding 模型</div>
+                    <div class="mt-1 truncate font-medium text-gray-800">{{ indexMeta?.embeddingModel || '暂无' }}</div>
+                  </div>
+                  <div class="rounded-md bg-gray-50 px-3 py-2">
+                    <div class="text-gray-400">最近构建</div>
+                    <div class="mt-1 truncate font-medium text-gray-800">{{ formatDate(indexMeta?.lastBuildAt) }}</div>
+                  </div>
+                </div>
+
+                <p v-if="indexMeta?.lastError" class="mt-3 text-xs text-red-600">
+                  {{ indexMeta.lastError }}
+                </p>
+              </div>
+
               <div>
                 <label class="mb-1 block text-sm font-medium text-gray-700">粗检索返回条数</label>
                 <p class="mb-1 text-xs text-gray-500">粗检索阶段返回的候选要素数量</p>
