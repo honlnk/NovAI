@@ -177,6 +177,13 @@ export type ElementExtractionResultView = {
   worldbuilding: ElementExtractionItemView[]
 }
 
+export type ElementWriteResultView = {
+  created: string[]
+  updated: string[]
+  skipped: string[]
+  staleIndex: boolean
+}
+
 export type ProjectView = {
   id: string
   name: string

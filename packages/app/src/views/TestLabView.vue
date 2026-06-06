@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
-import { previewElementExtraction } from '@novai/core/services/element-service'
+import { previewElementExtraction, writeExtractedElements } from '@novai/core/services/element-service'
 import { writeChapter } from '@novai/core/services/file-service'
 import { streamGeneration } from '@novai/core/services/generation-service'
 import {
@@ -13,6 +13,7 @@ import { useProjectStore } from '../stores/project'
 import { useSettingsStore } from '../stores/settings'
 import type {
   ElementExtractionResultView,
+  ElementWriteResultView,
   GenerationContextDraftView,
   ProjectConfigView,
   ProjectFileNodeView,
@@ -35,10 +36,12 @@ const rerankStatus = ref('还没有测试 Rerank 连接。')
 const indexStatusMessage = ref('还没有读取索引状态。')
 const ragStatus = ref('还没有执行 RAG 调试流程。')
 const extractionStatus = ref('还没有执行要素提取预览。')
+const elementWriteStatus = ref('还没有写入要素文件。')
 const projectIndexMeta = ref<ProjectIndexMetaView | null>(null)
 const ragDraft = ref<GenerationContextDraftView | null>(null)
 const retrievalExplanations = ref<RetrievalExplanationView[]>([])
 const extractionPreview = ref<ElementExtractionResultView | null>(null)
+const elementWriteResult = ref<ElementWriteResultView | null>(null)
 const projectStore = useProjectStore()
 const settingsStore = useSettingsStore()
 
@@ -89,6 +92,7 @@ const groupedReadableFiles = computed(() => groupReadableFiles(readableFiles.val
 const indexMetaPreview = computed(() => JSON.stringify(projectIndexMeta.value, null, 2))
 const ragDraftPreview = computed(() => JSON.stringify(ragDraft.value, null, 2))
 const extractionPreviewText = computed(() => JSON.stringify(extractionPreview.value, null, 2))
+const elementWritePreviewText = computed(() => JSON.stringify(elementWriteResult.value, null, 2))
 const retrievalExplanationPreview = computed(() => JSON.stringify(retrievalExplanations.value, null, 2))
 
 function applyConfigDraft(config: ProjectConfigView) {
@@ -310,6 +314,33 @@ async function onPreviewElementExtraction() {
       ? `要素提取预览完成，共得到 ${total} 条候选`
       : '要素提取预览完成：当前仍是占位结果'
   }, '执行要素提取预览失败')
+}
+
+async function onWriteExtractedElements() {
+  if (!currentProject.value) {
+    elementWriteStatus.value = '请先创建或打开项目'
+    return
+  }
+
+  if (!extractionPreview.value) {
+    elementWriteStatus.value = '请先执行要素提取预览'
+    return
+  }
+
+  await runTask(async () => {
+    elementWriteResult.value = await writeExtractedElements({
+      projectId: currentProject.value!.id,
+      extraction: extractionPreview.value!,
+    })
+
+    const changedCount = elementWriteResult.value.created.length + elementWriteResult.value.updated.length
+    elementWriteStatus.value = changedCount > 0
+      ? `已写入 ${changedCount} 个要素文件，索引已标记为过期`
+      : `没有新的要素文件需要写入，跳过 ${elementWriteResult.value.skipped.length} 个文件`
+
+    await refreshProjectFiles(elementWriteResult.value.created[0] || elementWriteResult.value.updated[0])
+    projectIndexMeta.value = await inspectIndex(currentProject.value!.id)
+  }, '写入要素文件失败')
 }
 
 async function activateProjectView(message: string) {
@@ -577,7 +608,11 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
       <h2>要素提取预览</h2>
       <p>{{ extractionStatus }}</p>
       <button type="button" :disabled="isBusy" @click="onPreviewElementExtraction">执行要素提取预览</button>
+      <button type="button" :disabled="isBusy || !currentProject || !extractionPreview" @click="onWriteExtractedElements">写入 elements</button>
+      <p>{{ elementWriteStatus }}</p>
       <pre>{{ extractionPreviewText || '还没有要素提取结果' }}</pre>
+      <h3>写入结果</h3>
+      <pre>{{ elementWritePreviewText || '还没有写入结果' }}</pre>
     </section>
 
     <section>
