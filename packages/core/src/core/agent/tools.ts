@@ -6,6 +6,7 @@ import {
   renameFileTool,
 } from '../tools/file-tools'
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
+import { ragSearchTool } from '../tools/rag-search'
 
 import type {
   AgentToolName,
@@ -22,6 +23,7 @@ import type {
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
+  RagSearchOutput,
   RenameFileInput,
   RenameFileOutput,
   ToolDefinition,
@@ -298,6 +300,88 @@ export function createAgentTools(): AgentRunnableToolMap {
         ].join('\n').trim()
       },
     },
+    RagSearch: {
+      name: 'RagSearch',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RagSearch',
+          description: '从当前小说项目的 RAG 要素索引中语义检索相关人物、地点、剧情、时间线和世界观设定；适合在写作、改稿或回答设定问题前召回背景上下文。',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: '检索问题或关键词，例如“鸿影 云溪 武当派 第一章需要用到的设定”。',
+              },
+              topK: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，向量召回候选数量；不传则使用项目配置 ragCandidateLimit。',
+              },
+              finalLimit: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，最终返回给上下文的条数；不传则使用项目配置 ragContextMaxItems。',
+              },
+              filters: {
+                type: 'object',
+                properties: {
+                  type: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: ['character', 'location', 'timeline', 'plot', 'worldbuilding'],
+                    },
+                    description: '可选，只检索指定类型的要素。',
+                  },
+                  tags: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: '可选，只检索包含这些标签之一的要素。',
+                  },
+                  lastUpdatedChapter: {
+                    type: 'string',
+                    description: '可选，只检索最后关联到指定章节的要素。',
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            required: ['query'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: ragSearchTool,
+      formatResult(output: RagSearchOutput) {
+        const lines = output.candidates.map((candidate, index) => {
+          const score = formatScore(candidate.rerankScore ?? candidate.score)
+          const tags = candidate.tags.length ? candidate.tags.join(', ') : '无'
+          const chapters = candidate.relatedChapters.length ? candidate.relatedChapters.join(', ') : '无'
+
+          return [
+            `#${index + 1} ${candidate.name} (${candidate.type})`,
+            `path: ${candidate.sourcePath}`,
+            score ? `score: ${score}` : '',
+            `tags: ${tags}`,
+            `lastUpdatedChapter: ${candidate.lastUpdatedChapter || '无'}`,
+            `relatedChapters: ${chapters}`,
+            `summary: ${candidate.summary || '无'}`,
+            `retrievalText: ${candidate.retrievalText || '无'}`,
+          ].filter(Boolean).join('\n')
+        })
+
+        return [
+          ragSearchTool.summarizeOutput(output),
+          `query: ${output.query}`,
+          '',
+          lines.join('\n\n') || '暂无匹配结果。若项目已有要素，请先在设置中重建 RAG 索引。',
+        ].join('\n')
+      },
+    },
   }
 }
 
@@ -309,4 +393,9 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'DeleteFile'
     || value === 'ListDirectory'
     || value === 'FindFiles'
+    || value === 'RagSearch'
+}
+
+function formatScore(value: number | undefined) {
+  return typeof value === 'number' ? value.toFixed(4) : ''
 }

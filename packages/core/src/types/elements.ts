@@ -39,4 +39,5 @@ export type ElementWriteResult = {
   created: string[]
   updated: string[]
   skipped: string[]
+  staleIndex: boolean
 }

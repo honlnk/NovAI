@@ -102,6 +102,21 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     target,
   })
   const tools = createAgentTools()
+  const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
+
+  if (enableDebugLogging) {
+    void writeAgentLog(input.project, {
+      sessionId: session.sessionId,
+      runId,
+      level: 'debug',
+      event: 'agent_messages_debug',
+      message: 'Agent 模型输入消息调试信息',
+      data: {
+        messageCount: agentMessages.length,
+        messages: summarizeAgentMessages(agentMessages),
+      },
+    })
+  }
 
   try {
     session.agentMessages = await query({
@@ -253,7 +268,12 @@ function logAgentQueryEvent(input: {
       level: 'info',
       event: 'model_start',
       message: `第 ${input.event.step} 轮模型调用开始`,
-      data: { step: input.event.step },
+      data: input.event.debug
+        ? {
+          step: input.event.step,
+          ...input.event.debug,
+        }
+        : { step: input.event.step },
     })
     return
   }
@@ -264,6 +284,17 @@ function logAgentQueryEvent(input: {
       level: 'info',
       event: 'model_finish',
       message: `第 ${input.event.step} 轮模型调用结束，返回 ${input.event.toolCallCount} 个工具调用`,
+      data: input.event,
+    })
+    return
+  }
+
+  if (input.event.type === 'model-tool-call-parse-warning') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'warn',
+      event: 'model_tool_call_parse_warning',
+      message: `第 ${input.event.step} 轮模型以 tool_calls 结束，但没有解析出有效工具调用`,
       data: input.event,
     })
     return
@@ -348,6 +379,48 @@ function logAgentQueryEvent(input: {
       },
     })
   }
+}
+
+function summarizeAgentMessages(messages: AgentMessage[]) {
+  return messages.map((message, index) => {
+    if (message.role === 'assistant') {
+      return {
+        index,
+        role: message.role,
+        contentLength: message.content.length,
+        contentPreview: previewLogText(message.content),
+        toolCallCount: message.toolCalls?.length ?? 0,
+        toolCalls: message.toolCalls?.map((toolCall) => ({
+          id: toolCall.id,
+          name: toolCall.name,
+          input: toolCall.input,
+        })),
+      }
+    }
+
+    if (message.role === 'tool') {
+      return {
+        index,
+        role: message.role,
+        toolCallId: message.toolCallId,
+        name: message.name,
+        contentLength: message.content.length,
+        contentPreview: previewLogText(message.content),
+      }
+    }
+
+    return {
+      index,
+      role: message.role,
+      contentLength: message.content.length,
+      contentPreview: previewLogText(message.content),
+    }
+  })
+}
+
+function previewLogText(text: string) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  return normalized.length > 600 ? `${normalized.slice(0, 600)}...` : normalized
 }
 
 function buildAgentMessages(input: {

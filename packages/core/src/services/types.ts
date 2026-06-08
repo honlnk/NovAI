@@ -40,6 +40,7 @@ export type ProjectConfigView = {
     compressionKeepRecentTurns: number
     embeddingTextVersion: number
     enableBackgroundIndexing: boolean
+    enableDebugLogging: boolean
   }
 }
 
@@ -175,6 +176,13 @@ export type ElementExtractionResultView = {
   timeline: ElementExtractionItemView[]
   plots: ElementExtractionItemView[]
   worldbuilding: ElementExtractionItemView[]
+}
+
+export type ElementWriteResultView = {
+  created: string[]
+  updated: string[]
+  skipped: string[]
+  staleIndex: boolean
 }
 
 export type ProjectView = {

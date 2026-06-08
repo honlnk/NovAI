@@ -41,6 +41,7 @@ export const DEFAULT_CONFIG = {
     compressionKeepRecentTurns: 5,
     embeddingTextVersion: 1,
     enableBackgroundIndexing: true,
+    enableDebugLogging: false,
   },
 } as const
 

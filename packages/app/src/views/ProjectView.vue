@@ -107,6 +107,11 @@ function handleGoToSettings() {
   showGuide.value = false
   handleOpenSettings()
 }
+
+async function handleElementsWritten() {
+  await projectStore.refreshTree()
+  toast.success('要素文件已写入，RAG 索引已标记为过期')
+}
 </script>
 
 <template>
@@ -134,6 +139,8 @@ function handleGoToSettings() {
     <!-- 中间对话面板 -->
     <ChatPanel
       :project-id="projectId"
+      :is-sidebar-open="isSidebarOpen"
+      :is-content-panel-open="isContentPanelOpen"
       @toggle-sidebar="toggleSidebar"
       @toggle-content-panel="toggleContentPanel"
       @toggle-mobile-sidebar="toggleMobileSidebar"
@@ -151,8 +158,10 @@ function handleGoToSettings() {
     <!-- 右侧内容面板 -->
     <ContentPanel
       :is-open="isContentPanelOpen"
+      :project-id="projectId"
       :file="projectStore.activeFile"
       @close="isContentPanelOpen = false"
+      @elements-written="handleElementsWritten"
     />
 
     <!-- Toast 提示 -->

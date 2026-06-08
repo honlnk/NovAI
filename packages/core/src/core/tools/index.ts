@@ -6,6 +6,7 @@ import {
   renameFileTool,
 } from './file-tools'
 import { findFilesTool, listDirectoryTool } from './directory-tools'
+import { ragSearchTool } from './rag-search'
 import type {
   CoreToolName,
   CreateFileInput,
@@ -21,6 +22,8 @@ import type {
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
+  RagSearchInput,
+  RagSearchOutput,
   RenameFileInput,
   RenameFileOutput,
   ToolCall,
@@ -45,6 +48,8 @@ export type {
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
+  RagSearchInput,
+  RagSearchOutput,
   RenameFileInput,
   RenameFileOutput,
   ToolCall,
@@ -61,6 +66,7 @@ type ToolOutputMap = {
   DeleteFile: DeleteFileOutput
   ListDirectory: ListDirectoryOutput
   FindFiles: FindFilesOutput
+  RagSearch: RagSearchOutput
 }
 
 const tools = {
@@ -71,6 +77,7 @@ const tools = {
   DeleteFile: deleteFileTool,
   ListDirectory: listDirectoryTool,
   FindFiles: findFilesTool,
+  RagSearch: ragSearchTool,
 } satisfies Record<CoreToolName, ToolDefinition<CoreToolName, unknown, unknown>>
 
 export function getCoreTools() {

@@ -24,7 +24,7 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
     }
   },
   async run(input, runtime) {
-    const directoryPath = input.path ?? ''
+    const directoryPath = normalizeDirectoryRuntimePath(input.path ?? '', runtime.project)
     let directoryHandle: FileSystemDirectoryHandle
 
     try {
@@ -69,6 +69,14 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
     const target = output.path || '项目根目录'
     return `已查看 ${target}，共 ${output.entries.length} 个条目`
   },
+}
+
+function normalizeDirectoryRuntimePath(path: string, project: { name: string; rootName: string }) {
+  if (path === project.name || path === project.rootName) {
+    return ''
+  }
+
+  return path
 }
 
 function getMissingDirectoryMessage(path: string) {

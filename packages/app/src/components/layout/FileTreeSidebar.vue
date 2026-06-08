@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ProjectFileNodeView, ProjectView } from '@novai/core/services/types'
+import type { ProjectView } from '@novai/core/services/types'
 import TreeNode from '../file-tree/TreeNode.vue'
 
 defineProps<{
@@ -21,7 +21,7 @@ const emit = defineEmits<{
 <template>
   <aside
     :class="[
-      'flex w-64 shrink-0 flex-col bg-[#171717] text-gray-100 transition-all duration-200',
+      'flex shrink-0 flex-col bg-[#171717] text-gray-100 transition-all duration-200',
       'max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-50',
       isOpen ? 'w-64' : 'w-0 overflow-hidden',
       isMobileOpen ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
