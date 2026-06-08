@@ -40,6 +40,7 @@ export type ProjectConfigView = {
     compressionKeepRecentTurns: number
     embeddingTextVersion: number
     enableBackgroundIndexing: boolean
+    enableDebugLogging: boolean
   }
 }
 

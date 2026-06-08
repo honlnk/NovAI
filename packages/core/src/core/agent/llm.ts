@@ -75,6 +75,10 @@ export async function streamAgentCompletion(
   let buffer = ''
   let content = ''
   let finishReason: string | undefined
+  let chunkCount = 0
+  let dataLineCount = 0
+  let parseErrorCount = 0
+  let toolCallDeltaCount = 0
 
   while (true) {
     const { done, value } = await reader.read()
@@ -83,6 +87,7 @@ export async function streamAgentCompletion(
       break
     }
 
+    chunkCount += 1
     buffer += decoder.decode(value, { stream: true })
     const chunks = buffer.split('\n\n')
     buffer = chunks.pop() ?? ''
@@ -98,6 +103,8 @@ export async function streamAgentCompletion(
         if (!data || data === '[DONE]') {
           continue
         }
+
+        dataLineCount += 1
 
         try {
           const payload = JSON.parse(data)
@@ -119,18 +126,28 @@ export async function streamAgentCompletion(
             onEvent({ type: 'delta', text: deltaText })
           }
 
-          collectToolCallDeltas(delta, pendingToolCalls)
+          toolCallDeltaCount += collectToolCallDeltas(delta, pendingToolCalls)
         } catch {
+          parseErrorCount += 1
           continue
         }
       }
     }
   }
 
+  const finalized = finalizeToolCalls(pendingToolCalls)
   const result = {
     content,
-    toolCalls: finalizeToolCalls(pendingToolCalls),
+    toolCalls: finalized,
     finishReason,
+    diagnostics: createDiagnostics({
+      pendingToolCalls,
+      finalizedToolCallCount: finalized.length,
+      chunkCount,
+      dataLineCount,
+      parseErrorCount,
+      toolCallDeltaCount,
+    }),
   }
 
   onEvent({ type: 'finish', response: result })
@@ -179,6 +196,23 @@ function extractNonStreamingResponse(payload: unknown): AgentAssistantResponse {
     content,
     toolCalls,
     finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+    diagnostics: createDiagnostics({
+      pendingToolCalls: new Map(
+        toolCalls.map((toolCall, index) => [
+          index,
+          {
+            id: toolCall.id,
+            name: toolCall.name,
+            argumentsText: JSON.stringify(toolCall.input),
+          },
+        ]),
+      ),
+      finalizedToolCallCount: toolCalls.length,
+      chunkCount: 0,
+      dataLineCount: 0,
+      parseErrorCount: 0,
+      toolCallDeltaCount: toolCalls.length,
+    }),
   }
 }
 
@@ -203,14 +237,17 @@ function collectToolCallDeltas(
   pendingToolCalls: Map<number, PendingToolCall>,
 ) {
   if (!delta || !Array.isArray(delta.tool_calls)) {
-    return
+    return 0
   }
+
+  let count = 0
 
   for (const rawToolCall of delta.tool_calls) {
     if (!isRecord(rawToolCall)) {
       continue
     }
 
+    count += 1
     const index = typeof rawToolCall.index === 'number' ? rawToolCall.index : pendingToolCalls.size
     const pending = pendingToolCalls.get(index) ?? { argumentsText: '' }
 
@@ -230,6 +267,8 @@ function collectToolCallDeltas(
 
     pendingToolCalls.set(index, pending)
   }
+
+  return count
 }
 
 function finalizeToolCalls(pendingToolCalls: Map<number, PendingToolCall>): AgentToolCall[] {
@@ -253,6 +292,48 @@ function parseToolArguments(text: string): Record<string, unknown> {
     return isRecord(value) ? value : {}
   } catch {
     return {}
+  }
+}
+
+function createDiagnostics(input: {
+  pendingToolCalls: Map<number, PendingToolCall>
+  finalizedToolCallCount: number
+  chunkCount: number
+  dataLineCount: number
+  parseErrorCount: number
+  toolCallDeltaCount: number
+}) {
+  const droppedToolCalls = Array.from(input.pendingToolCalls.entries())
+    .filter(([, value]) => !value.name)
+    .map(([index, value]) => ({
+      index,
+      hasId: Boolean(value.id),
+      hasName: Boolean(value.name),
+      argumentsLength: value.argumentsText.length,
+      argumentsParseable: isParseableJsonObject(value.argumentsText),
+    }))
+
+  return {
+    chunkCount: input.chunkCount,
+    dataLineCount: input.dataLineCount,
+    parseErrorCount: input.parseErrorCount,
+    toolCallDeltaCount: input.toolCallDeltaCount,
+    pendingToolCallCount: input.pendingToolCalls.size,
+    finalizedToolCallCount: input.finalizedToolCallCount,
+    droppedToolCallCount: droppedToolCalls.length,
+    droppedToolCalls,
+  }
+}
+
+function isParseableJsonObject(text: string) {
+  if (!text.trim()) {
+    return true
+  }
+
+  try {
+    return isRecord(JSON.parse(text))
+  } catch {
+    return false
   }
 }
 

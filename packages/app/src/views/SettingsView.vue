@@ -44,6 +44,7 @@ const projectForm = ref({
   ragContextMaxItems: 8,
   conversationTokenLimit: 8000,
   compressionKeepRecentTurns: 5,
+  enableDebugLogging: false,
 })
 
 const isTesting = ref(false)
@@ -78,15 +79,7 @@ onMounted(async () => {
       }
     }
     if (settingsStore.config.settings) {
-      projectForm.value = {
-        proofreadDefaultChapters: settingsStore.config.settings.proofreadDefaultChapters ?? 3,
-        organizeDefaultChapters: settingsStore.config.settings.organizeDefaultChapters ?? 10,
-        generationRecentChapters: settingsStore.config.settings.generationRecentChapters ?? 3,
-        ragCandidateLimit: settingsStore.config.settings.ragCandidateLimit ?? 20,
-        ragContextMaxItems: settingsStore.config.settings.ragContextMaxItems ?? 8,
-        conversationTokenLimit: settingsStore.config.settings.conversationTokenLimit ?? 8000,
-        compressionKeepRecentTurns: settingsStore.config.settings.compressionKeepRecentTurns ?? 5,
-      }
+      applyProjectSettings(settingsStore.config.settings)
     }
   }
 
@@ -132,7 +125,25 @@ async function handleSaveRerank() {
 }
 
 async function handleSaveProject() {
-  await settingsStore.saveConfig(projectId.value, { settings: projectForm.value })
+  testResult.value = null
+
+  const savedConfig = await settingsStore.saveConfig(projectId.value, {
+    settings: { ...projectForm.value },
+  })
+
+  if (!savedConfig) {
+    testResult.value = {
+      ok: false,
+      message: settingsStore.errorMessage || '项目设置保存失败',
+    }
+    return
+  }
+
+  applyProjectSettings(savedConfig.settings)
+  testResult.value = {
+    ok: true,
+    message: '项目设置已保存',
+  }
 }
 
 async function handleInspectIndex() {
@@ -199,6 +210,19 @@ function getIndexStatusClass(status?: ProjectIndexMetaView['status']) {
 
 function formatDate(value?: string) {
   return value ? new Date(value).toLocaleString('zh-CN') : '暂无'
+}
+
+function applyProjectSettings(settings: NonNullable<typeof settingsStore.config>['settings']) {
+  projectForm.value = {
+    proofreadDefaultChapters: settings.proofreadDefaultChapters ?? 3,
+    organizeDefaultChapters: settings.organizeDefaultChapters ?? 10,
+    generationRecentChapters: settings.generationRecentChapters ?? 3,
+    ragCandidateLimit: settings.ragCandidateLimit ?? 20,
+    ragContextMaxItems: settings.ragContextMaxItems ?? 8,
+    conversationTokenLimit: settings.conversationTokenLimit ?? 8000,
+    compressionKeepRecentTurns: settings.compressionKeepRecentTurns ?? 5,
+    enableDebugLogging: settings.enableDebugLogging ?? false,
+  }
 }
 </script>
 
@@ -274,6 +298,7 @@ function formatDate(value?: string) {
           </div>
           <div class="flex gap-3 pt-2">
             <button
+              type="button"
               class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
               :disabled="isTesting"
               @click="handleTestLlm"
@@ -281,6 +306,7 @@ function formatDate(value?: string) {
               {{ isTesting ? '测试中...' : '测试连接' }}
             </button>
             <button
+              type="button"
               class="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
               @click="handleSaveLlm"
             >
@@ -318,6 +344,7 @@ function formatDate(value?: string) {
           </div>
           <div class="flex gap-3 pt-2">
             <button
+              type="button"
               class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
               :disabled="isTesting"
               @click="handleTestEmbedding"
@@ -325,6 +352,7 @@ function formatDate(value?: string) {
               {{ isTesting ? '测试中...' : '测试连接' }}
             </button>
             <button
+              type="button"
               class="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
               @click="handleSaveEmbedding"
             >
@@ -388,6 +416,7 @@ function formatDate(value?: string) {
           </div>
           <div class="pt-2">
             <button
+              type="button"
               class="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
               @click="handleSaveRerank"
             >
@@ -545,6 +574,17 @@ function formatDate(value?: string) {
                   class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
+              <label class="flex items-start gap-3 rounded-lg border border-gray-200 px-3 py-3">
+                <input
+                  v-model="projectForm.enableDebugLogging"
+                  type="checkbox"
+                  class="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <span class="block text-sm font-medium text-gray-700">开发调试日志</span>
+                  <span class="block text-xs text-gray-500">记录模型配置、请求摘要和工具调用解析诊断；正式使用建议关闭</span>
+                </span>
+              </label>
             </div>
           </div>
 
@@ -580,6 +620,7 @@ function formatDate(value?: string) {
           <!-- 保存按钮 -->
           <div class="pt-2">
             <button
+              type="button"
               class="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
               @click="handleSaveProject"
             >

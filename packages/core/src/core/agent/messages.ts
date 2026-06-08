@@ -61,6 +61,24 @@ export type AgentAssistantResponse = {
   content: string
   toolCalls: AgentToolCall[]
   finishReason?: string
+  diagnostics?: AgentLlmDiagnostics
+}
+
+export type AgentLlmDiagnostics = {
+  chunkCount: number
+  dataLineCount: number
+  parseErrorCount: number
+  toolCallDeltaCount: number
+  pendingToolCallCount: number
+  finalizedToolCallCount: number
+  droppedToolCallCount: number
+  droppedToolCalls: Array<{
+    index: number
+    hasId: boolean
+    hasName: boolean
+    argumentsLength: number
+    argumentsParseable: boolean
+  }>
 }
 
 export function createAgentId(prefix: string) {

@@ -80,6 +80,7 @@ const configDraft = reactive<ProjectConfigView>({
     compressionKeepRecentTurns: 5,
     embeddingTextVersion: 1,
     enableBackgroundIndexing: true,
+    enableDebugLogging: false,
   },
 })
 
@@ -540,6 +541,10 @@ function groupReadableFiles(files: Array<{ path: string; name: string }>) {
       <label>
         <span>后台索引更新</span>
         <input v-model="configDraft.settings.enableBackgroundIndexing" type="checkbox" />
+      </label>
+      <label>
+        <span>开发调试日志</span>
+        <input v-model="configDraft.settings.enableDebugLogging" type="checkbox" />
       </label>
       <button type="button" :disabled="isBusy || !currentProject" @click="onSaveConfig">保存配置</button>
       <pre>{{ configPreview }}</pre>

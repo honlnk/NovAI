@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -181,7 +181,7 @@ export async function repairProject(
  * 这是测试页后续所有项目级操作的基础输入。
  */
 export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandle): Promise<ProjectSnapshot> {
-  const config = await readJson<ProjectConfig>(rootHandle, 'novel.config.json')
+  const config = normalizeProjectConfig(await readJson<ProjectConfig>(rootHandle, 'novel.config.json'))
   const manifest = await readJson<ProjectManifest>(rootHandle, '.novel/manifest.json')
   const tree = await scanDirectory(rootHandle)
 
@@ -226,7 +226,7 @@ export async function rescanProject(snapshot: ProjectSnapshot): Promise<TreeNode
  * 读取 `novel.config.json` 并返回当前项目配置。
  */
 export async function readProjectConfig(rootHandle: FileSystemDirectoryHandle): Promise<ProjectConfig> {
-  return readJson<ProjectConfig>(rootHandle, 'novel.config.json')
+  return normalizeProjectConfig(await readJson<ProjectConfig>(rootHandle, 'novel.config.json'))
 }
 
 /**
@@ -237,17 +237,45 @@ export async function writeProjectConfig(
   rootHandle: FileSystemDirectoryHandle,
   config: ProjectConfig,
 ): Promise<ProjectConfig> {
+  const normalizedConfig = normalizeProjectConfig(config)
   const nextConfig: ProjectConfig = {
-    ...config,
+    ...normalizedConfig,
     project: {
-      ...config.project,
-      name: config.project.name || rootHandle.name,
+      ...normalizedConfig.project,
+      name: normalizedConfig.project.name || rootHandle.name,
       updatedAt: new Date().toISOString(),
     },
   }
 
   await writeJson(rootHandle, 'novel.config.json', nextConfig)
   return nextConfig
+}
+
+function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    ...config,
+    project: {
+      ...DEFAULT_CONFIG.project,
+      ...config.project,
+    },
+    llm: {
+      ...DEFAULT_CONFIG.llm,
+      ...config.llm,
+    },
+    embedding: {
+      ...DEFAULT_CONFIG.embedding,
+      ...config.embedding,
+    },
+    rerank: {
+      ...DEFAULT_CONFIG.rerank,
+      ...config.rerank,
+    },
+    settings: {
+      ...DEFAULT_CONFIG.settings,
+      ...config.settings,
+    },
+  }
 }
 
 /**
