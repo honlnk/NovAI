@@ -28,6 +28,8 @@ type PendingToolCall = {
   argumentsText: string
 }
 
+type CompletionRequestMode = 'stream' | 'non_streaming' | 'non_streaming_fallback'
+
 export async function streamAgentCompletion(
   input: AgentLlmInput,
   onEvent: (event: AgentLlmEvent) => void,
@@ -40,17 +42,7 @@ export async function streamAgentCompletion(
     throw new Error(message)
   }
 
-  const response = await fetch(resolveApiUrl(baseUrl, '/chat/completions'), {
-    method: 'POST',
-    headers: createJsonHeaders(input.apiKey, baseUrl),
-    body: JSON.stringify({
-      model: input.model.trim(),
-      stream: true,
-      messages: input.messages.map(toOpenAiMessage),
-      tools: input.tools,
-      tool_choice: 'auto',
-    }),
-  })
+  const response = await requestChatCompletion(input, baseUrl, true)
 
   if (!response.ok) {
     const payload = await readJsonResponse(response)
@@ -61,7 +53,7 @@ export async function streamAgentCompletion(
 
   if (!response.body) {
     const payload = await readJsonResponse(response)
-    const result = extractNonStreamingResponse(payload)
+    const result = extractNonStreamingResponse(payload, 'non_streaming')
     onEvent({ type: 'start' })
     onEvent({ type: 'finish', response: result })
     return result
@@ -136,11 +128,12 @@ export async function streamAgentCompletion(
   }
 
   const finalized = finalizeToolCalls(pendingToolCalls)
-  const result = {
+  const result: AgentAssistantResponse = {
     content,
     toolCalls: finalized,
     finishReason,
     diagnostics: createDiagnostics({
+      responseMode: 'stream',
       pendingToolCalls,
       finalizedToolCallCount: finalized.length,
       chunkCount,
@@ -150,8 +143,98 @@ export async function streamAgentCompletion(
     }),
   }
 
+  if (shouldFallbackToNonStreaming(result)) {
+    const fallback = await fallbackToNonStreaming(input, baseUrl, result)
+    onEvent({ type: 'finish', response: fallback })
+    return fallback
+  }
+
   onEvent({ type: 'finish', response: result })
   return result
+}
+
+async function requestChatCompletion(input: AgentLlmInput, baseUrl: string, stream: boolean) {
+  return fetch(resolveApiUrl(baseUrl, '/chat/completions'), {
+    method: 'POST',
+    headers: createJsonHeaders(input.apiKey, baseUrl),
+    body: JSON.stringify({
+      model: input.model.trim(),
+      stream,
+      messages: input.messages.map(toOpenAiMessage),
+      tools: input.tools,
+      tool_choice: 'auto',
+    }),
+  })
+}
+
+function shouldFallbackToNonStreaming(response: AgentAssistantResponse) {
+  return (
+    response.finishReason === 'tool_calls' &&
+    response.toolCalls.length === 0 &&
+    (response.diagnostics?.droppedToolCallCount ?? 0) > 0
+  )
+}
+
+async function fallbackToNonStreaming(
+  input: AgentLlmInput,
+  baseUrl: string,
+  streamResult: AgentAssistantResponse,
+): Promise<AgentAssistantResponse> {
+  const reason = 'stream_tool_calls_missing_function_name'
+
+  try {
+    const response = await requestChatCompletion(input, baseUrl, false)
+
+    if (!response.ok) {
+      const payload = await readJsonResponse(response)
+      throw new Error(extractErrorMessage(payload, 'Agent 非流式 fallback 调用模型失败'))
+    }
+
+    const payload = await readJsonResponse(response)
+    const fallback = extractNonStreamingResponse(payload, 'non_streaming_fallback')
+    const diagnostics = fallback.diagnostics
+
+    if (!diagnostics) {
+      return fallback
+    }
+
+    return {
+      ...fallback,
+      diagnostics: {
+        ...diagnostics,
+        fallback: {
+          from: 'stream',
+          to: 'non_streaming',
+          reason,
+          succeeded: true,
+          originalToolCallCount: streamResult.toolCalls.length,
+          originalDroppedToolCallCount: streamResult.diagnostics?.droppedToolCallCount ?? 0,
+        },
+      },
+    }
+  } catch (error) {
+    const diagnostics = streamResult.diagnostics
+
+    if (!diagnostics) {
+      return streamResult
+    }
+
+    return {
+      ...streamResult,
+      diagnostics: {
+        ...diagnostics,
+        fallback: {
+          from: 'stream',
+          to: 'non_streaming',
+          reason,
+          succeeded: false,
+          originalToolCallCount: streamResult.toolCalls.length,
+          originalDroppedToolCallCount: streamResult.diagnostics?.droppedToolCallCount ?? 0,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+      },
+    }
+  }
 }
 
 function toOpenAiMessage(message: AgentMessage) {
@@ -184,7 +267,10 @@ function toOpenAiMessage(message: AgentMessage) {
   return message
 }
 
-function extractNonStreamingResponse(payload: unknown): AgentAssistantResponse {
+function extractNonStreamingResponse(
+  payload: unknown,
+  responseMode: CompletionRequestMode,
+): AgentAssistantResponse {
   const choice = readFirstChoice(payload)
   const message = choice && isRecord(choice.message) ? choice.message : undefined
   const content = typeof message?.content === 'string' ? message.content : ''
@@ -197,6 +283,7 @@ function extractNonStreamingResponse(payload: unknown): AgentAssistantResponse {
     toolCalls,
     finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
     diagnostics: createDiagnostics({
+      responseMode,
       pendingToolCalls: new Map(
         toolCalls.map((toolCall, index) => [
           index,
@@ -296,6 +383,7 @@ function parseToolArguments(text: string): Record<string, unknown> {
 }
 
 function createDiagnostics(input: {
+  responseMode: CompletionRequestMode
   pendingToolCalls: Map<number, PendingToolCall>
   finalizedToolCallCount: number
   chunkCount: number
@@ -314,6 +402,7 @@ function createDiagnostics(input: {
     }))
 
   return {
+    responseMode: input.responseMode,
     chunkCount: input.chunkCount,
     dataLineCount: input.dataLineCount,
     parseErrorCount: input.parseErrorCount,

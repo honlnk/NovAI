@@ -65,6 +65,7 @@ export type AgentAssistantResponse = {
 }
 
 export type AgentLlmDiagnostics = {
+  responseMode: 'stream' | 'non_streaming' | 'non_streaming_fallback'
   chunkCount: number
   dataLineCount: number
   parseErrorCount: number
@@ -79,6 +80,15 @@ export type AgentLlmDiagnostics = {
     argumentsLength: number
     argumentsParseable: boolean
   }>
+  fallback?: {
+    from: 'stream'
+    to: 'non_streaming'
+    reason: string
+    succeeded: boolean
+    originalToolCallCount: number
+    originalDroppedToolCallCount: number
+    errorMessage?: string
+  }
 }
 
 export function createAgentId(prefix: string) {
