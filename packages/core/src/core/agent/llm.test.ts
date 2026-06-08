@@ -7,6 +7,7 @@ const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -98,6 +99,92 @@ describe('streamAgentCompletion', () => {
       originalToolCallCount: 0,
       originalDroppedToolCallCount: 1,
     })
+  })
+
+  it('falls back to non-streaming when the streaming body does not finish', async () => {
+    vi.useFakeTimers()
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>()))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '项目读取完成。',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    globalThis.fetch = fetchMock
+
+    const resultPromise = streamAgentCompletion({
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-ai/DeepSeek-V4-Pro',
+      messages: [
+        { role: 'system', content: '你是小说创作 Agent。' },
+        { role: 'user', content: '你好 你能帮我做什么？' },
+      ],
+      tools: [listDirectoryToolSchema],
+    }, () => {})
+
+    await vi.advanceTimersByTimeAsync(90_000)
+    const result = await resultPromise
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).stream).toBe(true)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).stream).toBe(false)
+    expect(result.content).toBe('项目读取完成。')
+    expect(result.diagnostics?.responseMode).toBe('non_streaming_fallback')
+    expect(result.diagnostics?.fallback).toMatchObject({
+      from: 'stream',
+      to: 'non_streaming',
+      reason: 'stream_request_failed',
+      succeeded: true,
+      originalToolCallCount: 0,
+    })
+  })
+
+  it('uses a longer timeout for non-streaming fallback requests', async () => {
+    vi.useFakeTimers()
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>()))
+      .mockImplementationOnce((_url: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(init.signal?.reason)
+        }, { once: true })
+      }))
+
+    globalThis.fetch = fetchMock
+
+    const resultPromise = streamAgentCompletion({
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-ai/DeepSeek-V4-Pro',
+      messages: [
+        { role: 'system', content: '你是小说创作 Agent。' },
+        { role: 'user', content: '总结第一章。' },
+      ],
+      tools: [listDirectoryToolSchema],
+    }, () => {})
+    const errorPromise = resultPromise.catch((error: unknown) => error)
+
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await vi.advanceTimersByTimeAsync(299_999)
+    await expect(Promise.resolve()).resolves.toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(errorPromise).resolves.toEqual(expect.objectContaining({
+      message: expect.stringContaining('模型非流式 fallback超过 300 秒未完成'),
+    }))
   })
 })
 

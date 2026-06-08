@@ -29,6 +29,12 @@ type PendingToolCall = {
 }
 
 type CompletionRequestMode = 'stream' | 'non_streaming' | 'non_streaming_fallback'
+type FallbackReason =
+  | 'stream_tool_calls_missing_function_name'
+  | 'stream_request_failed'
+
+const LLM_STREAM_IDLE_TIMEOUT_MS = 90_000
+const LLM_NON_STREAMING_TIMEOUT_MS = 300_000
 
 export async function streamAgentCompletion(
   input: AgentLlmInput,
@@ -42,26 +48,9 @@ export async function streamAgentCompletion(
     throw new Error(message)
   }
 
-  const response = await requestChatCompletion(input, baseUrl, true)
-
-  if (!response.ok) {
-    const payload = await readJsonResponse(response)
-    const message = extractErrorMessage(payload, 'Agent 调用模型失败')
-    onEvent({ type: 'error', message })
-    throw new Error(message)
-  }
-
-  if (!response.body) {
-    const payload = await readJsonResponse(response)
-    const result = extractNonStreamingResponse(payload, 'non_streaming')
-    onEvent({ type: 'start' })
-    onEvent({ type: 'finish', response: result })
-    return result
-  }
-
   onEvent({ type: 'start' })
 
-  const reader = response.body.getReader()
+  const timeout = createRequestTimeout(LLM_STREAM_IDLE_TIMEOUT_MS, '流式响应空闲')
   const decoder = new TextDecoder('utf-8')
   const pendingToolCalls = new Map<number, PendingToolCall>()
   let buffer = ''
@@ -72,79 +61,119 @@ export async function streamAgentCompletion(
   let parseErrorCount = 0
   let toolCallDeltaCount = 0
 
-  while (true) {
-    const { done, value } = await reader.read()
+  try {
+    const response = await requestChatCompletion(input, baseUrl, true, timeout.signal)
 
-    if (done) {
-      break
+    if (!response.ok) {
+      const payload = await readJsonResponse(response)
+      const message = extractErrorMessage(payload, 'Agent 调用模型失败')
+      onEvent({ type: 'error', message })
+      throw new Error(message)
     }
 
-    chunkCount += 1
-    buffer += decoder.decode(value, { stream: true })
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() ?? ''
+    if (!response.body) {
+      const payload = await readJsonResponse(response)
+      const result = extractNonStreamingResponse(payload, 'non_streaming')
+      onEvent({ type: 'finish', response: result })
+      return result
+    }
 
-    for (const chunk of chunks) {
-      for (const line of chunk.split('\n').map((item) => item.trim()).filter(Boolean)) {
-        if (!line.startsWith('data:')) {
-          continue
-        }
+    const reader = response.body.getReader()
 
-        const data = line.slice(5).trim()
+    while (true) {
+      const { done, value } = await readStreamChunk(reader, timeout.signal)
 
-        if (!data || data === '[DONE]') {
-          continue
-        }
+      if (done) {
+        break
+      }
 
-        dataLineCount += 1
+      chunkCount += 1
+      timeout.reset()
+      buffer += decoder.decode(value, { stream: true })
+      const chunks = buffer.split('\n\n')
+      buffer = chunks.pop() ?? ''
 
-        try {
-          const payload = JSON.parse(data)
-          const choice = readFirstChoice(payload)
-
-          if (!choice) {
+      for (const chunk of chunks) {
+        for (const line of chunk.split('\n').map((item) => item.trim()).filter(Boolean)) {
+          if (!line.startsWith('data:')) {
             continue
           }
 
-          if (typeof choice.finish_reason === 'string') {
-            finishReason = choice.finish_reason
+          const data = line.slice(5).trim()
+
+          if (!data || data === '[DONE]') {
+            continue
           }
 
-          const delta = isRecord(choice.delta) ? choice.delta : undefined
-          const deltaText = extractDeltaText(delta)
+          dataLineCount += 1
 
-          if (deltaText) {
-            content += deltaText
-            onEvent({ type: 'delta', text: deltaText })
+          try {
+            const payload = JSON.parse(data)
+            const choice = readFirstChoice(payload)
+
+            if (!choice) {
+              continue
+            }
+
+            if (typeof choice.finish_reason === 'string') {
+              finishReason = choice.finish_reason
+            }
+
+            const delta = isRecord(choice.delta) ? choice.delta : undefined
+            const deltaText = extractDeltaText(delta)
+
+            if (deltaText) {
+              content += deltaText
+              onEvent({ type: 'delta', text: deltaText })
+            }
+
+            toolCallDeltaCount += collectToolCallDeltas(delta, pendingToolCalls)
+          } catch {
+            parseErrorCount += 1
+            continue
           }
-
-          toolCallDeltaCount += collectToolCallDeltas(delta, pendingToolCalls)
-        } catch {
-          parseErrorCount += 1
-          continue
         }
       }
     }
+  } catch (error) {
+    const fallback = await fallbackToNonStreaming(
+      input,
+      baseUrl,
+      createStreamResult({
+        content,
+        finishReason,
+        pendingToolCalls,
+        chunkCount,
+        dataLineCount,
+        parseErrorCount,
+        toolCallDeltaCount,
+      }),
+      'stream_request_failed',
+      error,
+    )
+    onEvent({ type: 'finish', response: fallback })
+    return fallback
+  } finally {
+    timeout.clear()
   }
 
-  const finalized = finalizeToolCalls(pendingToolCalls)
-  const result: AgentAssistantResponse = {
+  const result = createStreamResult({
     content,
-    toolCalls: finalized,
     finishReason,
-    diagnostics: createDiagnostics({
-      responseMode: 'stream',
-      pendingToolCalls,
-      finalizedToolCallCount: finalized.length,
-      chunkCount,
-      dataLineCount,
-      parseErrorCount,
-      toolCallDeltaCount,
-    }),
-  }
+    pendingToolCalls,
+    chunkCount,
+    dataLineCount,
+    parseErrorCount,
+    toolCallDeltaCount,
+  })
 
   if (shouldFallbackToNonStreaming(result)) {
-    const fallback = await fallbackToNonStreaming(input, baseUrl, result)
+    const fallback = await fallbackToNonStreaming(
+      input,
+      baseUrl,
+      result,
+      'stream_tool_calls_missing_function_name',
+    )
     onEvent({ type: 'finish', response: fallback })
     return fallback
   }
@@ -153,10 +182,16 @@ export async function streamAgentCompletion(
   return result
 }
 
-async function requestChatCompletion(input: AgentLlmInput, baseUrl: string, stream: boolean) {
+async function requestChatCompletion(
+  input: AgentLlmInput,
+  baseUrl: string,
+  stream: boolean,
+  signal: AbortSignal,
+) {
   return fetch(resolveApiUrl(baseUrl, '/chat/completions'), {
     method: 'POST',
     headers: createJsonHeaders(input.apiKey, baseUrl),
+    signal,
     body: JSON.stringify({
       model: input.model.trim(),
       stream,
@@ -165,6 +200,33 @@ async function requestChatCompletion(input: AgentLlmInput, baseUrl: string, stre
       tool_choice: 'auto',
     }),
   })
+}
+
+function createStreamResult(input: {
+  content: string
+  finishReason?: string
+  pendingToolCalls: Map<number, PendingToolCall>
+  chunkCount: number
+  dataLineCount: number
+  parseErrorCount: number
+  toolCallDeltaCount: number
+}): AgentAssistantResponse {
+  const finalized = finalizeToolCalls(input.pendingToolCalls)
+
+  return {
+    content: input.content,
+    toolCalls: finalized,
+    finishReason: input.finishReason,
+    diagnostics: createDiagnostics({
+      responseMode: 'stream',
+      pendingToolCalls: input.pendingToolCalls,
+      finalizedToolCallCount: finalized.length,
+      chunkCount: input.chunkCount,
+      dataLineCount: input.dataLineCount,
+      parseErrorCount: input.parseErrorCount,
+      toolCallDeltaCount: input.toolCallDeltaCount,
+    }),
+  }
 }
 
 function shouldFallbackToNonStreaming(response: AgentAssistantResponse) {
@@ -179,11 +241,12 @@ async function fallbackToNonStreaming(
   input: AgentLlmInput,
   baseUrl: string,
   streamResult: AgentAssistantResponse,
+  reason: FallbackReason,
+  streamError?: unknown,
 ): Promise<AgentAssistantResponse> {
-  const reason = 'stream_tool_calls_missing_function_name'
-
+  const timeout = createRequestTimeout(LLM_NON_STREAMING_TIMEOUT_MS, '非流式 fallback')
   try {
-    const response = await requestChatCompletion(input, baseUrl, false)
+    const response = await requestChatCompletion(input, baseUrl, false, timeout.signal)
 
     if (!response.ok) {
       const payload = await readJsonResponse(response)
@@ -209,6 +272,7 @@ async function fallbackToNonStreaming(
           succeeded: true,
           originalToolCallCount: streamResult.toolCalls.length,
           originalDroppedToolCallCount: streamResult.diagnostics?.droppedToolCallCount ?? 0,
+          errorMessage: formatFallbackSourceError(streamError),
         },
       },
     }
@@ -216,25 +280,91 @@ async function fallbackToNonStreaming(
     const diagnostics = streamResult.diagnostics
 
     if (!diagnostics) {
-      return streamResult
+      throw createFallbackError(error, LLM_NON_STREAMING_TIMEOUT_MS, '非流式 fallback')
     }
 
-    return {
-      ...streamResult,
-      diagnostics: {
-        ...diagnostics,
-        fallback: {
-          from: 'stream',
-          to: 'non_streaming',
-          reason,
-          succeeded: false,
-          originalToolCallCount: streamResult.toolCalls.length,
-          originalDroppedToolCallCount: streamResult.diagnostics?.droppedToolCallCount ?? 0,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
+    streamResult.diagnostics = {
+      ...diagnostics,
+      fallback: {
+        from: 'stream',
+        to: 'non_streaming',
+        reason,
+        succeeded: false,
+        originalToolCallCount: streamResult.toolCalls.length,
+        originalDroppedToolCallCount: streamResult.diagnostics?.droppedToolCallCount ?? 0,
+        errorMessage: error instanceof Error ? error.message : String(error),
       },
     }
+
+    throw createFallbackError(error, LLM_NON_STREAMING_TIMEOUT_MS, '非流式 fallback')
+  } finally {
+    timeout.clear()
   }
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+) {
+  if (signal.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason))
+  }
+
+  return Promise.race([
+    reader.read(),
+    new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+      signal.addEventListener('abort', () => {
+        reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
+      }, { once: true })
+    }),
+  ])
+}
+
+function createRequestTimeout(timeoutMs: number, label: string) {
+  const controller = new AbortController()
+  let timer = globalThis.setTimeout(() => {
+    controller.abort(new Error(`LLM ${label}超过 ${timeoutMs / 1000} 秒未完成`))
+  }, timeoutMs)
+
+  return {
+    signal: controller.signal,
+    reset() {
+      if (controller.signal.aborted) {
+        return
+      }
+
+      globalThis.clearTimeout(timer)
+      timer = globalThis.setTimeout(() => {
+        controller.abort(new Error(`LLM ${label}超过 ${timeoutMs / 1000} 秒未完成`))
+      }, timeoutMs)
+    },
+    clear() {
+      globalThis.clearTimeout(timer)
+    },
+  }
+}
+
+function createFallbackError(error: unknown, timeoutMs: number, label: string) {
+  if (isAbortError(error)) {
+    return new Error(`模型${label}超过 ${timeoutMs / 1000} 秒未完成，请稍后重试或切换模型服务商`)
+  }
+
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function formatFallbackSourceError(error: unknown) {
+  if (!error) {
+    return undefined
+  }
+
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isAbortError(error: unknown) {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof Error && error.message.includes('LLM ') && error.message.includes('超过'))
+  )
 }
 
 function toOpenAiMessage(message: AgentMessage) {
