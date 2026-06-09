@@ -43,9 +43,9 @@ export async function refreshFiles(projectId: string): Promise<ProjectFileNodeVi
 export async function writeChapter(
   projectId: string,
   fileName: string,
-  markdown: string,
+  content: string,
 ): Promise<FileContentView> {
   const project = requireRuntimeProject(projectId)
-  const savedName = await writeChapterFile(project.handle, fileName, markdown)
+  const savedName = await writeChapterFile(project.handle, fileName, content)
   return toFileContentView(await readProjectFile(project, `chapters/${savedName}`))
 }

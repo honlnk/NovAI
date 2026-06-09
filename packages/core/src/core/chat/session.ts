@@ -665,7 +665,7 @@ function flattenChapterPaths(tree: ChatTurnInput['project']['tree']) {
       continue
     }
 
-    if (node.kind === 'file' && node.path.startsWith('chapters/') && node.name.endsWith('.md')) {
+    if (node.kind === 'file' && node.path.startsWith('chapters/') && node.name.endsWith('.txt')) {
       paths.push(node.path)
       continue
     }
@@ -808,7 +808,7 @@ function buildNextChapterPath(project: ChatTurnInput['project']) {
   }, 0)
 
   const nextSequence = String(maxSequence + 1).padStart(3, '0')
-  return `chapters/第${nextSequence}章-未命名章节.md`
+  return `chapters/第${nextSequence}章-未命名章节.txt`
 }
 
 function summarizeTurnMode(mode: TurnMode) {

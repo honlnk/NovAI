@@ -54,6 +54,14 @@ export function assertTextFilePath(path: string): void {
   }
 }
 
+export function assertWritableTextFilePath(path: string): void {
+  assertTextFilePath(path)
+
+  if (path.startsWith('chapters/') && !path.toLowerCase().endsWith('.txt')) {
+    throw new Error('章节正文必须写入 chapters/*.txt；要素和提示词才使用 .md')
+  }
+}
+
 export function isNotFoundError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'NotFoundError'
 }

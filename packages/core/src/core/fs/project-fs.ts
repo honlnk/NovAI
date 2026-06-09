@@ -334,17 +334,17 @@ export async function writeSystemPrompt(rootHandle: FileSystemDirectoryHandle, c
 }
 
 /**
- * 将生成结果保存为章节 Markdown 文件，并返回最终采用的文件名。
+ * 将生成结果保存为章节文件，并返回最终采用的文件名。
  * 如果调用方没有提供合法名称，这里会自动生成一个可落盘的默认值。
  */
 export async function writeChapterFile(
   rootHandle: FileSystemDirectoryHandle,
   fileName: string,
-  markdown: string,
+  content: string,
 ) {
-  // 测试页允许直接输入文件名，这里统一兜底成稳定的 .md 文件名。
+  // 测试页允许直接输入文件名，这里统一兜底成稳定的 .txt 文件名。
   const normalizedName = normalizeChapterFileName(fileName)
-  await writeText(rootHandle, `chapters/${normalizedName}`, markdown)
+  await writeText(rootHandle, `chapters/${normalizedName}`, content)
   return normalizedName
 }
 
@@ -399,10 +399,10 @@ function normalizeChapterFileName(fileName: string) {
       `${now.getMinutes()}`.padStart(2, '0'),
       `${now.getSeconds()}`.padStart(2, '0'),
     ].join('')
-    return `chapter-${stamp}.md`
+    return `chapter-${stamp}.txt`
   }
 
-  return trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`
+  return trimmed.endsWith('.txt') ? trimmed : `${trimmed.replace(/\.md$/i, '')}.txt`
 }
 
 async function scanDirectory(
