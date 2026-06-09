@@ -1,7 +1,7 @@
 import { moveProjectTextFile, readProjectTextFile } from '../../fs/project-fs'
-import { isNotFoundError, normalizeProjectPath } from '../path'
+import { assertWritableTextFilePath, isNotFoundError, normalizeProjectPath } from '../path'
 import type { RenameFileInput, RenameFileOutput, ToolDefinition } from '../types'
-import { asRecord, assertMutableDocumentPath, readString } from './common'
+import { asRecord, assertMutableDocumentPath, assertWritableDocumentPath, readString } from './common'
 
 export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, RenameFileOutput> = {
   name: 'RenameFile',
@@ -12,7 +12,7 @@ export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, Renam
     const toPath = normalizeProjectPath(readString(value.toPath, 'RenameFile.toPath'))
 
     assertMutableDocumentPath(fromPath, 'RenameFile.fromPath')
-    assertMutableDocumentPath(toPath, 'RenameFile.toPath')
+    assertWritableDocumentPath(toPath, 'RenameFile.toPath')
 
     if (fromPath === toPath) {
       throw new Error('RenameFile.fromPath 和 RenameFile.toPath 不能相同')
@@ -24,6 +24,8 @@ export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, Renam
     }
   },
   async run(input, runtime) {
+    assertWritableTextFilePath(input.toPath)
+
     const content = await readProjectTextFile(runtime.project.handle, input.fromPath)
 
     try {

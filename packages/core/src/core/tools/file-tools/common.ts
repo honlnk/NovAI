@@ -1,4 +1,4 @@
-import { assertTextFilePath, normalizeProjectPath } from '../path'
+import { assertTextFilePath, assertWritableTextFilePath, normalizeProjectPath } from '../path'
 
 export function asRecord(input: unknown) {
   if (!input || typeof input !== 'object') {
@@ -24,9 +24,17 @@ export function assertMutableDocumentPath(path: string, label: string) {
   }
 }
 
+export function assertWritableDocumentPath(path: string, label: string) {
+  assertWritableTextFilePath(path)
+
+  if (path === 'novel.config.json' || path.startsWith('.novel/')) {
+    throw new Error(`${label} 不能指向项目配置或 .novel 内部文件`)
+  }
+}
+
 export function normalizeTextFilePath(value: unknown, label: string) {
   const path = normalizeProjectPath(readString(value, label))
-  assertTextFilePath(path)
+  assertWritableTextFilePath(path)
   return path
 }
 

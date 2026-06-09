@@ -1,5 +1,5 @@
 import { readProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
-import { isNotFoundError } from '../path'
+import { assertWritableTextFilePath, isNotFoundError } from '../path'
 import type { CreateFileInput, CreateFileOutput, ToolDefinition } from '../types'
 import { asRecord, countLines, normalizeTextFilePath, readString } from './common'
 
@@ -17,6 +17,8 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
     }
   },
   async run(input, runtime) {
+    assertWritableTextFilePath(input.path)
+
     try {
       await readProjectTextFile(runtime.project.handle, input.path)
       throw new Error(`文件已存在：${input.path}；CreateFile 只用于新建文件。修改已有文件请先用 ReadFile 读取原文，再使用 EditFile 精确替换`)

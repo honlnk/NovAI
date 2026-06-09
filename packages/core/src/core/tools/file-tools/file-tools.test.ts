@@ -12,39 +12,39 @@ import type { ToolRuntime } from '../types'
 describe('file tools', () => {
   it('requires ReadFile state before EditFile and edits a fresh file', async () => {
     const runtime = createRuntime({
-      'chapters/001.md': '第一段\n第二段',
+      'chapters/001.txt': '第一段\n第二段',
     })
 
     await expect(editFileTool.run({
-      path: 'chapters/001.md',
+      path: 'chapters/001.txt',
       oldText: '第二段',
       newText: '第二段修改',
     }, runtime)).rejects.toThrow('必须先用 ReadFile')
 
-    const readOutput = await readFileTool.run({ path: 'chapters/001.md' }, runtime)
+    const readOutput = await readFileTool.run({ path: 'chapters/001.txt' }, runtime)
 
     expect(readOutput.numberedContent).toContain('1 | 第一段')
 
     const editOutput = await editFileTool.run({
-      path: 'chapters/001.md',
+      path: 'chapters/001.txt',
       oldText: '第二段',
       newText: '第二段修改',
     }, runtime)
 
     expect(editOutput.occurrences).toBe(1)
-    await expect(readProjectText(runtime.project.handle, 'chapters/001.md')).resolves.toBe('第一段\n第二段修改')
+    await expect(readProjectText(runtime.project.handle, 'chapters/001.txt')).resolves.toBe('第一段\n第二段修改')
   })
 
   it('rejects EditFile when the file changed after ReadFile', async () => {
     const runtime = createRuntime({
-      'chapters/001.md': '旧内容',
+      'chapters/001.txt': '旧内容',
     })
 
-    await readFileTool.run({ path: 'chapters/001.md' }, runtime)
-    await writeProjectText(runtime.project.handle, 'chapters/001.md', '外部修改')
+    await readFileTool.run({ path: 'chapters/001.txt' }, runtime)
+    await writeProjectText(runtime.project.handle, 'chapters/001.txt', '外部修改')
 
     await expect(editFileTool.run({
-      path: 'chapters/001.md',
+      path: 'chapters/001.txt',
       oldText: '旧内容',
       newText: '新内容',
     }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
@@ -52,51 +52,79 @@ describe('file tools', () => {
 
   it('creates new files but refuses to overwrite existing files', async () => {
     const runtime = createRuntime({
-      'chapters/existing.md': '已有内容',
+      'chapters/existing.txt': '已有内容',
     })
 
     await createFileTool.run({
-      path: 'chapters/new.md',
+      path: 'chapters/new.txt',
       content: '新内容',
     }, runtime)
 
-    await expect(readProjectText(runtime.project.handle, 'chapters/new.md')).resolves.toBe('新内容')
+    await expect(readProjectText(runtime.project.handle, 'chapters/new.txt')).resolves.toBe('新内容')
     await expect(createFileTool.run({
-      path: 'chapters/existing.md',
+      path: 'chapters/existing.txt',
       content: '覆盖内容',
     }, runtime)).rejects.toThrow('文件已存在')
   })
 
+  it('requires new chapter files to use txt extension', async () => {
+    const runtime = createRuntime({})
+
+    await expect(createFileTool.run({
+      path: 'chapters/new.md',
+      content: '新内容',
+    }, runtime)).rejects.toThrow('章节正文必须写入 chapters/*.txt')
+  })
+
   it('renames files and refuses to overwrite destination files', async () => {
     const runtime = createRuntime({
-      'chapters/source.md': '源内容',
-      'chapters/existing.md': '已有内容',
+      'chapters/source.txt': '源内容',
+      'chapters/existing.txt': '已有内容',
     })
 
     await expect(renameFileTool.run({
-      fromPath: 'chapters/source.md',
-      toPath: 'chapters/existing.md',
+      fromPath: 'chapters/source.txt',
+      toPath: 'chapters/existing.txt',
     }, runtime)).rejects.toThrow('目标文件已存在')
 
     await renameFileTool.run({
-      fromPath: 'chapters/source.md',
-      toPath: 'chapters/renamed.md',
+      fromPath: 'chapters/source.txt',
+      toPath: 'chapters/renamed.txt',
     }, runtime)
 
-    await expect(readProjectText(runtime.project.handle, 'chapters/renamed.md')).resolves.toBe('源内容')
-    await expect(readProjectText(runtime.project.handle, 'chapters/source.md')).rejects.toThrow('Not found')
+    await expect(readProjectText(runtime.project.handle, 'chapters/renamed.txt')).resolves.toBe('源内容')
+    await expect(readProjectText(runtime.project.handle, 'chapters/source.txt')).rejects.toThrow('Not found')
+  })
+
+  it('allows migrating legacy chapter md files to txt but rejects new md targets', async () => {
+    const runtime = createRuntime({
+      'chapters/legacy.md': '旧章节',
+    })
+
+    await expect(renameFileTool.run({
+      fromPath: 'chapters/legacy.md',
+      toPath: 'chapters/still-md.md',
+    }, runtime)).rejects.toThrow('章节正文必须写入 chapters/*.txt')
+
+    await renameFileTool.run({
+      fromPath: 'chapters/legacy.md',
+      toPath: 'chapters/legacy.txt',
+    }, runtime)
+
+    await expect(readProjectText(runtime.project.handle, 'chapters/legacy.txt')).resolves.toBe('旧章节')
+    await expect(readProjectText(runtime.project.handle, 'chapters/legacy.md')).rejects.toThrow('Not found')
   })
 
   it('moves deleted files into the project trash', async () => {
     const runtime = createRuntime({
-      'chapters/old.md': '废稿',
+      'chapters/old.txt': '废稿',
     })
 
-    const output = await deleteFileTool.run({ path: 'chapters/old.md' }, runtime)
+    const output = await deleteFileTool.run({ path: 'chapters/old.txt' }, runtime)
 
-    expect(output.trashPath).toMatch(/^\.novel\/trash\/.+\/chapters\/old\.md$/)
+    expect(output.trashPath).toMatch(/^\.novel\/trash\/.+\/chapters\/old\.txt$/)
     await expect(readProjectText(runtime.project.handle, output.trashPath)).resolves.toBe('废稿')
-    await expect(readProjectText(runtime.project.handle, 'chapters/old.md')).rejects.toThrow('Not found')
+    await expect(readProjectText(runtime.project.handle, 'chapters/old.txt')).rejects.toThrow('Not found')
   })
 })
 

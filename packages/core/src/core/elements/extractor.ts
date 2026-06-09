@@ -14,12 +14,12 @@ const TYPE_BUCKET_MAP: Record<ElementType, ExtractionBucket> = {
 const LOCATION_SUFFIXES = '楼阁院城镇村谷山峰林河湖海洞宫殿寺庙塔桥巷街路关岛洲府国界域'
 
 export async function extractElementsFromChapter(input: {
-  chapterMarkdown: string
+  chapterContent: string
   chapterPath?: string
   systemPrompt?: string
 }): Promise<ElementExtractionResult> {
-  const markdown = normalizeMarkdown(input.chapterMarkdown)
-  const title = extractTitle(markdown, input.chapterPath)
+  const content = normalizeChapterContent(input.chapterContent)
+  const title = extractTitle(content, input.chapterPath)
   const chapterRef = input.chapterPath || title
   const result: ElementExtractionResult = {
     characters: [],
@@ -29,29 +29,29 @@ export async function extractElementsFromChapter(input: {
     worldbuilding: [],
   }
 
-  for (const name of extractCharacterNames(markdown)) {
+  for (const name of extractCharacterNames(content)) {
     pushItem(result, 'character', {
       name,
       summary: `${name} 在「${title}」中出现，需要记录其当前状态与关系变化。`,
       tags: ['自动提取', '人物'],
       lastUpdatedChapter: chapterRef,
       relatedChapters: [chapterRef],
-      body: buildBody(markdown, name, '人物线索'),
+      body: buildBody(content, name, '人物线索'),
     })
   }
 
-  for (const name of extractLocationNames(markdown)) {
+  for (const name of extractLocationNames(content)) {
     pushItem(result, 'location', {
       name,
       summary: `${name} 是「${title}」中出现的地点或场景。`,
       tags: ['自动提取', '地点'],
       lastUpdatedChapter: chapterRef,
       relatedChapters: [chapterRef],
-      body: buildBody(markdown, name, '地点线索'),
+      body: buildBody(content, name, '地点线索'),
     })
   }
 
-  const plotSummary = summarizeChapter(markdown)
+  const plotSummary = summarizeChapter(content)
   if (plotSummary) {
     pushItem(result, 'plot', {
       name: title,
@@ -59,7 +59,7 @@ export async function extractElementsFromChapter(input: {
       tags: ['自动提取', '情节'],
       lastUpdatedChapter: chapterRef,
       relatedChapters: [chapterRef],
-      body: `## 情节摘要\n\n${plotSummary}\n\n## 原文线索\n\n${excerpt(markdown)}`,
+      body: `## 情节摘要\n\n${plotSummary}\n\n## 原文线索\n\n${excerpt(content)}`,
     })
   }
 
@@ -69,17 +69,17 @@ export async function extractElementsFromChapter(input: {
     tags: ['自动提取', '时间线'],
     lastUpdatedChapter: chapterRef,
     relatedChapters: [chapterRef],
-    body: buildTimelineBody(markdown),
+    body: buildTimelineBody(content),
   })
 
-  for (const name of extractWorldbuildingNames(markdown)) {
+  for (const name of extractWorldbuildingNames(content)) {
     pushItem(result, 'worldbuilding', {
       name,
       summary: `${name} 是「${title}」中出现的设定、物件或组织线索。`,
       tags: ['自动提取', '设定'],
       lastUpdatedChapter: chapterRef,
       relatedChapters: [chapterRef],
-      body: buildBody(markdown, name, '设定线索'),
+      body: buildBody(content, name, '设定线索'),
     })
   }
 
@@ -103,18 +103,18 @@ function pushItem(
   })
 }
 
-function normalizeMarkdown(markdown: string) {
-  return markdown.replace(/\r\n/g, '\n').trim()
+function normalizeChapterContent(content: string) {
+  return content.replace(/\r\n/g, '\n').trim()
 }
 
-function extractTitle(markdown: string, chapterPath?: string) {
-  const heading = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim()
+function extractTitle(content: string, chapterPath?: string) {
+  const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim()
 
   if (heading) {
     return heading
   }
 
-  const fileName = chapterPath?.split('/').pop()?.replace(/\.md$/i, '').trim()
+  const fileName = chapterPath?.split('/').pop()?.replace(/\.(md|txt)$/i, '').trim()
   return fileName || '未命名章节'
 }
 

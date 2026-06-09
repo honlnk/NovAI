@@ -27,9 +27,9 @@ const connectionStatus = ref('还没有测试连接。')
 const generationStatus = ref('还没有开始生成。')
 const isBusy = ref(false)
 const isStreaming = ref(false)
-const systemPrompt = ref('你是一名长篇小说写作助手，输出中文 Markdown。')
+const systemPrompt = ref('你是一名长篇小说写作助手，输出中文纯文本章节正文。')
 const instruction = ref('写一段测试内容：主角深夜走进废弃藏书楼，发现一封来自十年前的信。')
-const chapterFileName = ref('chapter-test.md')
+const chapterFileName = ref('chapter-test.txt')
 const result = ref('')
 const lastSavedChapterPath = ref('')
 const rerankStatus = ref('还没有测试 Rerank 连接。')
@@ -290,16 +290,16 @@ async function onRunRagDemo() {
 }
 
 async function onPreviewElementExtraction() {
-  const chapterMarkdown = result.value.trim() || activeFile.value?.content || ''
+  const chapterContent = result.value.trim() || activeFile.value?.content || ''
 
-  if (!chapterMarkdown) {
+  if (!chapterContent) {
     extractionStatus.value = '请先生成章节结果，或先打开一个可预览文件'
     return
   }
 
   await runTask(async () => {
     extractionPreview.value = await previewElementExtraction({
-      chapterMarkdown,
+      chapterContent,
       chapterPath: activeFile.value?.path || lastSavedChapterPath.value || '',
       systemPrompt: systemPrompt.value,
     })

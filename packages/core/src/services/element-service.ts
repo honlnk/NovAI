@@ -6,7 +6,7 @@ import { requireRuntimeProject } from './project-runtime'
 import type { ElementExtractionResultView, ElementWriteResultView } from './types'
 
 export async function previewElementExtraction(input: {
-  chapterMarkdown: string
+  chapterContent: string
   chapterPath?: string
   systemPrompt?: string
 }): Promise<ElementExtractionResultView> {

@@ -29,8 +29,8 @@ const isWritingElements = ref(false)
 const canExtractElements = computed(() => {
   return Boolean(
     props.file &&
-    props.file.format === 'markdown' &&
     props.file.path.startsWith('chapters/') &&
+    props.file.name.endsWith('.txt') &&
     props.file.content.trim(),
   )
 })
@@ -88,7 +88,7 @@ async function handlePreviewElements() {
 
   try {
     extractionPreview.value = await previewElementExtraction({
-      chapterMarkdown: props.file.content,
+      chapterContent: props.file.content,
       chapterPath: props.file.path,
     })
 

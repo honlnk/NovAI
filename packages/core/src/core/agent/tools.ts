@@ -56,7 +56,7 @@ export function createAgentTools(): AgentRunnableToolMap {
             properties: {
               path: {
                 type: 'string',
-                description: '项目内相对路径，例如 chapters/第001章.md',
+                description: '项目内相对路径，例如 chapters/第001章.txt',
               },
               offset: {
                 type: 'integer',
@@ -134,17 +134,17 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'CreateFile',
-          description: '在当前小说项目中新建文本文件；中间目录会自动创建，目标已存在时会失败。已有文件请用 EditFile 修改。',
+          description: '在当前小说项目中新建文本文件；中间目录会自动创建，目标已存在时会失败。章节必须创建为 chapters/*.txt，要素和提示词使用 .md。已有文件请用 EditFile 修改。',
           parameters: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: '项目内相对路径；父目录不存在时会自动创建。',
+                description: '项目内相对路径；父目录不存在时会自动创建。新建章节必须使用 chapters/*.txt，不能使用 chapters/*.md。',
               },
               content: {
                 type: 'string',
-                description: '新文件完整内容；不要用于覆盖已有文件。',
+                description: '新文件完整内容；章节正文应为纯文本，不要以 Markdown 标题符号 # 开头。',
               },
             },
             required: ['path', 'content'],
@@ -175,7 +175,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               toPath: {
                 type: 'string',
-                description: '新的项目内相对路径；父目录不存在时会自动创建，目标文件不能已存在。',
+                description: '新的项目内相对路径；父目录不存在时会自动创建，目标文件不能已存在。移动到 chapters/ 下时必须使用 .txt。',
               },
             },
             required: ['fromPath', 'toPath'],
@@ -268,7 +268,7 @@ export function createAgentTools(): AgentRunnableToolMap {
             properties: {
               pattern: {
                 type: 'string',
-                description: '必填，glob 文件匹配模式，例如 **/*.md、chapters/*.md、**/*来信*.md。',
+                description: '必填，glob 文件匹配模式，例如 **/*.md、chapters/*.txt、**/*来信*.md。',
               },
               path: {
                 type: 'string',

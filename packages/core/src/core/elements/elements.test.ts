@@ -4,11 +4,11 @@ import { extractElementsFromChapter } from './extractor'
 import { createElementDocument, writeElementDocuments } from './writer'
 
 describe('elements', () => {
-  it('extracts usable element candidates from chapter markdown', async () => {
+  it('extracts usable element candidates from chapter content', async () => {
     const result = await extractElementsFromChapter({
-      chapterPath: 'chapters/第001章.md',
-      chapterMarkdown: [
-        '# 第一章 藏书楼',
+      chapterPath: 'chapters/第001章.txt',
+      chapterContent: [
+        '第一章 藏书楼',
         '',
         '主角林远在深夜走进废弃藏书楼，发现一封来自十年前的信。',
         '林远低声问自己，那封旧王朝密信为什么会藏在这里。',
@@ -29,8 +29,8 @@ describe('elements', () => {
       name: '林远',
       summary: '年轻修士，正在调查藏书楼旧信。',
       tags: ['人物', '主角'],
-      lastUpdatedChapter: 'chapters/第001章.md',
-      relatedChapters: ['chapters/第001章.md'],
+      lastUpdatedChapter: 'chapters/第001章.txt',
+      relatedChapters: ['chapters/第001章.txt'],
       body: '## 人物线索\n\n- 林远发现旧信。',
     })
 
