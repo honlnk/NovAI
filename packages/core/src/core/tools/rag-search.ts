@@ -8,7 +8,7 @@ import type {
 } from './types'
 import type { ElementType } from '../../types/rag'
 
-const ELEMENT_TYPES: ElementType[] = ['character', 'location', 'timeline', 'plot', 'worldbuilding']
+const ELEMENT_TYPES: ElementType[] = ['character', 'location', 'entity', 'timeline', 'plot', 'worldbuilding']
 
 export const ragSearchTool: ToolDefinition<'RagSearch', RagSearchInput, RagSearchOutput> = {
   name: 'RagSearch',

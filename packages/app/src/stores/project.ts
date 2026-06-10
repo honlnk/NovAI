@@ -261,7 +261,7 @@ function toRecentProject(project: ProjectView): RecentProject {
 function countChapterFiles(nodes: ProjectFileNodeView[]): number {
   return nodes.reduce((total, node) => {
     if (node.kind === 'file') {
-      return node.path.startsWith('chapters/') && node.name.endsWith('.txt')
+      return node.path.startsWith('chapters/') && /\.(txt|md)$/i.test(node.name)
         ? total + 1
         : total
     }

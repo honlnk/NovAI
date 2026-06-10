@@ -12,14 +12,16 @@ describe('elements', () => {
         '',
         '主角林远在深夜走进废弃藏书楼，发现一封来自十年前的信。',
         '林远低声问自己，那封旧王朝密信为什么会藏在这里。',
+        '他取出青霜剑，又想起玄天剑法不能在人前施展。',
       ].join('\n'),
     })
 
     expect(result.characters.some((item) => item.name === '林远')).toBe(true)
     expect(result.locations.some((item) => item.name.includes('藏书楼'))).toBe(true)
+    expect(result.entities.some((item) => item.name.includes('青霜剑'))).toBe(true)
+    expect(result.entities.some((item) => item.name.includes('玄天剑法'))).toBe(true)
     expect(result.plots).toHaveLength(1)
     expect(result.timeline).toHaveLength(1)
-    expect(result.worldbuilding.some((item) => item.name.includes('密信'))).toBe(true)
   })
 
   it('writes element documents and skips unchanged writes', async () => {
@@ -51,6 +53,24 @@ describe('elements', () => {
     expect(second.updated).toEqual([])
     expect(second.skipped).toEqual(['elements/characters/林远.md'])
     expect(second.staleIndex).toBe(false)
+  })
+
+  it('writes entity documents into elements/entities', async () => {
+    const handle = createMemoryDirectory('novel')
+    const element = createElementDocument({
+      type: 'entity',
+      name: '青霜剑',
+      summary: '林远当前持有的佩剑。',
+      tags: ['实体', '武器'],
+      lastUpdatedChapter: 'chapters/第001章.txt',
+      relatedChapters: ['chapters/第001章.txt'],
+      body: '## 实体线索\n\n- 林远取出青霜剑。',
+    })
+
+    const result = await writeElementDocuments(handle, [element])
+
+    expect(result.created).toEqual(['elements/entities/青霜剑.md'])
+    await expect(readProjectText(handle, 'elements/entities/青霜剑.md')).resolves.toContain('type: entity')
   })
 })
 

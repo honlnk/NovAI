@@ -21,6 +21,7 @@ export async function writeExtractedElements(input: {
   const items = [
     ...input.extraction.characters,
     ...input.extraction.locations,
+    ...input.extraction.entities,
     ...input.extraction.timeline,
     ...input.extraction.plots,
     ...input.extraction.worldbuilding,

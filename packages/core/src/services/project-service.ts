@@ -78,7 +78,7 @@ export async function restoreLastProject(): Promise<ProjectView | null> {
     return null
   }
 
-  const project = await loadProjectFromHandle(record.handle)
+  const project = await repairProject(record.handle)
   await activateProject(project, 'project_restored', `恢复上次项目「${project.name}」`, {
     rememberedAt: record.lastOpenedAt,
   })

@@ -333,7 +333,7 @@ export function createAgentTools(): AgentRunnableToolMap {
                     type: 'array',
                     items: {
                       type: 'string',
-                      enum: ['character', 'location', 'timeline', 'plot', 'worldbuilding'],
+                      enum: ['character', 'location', 'entity', 'timeline', 'plot', 'worldbuilding'],
                     },
                     description: '可选，只检索指定类型的要素。',
                   },

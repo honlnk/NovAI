@@ -307,6 +307,7 @@ async function onPreviewElementExtraction() {
     const total =
       extractionPreview.value.characters.length +
       extractionPreview.value.locations.length +
+      extractionPreview.value.entities.length +
       extractionPreview.value.timeline.length +
       extractionPreview.value.plots.length +
       extractionPreview.value.worldbuilding.length

@@ -17,6 +17,7 @@ const REQUIRED_DIRECTORY_PATHS = [
   'elements',
   'elements/characters',
   'elements/locations',
+  'elements/entities',
   'elements/timeline',
   'elements/plots',
   'elements/worldbuilding',
@@ -43,15 +44,9 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   const rootHandle = await parentHandle.getDirectoryHandle(projectName, { create: true })
   const projectId = createProjectId()
 
-  await ensureDirectory(rootHandle, 'chapters')
-  await ensureDirectory(rootHandle, 'elements/characters')
-  await ensureDirectory(rootHandle, 'elements/locations')
-  await ensureDirectory(rootHandle, 'elements/timeline')
-  await ensureDirectory(rootHandle, 'elements/plots')
-  await ensureDirectory(rootHandle, 'elements/worldbuilding')
-  await ensureDirectory(rootHandle, 'prompts/scenes')
-  await ensureDirectory(rootHandle, '.novel')
-  await ensureDirectory(rootHandle, '.novel/logs')
+  for (const directoryPath of REQUIRED_DIRECTORY_PATHS) {
+    await ensureDirectory(rootHandle, directoryPath)
+  }
 
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
@@ -113,7 +108,7 @@ export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Pro
     issues.push('missing-chapters')
   }
 
-  if (!(await pathExists(rootHandle, 'elements', 'directory'))) {
+  if (!(await hasRequiredElementDirectories(rootHandle))) {
     issues.push('missing-elements')
   }
 
@@ -276,6 +271,18 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       ...config.settings,
     },
   }
+}
+
+async function hasRequiredElementDirectories(rootHandle: FileSystemDirectoryHandle) {
+  const elementDirectories = REQUIRED_DIRECTORY_PATHS.filter((path) => path === 'elements' || path.startsWith('elements/'))
+
+  for (const directoryPath of elementDirectories) {
+    if (!(await pathExists(rootHandle, directoryPath, 'directory'))) {
+      return false
+    }
+  }
+
+  return true
 }
 
 /**

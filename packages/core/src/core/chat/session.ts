@@ -665,7 +665,7 @@ function flattenChapterPaths(tree: ChatTurnInput['project']['tree']) {
       continue
     }
 
-    if (node.kind === 'file' && node.path.startsWith('chapters/') && node.name.endsWith('.txt')) {
+    if (node.kind === 'file' && node.path.startsWith('chapters/') && /\.(txt|md)$/i.test(node.name)) {
       paths.push(node.path)
       continue
     }

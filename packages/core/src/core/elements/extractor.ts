@@ -6,12 +6,15 @@ type ExtractionBucket = keyof ElementExtractionResult
 const TYPE_BUCKET_MAP: Record<ElementType, ExtractionBucket> = {
   character: 'characters',
   location: 'locations',
+  entity: 'entities',
   timeline: 'timeline',
   plot: 'plots',
   worldbuilding: 'worldbuilding',
 }
 
 const LOCATION_SUFFIXES = '楼阁院城镇村谷山峰林河湖海洞宫殿寺庙塔桥巷街路关岛洲府国界域'
+const ENTITY_SUFFIX_PATTERN =
+  '令牌|玉佩|丹药|卷轴|图谱|秘籍|功法|剑法|刀法|拳法|掌法|身法|秘术|法器|灵器|宝物|信物|剑|刀|枪|戟|弓|弩|鞭|锤|鼎|炉|镜|珠|佩|钗|戒|袍|甲|冠|印|符|丸|散|膏|酒|茶|马|兽|鹰|书'
 
 export async function extractElementsFromChapter(input: {
   chapterContent: string
@@ -24,6 +27,7 @@ export async function extractElementsFromChapter(input: {
   const result: ElementExtractionResult = {
     characters: [],
     locations: [],
+    entities: [],
     timeline: [],
     plots: [],
     worldbuilding: [],
@@ -48,6 +52,17 @@ export async function extractElementsFromChapter(input: {
       lastUpdatedChapter: chapterRef,
       relatedChapters: [chapterRef],
       body: buildBody(content, name, '地点线索'),
+    })
+  }
+
+  for (const name of extractEntityNames(content)) {
+    pushItem(result, 'entity', {
+      name,
+      summary: `${name} 是「${title}」中出现的具体实体，需要记录来历、归属、能力或状态变化。`,
+      tags: ['自动提取', '实体'],
+      lastUpdatedChapter: chapterRef,
+      relatedChapters: [chapterRef],
+      body: buildEntityBody(content, name),
     })
   }
 
@@ -162,13 +177,33 @@ function extractLocationNames(markdown: string) {
 
 function extractWorldbuildingNames(markdown: string) {
   const names = new Set<string>()
-  const pattern = /([一-龥]{2,10}(?:信|书|卷轴|玉佩|令牌|契约|阵法|禁制|传说|预言|组织|宗门|王朝|仪式|秘术|法器))/g
+  const pattern = /([一-龥]{2,10}(?:契约|阵法|禁制|传说|预言|组织|宗门|王朝|仪式|门派|规矩|境界|体系))/g
 
   for (const match of markdown.matchAll(pattern)) {
     const name = sanitizeName(match[1])
 
     if (name.length >= 2 && !isCommonPhrase(name)) {
       names.add(name)
+    }
+  }
+
+  return Array.from(names).slice(0, 8)
+}
+
+function extractEntityNames(markdown: string) {
+  const names = new Set<string>()
+  const patterns = [
+    new RegExp(`([一-龥]{2,12}(?:${ENTITY_SUFFIX_PATTERN}))`, 'g'),
+    /(?:持有|握住|拔出|取出|递给|服下|修炼|施展|得到|遗失|损毁)([一-龥]{2,12})/g,
+  ]
+
+  for (const pattern of patterns) {
+    for (const match of markdown.matchAll(pattern)) {
+      const name = sanitizeName(match[1])
+
+      if (name.length >= 2 && name.length <= 12 && !isCommonPhrase(name)) {
+        names.add(name)
+      }
     }
   }
 
@@ -194,6 +229,32 @@ function buildBody(markdown: string, name: string, heading: string) {
     '',
     '- 当前状态：待人工或 Agent 继续整理。',
     '- 与其他要素的关系：待补充。',
+  ].join('\n')
+}
+
+function buildEntityBody(markdown: string, name: string) {
+  return [
+    '## 基本信息',
+    '',
+    '- 类型：待补充',
+    '- 当前状态：待补充',
+    '',
+    '## 实体线索',
+    '',
+    collectEvidence(markdown, name),
+    '',
+    '## 来历与归属',
+    '',
+    '- 来历：待补充。',
+    '- 当前归属：待补充。',
+    '',
+    '## 能力或用途',
+    '',
+    '- 待补充。',
+    '',
+    '## 状态变化',
+    '',
+    '- 待补充。',
   ].join('\n')
 }
 

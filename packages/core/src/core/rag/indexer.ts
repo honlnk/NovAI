@@ -201,6 +201,10 @@ function inferTypeFromPath(path: string) {
     return 'location' as const
   }
 
+  if (path.startsWith('elements/entities/')) {
+    return 'entity' as const
+  }
+
   if (path.startsWith('elements/timeline/')) {
     return 'timeline' as const
   }

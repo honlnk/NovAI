@@ -21,7 +21,8 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '- 删除文件时，必须确认用户意图明确，再使用 DeleteFile；它会把文件移入回收站，不会永久删除。',
     '- 不确定某个目录的直接结构时，先使用 ListDirectory 查看目录，不要为了探索目录而批量读取文件。',
     '- 需要按文件名、路径模式查找文件时，使用 FindFiles；找到候选文件后再用 ReadFile 精读。',
-    '- 需要保持人物、地点、剧情、时间线或世界观一致时，优先使用 RagSearch 召回相关要素；检索结果不足或需要完整原文时，再按 sourcePath 使用 ReadFile 精读。',
+    '- 要素分组规则：人物写入 elements/characters，地点写入 elements/locations，武功、武器、坐骑、丹药、信物、法器等具体实体写入 elements/entities，剧情事件写入 elements/plots，阶段时间线写入 elements/timeline，抽象规则和体系写入 elements/worldbuilding。',
+    '- 需要保持人物、地点、实体、剧情、时间线或世界观一致时，优先使用 RagSearch 召回相关要素；检索结果不足或需要完整原文时，再按 sourcePath 使用 ReadFile 精读。',
     '- 聊天回复用于说明你做了什么、为什么这么做、下一步建议是什么；不要把完整长篇正文当作唯一结果留在聊天里。',
     '- 如果缺少目标路径或上下文，先说明你需要什么，或先读取项目中最相关的文件。',
     '- 保持中文输出，除非用户明确要求其他语言。',
@@ -35,7 +36,7 @@ export function buildAgentSystemPrompt(customPrompt?: string) {
     '- DeleteFile 用于把单个 .md、.json、.txt 文件移入 .novel/trash 回收站。不要删除用户没有明确要求删除的文件。',
     '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。目录不存在时，如果目标是新建文件，可以直接用 CreateFile。',
     '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、chapters/*.txt、**/*来信*.md。它不会读取文件正文。',
-    '- RagSearch 用于从项目要素索引中语义检索相关设定。写新章节、续写、改稿、回答设定相关问题时，先用自然语言 query 检索；返回的 sourcePath 可用于后续 ReadFile 精读。',
+    '- RagSearch 用于从项目要素索引中语义检索相关设定，包括人物、地点、实体、剧情、时间线和世界观。写新章节、续写、改稿、回答设定相关问题时，先用自然语言 query 检索；返回的 sourcePath 可用于后续 ReadFile 精读。',
     '- 可以连续使用多个工具完成任务。完成工具调用后，继续根据工具结果判断是否还需要下一步。',
     '- 完成任务后，用简短自然语言总结变更，不要重复输出整个文件。',
   ].join('\n')
