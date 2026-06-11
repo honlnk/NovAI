@@ -57,4 +57,4 @@ packages/core  @novai/core  → 业务逻辑层（无框架依赖，纯 TypeScri
 
 - Node.js 18+, pnpm 10+
 - 浏览器需支持 File System Access API（仅 Chromium）
-- `docs/` 是 git submodule，指向 NovAI-document 仓库
+- `docs/` 是 git submodule，指向 NovAI-document 仓库；文档按 `product/`、`architecture/`、`decisions/`、`project/` 分层维护

@@ -331,5 +331,5 @@ function resolvePreferredPath(changes: ChangedFileView[]) {
 更详细的设计记录见：
 
 ```txt
-docs/UI协作接口契约设计.md
+docs/architecture/UI协作接口契约设计.md
 ```
