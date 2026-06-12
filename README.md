@@ -185,11 +185,12 @@ pnpm typecheck
 
 ## 文档
 
-项目文档主要放在 [`docs/`](./docs)，当前按用途分为四类：
+项目文档主要放在 [`docs/`](./docs)，当前按用途分为五类：
 
 - [`docs/product/`](./docs/product)：产品愿景、AI 功能需求、UI 设计
 - [`docs/architecture/`](./docs/architecture)：技术架构、Agent Loop、工具系统、RAG、UI 接口契约
 - [`docs/decisions/`](./docs/decisions)：阶段性技术和产品决策记录
+- [`docs/plans/`](./docs/plans)：阶段性功能计划和重构计划
 - [`docs/project/`](./docs/project)：路线图、MVP、当前进度、开发日志
 
 常用入口：
