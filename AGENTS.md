@@ -28,7 +28,7 @@ This means NovAI should gradually move away from a simple "single prompt -> sing
 
 For implementation reference and comparative study, keep this external repository available next to the NovAI repo:
 
-- `/Users/honlnk/project/claude-code-sound`
+- `/Users/honlnk/project/claude-code`
 
 This repository is intentionally cloned outside the NovAI git repository so that:
 
