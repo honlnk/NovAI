@@ -1,6 +1,6 @@
 # NovAI UI 接口说明
 
-最后更新：2026-05-01
+最后更新：2026-06-12
 
 本文档说明当前 NovAI 代码中 UI 层应如何使用项目能力。它面向前端协作者，重点回答三个问题：
 
@@ -14,16 +14,16 @@
 
 约定如下：
 
-- UI 页面优先使用 `src/stores/*`。
-- Store 通过 `src/services/*` 调用 core 能力。
-- 页面和组件不要直接 import `src/core/*`。
+- UI 页面优先使用 `packages/app/src/stores/*`。
+- Store 通过 `packages/core/src/services/*` 调用 core 能力。
+- 页面和组件不要直接 import `packages/core/src/core/*`。
 - UI 不直接持有 `FileSystemDirectoryHandle` 或 `ProjectSnapshot`。
-- 项目、文件、会话、Agent 事件都通过 `src/services/types.ts` 中的 view type 暴露。
+- 项目、文件、会话、Agent 事件都通过 `packages/core/src/services/types.ts` 中的 view type 暴露。
 
 当前已经完成迁移验证：
 
-- `src/views/SessionTestView.vue`
-- `src/views/TestLabView.vue`
+- `packages/app/src/views/SessionTestView.vue`
+- `packages/app/src/views/TestLabView.vue`
 
 ## 推荐调用路径
 
@@ -148,7 +148,7 @@ const result = await chatStore.runServiceTurn({
 
 ## Service 入口
 
-所有 service 都在 `src/services/` 下。
+所有 service 都在 `packages/core/src/services/` 下。
 
 | 文件 | 职责 |
 |:-----|:-----|
@@ -170,7 +170,7 @@ const result = await chatStore.runServiceTurn({
 核心接口类型统一放在：
 
 ```txt
-src/services/types.ts
+packages/core/src/services/types.ts
 ```
 
 常用类型：
@@ -227,7 +227,7 @@ type AgentUiEvent =
 
 - 用户消息
 - 上下文摘要
-- assistant 流式输出
+- assistant 文本消息
 - 工具调用记录
 - 工具结果记录
 - 文件变更
@@ -275,6 +275,7 @@ chatStore.syncDefaultTarget(project.id, projectStore.activeFile?.path)
 
 ```txt
 chapters/chapter-001.md
+chapters/第001章.txt
 prompts/system.md
 elements/characters/foo.md
 ```
@@ -315,15 +316,16 @@ function resolvePreferredPath(changes: ChangedFileView[]) {
 - 文件 diff 预览尚未实现。
 - `changedFiles` 仍是 service 层推导，不是工具层结构化输出。
 - Agent 会话还没有持久化。
-- RAG 调试接口已存在，但 `RagSearch` 尚未作为正式 Agent 工具接入。
-- 要素提取当前仍是预览/占位能力。
+- `RagSearch` 已作为正式 Agent 工具接入，但真实创作任务中的触发率和召回质量仍需验证。
+- 要素提取已能规则型提取并写入 `elements/`，但还不是 LLM 结构化提取，也缺少用户确认、去重合并和覆盖策略。
+- 旧的 `pendingFileChange / confirmPendingFileChange` 确认流程代码仍有残留，但当前主工作流没有接入。
 
 ## 协作规则
 
 为了减少多人协作冲突，建议遵守：
 
 - UI 页面只依赖 stores 和 services。
-- 新 UI 组件不要直接 import `src/core/*`。
+- 新 UI 组件不要直接 import `packages/core/src/core/*`。
 - 新增 UI 需要的数据，优先扩展 `services/types.ts` 和 mapper。
 - core 内部结构变化时，尽量只修改 service / mapper，不让页面跟着改。
 - 如果需要新增业务动作，优先新增 service，再由 store 适配 UI 状态。
