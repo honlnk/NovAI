@@ -334,6 +334,27 @@ export async function readSystemPrompt(rootHandle: FileSystemDirectoryHandle) {
 }
 
 /**
+ * 读取当前激活的场景级提示词。
+ * path 为空、不是 prompts/scenes/ 下文件或文件缺失时，返回空字符串，不抛错。
+ */
+export async function readScenePrompt(
+  rootHandle: FileSystemDirectoryHandle,
+  path?: string | null,
+): Promise<string> {
+  const scenePath = path?.trim()
+
+  if (!scenePath || !scenePath.startsWith('prompts/scenes/')) {
+    return ''
+  }
+
+  try {
+    return await readText(rootHandle, scenePath)
+  } catch {
+    return ''
+  }
+}
+
+/**
  * 写回项目中的 `prompts/system.md`。
  */
 export async function writeSystemPrompt(rootHandle: FileSystemDirectoryHandle, content: string) {

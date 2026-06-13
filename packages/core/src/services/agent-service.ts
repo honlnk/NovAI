@@ -3,7 +3,7 @@ import {
   runChatTurn,
 } from '../core/chat/session'
 import { deriveChatTargetFromPath } from '../core/chat/target'
-import { readSystemPrompt } from '../core/fs/project-fs'
+import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import type { AgentMessage, AgentToolCall } from '../core/agent/messages'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
 
@@ -60,6 +60,10 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
 
   try {
     const systemPrompt = await readSystemPrompt(project.handle)
+    const scenePrompt = await readScenePrompt(
+      project.handle,
+      project.config.settings.activeScenePromptPath,
+    )
     const turn = await runChatTurn({
       session: previousSession,
       input: {
@@ -67,6 +71,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         project,
         config: project.config,
         systemPrompt,
+        scenePrompt,
         activeFilePath: input.activeFilePath,
       },
       onEvent(event) {

@@ -1,11 +1,27 @@
 import type { ChatTargetContext } from '../../types/chat'
 import type { ProjectSnapshot } from '../../types/project'
 
-export function buildAgentSystemPrompt(customPrompt?: string) {
-  const userPrompt = customPrompt?.trim()
+export function buildAgentSystemPrompt(input: {
+  systemPrompt?: string
+  scenePrompt?: string
+} = {}) {
+  const userPrompt = input.systemPrompt?.trim()
+  const scenePrompt = input.scenePrompt?.trim()
+
+  const head = scenePrompt
+    ? [
+        userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。',
+        '',
+        '---',
+        '',
+        '【当前场景提示词】',
+        '',
+        scenePrompt,
+      ].join('\n')
+    : userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。'
 
   return [
-    userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。',
+    head,
     '',
     '你是交互式小说创作 Agent。你的工作不是把所有正文都堆到聊天里，而是理解用户意图，然后使用工具读取、修改或创建项目文件。',
     '',

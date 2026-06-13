@@ -98,6 +98,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     previousMessages: session.agentMessages,
     instruction: input.instruction,
     systemPrompt: input.systemPrompt,
+    scenePrompt: input.scenePrompt,
     project: input.project,
     target,
   })
@@ -427,6 +428,7 @@ function buildAgentMessages(input: {
   previousMessages?: AgentMessage[]
   instruction: string
   systemPrompt: string
+  scenePrompt?: string
   project: ChatTurnInput['project']
   target: ChatTargetContext | null
 }): AgentMessage[] {
@@ -446,7 +448,10 @@ function buildAgentMessages(input: {
   return [
     {
       role: 'system',
-      content: buildAgentSystemPrompt(input.systemPrompt),
+      content: buildAgentSystemPrompt({
+        systemPrompt: input.systemPrompt,
+        scenePrompt: input.scenePrompt,
+      }),
     },
     nextUserMessage,
   ]
