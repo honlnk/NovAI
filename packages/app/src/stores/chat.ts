@@ -3,7 +3,6 @@ import { defineStore } from 'pinia'
 
 import {
   createSession as createAgentSession,
-  deriveTargetFromPath,
   runTurn as runAgentTurn,
 } from '@novai/core/services/agent-service'
 
@@ -12,7 +11,6 @@ import type {
   ChangedFileView,
   ChatMessageView,
   ChatSessionView,
-  ChatTargetView,
   RunAgentTurnInput,
   RunAgentTurnResult,
 } from '@novai/core/services/types'
@@ -22,10 +20,8 @@ export const useChatStore = defineStore('chat', () => {
   const agentEvents = ref<AgentUiEvent[]>([])
   const changedFiles = ref<ChangedFileView[]>([])
   const runStatus = ref('还没有开始执行。')
-  const defaultTarget = ref<ChatTargetView | null>(null)
 
   const hasSessionView = computed(() => sessionView.value !== null)
-  const currentTarget = computed(() => defaultTarget.value)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
 
   async function ensureSessionView(projectId: string) {
@@ -68,21 +64,6 @@ export const useChatStore = defineStore('chat', () => {
       runStatus.value = error instanceof Error ? error.message : '执行会话失败'
       throw error
     }
-  }
-
-  function syncDefaultTarget(projectId?: string, activeFilePath?: string | null) {
-    void projectId
-    defaultTarget.value = deriveTargetFromPath(activeFilePath)
-  }
-
-  function resetSession(projectId?: string) {
-    sessionView.value = null
-    agentEvents.value = []
-    changedFiles.value = []
-    if (!projectId) {
-      defaultTarget.value = null
-    }
-    runStatus.value = '还没有开始执行。'
   }
 
   function setRunStatus(nextStatus: string) {
@@ -146,14 +127,10 @@ export const useChatStore = defineStore('chat', () => {
     sessionView,
     runStatus,
     hasSessionView,
-    currentTarget,
-    defaultTarget,
     createSession,
     ensureSessionView,
     sendMessage,
     runServiceTurn,
-    syncDefaultTarget,
-    resetSession,
     setRunStatus,
   }
 })
