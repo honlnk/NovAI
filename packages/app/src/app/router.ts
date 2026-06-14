@@ -3,8 +3,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
 import ProjectView from '../views/ProjectView.vue'
 import SettingsView from '../views/SettingsView.vue'
-import SessionTestView from '../views/SessionTestView.vue'
-import TestLabView from '../views/TestLabView.vue'
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -23,16 +21,6 @@ export const router = createRouter({
       path: '/project/:id/settings',
       name: 'settings',
       component: SettingsView,
-    },
-    {
-      path: '/test',
-      name: 'test',
-      component: TestLabView,
-    },
-    {
-      path: '/session-test',
-      name: 'session-test',
-      component: SessionTestView,
     },
   ],
 })
