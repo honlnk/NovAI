@@ -93,12 +93,12 @@ async function handlePreviewElements() {
       chapterPath: props.file.path,
     })
 
-    const sourceLabel = extractionPreview.value.__source === 'llm' ? 'AI' : '规则'
     extractionStatus.value = extractionCount.value > 0
-      ? `已通过${sourceLabel}提取 ${extractionCount.value} 个候选要素`
+      ? `已提取 ${extractionCount.value} 个候选要素`
       : '未提取到可写入的要素'
   } catch (error) {
-    extractionStatus.value = error instanceof Error ? error.message : '要素提取失败'
+    const message = error instanceof Error ? error.message : '要素提取失败'
+    extractionStatus.value = `AI 提取失败：${message}。请检查设置页的 LLM 配置。`
   } finally {
     isExtracting.value = false
   }

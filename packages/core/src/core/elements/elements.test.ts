@@ -1,29 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractElementsFromChapter } from './extractor'
 import { createElementDocument, writeElementDocuments } from './writer'
 
 describe('elements', () => {
-  it('extracts usable element candidates from chapter content', async () => {
-    const result = await extractElementsFromChapter({
-      chapterPath: 'chapters/第001章.txt',
-      chapterContent: [
-        '第一章 藏书楼',
-        '',
-        '主角林远在深夜走进废弃藏书楼，发现一封来自十年前的信。',
-        '林远低声问自己，那封旧王朝密信为什么会藏在这里。',
-        '他取出青霜剑，又想起玄天剑法不能在人前施展。',
-      ].join('\n'),
-    })
-
-    expect(result.characters.some((item) => item.name === '林远')).toBe(true)
-    expect(result.locations.some((item) => item.name.includes('藏书楼'))).toBe(true)
-    expect(result.entities.some((item) => item.name.includes('青霜剑'))).toBe(true)
-    expect(result.entities.some((item) => item.name.includes('玄天剑法'))).toBe(true)
-    expect(result.plots).toHaveLength(1)
-    expect(result.timeline).toHaveLength(1)
-  })
-
   it('writes element documents and skips unchanged writes', async () => {
     const handle = createMemoryDirectory('novel')
     const element = createElementDocument({

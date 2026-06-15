@@ -1,4 +1,3 @@
-import { extractElementsFromChapter } from '../core/elements/extractor'
 import { extractElementsWithLlm } from '../core/elements/extractor-llm'
 import { createElementDocument, writeElementDocuments } from '../core/elements/writer'
 import { markProjectIndexStale } from '../core/rag/indexer'
@@ -9,6 +8,11 @@ import type {
   ElementWriteResultView,
 } from './types'
 
+/**
+ * 使用项目配置的 LLM 对单章正文做结构化要素提取。
+ * LLM 不可用（未配置、网络异常、解析失败）时直接抛错，由 UI 提示用户。
+ * 不再回退到规则型正则提取——正则会生成大量低质量误匹配内容，对创作有害无益。
+ */
 export async function previewElementExtraction(input: {
   projectId: string
   chapterContent: string
@@ -16,21 +20,11 @@ export async function previewElementExtraction(input: {
 }): Promise<ElementExtractionResultView> {
   const project = requireRuntimeProject(input.projectId)
 
-  // 优先尝试 LLM 结构化提取；失败则降级到规则型正则提取。
-  try {
-    const result = await extractElementsWithLlm({
-      chapterContent: input.chapterContent,
-      chapterPath: input.chapterPath,
-      config: project.config,
-    })
-    return { ...result, __source: 'llm' }
-  } catch {
-    const result = await extractElementsFromChapter({
-      chapterContent: input.chapterContent,
-      chapterPath: input.chapterPath,
-    })
-    return { ...result, __source: 'rule' }
-  }
+  return extractElementsWithLlm({
+    chapterContent: input.chapterContent,
+    chapterPath: input.chapterPath,
+    config: project.config,
+  })
 }
 
 export async function writeExtractedElements(input: {

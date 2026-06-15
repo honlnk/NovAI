@@ -178,11 +178,6 @@ export type ElementExtractionResultView = {
   timeline: ElementExtractionItemView[]
   plots: ElementExtractionItemView[]
   worldbuilding: ElementExtractionItemView[]
-  /**
-   * 标记本次提取来源：llm 表示 AI 结构化提取，rule 表示降级到规则型正则提取。
-   * 仅由 service 层写入，UI 可据此提示用户。
-   */
-  __source?: 'llm' | 'rule'
 }
 
 export type ElementWriteResultView = {
