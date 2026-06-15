@@ -164,10 +164,6 @@ export async function repairProject(
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   }
 
-  if (!(await pathExists(rootHandle, 'prompts/scenes/scene-001.md', 'file'))) {
-    await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
-  }
-
   return loadProjectFromHandle(rootHandle)
 }
 

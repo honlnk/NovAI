@@ -50,7 +50,7 @@ export async function openProject(): Promise<ProjectView> {
   const handle = await pickProjectDirectory()
   const inspection = await inspectCoreProject(handle)
   // repairProject is intentionally used for both valid and incomplete projects:
-  // it loads valid projects and gently fills missing optional defaults.
+  // it loads valid projects and gently fills the structure required for loading.
   const project = await repairProject(handle)
 
   await activateProject(project, 'project_opened', `打开项目「${project.name}」`, {
