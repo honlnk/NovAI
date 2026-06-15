@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { useChatStore } from '../../stores/chat'
+import { shouldSubmitOnEnter } from '../../composables/keyboard'
 import MessageItem from '../chat/MessageItem.vue'
 
 defineProps<{
@@ -58,7 +59,7 @@ async function handleSend() {
 
 function handleKeydown(event: KeyboardEvent) {
   // Enter 发送，Shift+Enter 换行
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (shouldSubmitOnEnter(event)) {
     event.preventDefault()
     handleSend()
   }
