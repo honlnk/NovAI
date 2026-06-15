@@ -51,6 +51,11 @@ export type ProjectConfig = {
     embeddingTextVersion: number
     enableBackgroundIndexing: boolean
     enableDebugLogging: boolean
+    /**
+     * 当前激活的场景级提示词路径（相对于项目根，如 prompts/scenes/scene-001.md）。
+     * 留空时不注入任何场景提示词；切换后会话首轮注入生效。
+     */
+    activeScenePromptPath: string | null
   }
 }
 

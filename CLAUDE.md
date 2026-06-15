@@ -31,11 +31,11 @@ packages/core  @novai/core  → 业务逻辑层（无框架依赖，纯 TypeScri
 
 **数据流：** `Vue Component → Pinia Store → Service → Core Domain`
 
-- **app/src/stores/** — 三个 Pinia store：`project`（项目/文件状态）、`chat`（Agent 会话/事件流）、`settings`（配置/模型）
-- **core/src/services/** — Service 层桥接 core 类型和 UI 视图类型，管理内存中的项目运行时注册表
-- **core/src/core/agent/** — Agent 循环：组装消息 → LLM 流式调用 → 解析 tool_calls → 执行工具 → 循环（最多 8 轮）
-- **core/src/core/tools/** — 7 个文件工具（ReadFile/EditFile/CreateFile/RenameFile/DeleteFile/ListDirectory/FindFiles），全部基于浏览器 File System Access API
-- **core/src/core/rag/** — RAG 管线（规划中/部分实现）
+- **packages/app/src/stores/** — 三个 Pinia store：`project`（项目/文件状态）、`chat`（Agent 会话/事件流）、`settings`（配置/模型）
+- **packages/core/src/services/** — Service 层桥接 core 类型和 UI 视图类型，管理内存中的项目运行时注册表
+- **packages/core/src/core/agent/** — Agent 循环：组装消息 → LLM 流式调用 → 解析 tool_calls → 执行工具 → 循环（最多 8 轮）
+- **packages/core/src/core/tools/** — 7 个文件工具（ReadFile/EditFile/CreateFile/RenameFile/DeleteFile/ListDirectory/FindFiles），全部基于浏览器 File System Access API；Agent 额外暴露 `RagSearch` 作为只读检索工具
+- **packages/core/src/core/rag/** — RAG 管线（IndexedDB 记录 + 手写 cosineSimilarity 的过渡召回，已接入可选 Rerank；正式 Orama 召回待补齐）
 
 ## Key Patterns
 
@@ -43,6 +43,7 @@ packages/core  @novai/core  → 业务逻辑层（无框架依赖，纯 TypeScri
 - **API 代理：** Vite dev server 内置 `/api-proxy` 中间件，通过 `x-target-base` header 转发请求到 LLM/Embedding API，解决浏览器 CORS 限制。
 - **@novai/core 无构建步骤：** app 直接通过源码导入 core（见 core/package.json exports map），不需要先构建 core。
 - **Agent 事件流：** AgentService 发出 `AgentUiEvent` 流供 UI 消费，实现流式响应展示。
+- **Agent LLM fallback：** 流式 tool_calls 解析异常或流式响应空闲超时时，会回退到非流式请求；相关行为已有 Vitest 覆盖。
 
 ## Commit Convention
 
@@ -57,4 +58,4 @@ packages/core  @novai/core  → 业务逻辑层（无框架依赖，纯 TypeScri
 
 - Node.js 18+, pnpm 10+
 - 浏览器需支持 File System Access API（仅 Chromium）
-- `docs/` 是 git submodule，指向 NovAI-document 仓库
+- `docs/` 是 git submodule，指向 NovAI-document 仓库；文档按 `product/`、`architecture/`、`decisions/`、`project/` 分层维护

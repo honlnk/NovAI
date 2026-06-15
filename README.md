@@ -53,10 +53,12 @@ NovAI 的思路是换一条路：
 尚未完整落地的核心能力包括：
 
 - 写工具执行前确认
+- 文件 diff 预览、Agent 停止运行与工具调用边界控制
 - LLM 结构化要素抽取、要素去重合并与覆盖确认
 - RAG 在真实创作任务中的召回质量验证与使用策略调优
 - 自动增量索引、索引过期提醒与更完整的降级策略
 - 近期章节上下文拼装
+- Agent 会话持久化与上下文压缩
 - Rerank 精排与更完整的创作工作流
 
 ## MVP 目标
@@ -82,6 +84,7 @@ NovAI 采用“一个文件夹就是一个小说项目”的思路。当前默�
 ├── elements/
 │   ├── characters/
 │   ├── locations/
+│   ├── entities/
 │   ├── timeline/
 │   ├── plots/
 │   └── worldbuilding/
@@ -185,15 +188,20 @@ pnpm typecheck
 
 ## 文档
 
-项目文档主要放在 [`docs/`](./docs)：
+项目文档主要放在 [`docs/`](./docs)，当前按用途分为五类：
 
-- [`docs/NovAI产品规划.md`](./docs/NovAI产品规划.md)：产品定位与核心思路
-- [`docs/AI功能需求说明书.md`](./docs/AI功能需求说明书.md)：AI 功能需求
-- [`docs/UI设计文档.md`](./docs/UI设计文档.md)：界面与交互设计
-- [`docs/技术架构设计.md`](./docs/技术架构设计.md)：技术选型与架构说明
-- [`docs/project/项目总览.md`](./docs/project/项目总览.md)：项目阶段与目标
-- [`docs/project/MVP清单.md`](./docs/project/MVP清单.md)：MVP 范围与执行顺序
+- [`docs/product/`](./docs/product)：产品愿景、AI 功能需求、UI 设计
+- [`docs/architecture/`](./docs/architecture)：技术架构、Agent Loop、工具系统、RAG、UI 接口契约
+- [`docs/decisions/`](./docs/decisions)：阶段性技术和产品决策记录
+- [`docs/plans/`](./docs/plans)：阶段性功能计划和重构计划
+- [`docs/project/`](./docs/project)：路线图、MVP、当前进度、开发日志
+
+常用入口：
+
 - [`docs/project/当前进度.md`](./docs/project/当前进度.md)：开发推进情况
+- [`docs/project/项目总览.md`](./docs/project/项目总览.md)：项目阶段与目标
+- [`docs/product/产品愿景.md`](./docs/product/产品愿景.md)：产品定位与核心思路
+- [`docs/architecture/技术架构设计.md`](./docs/architecture/技术架构设计.md)：技术选型与架构说明
 - [`INTERFACE.md`](./INTERFACE.md)：当前 UI 协作接口、stores/services 使用入口
 
 ## 仓库目标

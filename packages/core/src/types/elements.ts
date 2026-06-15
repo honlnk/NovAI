@@ -30,6 +30,7 @@ export type ElementExtractionItem = {
 export type ElementExtractionResult = {
   characters: ElementExtractionItem[]
   locations: ElementExtractionItem[]
+  entities: ElementExtractionItem[]
   timeline: ElementExtractionItem[]
   plots: ElementExtractionItem[]
   worldbuilding: ElementExtractionItem[]

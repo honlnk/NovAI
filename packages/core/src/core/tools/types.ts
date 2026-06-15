@@ -161,7 +161,7 @@ export type RagSearchInput = {
   topK?: number
   finalLimit?: number
   filters?: {
-    type?: Array<'character' | 'location' | 'timeline' | 'plot' | 'worldbuilding'>
+    type?: Array<'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'>
     tags?: string[]
     lastUpdatedChapter?: string
   }
@@ -175,7 +175,7 @@ export type RagSearchOutput = {
   candidates: Array<{
     id: string
     sourcePath: string
-    type: 'character' | 'location' | 'timeline' | 'plot' | 'worldbuilding'
+    type: 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'
     name: string
     summary: string
     retrievalText: string

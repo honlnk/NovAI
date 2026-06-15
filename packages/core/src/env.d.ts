@@ -23,6 +23,7 @@ interface FileSystemHandle {
   kind: 'file' | 'directory'
   name: string
   isSameEntry(other: FileSystemHandle): Promise<boolean>
+  remove?(options?: { recursive?: boolean }): Promise<void>
 }
 
 interface FileSystemWritableFileStream extends WritableStream {

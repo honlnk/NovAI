@@ -6,6 +6,7 @@ import { readProjectTextFile, writeProjectTextFile } from '../fs/project-fs'
 const ELEMENT_DIRECTORY_MAP: Record<ElementType, string> = {
   character: 'elements/characters',
   location: 'elements/locations',
+  entity: 'elements/entities',
   timeline: 'elements/timeline',
   plot: 'elements/plots',
   worldbuilding: 'elements/worldbuilding',

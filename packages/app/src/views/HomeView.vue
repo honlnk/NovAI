@@ -2,12 +2,16 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
+import type { RecentProject } from '@novai/core/types/project'
 
 const router = useRouter()
 const projectStore = useProjectStore()
 const showCreateDialog = ref(false)
+const projectPendingDelete = ref<RecentProject | null>(null)
 const newProjectName = ref('')
 const isCreating = ref(false)
+const isDeleting = ref(false)
+const shouldDeleteDirectory = ref(false)
 
 onMounted(async () => {
   await projectStore.loadLastProjectSummary()
@@ -44,8 +48,44 @@ async function handleCreateProject() {
   }
 }
 
-function handleSelectProject(projectId: string) {
-  router.push(`/project/${projectId}`)
+async function handleSelectProject(projectId: string) {
+  const project = await projectStore.openRecentProject(projectId)
+  if (project) {
+    router.push(`/project/${project.id}`)
+  }
+}
+
+function handleAskDeleteProject(project: RecentProject) {
+  projectPendingDelete.value = project
+  shouldDeleteDirectory.value = false
+}
+
+function handleCancelDeleteProject() {
+  if (isDeleting.value) return
+
+  projectPendingDelete.value = null
+  shouldDeleteDirectory.value = false
+}
+
+async function handleConfirmDeleteProject() {
+  if (!projectPendingDelete.value) return
+
+  isDeleting.value = true
+  try {
+    const removed = await projectStore.removeRecentProject(projectPendingDelete.value.id, {
+      deleteDirectory: shouldDeleteDirectory.value,
+    })
+
+    if (!removed) {
+      return
+    }
+
+    projectPendingDelete.value = null
+    shouldDeleteDirectory.value = false
+    await projectStore.loadLastProjectSummary()
+  } finally {
+    isDeleting.value = false
+  }
 }
 </script>
 
@@ -62,6 +102,13 @@ function handleSelectProject(projectId: string) {
     <!-- 主体 -->
     <main class="flex-1 overflow-y-auto p-6">
       <div class="mx-auto max-w-4xl">
+        <div
+          v-if="projectStore.errorMessage"
+          class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
+          {{ projectStore.errorMessage }}
+        </div>
+
         <!-- 恢复上次项目提示 -->
         <div
           v-if="projectStore.lastProjectSummary"
@@ -110,11 +157,24 @@ function handleSelectProject(projectId: string) {
             <div
               v-for="project in projectStore.recentProjects"
               :key="project.id"
-              class="cursor-pointer rounded-lg border border-gray-200 bg-white p-4 transition-all hover:border-gray-300 hover:shadow-sm"
+              class="group cursor-pointer rounded-lg border border-gray-200 bg-white p-4 transition-all hover:border-gray-300 hover:shadow-sm"
               @click="handleSelectProject(project.id)"
             >
-              <h3 class="font-medium text-gray-900">{{ project.name }}</h3>
-              <p class="mt-1 text-sm text-gray-500">{{ project.chapterCount }} 章</p>
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h3 class="truncate font-medium text-gray-900">{{ project.name }}</h3>
+                  <p class="mt-1 text-sm text-gray-500">{{ project.chapterCount }} 章</p>
+                </div>
+                <button
+                  class="rounded-md p-1.5 text-gray-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 group-hover:opacity-100"
+                  title="移除最近项目"
+                  @click.stop="handleAskDeleteProject(project)"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 .93h6a1 1 0 001-.93l1-12" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -163,6 +223,47 @@ function handleSelectProject(projectId: string) {
             @click="handleCreateProject"
           >
             {{ isCreating ? '创建中...' : '创建' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除最近项目对话框 -->
+    <div
+      v-if="projectPendingDelete"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="handleCancelDeleteProject"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+        <h2 class="mb-2 text-lg font-semibold text-gray-900">移除最近项目</h2>
+        <p class="mb-4 text-sm text-gray-600">
+          要从最近项目中移除「{{ projectPendingDelete.name }}」吗？
+        </p>
+        <label class="mb-5 flex items-start gap-3 rounded-lg border border-red-100 bg-red-50 p-3">
+          <input
+            v-model="shouldDeleteDirectory"
+            class="mt-0.5 h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+            type="checkbox"
+          />
+          <span>
+            <span class="block text-sm font-medium text-red-900">同步删除本地项目目录</span>
+            <span class="mt-1 block text-sm text-red-700">勾选后会删除该项目文件夹及其中所有文件。</span>
+          </span>
+        </label>
+        <div class="flex justify-end gap-3">
+          <button
+            class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+            :disabled="isDeleting"
+            @click="handleCancelDeleteProject"
+          >
+            取消
+          </button>
+          <button
+            class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+            :disabled="isDeleting"
+            @click="handleConfirmDeleteProject"
+          >
+            {{ isDeleting ? '处理中...' : '确认移除' }}
           </button>
         </div>
       </div>

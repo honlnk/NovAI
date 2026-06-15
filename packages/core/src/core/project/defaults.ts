@@ -49,6 +49,7 @@ export const DEFAULT_CONFIG = {
     embeddingTextVersion: 1,
     enableBackgroundIndexing: true,
     enableDebugLogging: false,
+    activeScenePromptPath: null,
   },
 } as const
 

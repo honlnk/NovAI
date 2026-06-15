@@ -1,4 +1,4 @@
-export type ElementType = 'character' | 'location' | 'timeline' | 'plot' | 'worldbuilding'
+export type ElementType = 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'
 
 export type IndexStatus = 'empty' | 'building' | 'ready' | 'stale' | 'rebuilding' | 'error'
 

@@ -41,6 +41,7 @@ export type ProjectConfigView = {
     embeddingTextVersion: number
     enableBackgroundIndexing: boolean
     enableDebugLogging: boolean
+    activeScenePromptPath: string | null
   }
 }
 
@@ -94,7 +95,7 @@ export type LlmStreamInputView = {
   instruction: string
 }
 
-export type ElementTypeView = 'character' | 'location' | 'timeline' | 'plot' | 'worldbuilding'
+export type ElementTypeView = 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'
 
 export type IndexStatusView = 'empty' | 'building' | 'ready' | 'stale' | 'rebuilding' | 'error'
 
@@ -173,6 +174,7 @@ export type ElementExtractionItemView = {
 export type ElementExtractionResultView = {
   characters: ElementExtractionItemView[]
   locations: ElementExtractionItemView[]
+  entities: ElementExtractionItemView[]
   timeline: ElementExtractionItemView[]
   plots: ElementExtractionItemView[]
   worldbuilding: ElementExtractionItemView[]

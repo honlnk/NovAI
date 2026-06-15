@@ -26,7 +26,8 @@ onMounted(async () => {
   // 如果没有当前项目，尝试恢复
   if (!projectStore.currentProject) {
     await projectStore.loadLastProjectSummary()
-    const restored = await projectStore.restoreLastOpenedProject()
+    const restored = await projectStore.openRecentProject(projectId.value)
+      || await projectStore.restoreLastOpenedProject()
     if (!restored || restored.id !== projectId.value) {
       router.push('/')
       return

@@ -1,55 +1,35 @@
 import { describe, expect, it } from 'vitest'
 
-import { createElementDocument, writeElementDocuments } from './writer'
+import { repairProject } from './project-fs'
 
-describe('elements', () => {
-  it('writes element documents and skips unchanged writes', async () => {
-    const handle = createMemoryDirectory('novel')
-    const element = createElementDocument({
-      type: 'character',
-      name: '林远',
-      summary: '年轻修士，正在调查藏书楼旧信。',
-      tags: ['人物', '主角'],
-      lastUpdatedChapter: 'chapters/第001章.txt',
-      relatedChapters: ['chapters/第001章.txt'],
-      body: '## 人物线索\n\n- 林远发现旧信。',
-    })
+describe('project fs repair', () => {
+  it('does not recreate the default scene prompt after it has been deleted or renamed', async () => {
+    const rootHandle = createMemoryDirectory('novel')
 
-    const first = await writeElementDocuments(handle, [element])
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      project: {
+        name: 'Test Novel',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    }))
+    writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
+      projectId: 'test-project',
+      version: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastOpenedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    writeProjectTextSync(rootHandle, 'prompts/system.md', '# System Prompt')
+    writeProjectTextSync(rootHandle, 'prompts/scenes/renamed-scene.md', '# Renamed Scene Prompt')
 
-    expect(first.created).toEqual(['elements/characters/林远.md'])
-    expect(first.updated).toEqual([])
-    expect(first.skipped).toEqual([])
-    expect(first.staleIndex).toBe(true)
+    const project = await repairProject(rootHandle)
 
-    const content = await readProjectText(handle, 'elements/characters/林远.md')
-    expect(content).toContain('id: character-林远')
-    expect(content).toContain('summary: 年轻修士')
-
-    const second = await writeElementDocuments(handle, [element])
-
-    expect(second.created).toEqual([])
-    expect(second.updated).toEqual([])
-    expect(second.skipped).toEqual(['elements/characters/林远.md'])
-    expect(second.staleIndex).toBe(false)
-  })
-
-  it('writes entity documents into elements/entities', async () => {
-    const handle = createMemoryDirectory('novel')
-    const element = createElementDocument({
-      type: 'entity',
-      name: '青霜剑',
-      summary: '林远当前持有的佩剑。',
-      tags: ['实体', '武器'],
-      lastUpdatedChapter: 'chapters/第001章.txt',
-      relatedChapters: ['chapters/第001章.txt'],
-      body: '## 实体线索\n\n- 林远取出青霜剑。',
-    })
-
-    const result = await writeElementDocuments(handle, [element])
-
-    expect(result.created).toEqual(['elements/entities/青霜剑.md'])
-    await expect(readProjectText(handle, 'elements/entities/青霜剑.md')).resolves.toContain('type: entity')
+    expect(project.tree).toContainEqual(expect.objectContaining({
+      kind: 'directory',
+      path: 'prompts',
+    }))
+    await expect(readProjectText(rootHandle, 'prompts/scenes/scene-001.md')).rejects.toThrow('Not found')
+    await expect(readProjectText(rootHandle, 'prompts/scenes/renamed-scene.md')).resolves.toBe('# Renamed Scene Prompt')
   })
 })
 
@@ -132,6 +112,11 @@ function createDirectoryHandle(entry: MemoryDirectoryEntry): MemoryDirectoryHand
       entry.entries.set(name, next)
       return createFileHandle(next)
     },
+    async removeEntry(name: string) {
+      if (!entry.entries.delete(name)) {
+        throw new DOMException(`Not found: ${name}`, 'NotFoundError')
+      }
+    },
     async *values() {
       for (const child of entry.entries.values()) {
         yield child.kind === 'directory'
@@ -172,7 +157,54 @@ function createFileHandle(entry: MemoryFileEntry): FileSystemFileHandle {
   } as unknown as FileSystemFileHandle
 }
 
+function writeProjectTextSync(rootHandle: MemoryDirectoryHandle, path: string, content: string) {
+  const segments = path.split('/').filter(Boolean)
+  const fileName = segments.pop()
+
+  if (!fileName) {
+    throw new Error(`Invalid file path: ${path}`)
+  }
+
+  let current = rootHandle.__entry
+
+  for (const segment of segments) {
+    const existing = current.entries.get(segment)
+
+    if (existing?.kind === 'file') {
+      throw new Error(`Not a directory: ${segment}`)
+    }
+
+    if (existing?.kind === 'directory') {
+      current = existing
+      continue
+    }
+
+    const next: MemoryDirectoryEntry = {
+      kind: 'directory',
+      name: segment,
+      entries: new Map(),
+    }
+    current.entries.set(segment, next)
+    current = next
+  }
+
+  current.entries.set(fileName, {
+    kind: 'file',
+    name: fileName,
+    content,
+    lastModified: Date.now(),
+  })
+}
+
 async function readProjectText(rootHandle: FileSystemDirectoryHandle, path: string) {
+  const fileHandle = await resolveMemoryFileHandle(rootHandle, path)
+  return (await fileHandle.getFile()).text()
+}
+
+async function resolveMemoryFileHandle(
+  rootHandle: FileSystemDirectoryHandle,
+  path: string,
+) {
   const segments = path.split('/').filter(Boolean)
   const fileName = segments.pop()
 
@@ -186,6 +218,5 @@ async function readProjectText(rootHandle: FileSystemDirectoryHandle, path: stri
     current = await current.getDirectoryHandle(segment)
   }
 
-  const fileHandle = await current.getFileHandle(fileName)
-  return (await fileHandle.getFile()).text()
+  return current.getFileHandle(fileName)
 }

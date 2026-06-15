@@ -17,6 +17,7 @@ const REQUIRED_DIRECTORY_PATHS = [
   'elements',
   'elements/characters',
   'elements/locations',
+  'elements/entities',
   'elements/timeline',
   'elements/plots',
   'elements/worldbuilding',
@@ -43,15 +44,9 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   const rootHandle = await parentHandle.getDirectoryHandle(projectName, { create: true })
   const projectId = createProjectId()
 
-  await ensureDirectory(rootHandle, 'chapters')
-  await ensureDirectory(rootHandle, 'elements/characters')
-  await ensureDirectory(rootHandle, 'elements/locations')
-  await ensureDirectory(rootHandle, 'elements/timeline')
-  await ensureDirectory(rootHandle, 'elements/plots')
-  await ensureDirectory(rootHandle, 'elements/worldbuilding')
-  await ensureDirectory(rootHandle, 'prompts/scenes')
-  await ensureDirectory(rootHandle, '.novel')
-  await ensureDirectory(rootHandle, '.novel/logs')
+  for (const directoryPath of REQUIRED_DIRECTORY_PATHS) {
+    await ensureDirectory(rootHandle, directoryPath)
+  }
 
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
@@ -113,7 +108,7 @@ export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Pro
     issues.push('missing-chapters')
   }
 
-  if (!(await pathExists(rootHandle, 'elements', 'directory'))) {
+  if (!(await hasRequiredElementDirectories(rootHandle))) {
     issues.push('missing-elements')
   }
 
@@ -167,10 +162,6 @@ export async function repairProject(
 
   if (!(await pathExists(rootHandle, 'prompts/system.md', 'file'))) {
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
-  }
-
-  if (!(await pathExists(rootHandle, 'prompts/scenes/scene-001.md', 'file'))) {
-    await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
   }
 
   return loadProjectFromHandle(rootHandle)
@@ -278,6 +269,18 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
   }
 }
 
+async function hasRequiredElementDirectories(rootHandle: FileSystemDirectoryHandle) {
+  const elementDirectories = REQUIRED_DIRECTORY_PATHS.filter((path) => path === 'elements' || path.startsWith('elements/'))
+
+  for (const directoryPath of elementDirectories) {
+    if (!(await pathExists(rootHandle, directoryPath, 'directory'))) {
+      return false
+    }
+  }
+
+  return true
+}
+
 /**
  * 按相对路径读取项目中的任意文本文件。
  * 适合测试页或后续业务层读取 prompt、章节、要素原文。
@@ -324,6 +327,27 @@ export async function removeProjectFile(rootHandle: FileSystemDirectoryHandle, p
  */
 export async function readSystemPrompt(rootHandle: FileSystemDirectoryHandle) {
   return readText(rootHandle, 'prompts/system.md')
+}
+
+/**
+ * 读取当前激活的场景级提示词。
+ * path 为空、不是 prompts/scenes/ 下文件或文件缺失时，返回空字符串，不抛错。
+ */
+export async function readScenePrompt(
+  rootHandle: FileSystemDirectoryHandle,
+  path?: string | null,
+): Promise<string> {
+  const scenePath = path?.trim()
+
+  if (!scenePath || !scenePath.startsWith('prompts/scenes/')) {
+    return ''
+  }
+
+  try {
+    return await readText(rootHandle, scenePath)
+  } catch {
+    return ''
+  }
 }
 
 /**

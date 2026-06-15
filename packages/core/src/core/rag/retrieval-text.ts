@@ -6,6 +6,7 @@ const MAX_RELATED_CHAPTERS = 20
 const TYPE_LABELS = {
   character: '人物',
   location: '地点',
+  entity: '实体',
   timeline: '时间线',
   plot: '情节',
   worldbuilding: '世界观',

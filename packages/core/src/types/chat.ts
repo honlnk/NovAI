@@ -144,6 +144,7 @@ export type ChatTurnInput = {
   project: ProjectSnapshot
   config: ProjectConfig
   systemPrompt: string
+  scenePrompt?: string
   activeFilePath?: string | null
 }
 

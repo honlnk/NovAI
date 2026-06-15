@@ -30,7 +30,7 @@ const canExtractElements = computed(() => {
   return Boolean(
     props.file &&
     props.file.path.startsWith('chapters/') &&
-    props.file.name.endsWith('.txt') &&
+    /\.(txt|md)$/i.test(props.file.name) &&
     props.file.content.trim(),
   )
 })
@@ -83,11 +83,12 @@ async function handlePreviewElements() {
   }
 
   isExtracting.value = true
-  extractionStatus.value = '正在提取要素...'
+  extractionStatus.value = '正在用 AI 提取要素...'
   elementWriteResult.value = null
 
   try {
     extractionPreview.value = await previewElementExtraction({
+      projectId: props.projectId,
       chapterContent: props.file.content,
       chapterPath: props.file.path,
     })
@@ -96,7 +97,8 @@ async function handlePreviewElements() {
       ? `已提取 ${extractionCount.value} 个候选要素`
       : '未提取到可写入的要素'
   } catch (error) {
-    extractionStatus.value = error instanceof Error ? error.message : '要素提取失败'
+    const message = error instanceof Error ? error.message : '要素提取失败'
+    extractionStatus.value = `AI 提取失败：${message}。请检查设置页的 LLM 配置。`
   } finally {
     isExtracting.value = false
   }
@@ -139,6 +141,7 @@ function resetExtractionState() {
 function countExtractionItems(result: ElementExtractionResultView) {
   return result.characters.length +
     result.locations.length +
+    result.entities.length +
     result.timeline.length +
     result.plots.length +
     result.worldbuilding.length
@@ -259,7 +262,7 @@ function countExtractionItems(result: ElementExtractionResultView) {
 
           <div
             v-if="extractionPreview"
-            class="grid grid-cols-5 gap-1 text-center text-xs"
+            class="grid grid-cols-3 gap-1 text-center text-xs"
           >
             <div class="rounded-md bg-gray-50 px-1 py-1">
               <div class="font-semibold text-gray-800">{{ extractionPreview.characters.length }}</div>
@@ -268,6 +271,10 @@ function countExtractionItems(result: ElementExtractionResultView) {
             <div class="rounded-md bg-gray-50 px-1 py-1">
               <div class="font-semibold text-gray-800">{{ extractionPreview.locations.length }}</div>
               <div class="text-gray-500">地点</div>
+            </div>
+            <div class="rounded-md bg-gray-50 px-1 py-1">
+              <div class="font-semibold text-gray-800">{{ extractionPreview.entities.length }}</div>
+              <div class="text-gray-500">实体</div>
             </div>
             <div class="rounded-md bg-gray-50 px-1 py-1">
               <div class="font-semibold text-gray-800">{{ extractionPreview.plots.length }}</div>
