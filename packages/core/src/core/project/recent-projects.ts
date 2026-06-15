@@ -102,6 +102,18 @@ export async function readRecentProjects(): Promise<LastProjectSummary[]> {
   }))
 }
 
+export async function readRecentProject(projectId: string): Promise<LastProjectRecord | null> {
+  const database = await openDatabase()
+  const record = await runStoreRequest<LastProjectRecord | undefined>(
+    database,
+    'readonly',
+    (store) => store.get(`project-${projectId}`),
+  )
+
+  database.close()
+  return record ?? null
+}
+
 export async function forgetLastProject() {
   const database = await openDatabase()
 

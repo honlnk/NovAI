@@ -14,6 +14,7 @@ interface FilePickerOptions {
 interface FileSystemHandle {
   readonly kind: 'file' | 'directory'
   readonly name: string
+  remove?(options?: { recursive?: boolean }): Promise<void>
 }
 
 interface FileSystemWritableFileStream {

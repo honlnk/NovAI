@@ -3,7 +3,6 @@ import {
   findFirstReadableFile,
   inspectProject as inspectCoreProject,
   isFileSystemAccessSupported,
-  loadProjectFromHandle,
   pickProjectDirectory,
   repairProject,
   rescanProject,
@@ -14,6 +13,7 @@ import {
   forgetRecentProject as forgetStoredRecentProject,
   hasProjectPermission,
   readLastProject,
+  readRecentProject,
   readRecentProjects,
   requestProjectPermission,
   saveLastProject,
@@ -88,6 +88,33 @@ export async function restoreLastProject(): Promise<ProjectView | null> {
   })
 }
 
+export async function restoreRecentProject(projectId: string): Promise<ProjectView | null> {
+  assertFileSystemAccessSupported()
+
+  const record = await readRecentProject(projectId)
+
+  if (!record) {
+    return null
+  }
+
+  const hasPermission = await hasProjectPermission(record.handle)
+    || await requestProjectPermission(record.handle)
+
+  if (!hasPermission) {
+    return null
+  }
+
+  const project = await repairProject(record.handle)
+  await activateProject(project, 'project_restored_from_recent', `恢复最近项目「${project.name}」`, {
+    rememberedAt: record.lastOpenedAt,
+    requestedProjectId: projectId,
+  })
+
+  return toProjectView(project, {
+    activeFilePath: findFirstReadableFile(project.tree) ?? undefined,
+  })
+}
+
 export async function getLastProjectSummary(): Promise<LastProjectSummaryView | null> {
   const record = await readLastProject()
   return record ? toLastProjectSummary(record) : null
@@ -103,6 +130,42 @@ export async function forgetLastProject(): Promise<void> {
 
 export async function forgetRecentProject(projectId: string): Promise<void> {
   await forgetStoredRecentProject(projectId)
+}
+
+export async function deleteRecentProject(
+  projectId: string,
+  options: {
+    deleteDirectory?: boolean
+  } = {},
+): Promise<void> {
+  const record = await readRecentProject(projectId)
+
+  if (!record) {
+    await forgetStoredRecentProject(projectId)
+    return
+  }
+
+  if (options.deleteDirectory) {
+    assertFileSystemAccessSupported()
+
+    const hasPermission = await hasProjectPermission(record.handle)
+      || await requestProjectPermission(record.handle)
+
+    if (!hasPermission) {
+      throw new Error('没有获得项目目录读写权限，已取消删除本地目录。')
+    }
+
+    await removeProjectDirectory(record.handle)
+  }
+
+  await forgetStoredRecentProject(projectId)
+
+  const lastRecord = await readLastProject()
+  if (lastRecord?.projectId === projectId) {
+    await forgetStoredLastProject()
+  }
+
+  removeRuntimeProject(projectId)
 }
 
 export async function closeProject(projectId: string): Promise<void> {
@@ -181,6 +244,18 @@ function assertFileSystemAccessSupported() {
   if (!isFileSystemAccessSupported()) {
     throw new Error('当前浏览器不支持 File System Access API，请使用 Chromium 内核浏览器。')
   }
+}
+
+async function removeProjectDirectory(handle: FileSystemDirectoryHandle) {
+  const removableHandle = handle as FileSystemDirectoryHandle & {
+    remove?: (options?: { recursive?: boolean }) => Promise<void>
+  }
+
+  if (!removableHandle.remove) {
+    throw new Error('当前浏览器不支持直接删除已记住的项目目录，请在系统文件管理器中手动删除。')
+  }
+
+  await removableHandle.remove({ recursive: true })
 }
 
 function asRecord(value: unknown) {

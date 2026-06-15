@@ -4,11 +4,13 @@ import { defineStore } from 'pinia'
 import {
   closeProject,
   createProject,
+  deleteRecentProject,
   forgetLastProject,
   getLastProjectSummary,
   getRecentProjects,
   isProjectAccessSupported,
   openProject,
+  restoreRecentProject,
   restoreLastProject,
 } from '@novai/core/services/project-service'
 import {
@@ -69,6 +71,21 @@ export const useProjectStore = defineStore('project', () => {
     })
   }
 
+  async function openRecentProject(projectId: string) {
+    return runProjectAction(async () => {
+      const project = await restoreRecentProject(projectId)
+
+      if (!project) {
+        statusMessage.value = '没有找到该最近项目，或目录权限尚未授权'
+        return null
+      }
+
+      await setCurrentProject(project)
+      statusMessage.value = `已打开最近项目「${project.name}」`
+      return project
+    })
+  }
+
   async function loadLastProjectSummary() {
     try {
       lastProjectSummary.value = await getLastProjectSummary()
@@ -101,6 +118,28 @@ export const useProjectStore = defineStore('project', () => {
       await forgetLastProject()
       lastProjectSummary.value = null
       statusMessage.value = '已忘记上次项目记录'
+    })
+  }
+
+  async function removeRecentProject(projectId: string, options: { deleteDirectory?: boolean } = {}) {
+    return runProjectAction(async () => {
+      await deleteRecentProject(projectId, options)
+      recentProjects.value = recentProjects.value.filter((item) => item.id !== projectId)
+
+      if (lastProjectSummary.value?.projectId === projectId) {
+        lastProjectSummary.value = null
+      }
+
+      if (currentProject.value?.id === projectId) {
+        currentProject.value = null
+        activeFile.value = null
+      }
+
+      statusMessage.value = options.deleteDirectory
+        ? '已移除最近项目记录并删除本地目录'
+        : '已移除最近项目记录'
+
+      return true
     })
   }
 
@@ -212,7 +251,9 @@ export const useProjectStore = defineStore('project', () => {
     loadRecentProjects,
     openExistingProject,
     openFile,
+    openRecentProject,
     refreshTree,
+    removeRecentProject,
     restoreLastOpenedProject,
     updateCurrentProjectConfig,
   }
