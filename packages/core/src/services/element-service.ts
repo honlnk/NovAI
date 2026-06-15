@@ -1,16 +1,36 @@
 import { extractElementsFromChapter } from '../core/elements/extractor'
+import { extractElementsWithLlm } from '../core/elements/extractor-llm'
 import { createElementDocument, writeElementDocuments } from '../core/elements/writer'
 import { markProjectIndexStale } from '../core/rag/indexer'
 
 import { requireRuntimeProject } from './project-runtime'
-import type { ElementExtractionResultView, ElementWriteResultView } from './types'
+import type {
+  ElementExtractionResultView,
+  ElementWriteResultView,
+} from './types'
 
 export async function previewElementExtraction(input: {
+  projectId: string
   chapterContent: string
   chapterPath?: string
-  systemPrompt?: string
 }): Promise<ElementExtractionResultView> {
-  return extractElementsFromChapter(input)
+  const project = requireRuntimeProject(input.projectId)
+
+  // 优先尝试 LLM 结构化提取；失败则降级到规则型正则提取。
+  try {
+    const result = await extractElementsWithLlm({
+      chapterContent: input.chapterContent,
+      chapterPath: input.chapterPath,
+      config: project.config,
+    })
+    return { ...result, __source: 'llm' }
+  } catch {
+    const result = await extractElementsFromChapter({
+      chapterContent: input.chapterContent,
+      chapterPath: input.chapterPath,
+    })
+    return { ...result, __source: 'rule' }
+  }
 }
 
 export async function writeExtractedElements(input: {

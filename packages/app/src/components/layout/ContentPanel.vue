@@ -83,17 +83,19 @@ async function handlePreviewElements() {
   }
 
   isExtracting.value = true
-  extractionStatus.value = '正在提取要素...'
+  extractionStatus.value = '正在用 AI 提取要素...'
   elementWriteResult.value = null
 
   try {
     extractionPreview.value = await previewElementExtraction({
+      projectId: props.projectId,
       chapterContent: props.file.content,
       chapterPath: props.file.path,
     })
 
+    const sourceLabel = extractionPreview.value.__source === 'llm' ? 'AI' : '规则'
     extractionStatus.value = extractionCount.value > 0
-      ? `已提取 ${extractionCount.value} 个候选要素`
+      ? `已通过${sourceLabel}提取 ${extractionCount.value} 个候选要素`
       : '未提取到可写入的要素'
   } catch (error) {
     extractionStatus.value = error instanceof Error ? error.message : '要素提取失败'
