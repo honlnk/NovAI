@@ -249,6 +249,7 @@ function countExtractionItems(result: ElementExtractionResultView) {
             :key="mode.key"
             :text="mode.key === 'edit' && !canEdit ? `${mode.label}（该文件类型不支持编辑）` : mode.label"
             :disabled="mode.key === 'edit' && !canEdit"
+            :delay="300"
             preferred-placement="bottom"
           >
             <button
