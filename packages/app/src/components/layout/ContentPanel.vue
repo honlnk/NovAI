@@ -7,6 +7,7 @@ import type {
   FileContentView,
 } from '@novai/core/services/types'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
+import Tooltip from '../ui/Tooltip.vue'
 
 const props = defineProps<{
   isOpen: boolean
@@ -17,9 +18,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   elementsWritten: [result: ElementWriteResultView]
+  save: [path: string, content: string]
 }>()
 
-const viewMode = ref<'preview' | 'raw'>('preview')
+const viewMode = ref<'preview' | 'edit' | 'raw'>('preview')
+const editDraft = ref('')
+const isSaving = ref(false)
 const extractionStatus = ref('尚未提取要素')
 const extractionPreview = ref<ElementExtractionResultView | null>(null)
 const elementWriteResult = ref<ElementWriteResultView | null>(null)
@@ -34,6 +38,13 @@ const canExtractElements = computed(() => {
     props.file.content.trim(),
   )
 })
+
+const canEdit = computed(() => {
+  return Boolean(props.file && isEditablePath(props.file.path))
+})
+
+/** 草稿与磁盘内容不一致时为脏，用于显示「未保存」标记 */
+const isDirty = computed(() => editDraft.value !== (props.file?.content ?? ''))
 
 const extractionCount = computed(() => {
   if (!extractionPreview.value) {
@@ -58,11 +69,27 @@ watch(
   () => props.file?.path,
   () => {
     resetExtractionState()
+    // 切换文件时回到预览模式并重置草稿，避免跨文件残留编辑内容
+    viewMode.value = 'preview'
+    editDraft.value = ''
   },
 )
 
-function toggleViewMode() {
-  viewMode.value = viewMode.value === 'preview' ? 'raw' : 'preview'
+// 进入编辑模式时，以磁盘当前内容初始化草稿
+watch(viewMode, (mode) => {
+  if (mode === 'edit') {
+    editDraft.value = props.file?.content ?? ''
+  }
+})
+
+/**
+ * 可编辑范围（D7 决策）：章节、提示词、要素 .md。
+ * .novel 配置、原始 JSON 等不进入用户编辑视图。
+ */
+function isEditablePath(path: string): boolean {
+  return path.startsWith('chapters/') ||
+    path.startsWith('prompts/') ||
+    (path.startsWith('elements/') && /\.md$/i.test(path))
 }
 
 function getLanguageLabel(format: string) {
@@ -75,6 +102,30 @@ function getLanguageLabel(format: string) {
 
 function shouldRenderMarkdown(format: string) {
   return format === 'markdown'
+}
+
+/**
+ * 编辑模式键盘处理：Ctrl/Cmd+S 手动保存（失焦不自动保存）。
+ */
+function handleKeydown(event: KeyboardEvent) {
+  const isSaveShortcut = (event.ctrlKey || event.metaKey) && event.key === 's'
+  if (isSaveShortcut) {
+    event.preventDefault()
+    void handleSave()
+  }
+}
+
+async function handleSave() {
+  if (!props.file || !canEdit.value || isSaving.value || !isDirty.value) {
+    return
+  }
+
+  isSaving.value = true
+  try {
+    emit('save', props.file.path, editDraft.value)
+  } finally {
+    isSaving.value = false
+  }
 }
 
 async function handlePreviewElements() {
@@ -171,19 +222,62 @@ function countExtractionItems(result: ElementExtractionResultView) {
         <h2 class="truncate text-sm font-semibold text-gray-800">
           {{ file ? file.name : '内容预览' }}
         </h2>
+        <!-- 未保存标记 -->
+        <span
+          v-if="file && viewMode === 'edit' && isDirty"
+          class="flex shrink-0 items-center gap-1 text-xs text-amber-600"
+        >
+          <span class="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          未保存
+        </span>
         <span v-if="file" class="shrink-0 text-xs text-gray-500">
           {{ getLanguageLabel(file.format) }}
         </span>
       </div>
       <div class="flex items-center gap-1">
-        <!-- 预览/原始切换 -->
-        <button
+        <!-- 预览/编辑/原始 三态分段控件 -->
+        <div
           v-if="file"
-          class="rounded-lg px-2 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-100"
-          @click="toggleViewMode"
+          class="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5"
         >
-          {{ viewMode === 'preview' ? '原始' : '预览' }}
-        </button>
+          <Tooltip
+            v-for="mode in [
+              { key: 'preview', label: '预览', icon: 'eye' },
+              { key: 'edit', label: '编辑', icon: 'pencil' },
+              { key: 'raw', label: '原始', icon: 'code' },
+            ]"
+            :key="mode.key"
+            :text="mode.key === 'edit' && !canEdit ? `${mode.label}（该文件类型不支持编辑）` : mode.label"
+            :disabled="mode.key === 'edit' && !canEdit"
+            preferred-placement="bottom"
+          >
+            <button
+              :class="[
+                'flex items-center justify-center rounded-md p-1.5 transition-colors',
+                viewMode === mode.key
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700',
+                mode.key === 'edit' && !canEdit ? 'cursor-not-allowed opacity-40' : '',
+              ]"
+              :disabled="mode.key === 'edit' && !canEdit"
+              @click="viewMode = mode.key as typeof viewMode"
+            >
+              <!-- 预览（眼睛） -->
+              <svg v-if="mode.icon === 'eye'" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <!-- 编辑（铅笔） -->
+              <svg v-else-if="mode.icon === 'pencil'" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              <!-- 原始（代码括号） -->
+              <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25" />
+              </svg>
+            </button>
+          </Tooltip>
+        </div>
         <button
           class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 lg:hidden"
           @click="emit('close')"
@@ -311,8 +405,30 @@ function countExtractionItems(result: ElementExtractionResultView) {
           <pre v-else class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
         </div>
 
+        <!-- 编辑模式 -->
+        <div v-else-if="viewMode === 'edit'" class="flex flex-col rounded-lg border border-gray-200 bg-white p-2">
+          <textarea
+            v-model="editDraft"
+            :disabled="!canEdit"
+            class="min-h-[400px] w-full resize-none rounded-md border border-gray-200 p-3 font-mono text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+            placeholder="该文件类型不支持编辑"
+            @keydown="handleKeydown"
+          />
+          <div class="mt-2 flex items-center justify-between px-1">
+            <span class="text-xs text-gray-400">Ctrl/⌘ + S 保存</span>
+            <button
+              type="button"
+              class="rounded-lg bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-40"
+              :disabled="!canEdit || !isDirty || isSaving"
+              @click="handleSave"
+            >
+              {{ isSaving ? '保存中...' : '保存' }}
+            </button>
+          </div>
+        </div>
+
         <!-- 原始模式 -->
-        <div v-else class="rounded-lg border border-gray-200 bg-gray-900 p-4">
+        <div v-else-if="viewMode === 'raw'" class="rounded-lg border border-gray-200 bg-gray-900 p-4">
           <pre class="whitespace-pre-wrap font-mono text-sm text-gray-100">{{ file.content }}</pre>
         </div>
 

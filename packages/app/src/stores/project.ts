@@ -16,6 +16,7 @@ import {
 import {
   readFile,
   refreshFiles,
+  writeFile,
 } from '@novai/core/services/file-service'
 import { updateConfig } from '@novai/core/services/settings-service'
 import type {
@@ -176,6 +177,27 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 保存内容面板编辑模式的草稿到磁盘。
+   * 写盘成功后更新 activeFile（同步最新 updatedAt），不刷新整个文件树
+   *（文件树结构未变，仅内容更新）。
+   */
+  async function saveFile(path: string, content: string) {
+    if (!currentProject.value) {
+      return null
+    }
+
+    errorMessage.value = ''
+
+    try {
+      activeFile.value = await writeFile(currentProject.value.id, path, content)
+      return activeFile.value
+    } catch (error) {
+      errorMessage.value = toMessage(error, '保存文件失败')
+      return null
+    }
+  }
+
   async function refreshTree() {
     if (!currentProject.value) {
       return
@@ -285,6 +307,7 @@ export const useProjectStore = defineStore('project', () => {
     refreshTree,
     removeRecentProject,
     restoreLastOpenedProject,
+    saveFile,
     updateCurrentProjectConfig,
   }
 })

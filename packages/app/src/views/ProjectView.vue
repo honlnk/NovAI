@@ -104,6 +104,20 @@ async function handleSelectFile(path: string) {
   isContentPanelOpen.value = true
 }
 
+/**
+ * 内容面板编辑模式保存：写盘后由 store 更新 activeFile（同步最新 updatedAt），
+ * ContentPanel 侧的草稿会因为 watch viewMode 不再触发而保持，但 isDirty 会
+ * 因 file.content 更新而变 false，「未保存」标记自动消失。
+ */
+async function handleSaveFile(path: string, content: string) {
+  const saved = await projectStore.saveFile(path, content)
+  if (saved) {
+    toast.success('已保存')
+  } else {
+    toast.error(projectStore.errorMessage || '保存失败')
+  }
+}
+
 async function handleChangeScene(path: string | null) {
   const saved = await projectStore.changeActiveScenePromptPath(projectId.value, path)
   if (saved) {
@@ -205,6 +219,7 @@ async function handleElementsWritten() {
       :file="projectStore.activeFile"
       @close="isContentPanelOpen = false"
       @elements-written="handleElementsWritten"
+      @save="handleSaveFile"
     />
 
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
