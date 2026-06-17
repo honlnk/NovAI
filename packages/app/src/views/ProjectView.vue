@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useToast } from '../composables/useToast'
-import FileTreeSidebar from '../components/layout/FileTreeSidebar.vue'
+import ActivityBar from '../components/layout/ActivityBar.vue'
+import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
+import type { Category } from '../constants/category'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,10 +19,16 @@ const chatStore = useChatStore()
 const toast = useToast()
 
 const projectId = computed(() => route.params.id as string)
-const isSidebarOpen = ref(true)
+const activeCategory = ref<Category>('chapter')
+const isCategoryOpen = ref(true)
+const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
-const isMobileSidebarOpen = ref(false)
 const showGuide = ref(false)
+
+/** 从 currentProject 取配置里的激活场景路径（分类面板需读取它做高亮联动） */
+const activeScenePromptPath = computed(() => {
+  return projectStore.currentProject?.config.settings.activeScenePromptPath ?? null
+})
 
 onMounted(async () => {
   // 如果没有当前项目，尝试恢复
@@ -46,13 +54,13 @@ onMounted(async () => {
   }
 })
 
-// 监听文件变更，自动刷新文件树
+// 监听文件变更，自动刷新分类面板数据
 watch(
   () => chatStore.changedFiles.length,
   async (newLength, oldLength) => {
     if (newLength > oldLength && projectStore.currentProject) {
       await projectStore.refreshTree()
-      toast.success('文件树已更新')
+      toast.success('文件列表已更新')
     }
   },
 )
@@ -74,8 +82,20 @@ function handleBackToHome() {
   router.push('/')
 }
 
+/**
+ * 打开设置。
+ * R1 阶段设置模态框尚未实现（R2 的工作），这里先给提示，保留入口。
+ */
 function handleOpenSettings() {
-  router.push(`/project/${projectId.value}/settings`)
+  toast.info('设置入口将在下一阶段改为弹窗')
+}
+
+/**
+ * 功能占位项统一反馈。
+ * 校对、章节整理、版本管理暂未实现，保留入口但提示「即将推出」。
+ */
+function handleNotImplemented(name: string) {
+  toast.info(`${name}功能即将推出`)
 }
 
 async function handleSelectFile(path: string) {
@@ -83,13 +103,23 @@ async function handleSelectFile(path: string) {
   isContentPanelOpen.value = true
 }
 
-async function handleRefreshTree() {
-  await projectStore.refreshTree()
-  toast.success('文件树已刷新')
+async function handleChangeScene(path: string | null) {
+  const saved = await projectStore.changeActiveScenePromptPath(projectId.value, path)
+  if (saved) {
+    toast.info(path ? '已切换场景提示词，新建会话后生效' : '已关闭场景提示词，新建会话后生效')
+  } else {
+    toast.error(projectStore.errorMessage || '切换场景提示词失败')
+  }
+}
+
+function selectCategory(category: Category) {
+  activeCategory.value = category
+  // 切换分类时确保面板展开
+  isCategoryOpen.value = true
 }
 
 function toggleSidebar() {
-  isSidebarOpen.value = !isSidebarOpen.value
+  isCategoryOpen.value = !isCategoryOpen.value
 }
 
 function toggleContentPanel() {
@@ -97,7 +127,7 @@ function toggleContentPanel() {
 }
 
 function toggleMobileSidebar() {
-  isMobileSidebarOpen.value = !isMobileSidebarOpen.value
+  isMobileCategoryOpen.value = !isMobileCategoryOpen.value
 }
 
 function handleCloseGuide() {
@@ -117,30 +147,41 @@ async function handleElementsWritten() {
 
 <template>
   <div class="flex h-screen bg-white">
-    <!-- 移动端侧边栏遮罩 -->
+    <!-- 移动端分类面板遮罩 -->
     <div
-      v-if="isMobileSidebarOpen"
+      v-if="isMobileCategoryOpen"
       class="fixed inset-0 z-40 bg-black/50 lg:hidden"
-      @click="isMobileSidebarOpen = false"
+      @click="isMobileCategoryOpen = false"
     />
 
-    <!-- 左侧文件树 -->
-    <FileTreeSidebar
-      :is-open="isSidebarOpen"
-      :is-mobile-open="isMobileSidebarOpen"
-      :project="projectStore.currentProject"
-      :active-file-path="projectStore.activeFile?.path"
-      @back-to-home="handleBackToHome"
+    <!-- Activity Bar（最左竖条） -->
+    <ActivityBar
+      :active-category="activeCategory"
+      @select="selectCategory"
       @open-settings="handleOpenSettings"
-      @close-mobile="isMobileSidebarOpen = false"
+      @back-to-home="handleBackToHome"
+      @proofread="handleNotImplemented('校对')"
+      @organize="handleNotImplemented('章节整理')"
+      @version="handleNotImplemented('版本管理')"
+    />
+
+    <!-- 分类面板（随 Activity Bar 切换） -->
+    <CategoryPanel
+      :active-category="activeCategory"
+      :files="projectStore.currentProject?.files ?? []"
+      :active-file-path="projectStore.activeFile?.path"
+      :active-scene-prompt-path="activeScenePromptPath"
+      :is-open="isCategoryOpen"
+      :is-mobile-open="isMobileCategoryOpen"
       @select-file="handleSelectFile"
-      @refresh-tree="handleRefreshTree"
+      @change-scene="handleChangeScene"
+      @close-mobile="isMobileCategoryOpen = false"
     />
 
     <!-- 中间对话面板 -->
     <ChatPanel
       :project-id="projectId"
-      :is-sidebar-open="isSidebarOpen"
+      :is-sidebar-open="isCategoryOpen"
       :is-content-panel-open="isContentPanelOpen"
       @toggle-sidebar="toggleSidebar"
       @toggle-content-panel="toggleContentPanel"
