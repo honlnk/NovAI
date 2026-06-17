@@ -8,6 +8,7 @@ import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
+import SettingsModal from '../components/settings/SettingsModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
@@ -24,6 +25,7 @@ const isCategoryOpen = ref(true)
 const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 const showGuide = ref(false)
+const isSettingsOpen = ref(false)
 
 /** 从 currentProject 取配置里的激活场景路径（分类面板需读取它做高亮联动） */
 const activeScenePromptPath = computed(() => {
@@ -83,11 +85,10 @@ function handleBackToHome() {
 }
 
 /**
- * 打开设置。
- * R1 阶段设置模态框尚未实现（R2 的工作），这里先给提示，保留入口。
+ * 打开设置模态框（R2：从路由页迁移为弹窗，按需挂载，每次打开都重新读取磁盘配置）。
  */
 function handleOpenSettings() {
-  toast.info('设置入口将在下一阶段改为弹窗')
+  isSettingsOpen.value = true
 }
 
 /**
@@ -204,6 +205,13 @@ async function handleElementsWritten() {
       :file="projectStore.activeFile"
       @close="isContentPanelOpen = false"
       @elements-written="handleElementsWritten"
+    />
+
+    <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
+    <SettingsModal
+      v-if="isSettingsOpen"
+      :project-id="projectId"
+      @close="isSettingsOpen = false"
     />
 
     <!-- Toast 提示 -->
