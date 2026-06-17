@@ -20,6 +20,12 @@ export const useChatStore = defineStore('chat', () => {
   const agentEvents = ref<AgentUiEvent[]>([])
   const changedFiles = ref<ChangedFileView[]>([])
   const runStatus = ref('还没有开始执行。')
+  const isRunning = ref(false)
+  // 用户已请求停止、正在等待当前工具执行完成
+  const isStopping = ref(false)
+
+  // 当前运行持有的停止控制器；仅 isRunning 期间存在
+  let activeAbortController: AbortController | null = null
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
@@ -42,11 +48,17 @@ export const useChatStore = defineStore('chat', () => {
     agentEvents.value = []
     changedFiles.value = []
     runStatus.value = '正在执行本轮 Agent...'
+    isRunning.value = true
+    isStopping.value = false
+
+    // 每轮新建 controller，signal 透传到 core Agent Loop
+    activeAbortController = new AbortController()
 
     try {
       const result = await runAgentTurn({
         ...input,
         sessionId: currentSession.sessionId,
+        signal: activeAbortController.signal,
         onEvent(event) {
           handleAgentEvent(event)
           input.onEvent?.(event)
@@ -63,6 +75,21 @@ export const useChatStore = defineStore('chat', () => {
     } catch (error) {
       runStatus.value = error instanceof Error ? error.message : '执行会话失败'
       throw error
+    } finally {
+      isRunning.value = false
+      isStopping.value = false
+      activeAbortController = null
+    }
+  }
+
+  /** 用户点击停止：中断当前模型流式请求，Agent Loop 会在边界优雅结束。 */
+  function abortRun() {
+    if (activeAbortController) {
+      activeAbortController.abort()
+      activeAbortController = null
+      // 立即进入「停止中」态：UI 反馈 + 等待当前工具完成
+      isStopping.value = true
+      runStatus.value = '已请求停止，等待当前工具执行完成…'
     }
   }
 
@@ -123,10 +150,13 @@ export const useChatStore = defineStore('chat', () => {
   return {
     agentEvents,
     changedFiles,
+    isRunning,
+    isStopping,
     messages,
     sessionView,
     runStatus,
     hasSessionView,
+    abortRun,
     createSession,
     ensureSessionView,
     sendMessage,

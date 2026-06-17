@@ -10,11 +10,37 @@ export async function runAgentTools(input: {
   project: ProjectSnapshot
   tools: AgentRunnableToolMap
   readFileStates?: Map<string, ReadFileState>
+  /** 用户停止信号：已停止时，批次内尚未开始执行的工具会被跳过。 */
+  signal?: AbortSignal
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage[]> {
   const results: AgentToolResultMessage[] = []
 
   for (const call of input.calls) {
+    // 每个工具开始前检查：用户已停止时跳过剩余工具。
+    // 仍为被跳过的工具补一条 tool result，保证消息序列对模型合法。
+    if (input.signal?.aborted) {
+      const skipSummary = '已因用户停止而跳过该工具'
+      input.onEvent?.({
+        type: 'tool-call',
+        call,
+        inputSummary: `跳过 ${call.name}（用户已停止）`,
+      })
+      input.onEvent?.({
+        type: 'tool-result',
+        call,
+        ok: false,
+        resultSummary: skipSummary,
+      })
+      results.push({
+        role: 'tool',
+        toolCallId: call.id,
+        name: call.name,
+        content: skipSummary,
+      })
+      continue
+    }
+
     results.push(await executeAgentTool({
       call,
       project: input.project,

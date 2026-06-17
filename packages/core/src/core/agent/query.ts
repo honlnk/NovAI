@@ -1,4 +1,4 @@
-import { streamAgentCompletion } from './llm'
+import { streamAgentCompletion, AgentAbortedError } from './llm'
 import { runAgentTools } from './tool-orchestration'
 import type { ToolExecutionEvent } from './tool-execution'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
@@ -19,9 +19,10 @@ export type AgentQueryEvent =
   | { type: 'model-tool-call-parse-warning'; step: number; finishReason?: string; diagnostics?: AgentLlmDiagnostics }
   | { type: 'tool-batch-start'; step: number; toolCallCount: number }
   | { type: 'tool-batch-finish'; step: number; toolResultCount: number }
+  | { type: 'aborted'; reason: 'user'; partialContent?: string }
   | { type: 'assistant-message'; message: AgentAssistantMessage }
   | ToolExecutionEvent
-  | { type: 'done'; messages: AgentMessage[] }
+  | { type: 'done'; messages: AgentMessage[]; aborted?: boolean }
 
 export async function query(input: {
   config: ProjectConfig
@@ -29,6 +30,7 @@ export async function query(input: {
   messages: AgentMessage[]
   tools: AgentRunnableToolMap
   maxTurns?: number
+  signal?: AbortSignal
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   let messages = [...input.messages]
@@ -38,6 +40,13 @@ export async function query(input: {
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const step = turn + 1
+
+    // 每一轮开始前检查用户是否已停止（工具执行完毕后停止的边界）
+    if (input.signal?.aborted) {
+      input.onEvent?.({ type: 'aborted', reason: 'user' })
+      input.onEvent?.({ type: 'done', messages, aborted: true })
+      return messages
+    }
 
     input.onEvent?.({ type: 'query-step-start', step })
     input.onEvent?.({
@@ -52,16 +61,36 @@ export async function query(input: {
         : undefined,
     })
 
-    const assistantResponse = await streamAgentCompletion(
-      {
-        baseUrl: input.config.llm.baseUrl,
-        apiKey: input.config.llm.apiKey,
-        model: input.config.llm.model,
-        messages,
-        tools: Object.values(input.tools).map((tool) => tool.schema),
-      },
-      () => {},
-    )
+    let assistantResponse
+    try {
+      assistantResponse = await streamAgentCompletion(
+        {
+          baseUrl: input.config.llm.baseUrl,
+          apiKey: input.config.llm.apiKey,
+          model: input.config.llm.model,
+          messages,
+          tools: Object.values(input.tools).map((tool) => tool.schema),
+          signal: input.signal,
+        },
+        () => {},
+      )
+    } catch (error) {
+      // 用户主动停止 —— 保留已生成的内容作为 assistant 消息，优雅结束
+      if (error instanceof AgentAbortedError) {
+        if (error.partialContent.trim()) {
+          const partialMessage: AgentAssistantMessage = {
+            role: 'assistant',
+            content: error.partialContent,
+          }
+          messages = [...messages, partialMessage]
+          input.onEvent?.({ type: 'assistant-message', message: partialMessage })
+        }
+        input.onEvent?.({ type: 'aborted', reason: 'user', partialContent: error.partialContent })
+        input.onEvent?.({ type: 'done', messages, aborted: true })
+        return messages
+      }
+      throw error
+    }
 
     input.onEvent?.({
       type: 'model-finish',
@@ -105,6 +134,7 @@ export async function query(input: {
       project: input.project,
       tools: input.tools,
       readFileStates,
+      signal: input.signal,
       onEvent: input.onEvent,
     })
 

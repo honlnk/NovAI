@@ -73,6 +73,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         systemPrompt,
         scenePrompt,
         activeFilePath: input.activeFilePath,
+        signal: input.signal,
       },
       onEvent(event) {
         emitMessageEvent(event.message, input.onEvent)

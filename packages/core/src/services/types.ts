@@ -318,6 +318,8 @@ export type RunAgentTurnInput = {
   sessionId?: string
   instruction: string
   activeFilePath?: string
+  /** 用户停止信号，透传到 Agent Loop。 */
+  signal?: AbortSignal
   onEvent?: (event: AgentUiEvent) => void
 }
 

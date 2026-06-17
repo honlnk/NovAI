@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { shouldSubmitOnEnter } from '../../composables/keyboard'
 import MessageItem from '../chat/MessageItem.vue'
@@ -20,7 +20,11 @@ const chatStore = useChatStore()
 const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const isSending = ref(false)
+
+// 是否正在运行，直接读 store，避免本地状态与 store 不同步
+const isSending = computed(() => chatStore.isRunning)
+// 用户已请求停止、正在等待当前工具完成
+const isStopping = computed(() => chatStore.isStopping)
 
 // 自动滚动到底部
 async function scrollToBottom() {
@@ -43,7 +47,6 @@ async function handleSend() {
 
   const message = inputText.value.trim()
   inputText.value = ''
-  isSending.value = true
 
   // 重置 textarea 高度
   if (textareaRef.value) {
@@ -52,9 +55,13 @@ async function handleSend() {
 
   try {
     await chatStore.sendMessage(message)
-  } finally {
-    isSending.value = false
+  } catch {
+    // 错误已在 store 中写入 runStatus，这里静默处理
   }
+}
+
+function handleStop() {
+  chatStore.abortRun()
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -159,26 +166,37 @@ function autoResize(event: Event) {
             class="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行)"
             rows="1"
-            :disabled="isSending"
             @keydown="handleKeydown"
             @input="autoResize"
           />
           <button
-            class="self-end rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
-            :disabled="!inputText.trim() || isSending"
-            @click="handleSend"
+            v-if="isStopping"
+            class="self-end rounded-lg border border-gray-200 bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-400"
+            title="正在停止…"
+            disabled
           >
-            <svg
-              v-if="isSending"
-              class="h-5 w-5 animate-spin"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
+            <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
+          </button>
+          <button
+            v-else-if="isSending"
+            class="self-end rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+            title="停止运行"
+            @click="handleStop"
+          >
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+          <button
+            v-else
+            class="self-end rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
+            :disabled="!inputText.trim()"
+            @click="handleSend"
+          >
             <svg
-              v-else
               class="h-5 w-5"
               fill="none"
               stroke="currentColor"

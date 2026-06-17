@@ -104,6 +104,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   })
   const tools = createAgentTools()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
+  let aborted = false
 
   if (enableDebugLogging) {
     void writeAgentLog(input.project, {
@@ -125,6 +126,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       project: input.project,
       messages: agentMessages,
       tools,
+      signal: input.signal,
       onEvent(event) {
         logAgentQueryEvent({
           project: input.project,
@@ -132,6 +134,18 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
           runId,
           event,
         })
+
+        if (event.type === 'aborted') {
+          aborted = true
+          void writeAgentLog(input.project, {
+            sessionId: session.sessionId,
+            runId,
+            level: 'info',
+            event: 'agent_run_aborted',
+            message: 'Agent 被用户停止',
+          })
+          return
+        }
 
         if (event.type === 'assistant-message') {
           if (event.message.content.trim()) {
@@ -201,6 +215,31 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     })
     pushErrorMessage(session, message, true, onEvent)
     throw error
+  }
+
+  if (aborted) {
+    pushMessage(
+      session,
+      {
+        id: createId('message'),
+        role: 'assistant',
+        kind: 'action-summary',
+        summary: session.lastWrittenPath
+          ? `本轮 Agent 已被停止，停止前已写回 ${session.lastWrittenPath}`
+          : '本轮 Agent 已被用户停止。',
+        targetPath: session.lastWrittenPath,
+        createdAt: new Date().toISOString(),
+      },
+      onEvent,
+    )
+
+    session.status = 'waiting-user'
+
+    return {
+      session,
+      target,
+      writtenPath: session.lastWrittenPath,
+    }
   }
 
   pushMessage(
