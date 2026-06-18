@@ -29,6 +29,27 @@ const isSettingsOpen = ref(false)
 /** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
 
+/**
+ * 内容面板宽度（R7）：从 localStorage 读取，clamp 到 240~720，无记录时默认 320。
+ * 持久化到 localStorage（界面偏好），不进 config（项目数据）。
+ */
+const CONTENT_PANEL_MIN = 240
+const CONTENT_PANEL_MAX = 720
+const CONTENT_PANEL_DEFAULT = 320
+const CONTENT_PANEL_WIDTH_KEY = 'novai:contentPanelWidth'
+
+function loadContentPanelWidth(): number {
+  const raw = Number(localStorage.getItem(CONTENT_PANEL_WIDTH_KEY))
+  if (!Number.isFinite(raw)) return CONTENT_PANEL_DEFAULT
+  return Math.max(CONTENT_PANEL_MIN, Math.min(CONTENT_PANEL_MAX, raw))
+}
+
+const contentPanelWidth = ref(loadContentPanelWidth())
+
+watch(contentPanelWidth, (width) => {
+  localStorage.setItem(CONTENT_PANEL_WIDTH_KEY, String(width))
+})
+
 /** 从 currentProject 取配置里的激活场景路径（分类面板需读取它做高亮联动） */
 const activeScenePromptPath = computed(() => {
   return projectStore.currentProject?.config.settings.activeScenePromptPath ?? null
@@ -238,10 +259,13 @@ async function handleElementsWritten() {
       :is-open="isContentPanelOpen"
       :project-id="projectId"
       :file="projectStore.activeFile"
+      :width="contentPanelWidth"
       @close="isContentPanelOpen = false"
       @elements-written="handleElementsWritten"
       @save="handleSaveFile"
       @select-quote="handleSelectQuote"
+      @resize="contentPanelWidth = $event"
+      @reset-width="contentPanelWidth = CONTENT_PANEL_DEFAULT"
     />
 
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->

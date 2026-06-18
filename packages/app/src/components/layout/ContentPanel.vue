@@ -8,11 +8,14 @@ import type {
 } from '@novai/core/services/types'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import Tooltip from '../ui/Tooltip.vue'
+import ResizeHandle from './ResizeHandle.vue'
 
 const props = defineProps<{
   isOpen: boolean
   projectId: string
   file: FileContentView | null
+  /** 内容面板宽度（px），由 ProjectView 持有并持久化（R7） */
+  width: number
 }>()
 
 const emit = defineEmits<{
@@ -20,11 +23,17 @@ const emit = defineEmits<{
   elementsWritten: [result: ElementWriteResultView]
   save: [path: string, content: string]
   selectQuote: [payload: { path: string; name: string; text: string }]
+  /** 拖拽改宽：发出 clamp 后的目标宽度（R7） */
+  resize: [width: number]
+  /** 双击手柄重置到默认宽度（R7） */
+  'reset-width': []
 }>()
 
 const viewMode = ref<'preview' | 'edit' | 'raw'>('preview')
 const editDraft = ref('')
 const isSaving = ref(false)
+/** 拖拽改宽进行中（R7）：暂停 aside 过渡动画，避免宽度变化滞后于光标 */
+const isResizing = ref(false)
 const extractionStatus = ref('尚未提取要素')
 const extractionPreview = ref<ElementExtractionResultView | null>(null)
 const elementWriteResult = ref<ElementWriteResultView | null>(null)
@@ -130,6 +139,13 @@ async function handleSave() {
 }
 
 /**
+ * 拖拽改宽（R7）：手柄发出目标宽度，clamp 到 240~720 后上抛。
+ */
+function handleResize(width: number) {
+  emit('resize', Math.max(240, Math.min(720, width)))
+}
+
+/**
  * 预览模式下捕获用户选中的文本，生成引用 chip。
  * 仅预览模式触发（编辑模式选中是编辑操作，原始模式选中无意义）。
  * 单段上限 500 字符，超出截断（避免整篇复制）。
@@ -231,12 +247,23 @@ function countExtractionItems(result: ElementExtractionResultView) {
   <!-- 内容面板 -->
   <aside
     :class="[
-      'flex shrink-0 flex-col border-l border-gray-200 bg-white transition-all duration-200',
+      'relative flex shrink-0 flex-col border-l border-gray-200 bg-white',
+      isResizing ? '' : 'transition-all duration-200',
       'max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-50',
-      isOpen ? 'w-80' : 'w-0 overflow-hidden',
+      isOpen ? '' : 'w-0 overflow-hidden',
       isOpen ? 'max-lg:translate-x-0' : 'max-lg:translate-x-full',
     ]"
+    :style="isOpen ? { width: width + 'px' } : undefined"
   >
+    <!-- 拖拽改宽手柄（仅 lg: 以上显示，R7） -->
+    <ResizeHandle
+      :start-width="width"
+      @dragstart="isResizing = true"
+      @drag="handleResize"
+      @dragend="isResizing = false"
+      @reset="emit('reset-width')"
+    />
+
     <!-- 头部 -->
     <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex min-w-0 items-center gap-2">
