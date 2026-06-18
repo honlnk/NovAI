@@ -208,6 +208,8 @@ export type LastProjectSummaryView = {
   name: string
   rootName: string
   lastOpenedAt: string
+  chapterCount: number
+  elementCount: number
 }
 
 export type FileContentView = {

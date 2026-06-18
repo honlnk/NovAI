@@ -626,6 +626,7 @@ function summarizeProject(
   manifest: ProjectManifest,
 ): RecentProject {
   const chapterDirectory = tree.find((node) => node.path === 'chapters')
+  const elementDirectory = tree.find((node) => node.path === 'elements')
   const updatedAt = config.project.updatedAt || manifest.lastOpenedAt || new Date().toISOString()
 
   return {
@@ -633,6 +634,7 @@ function summarizeProject(
     name: config.project.name,
     updatedAt,
     chapterCount: countFiles(chapterDirectory),
+    elementCount: countFiles(elementDirectory),
     wordCount: 0,
   }
 }

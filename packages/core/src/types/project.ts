@@ -3,6 +3,7 @@ export type ProjectSummary = {
   name: string
   updatedAt: string
   chapterCount: number
+  elementCount: number
   wordCount: number
 }
 

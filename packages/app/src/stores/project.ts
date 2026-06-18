@@ -10,6 +10,7 @@ import {
   getRecentProjects,
   isProjectAccessSupported,
   openProject,
+  refreshRecentProjectCounts,
   restoreRecentProject,
   restoreLastProject,
 } from '@novai/core/services/project-service'
@@ -27,6 +28,12 @@ import type {
   ProjectView,
 } from '@novai/core/services/types'
 import type { RecentProject } from '@novai/core/types/project'
+
+/**
+ * 首屏计数刷新的并发开关。
+ * onMounted 等场景可能多次触发 loadRecentProjects，用 module 级 flag 保证同一时刻只跑一次后台刷新。
+ */
+let isRefreshingCounts = false
 
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<ProjectView | null>(null)
@@ -101,17 +108,53 @@ export const useProjectStore = defineStore('project', () => {
   async function loadRecentProjects() {
     try {
       const summaries = await getRecentProjects()
-      recentProjects.value = summaries.map((summary) => ({
-        id: summary.projectId,
-        name: summary.name,
-        updatedAt: summary.lastOpenedAt,
-        chapterCount: 0,
-        wordCount: 0,
-      }))
+      recentProjects.value = toRecentProjectsFromSummaries(summaries)
+      refreshRecentProjectsInBackground()
       return recentProjects.value
     } catch (error) {
       errorMessage.value = toMessage(error, '读取最近项目列表失败')
       return []
+    }
+  }
+
+  /**
+   * 把 service 层返回的最近项目摘要映射成 store 内部结构。
+   */
+  function toRecentProjectsFromSummaries(summaries: LastProjectSummaryView[]): RecentProject[] {
+    return summaries.map((summary) => ({
+      id: summary.projectId,
+      name: summary.name,
+      updatedAt: summary.lastOpenedAt,
+      chapterCount: summary.chapterCount,
+      elementCount: summary.elementCount,
+      wordCount: 0,
+    }))
+  }
+
+  /**
+   * 后台静默刷新最近项目的章节数/要素数。
+   *
+   * 解决「必须打开一遍才显示计数」：对已持有目录权限的项目重新扫描计数并回写。
+   * 不阻塞首屏（loadRecentProjects 已用旧值先渲染），刷新完成后覆盖 store 触发重渲染。
+   * 单次并发保护，避免 onMounted 重复触发。
+   */
+  async function refreshRecentProjectsInBackground() {
+    if (isRefreshingCounts) {
+      return
+    }
+
+    isRefreshingCounts = true
+    try {
+      const refreshedSummaries = await refreshRecentProjectCounts()
+      // 刷新期间若用户已打开项目，避免覆盖 setCurrentProject 写入的更新数据：仅当
+      // 当前 store 状态仍是列表（非空且未被清空）时回填。
+      if (recentProjects.value.length > 0) {
+        recentProjects.value = toRecentProjectsFromSummaries(refreshedSummaries)
+      }
+    } catch {
+      // 后台刷新失败不影响首屏已有数据。
+    } finally {
+      isRefreshingCounts = false
     }
   }
 
@@ -348,6 +391,7 @@ function toRecentProject(project: ProjectView): RecentProject {
     name: project.name,
     updatedAt: project.config.project.updatedAt,
     chapterCount: countChapterFiles(project.files),
+    elementCount: countElementFiles(project.files),
     wordCount: 0,
   }
 }
@@ -361,5 +405,17 @@ function countChapterFiles(nodes: ProjectFileNodeView[]): number {
     }
 
     return total + countChapterFiles(node.children ?? [])
+  }, 0)
+}
+
+function countElementFiles(nodes: ProjectFileNodeView[]): number {
+  return nodes.reduce((total, node) => {
+    if (node.kind === 'file') {
+      return node.path.startsWith('elements/') && /\.(md|json|txt)$/i.test(node.name)
+        ? total + 1
+        : total
+    }
+
+    return total + countElementFiles(node.children ?? [])
   }, 0)
 }
