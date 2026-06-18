@@ -17,6 +17,8 @@ export type UserTextMessage = {
   role: 'user'
   kind: 'text'
   text: string
+  /** 用户在内容面板选中的引用内容，作为独立引用块展示在用户气泡内 */
+  quote?: string
   createdAt: string
 }
 
@@ -141,6 +143,8 @@ export type ToolDefinition<TInput, TOutput> = {
 
 export type ChatTurnInput = {
   instruction: string
+  /** 本轮引用的选中内容，会注入到发给模型的 user context */
+  quote?: string
   project: ProjectSnapshot
   config: ProjectConfig
   systemPrompt: string

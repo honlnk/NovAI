@@ -75,12 +75,13 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     message: 'Agent 开始处理用户输入',
     data: {
       instruction: input.instruction,
+      quote: input.quote,
       activeFilePath: input.activeFilePath,
       target,
     },
   })
 
-  pushMessage(session, createUserMessage(input.instruction), onEvent)
+  pushMessage(session, createUserMessage(input.instruction, input.quote), onEvent)
   pushMessage(session, createContextSummary(target), onEvent)
   pushMessage(
     session,
@@ -97,6 +98,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   const agentMessages = buildAgentMessages({
     previousMessages: session.agentMessages,
     instruction: input.instruction,
+    quote: input.quote,
     systemPrompt: input.systemPrompt,
     scenePrompt: input.scenePrompt,
     project: input.project,
@@ -466,6 +468,7 @@ function previewLogText(text: string) {
 function buildAgentMessages(input: {
   previousMessages?: AgentMessage[]
   instruction: string
+  quote?: string
   systemPrompt: string
   scenePrompt?: string
   project: ChatTurnInput['project']
@@ -475,6 +478,7 @@ function buildAgentMessages(input: {
     role: 'user',
     content: buildAgentUserContext({
       instruction: input.instruction,
+      quote: input.quote,
       project: input.project,
       target: input.target,
     }),
@@ -751,12 +755,13 @@ function pushErrorMessage(
   )
 }
 
-function createUserMessage(text: string): ChatMessage {
+function createUserMessage(text: string, quote?: string): ChatMessage {
   return {
     id: createId('message'),
     role: 'user',
     kind: 'text',
     text,
+    quote,
     createdAt: new Date().toISOString(),
   }
 }

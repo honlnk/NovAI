@@ -68,6 +68,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       session: previousSession,
       input: {
         instruction: input.instruction,
+        quote: input.quote,
         project,
         config: project.config,
         systemPrompt,
@@ -168,6 +169,8 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
       role: message.role,
       kind: 'text',
       text: message.text,
+      // 仅 user text 消息有 quote；assistant text 无此字段，undefined 自动忽略
+      quote: 'quote' in message ? message.quote : undefined,
       createdAt: message.createdAt,
     }
   }

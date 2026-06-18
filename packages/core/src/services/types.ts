@@ -283,6 +283,8 @@ export type ChatMessageView =
       role: 'user'
       kind: 'text'
       text: string
+      /** 引用的选中内容，渲染为用户气泡内的独立引用块 */
+      quote?: string
       createdAt: string
     }
   | {
@@ -317,6 +319,8 @@ export type RunAgentTurnInput = {
   projectId: string
   sessionId?: string
   instruction: string
+  /** 本轮引用的选中内容，注入到发给模型的 user context */
+  quote?: string
   activeFilePath?: string
   /** 用户停止信号，透传到 Agent Loop。 */
   signal?: AbortSignal

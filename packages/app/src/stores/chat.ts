@@ -136,7 +136,7 @@ export const useChatStore = defineStore('chat', () => {
     return ensureSessionView(projectId)
   }
 
-  async function sendMessage(text: string) {
+  async function sendMessage(text: string, quote?: string) {
     if (!sessionView.value) {
       throw new Error('没有活跃的会话')
     }
@@ -144,6 +144,7 @@ export const useChatStore = defineStore('chat', () => {
     return runServiceTurn({
       projectId: sessionView.value.projectId,
       instruction: text,
+      quote,
     })
   }
 

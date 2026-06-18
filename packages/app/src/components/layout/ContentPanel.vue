@@ -19,6 +19,7 @@ const emit = defineEmits<{
   close: []
   elementsWritten: [result: ElementWriteResultView]
   save: [path: string, content: string]
+  selectQuote: [payload: { path: string; name: string; text: string }]
 }>()
 
 const viewMode = ref<'preview' | 'edit' | 'raw'>('preview')
@@ -126,6 +127,26 @@ async function handleSave() {
   } finally {
     isSaving.value = false
   }
+}
+
+/**
+ * 预览模式下捕获用户选中的文本，生成引用 chip。
+ * 仅预览模式触发（编辑模式选中是编辑操作，原始模式选中无意义）。
+ * 单段上限 500 字符，超出截断（避免整篇复制）。
+ */
+function handleContentMouseup() {
+  if (!props.file || viewMode.value !== 'preview') return
+
+  const selection = window.getSelection()
+  const text = selection?.toString().trim() ?? ''
+  if (text.length === 0) return
+
+  const trimmed = text.length > 500 ? `${text.slice(0, 500)}…` : text
+  emit('selectQuote', {
+    path: props.file.path,
+    name: props.file.name,
+    text: trimmed,
+  })
 }
 
 async function handlePreviewElements() {
@@ -401,7 +422,11 @@ function countExtractionItems(result: ElementExtractionResultView) {
         </div>
 
         <!-- 预览模式 -->
-        <div v-if="viewMode === 'preview'" class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+        <div
+          v-if="viewMode === 'preview'"
+          class="rounded-lg border border-gray-200 bg-gray-50 p-4"
+          @mouseup="handleContentMouseup"
+        >
           <MarkdownRenderer v-if="shouldRenderMarkdown(file.format)" :content="file.content" />
           <pre v-else class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
         </div>

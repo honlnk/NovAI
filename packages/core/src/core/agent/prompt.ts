@@ -60,6 +60,7 @@ export function buildAgentSystemPrompt(input: {
 
 export function buildAgentUserContext(input: {
   instruction: string
+  quote?: string
   project: ProjectSnapshot
   target: ChatTargetContext | null
 }) {
@@ -67,12 +68,21 @@ export function buildAgentUserContext(input: {
     ? `${input.target.displayName} (${input.target.primaryPath})`
     : input.target?.displayName || '当前项目'
 
-  return [
+  const lines = [
     `用户意图：${input.instruction}`,
+  ]
+
+  if (input.quote?.trim()) {
+    lines.push('', '用户引用的内容：', input.quote.trim())
+  }
+
+  lines.push(
     '',
     `当前项目：${input.project.name}`,
     `默认目标：${target}`,
     '',
     '请按照系统要求，通过工具读取或修改文件。若任务已经完成，请直接总结。若需要写文件，直接调用合适的文件工具。',
-  ].join('\n')
+  )
+
+  return lines.join('\n')
 }

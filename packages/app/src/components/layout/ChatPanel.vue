@@ -3,17 +3,27 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useChatStore } from '../../stores/chat'
 import { shouldSubmitOnEnter } from '../../composables/keyboard'
 import MessageItem from '../chat/MessageItem.vue'
+import SelectionChip from '../chat/SelectionChip.vue'
 
-defineProps<{
+/** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
+type SelectionQuote = {
+  path: string
+  name: string
+  text: string
+}
+
+const props = defineProps<{
   projectId: string
   isSidebarOpen: boolean
   isContentPanelOpen: boolean
+  quote: SelectionQuote | null
 }>()
 
 const emit = defineEmits<{
   toggleSidebar: []
   toggleContentPanel: []
   toggleMobileSidebar: []
+  clearQuote: []
 }>()
 
 const chatStore = useChatStore()
@@ -46,6 +56,8 @@ async function handleSend() {
   if (!inputText.value.trim() || isSending.value) return
 
   const message = inputText.value.trim()
+  // 发送前快照引用文本（发送过程中 chip 可能被清除）
+  const quoteText = props.quote?.text
   inputText.value = ''
 
   // 重置 textarea 高度
@@ -54,7 +66,9 @@ async function handleSend() {
   }
 
   try {
-    await chatStore.sendMessage(message)
+    await chatStore.sendMessage(message, quoteText)
+    // 发送成功后清除引用 chip
+    emit('clearQuote')
   } catch {
     // 错误已在 store 中写入 runStatus，这里静默处理
   }
@@ -159,6 +173,14 @@ function autoResize(event: Event) {
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
+        <!-- 选中引用 chip -->
+        <div v-if="quote" class="mb-2">
+          <SelectionChip
+            :file-name="quote.name"
+            :text="quote.text"
+            @remove="emit('clearQuote')"
+          />
+        </div>
         <div class="flex gap-2">
           <textarea
             ref="textareaRef"

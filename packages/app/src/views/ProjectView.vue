@@ -26,6 +26,8 @@ const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
+/** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
+const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
 
 /** 从 currentProject 取配置里的激活场景路径（分类面板需读取它做高亮联动） */
 const activeScenePromptPath = computed(() => {
@@ -79,6 +81,14 @@ watch(
   },
 )
 
+// 切换文件时清空选中引用（引用绑定当前文件，避免跨文件残留）
+watch(
+  () => projectStore.activeFile?.path,
+  () => {
+    selectionQuote.value = null
+  },
+)
+
 function handleBackToHome() {
   projectStore.closeCurrentProject()
   router.push('/')
@@ -116,6 +126,15 @@ async function handleSaveFile(path: string, content: string) {
   } else {
     toast.error(projectStore.errorMessage || '保存失败')
   }
+}
+
+/** 内容面板选中文字后，把引用存入状态供 ChatPanel 显示 chip */
+function handleSelectQuote(payload: { path: string; name: string; text: string }) {
+  selectionQuote.value = payload
+}
+
+function handleClearQuote() {
+  selectionQuote.value = null
 }
 
 async function handleChangeScene(path: string | null) {
@@ -198,9 +217,11 @@ async function handleElementsWritten() {
       :project-id="projectId"
       :is-sidebar-open="isCategoryOpen"
       :is-content-panel-open="isContentPanelOpen"
+      :quote="selectionQuote"
       @toggle-sidebar="toggleSidebar"
       @toggle-content-panel="toggleContentPanel"
       @toggle-mobile-sidebar="toggleMobileSidebar"
+      @clear-quote="handleClearQuote"
     >
       <!-- 首次使用引导 -->
       <template #guide>
@@ -220,6 +241,7 @@ async function handleElementsWritten() {
       @close="isContentPanelOpen = false"
       @elements-written="handleElementsWritten"
       @save="handleSaveFile"
+      @select-quote="handleSelectQuote"
     />
 
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
