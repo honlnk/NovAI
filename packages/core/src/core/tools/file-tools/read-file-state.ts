@@ -1,3 +1,4 @@
+import { hashContent } from '../../util/hash'
 import { normalizeProjectPath } from '../path'
 import type { ReadFileState } from '../types'
 import { asRecord, readString } from './common'
@@ -42,15 +43,4 @@ export function assertFreshReadFileState(
   if (expectedState.contentHash !== currentState.contentHash) {
     throw new Error(`文件 ${path} 已在 ReadFile 之后发生变化；请重新 ReadFile 获取最新内容后再 EditFile，避免覆盖他人或其他工具的修改`)
   }
-}
-
-function hashContent(content: string) {
-  let hash = 2166136261
-
-  for (let index = 0; index < content.length; index += 1) {
-    hash ^= content.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-
-  return `h${(hash >>> 0).toString(16)}`
 }

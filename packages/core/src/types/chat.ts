@@ -106,6 +106,8 @@ export type ChatSessionState = {
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
   lastWrittenPath?: string
+  /** 当前会话已注入的 system message（systemPrompt + scenePrompt 拼接结果）hash，用于检测同会话内提示词变化并刷新。 */
+  systemPromptHash?: string
 }
 
 export type ChatTurnInput = {

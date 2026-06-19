@@ -2,6 +2,7 @@ import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
 import { query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
 import { createLogId, writeAgentLog } from '../logging/agent-log'
+import { hashContent } from '../util/hash'
 import type { AgentQueryEvent } from '../agent/query'
 
 import { deriveChatTargetFromPath } from './target'
@@ -75,6 +76,18 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     },
     onEvent,
   )
+
+  // 同会话内 system.md 或场景提示词变化时，刷新 agentMessages 里的 system message。
+  // buildAgentMessages 的复用分支会原样保留首轮 system message，这里先 in-place 替换为最新内容。
+  const newSystemContent = buildAgentSystemPrompt({
+    systemPrompt: input.systemPrompt,
+    scenePrompt: input.scenePrompt,
+  })
+  const newSystemHash = hashContent(newSystemContent)
+  if (session.agentMessages && session.systemPromptHash !== newSystemHash) {
+    session.agentMessages = refreshSystemMessageContent(session.agentMessages, newSystemContent)
+  }
+  session.systemPromptHash = newSystemHash
 
   const agentMessages = buildAgentMessages({
     previousMessages: session.agentMessages,
@@ -436,6 +449,21 @@ function summarizeAgentMessages(messages: AgentMessage[]) {
 function previewLogText(text: string) {
   const normalized = text.replace(/\s+/g, ' ').trim()
   return normalized.length > 600 ? `${normalized.slice(0, 600)}...` : normalized
+}
+
+/**
+ * 同会话内 system prompt 变化时，in-place 替换 agentMessages 里 system message 的 content。
+ * system message 恒在 index 0（query 循环只 push assistant/tool，从不新增 system），
+ * 替换不破坏消息序列合法性。若无 system message（异常情况）则原样返回。
+ */
+export function refreshSystemMessageContent(
+  messages: AgentMessage[],
+  newContent: string,
+): AgentMessage[] {
+  if (messages.length === 0 || messages[0].role !== 'system') {
+    return messages
+  }
+  return [{ ...messages[0], content: newContent }, ...messages.slice(1)]
 }
 
 function buildAgentMessages(input: {

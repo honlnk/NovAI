@@ -1,6 +1,7 @@
 import { createEmbedding } from '../embedding/client'
 import { parseElementFile } from '../elements/parser'
 import { readProjectFile } from '../fs/project-fs'
+import { hashContent } from '../util/hash'
 
 import type { ProjectSnapshot, TreeNode } from '../../types/project'
 import type { IndexBuildRequest, IndexBuildResult, ProjectIndexMeta } from '../../types/rag'
@@ -233,15 +234,4 @@ function summarizeBody(body: string) {
 
 function createStableElementId(path: string) {
   return `element-${hashContent(path)}`
-}
-
-function hashContent(content: string) {
-  let hash = 2166136261
-
-  for (let index = 0; index < content.length; index += 1) {
-    hash ^= content.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-
-  return `h${(hash >>> 0).toString(16)}`
 }
