@@ -27,6 +27,7 @@ type RunChatTurnOptions = {
 }
 
 export function createChatSession(projectId: string): ChatSessionState {
+  const now = new Date().toISOString()
   return {
     sessionId: createId('session'),
     projectId,
@@ -34,6 +35,9 @@ export function createChatSession(projectId: string): ChatSessionState {
     status: 'idle',
     currentTarget: null,
     lastRagResult: null,
+    title: DEFAULT_SESSION_TITLE,
+    createdAt: now,
+    updatedAt: now,
   }
 }
 
@@ -573,4 +577,25 @@ function createId(prefix: string) {
 // 从结构化 fileChange 取最终落点：rename 取 toPath，其余取 path。
 function resolveWrittenPath(change: FileChange): string {
   return change.type === 'renamed' ? change.toPath : change.path
+}
+
+/** 新会话默认标题，首轮用户消息后会被首句截断覆盖 */
+export const DEFAULT_SESSION_TITLE = '新对话'
+
+/** 首句截断上限（字符），用于从首条用户消息生成会话标题 */
+const SESSION_TITLE_MAX_LENGTH = 20
+
+/**
+ * 从首条用户消息派生会话标题：取首行、压空白、超长截断加省略号。
+ * 用于新建会话首轮发送后自动更新标题，避免列表里全是「新对话」。
+ */
+export function deriveSessionTitle(firstUserText: string): string {
+  const firstLine = firstUserText.split(/\r?\n/)[0] ?? firstUserText
+  const normalized = firstLine.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return DEFAULT_SESSION_TITLE
+  }
+  return normalized.length > SESSION_TITLE_MAX_LENGTH
+    ? `${normalized.slice(0, SESSION_TITLE_MAX_LENGTH)}…`
+    : normalized
 }

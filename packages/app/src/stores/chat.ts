@@ -5,12 +5,17 @@ import {
   createSession as createAgentSession,
   respondConfirmation as respondAgentConfirmation,
   runTurn as runAgentTurn,
+  getSession as getAgentSession,
+  listSessions as listAgentSessions,
+  renameSession as renameAgentSession,
+  deleteSession as deleteAgentSession,
 } from '@novai/core/services/agent-service'
 
 import type {
   AgentUiEvent,
   ChangedFileView,
   ChatMessageView,
+  ChatSessionSummaryView,
   ChatSessionView,
   FileChangeConfirmationView,
   RunAgentTurnInput,
@@ -28,18 +33,97 @@ export const useChatStore = defineStore('chat', () => {
   // 当前等待用户确认的写操作；Agent Loop 在此暂停
   const pendingConfirmation = ref<FileChangeConfirmationView | null>(null)
 
+  // 历史会话列表（对话分类面板渲染），按 updatedAt 降序
+  const sessions = ref<ChatSessionSummaryView[]>([])
+  // 当前激活会话 id（高亮 + runTurn 路由用）
+  const activeSessionId = ref<string | null>(null)
+  const isLoadingSessions = ref(false)
+
   // 当前运行持有的停止控制器；仅 isRunning 期间存在
   let activeAbortController: AbortController | null = null
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
 
-  async function ensureSessionView(projectId: string) {
-    if (!sessionView.value || sessionView.value.projectId !== projectId) {
-      sessionView.value = await createAgentSession(projectId)
+  /**
+   * 项目打开时的会话初始化入口：
+   * 拉取历史会话列表，有历史则激活最近一条，无历史则新建。
+   * 取代旧的 ensureSessionView（后者只支持单会话）。
+   */
+  async function initSessions(projectId: string): Promise<ChatSessionView> {
+    await loadSessions(projectId)
+
+    if (sessions.value.length > 0) {
+      await selectSession(projectId, sessions.value[0].sessionId)
+      return sessionView.value!
     }
 
-    return sessionView.value
+    return createNewSession(projectId)
+  }
+
+  /** 拉取并刷新历史会话列表，同步当前激活 id。 */
+  async function loadSessions(projectId: string) {
+    isLoadingSessions.value = true
+    try {
+      sessions.value = await listAgentSessions(projectId)
+      // 列表里已不存在当前激活会话时清空（例如被删除）
+      if (activeSessionId.value && !sessions.value.some((s) => s.sessionId === activeSessionId.value)) {
+        activeSessionId.value = null
+      }
+    } finally {
+      isLoadingSessions.value = false
+    }
+  }
+
+  /** 切换到指定历史会话：加载其完整消息体并设为激活。 */
+  async function selectSession(projectId: string, sessionId: string): Promise<ChatSessionView | null> {
+    const view = await getAgentSession(projectId, sessionId)
+    if (!view) {
+      return null
+    }
+
+    sessionView.value = view
+    activeSessionId.value = sessionId
+    // 切换会话时清空上一轮的运行态残留，避免跨会话串扰
+    agentEvents.value = []
+    changedFiles.value = []
+    return view
+  }
+
+  /** 新建会话：创建 + 激活 + 刷新列表。 */
+  async function createNewSession(projectId: string): Promise<ChatSessionView> {
+    const view = await createAgentSession(projectId)
+    sessionView.value = view
+    activeSessionId.value = view.sessionId
+    await loadSessions(projectId)
+    return view
+  }
+
+  /** 重命名会话标题，并同步列表对应项。 */
+  async function renameSession(projectId: string, sessionId: string, title: string): Promise<void> {
+    const view = await renameAgentSession(projectId, sessionId, title)
+    // 同步列表项标题
+    sessions.value = sessions.value.map((s) =>
+      s.sessionId === sessionId ? { ...s, title: view.title ?? s.title } : s,
+    )
+    // 若是当前会话，同步视图
+    if (sessionView.value?.sessionId === sessionId) {
+      sessionView.value = { ...sessionView.value, title: view.title }
+    }
+  }
+
+  /** 删除会话；若删的是当前激活会话，则切到列表第一条或新建。 */
+  async function deleteSession(projectId: string, sessionId: string): Promise<void> {
+    await deleteAgentSession(projectId, sessionId)
+    await loadSessions(projectId)
+
+    if (activeSessionId.value === sessionId) {
+      if (sessions.value.length > 0) {
+        await selectSession(projectId, sessions.value[0].sessionId)
+      } else {
+        await createNewSession(projectId)
+      }
+    }
   }
 
   async function runServiceTurn(
@@ -47,7 +131,10 @@ export const useChatStore = defineStore('chat', () => {
       onEvent?: (event: AgentUiEvent) => void
     },
   ): Promise<RunAgentTurnResult> {
-    const currentSession = await ensureSessionView(input.projectId)
+    if (!sessionView.value) {
+      throw new Error('没有活跃的会话')
+    }
+    const currentSession = sessionView.value
 
     agentEvents.value = []
     changedFiles.value = []
@@ -83,6 +170,8 @@ export const useChatStore = defineStore('chat', () => {
       isRunning.value = false
       isStopping.value = false
       activeAbortController = null
+      // 刷新历史列表（捕获首轮后的自动标题更新与 updatedAt 变化）
+      void loadSessions(currentSession.projectId)
     }
   }
 
@@ -142,10 +231,6 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function createSession(projectId: string) {
-    return ensureSessionView(projectId)
-  }
-
   async function sendMessage(text: string, quote?: string) {
     if (!sessionView.value) {
       throw new Error('没有活跃的会话')
@@ -185,18 +270,25 @@ export const useChatStore = defineStore('chat', () => {
     changedFiles,
     isRunning,
     isStopping,
+    isLoadingSessions,
     messages,
     pendingConfirmation,
     sessionView,
+    sessions,
+    activeSessionId,
     runStatus,
     hasSessionView,
     abortRun,
     confirmWriteTool,
-    createSession,
-    ensureSessionView,
+    createNewSession,
+    deleteSession,
+    initSessions,
+    loadSessions,
     rejectWriteTool,
-    sendMessage,
+    renameSession,
     runServiceTurn,
+    selectSession,
+    sendMessage,
     setRunStatus,
   }
 })

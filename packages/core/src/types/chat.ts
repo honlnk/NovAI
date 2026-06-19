@@ -108,6 +108,28 @@ export type ChatSessionState = {
   lastWrittenPath?: string
   /** 当前会话已注入的 system message（systemPrompt + scenePrompt 拼接结果）hash，用于检测同会话内提示词变化并刷新。 */
   systemPromptHash?: string
+  /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
+  title: string
+  /** 会话创建时间（ISO），落盘与列表排序用 */
+  createdAt: string
+  /** 会话最近更新时间（ISO），每轮保存刷新；列表按此降序 */
+  updatedAt: string
+}
+
+export type ToolRuntimeContext = {
+  project: ProjectSnapshot
+  config: ProjectConfig
+  target: ChatTargetContext | null
+  session: ChatSessionState
+}
+
+export type ToolDefinition<TInput, TOutput> = {
+  name: ChatToolName
+  description: string
+  validateInput: (input: unknown) => TInput
+  call: (input: TInput, context: ToolRuntimeContext) => Promise<TOutput>
+  summarizeInput: (input: TInput) => string
+  summarizeOutput: (output: TOutput) => string
 }
 
 export type ChatTurnInput = {

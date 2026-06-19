@@ -1,7 +1,15 @@
 import {
   createChatSession,
   runChatTurn,
+  DEFAULT_SESSION_TITLE,
+  deriveSessionTitle,
 } from '../core/chat/session'
+import {
+  saveSession,
+  loadSession,
+  deleteSessionFile,
+  listSessionMetas,
+} from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
@@ -16,6 +24,7 @@ import type {
   AgentUiEvent,
   ChangedFileView,
   ChatMessageView,
+  ChatSessionSummaryView,
   ChatSessionView,
   ChatTargetView,
   FileChangeConfirmationView,
@@ -28,6 +37,10 @@ import type {
   WriteConfirmationView,
 } from './types'
 
+/**
+ * 会话内存态：key 为 sessionId（一个项目可同时驻留多个历史会话）。
+ * 从「单项目单会话」升级为「多会话」，支持历史会话切换。
+ */
 const sessionMap = new Map<string, ChatSessionState>()
 
 // 确认注册表：confirmationId -> resolve。UI 调 respondConfirmation 时取出来 resolve，
@@ -38,32 +51,139 @@ type PendingConfirmation = {
 }
 const confirmationMap = new Map<string, PendingConfirmation>()
 
+/** 每个项目当前激活的会话 id；新建/切换/删除时维护。 */
+const activeSessionByProject = new Map<string, string>()
+
 export function deriveTargetFromPath(path?: string | null): ChatTargetView | null {
   return toChatTargetView(deriveChatTargetFromPath(path))
 }
 
 export async function createSession(projectId: string): Promise<ChatSessionView> {
-  requireRuntimeProject(projectId)
+  const project = requireRuntimeProject(projectId)
 
   const session = createChatSession(projectId)
-  sessionMap.set(projectId, session)
+  sessionMap.set(session.sessionId, session)
+  activeSessionByProject.set(projectId, session.sessionId)
+
+  // 新建即落盘，确保列表能立即看到（即便用户还没发消息）
+  await saveSession(project, session)
 
   return toChatSessionView(session)
 }
 
-export async function getSession(projectId: string): Promise<ChatSessionView | null> {
-  const session = sessionMap.get(projectId)
-  return session ? toChatSessionView(session) : null
+/**
+ * 取会话视图。sessionId 缺省时返回该项目当前激活会话。
+ * 内存未命中时从文件系统加载并缓存，支持「冷启动后查看历史会话」。
+ */
+export async function getSession(
+  projectId: string,
+  sessionId?: string,
+): Promise<ChatSessionView | null> {
+  const targetId = sessionId ?? activeSessionByProject.get(projectId)
+  if (!targetId) {
+    return null
+  }
+
+  const session = await resolveSession(projectId, targetId)
+  if (!session) {
+    return null
+  }
+
+  // 若传了 sessionId 且与当前激活不同，则切换激活
+  if (sessionId && activeSessionByProject.get(projectId) !== sessionId) {
+    activeSessionByProject.set(projectId, sessionId)
+  }
+
+  return toChatSessionView(session)
+}
+
+/** 列出项目下所有历史会话摘要（按 updatedAt 降序）。 */
+export async function listSessions(
+  projectId: string,
+): Promise<ChatSessionSummaryView[]> {
+  const project = requireRuntimeProject(projectId)
+  const metas = await listSessionMetas(project)
+
+  return metas.map((meta) => ({
+    sessionId: meta.sessionId,
+    projectId,
+    title: meta.title,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    messageCount: meta.messageCount,
+  }))
+}
+
+/** 重命名会话标题（只改 state.title，不动文件名）。返回更新后的视图。 */
+export async function renameSession(
+  projectId: string,
+  sessionId: string,
+  title: string,
+): Promise<ChatSessionView> {
+  const project = requireRuntimeProject(projectId)
+  const session = await resolveSession(projectId, sessionId)
+  if (!session) {
+    throw new Error(`会话不存在或已删除：${sessionId}`)
+  }
+
+  session.title = title.trim() || DEFAULT_SESSION_TITLE
+  await saveSession(project, session)
+
+  return toChatSessionView(session)
+}
+
+/** 删除会话：删文件 + 移出内存；若删的是激活会话则激活置空（由前端决定后续切到哪条）。 */
+export async function deleteSession(projectId: string, sessionId: string): Promise<void> {
+  const project = requireRuntimeProject(projectId)
+
+  await deleteSessionFile(project, sessionId)
+  sessionMap.delete(sessionId)
+
+  if (activeSessionByProject.get(projectId) === sessionId) {
+    activeSessionByProject.delete(projectId)
+  }
+}
+
+/**
+ * 取会话状态：内存优先，未命中则从盘读入并缓存。
+ * 这是 sessionMap 多会话化后的统一读取入口。
+ */
+async function resolveSession(
+  projectId: string,
+  sessionId: string,
+): Promise<ChatSessionState | null> {
+  const cached = sessionMap.get(sessionId)
+  if (cached) {
+    return cached
+  }
+
+  const project = requireRuntimeProject(projectId)
+  const loaded = await loadSession(project, sessionId)
+  if (!loaded) {
+    return null
+  }
+
+  sessionMap.set(sessionId, loaded)
+  return loaded
 }
 
 export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
   const project = requireRuntimeProject(input.projectId)
-  const previousSession = input.sessionId
-    ? findSessionById(input.projectId, input.sessionId) ?? createChatSession(input.projectId)
-    : sessionMap.get(input.projectId) ?? createChatSession(input.projectId)
+
+  // 按 sessionId 路由到对应历史会话；都没有则新建（并落盘）。
+  const resolved = input.sessionId
+    ? await resolveSession(input.projectId, input.sessionId)
+    : null
+  const previousSession = resolved
+    ?? await resolveActiveOrCreate(input.projectId)
   const runId = createRunId()
 
-  sessionMap.set(input.projectId, previousSession)
+  // 记录首轮发送前的状态，用于判断本轮是否为「首条用户消息」以自动生成标题
+  const hadNoUserMessage = !previousSession.messages.some((m) => m.role === 'user')
+  const titleBeforeTurn = previousSession.title
+
+  sessionMap.set(previousSession.sessionId, previousSession)
+  activeSessionByProject.set(input.projectId, previousSession.sessionId)
   input.onEvent?.({
     type: 'run-start',
     runId,
@@ -101,7 +221,14 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       },
     })
 
-    sessionMap.set(input.projectId, turn.session)
+    // 首轮用户消息后，若标题仍是默认值则用首句截断自动更新
+    if (hadNoUserMessage && titleBeforeTurn === DEFAULT_SESSION_TITLE) {
+      turn.session.title = deriveSessionTitle(input.instruction)
+    }
+
+    sessionMap.set(turn.session.sessionId, turn.session)
+    // 每轮结束落盘，刷新 updatedAt，保证历史列表排序与内容持久
+    await saveSession(project, turn.session)
 
     const changedFiles = collectChangedFiles(turn.session)
     const result: RunAgentTurnResult = {
@@ -127,9 +254,24 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
   }
 }
 
-function findSessionById(projectId: string, sessionId: string) {
-  const session = sessionMap.get(projectId)
-  return session?.sessionId === sessionId ? session : null
+/**
+ * 取当前激活会话；没有激活则新建并落盘。runTurn 在未显式传 sessionId 时走此路径。
+ */
+async function resolveActiveOrCreate(projectId: string): Promise<ChatSessionState> {
+  const activeId = activeSessionByProject.get(projectId)
+  if (activeId) {
+    const cached = await resolveSession(projectId, activeId)
+    if (cached) {
+      return cached
+    }
+  }
+
+  const project = requireRuntimeProject(projectId)
+  const session = createChatSession(projectId)
+  sessionMap.set(session.sessionId, session)
+  activeSessionByProject.set(projectId, session.sessionId)
+  await saveSession(project, session)
+  return session
 }
 
 /**
@@ -265,6 +407,9 @@ function toChatSessionView(
     messages: session.messages.map(toChatMessageView),
     currentTargetPath: session.currentTarget?.primaryPath,
     lastChangedFile,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
   }
 }
 

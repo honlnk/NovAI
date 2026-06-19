@@ -91,8 +91,8 @@ onMounted(async () => {
     }
   }
 
-  // 初始化聊天会话
-  await chatStore.createSession(projectId.value)
+  // 初始化聊天会话（拉取历史列表，有历史则激活最近一条，否则新建）
+  await chatStore.initSessions(projectId.value)
 
   // 检查是否需要显示首次引导
   if (projectStore.currentProject) {
@@ -250,11 +250,17 @@ async function handleElementsWritten() {
       :files="projectStore.currentProject?.files ?? []"
       :active-file-path="projectStore.activeFile?.path"
       :active-scene-prompt-path="activeScenePromptPath"
+      :sessions="chatStore.sessions"
+      :active-session-id="chatStore.activeSessionId"
       :is-open="isCategoryOpen"
       :is-mobile-open="isMobileCategoryOpen"
       @select-file="handleSelectFile"
       @change-scene="handleChangeScene"
       @close-mobile="isMobileCategoryOpen = false"
+      @select-session="(sessionId) => chatStore.selectSession(projectId, sessionId)"
+      @create-session="chatStore.createNewSession(projectId)"
+      @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
+      @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
     />
 
     <!-- 中间对话面板 -->

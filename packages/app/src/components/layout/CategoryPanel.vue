@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ProjectFileNodeView } from '@novai/core/services/types'
+import type { ChatSessionSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
 import type { Category } from '../../constants/category'
 import ChapterList from '../category/ChapterList.vue'
 import ElementList from '../category/ElementList.vue'
@@ -11,6 +11,10 @@ defineProps<{
   files: ProjectFileNodeView[]
   activeFilePath?: string
   activeScenePromptPath: string | null
+  /** 历史会话列表（对话分类面板用） */
+  sessions: ChatSessionSummaryView[]
+  /** 当前激活会话 id（对话分类面板高亮用） */
+  activeSessionId: string | null
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -21,6 +25,10 @@ const emit = defineEmits<{
   selectFile: [path: string]
   changeScene: [path: string | null]
   closeMobile: []
+  selectSession: [sessionId: string]
+  createSession: []
+  renameSession: [sessionId: string, title: string]
+  deleteSession: [sessionId: string]
 }>()
 </script>
 
@@ -44,7 +52,15 @@ const emit = defineEmits<{
     </button>
 
     <!-- 按分类切换内容 -->
-    <ConversationList v-if="activeCategory === 'conversation'" />
+    <ConversationList
+      v-if="activeCategory === 'conversation'"
+      :sessions="sessions"
+      :active-session-id="activeSessionId"
+      @select="emit('selectSession', $event)"
+      @create="emit('createSession')"
+      @rename="(sessionId, title) => emit('renameSession', sessionId, title)"
+      @remove="emit('deleteSession', $event)"
+    />
     <ChapterList
       v-else-if="activeCategory === 'chapter'"
       :files="files"

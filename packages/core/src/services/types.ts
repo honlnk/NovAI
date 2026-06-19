@@ -315,6 +315,23 @@ export type ChatSessionView = {
   messages: ChatMessageView[]
   currentTargetPath?: string
   lastChangedFile?: ChangedFileView
+  /** 会话标题，可选以兼容旧 view */
+  title?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+/**
+ * 历史会话列表项：只携带列表展示所需的摘要字段，不含完整消息体。
+ * listSessions 返回该数组，供前端对话分类面板渲染。
+ */
+export type ChatSessionSummaryView = {
+  sessionId: string
+  projectId: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
 }
 
 export type RunAgentTurnInput = {
