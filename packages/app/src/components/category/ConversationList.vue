@@ -24,6 +24,12 @@ function startRename(session: ChatSessionSummaryView) {
 }
 
 function commitRename(sessionId: string) {
+  // 防重入：Enter 会先触发 keydown 提交，随即 input 卸载又触发 blur。
+  // 第一次提交后 renamingId 已置 null，第二次进入直接返回，避免重复 emit。
+  if (renamingId.value === null) {
+    return
+  }
+
   const title = renameDraft.value.trim()
   renamingId.value = null
   if (title) {
