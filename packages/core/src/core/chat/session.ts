@@ -84,6 +84,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     scenePrompt: input.scenePrompt,
     project: input.project,
     target,
+    toolPolicy: input.toolPolicy,
   })
   const tools = createAgentTools()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
@@ -111,6 +112,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       tools,
       signal: input.signal,
       confirm: input.confirm,
+      toolPolicy: input.toolPolicy,
       onEvent(event) {
         logAgentQueryEvent({
           project: input.project,
@@ -444,6 +446,7 @@ function buildAgentMessages(input: {
   scenePrompt?: string
   project: ChatTurnInput['project']
   target: ChatTargetContext | null
+  toolPolicy?: ChatTurnInput['toolPolicy']
 }): AgentMessage[] {
   const nextUserMessage: AgentMessage = {
     role: 'user',
@@ -452,6 +455,7 @@ function buildAgentMessages(input: {
       quote: input.quote,
       project: input.project,
       target: input.target,
+      policy: input.toolPolicy,
     }),
   }
 

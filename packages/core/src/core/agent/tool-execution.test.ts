@@ -188,3 +188,83 @@ describe('executeAgentTool confirmation', () => {
     expect(result.content).toContain('用户拒绝')
   })
 })
+
+describe('executeAgentTool toolPolicy', () => {
+  it('rejects read tools when allowRead is false', async () => {
+    const run = vi.fn().mockResolvedValue({ path: 'chapters/001.txt', content: '内容' })
+    const tool = createStubTool({ name: 'ReadFile', isReadOnly: true, run })
+    const tools = { ReadFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('ReadFile', { path: 'chapters/001.txt' }),
+      project: stubProject,
+      tools,
+      toolPolicy: { allowRead: false, allowWrite: true },
+    })
+
+    expect(run).not.toHaveBeenCalled()
+    expect(result.content).toContain('禁用')
+    expect(result.content).toContain('读取')
+    expect(result.fileChange).toBeUndefined()
+  })
+
+  it('rejects write tools when allowWrite is false', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const tool = createStubTool({
+      name: 'CreateFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'create', path: (input as { path: string }).path, content: '' }),
+    })
+    const tools = { CreateFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('CreateFile', { path: 'chapters/new.txt' }),
+      project: stubProject,
+      tools,
+      toolPolicy: { allowRead: true, allowWrite: false },
+    })
+
+    expect(run).not.toHaveBeenCalled()
+    expect(result.content).toContain('禁用')
+    expect(result.content).toContain('修改')
+  })
+
+  it('executes normally when policy allows the tool', async () => {
+    const run = vi.fn().mockResolvedValue({ path: 'chapters/001.txt', content: '内容' })
+    const tool = createStubTool({ name: 'ReadFile', isReadOnly: true, run })
+    const tools = { ReadFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('ReadFile', { path: 'chapters/001.txt' }),
+      project: stubProject,
+      tools,
+      toolPolicy: { allowRead: true, allowWrite: true },
+    })
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(result.content).toBe('ReadFile 结果')
+  })
+
+  it('policy denial takes precedence over confirmation (no confirm popup for disabled tools)', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+    const tool = createStubTool({
+      name: 'EditFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'edit', path: (input as { path: string }).path, oldText: 'a', newText: 'b' }),
+    })
+    const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    await executeAgentTool({
+      call: createCall('EditFile', { path: 'chapters/001.txt' }),
+      project: stubProject,
+      tools,
+      confirm,
+      toolPolicy: { allowRead: true, allowWrite: false },
+    })
+
+    // 被禁工具直接拒绝，不弹确认
+    expect(confirm).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+})

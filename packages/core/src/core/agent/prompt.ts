@@ -1,5 +1,6 @@
 import type { ChatTargetContext } from '../../types/chat'
 import type { ProjectSnapshot } from '../../types/project'
+import { describeActivePolicy, type ToolPolicy } from './tool-policy'
 
 export function buildAgentSystemPrompt(input: {
   systemPrompt?: string
@@ -63,6 +64,8 @@ export function buildAgentUserContext(input: {
   quote?: string
   project: ProjectSnapshot
   target: ChatTargetContext | null
+  /** 本轮工具约束；有禁用时注入显式声明，让模型在 prompt 层感知。 */
+  policy?: ToolPolicy
 }) {
   const target = input.target?.primaryPath
     ? `${input.target.displayName} (${input.target.primaryPath})`
@@ -74,6 +77,12 @@ export function buildAgentUserContext(input: {
 
   if (input.quote?.trim()) {
     lines.push('', '用户引用的内容：', input.quote.trim())
+  }
+
+  // 本轮工具约束声明（软约束）：让模型主动避免调用被禁工具。
+  const policyNotice = input.policy ? describeActivePolicy(input.policy) : ''
+  if (policyNotice) {
+    lines.push('', policyNotice)
   }
 
   lines.push(

@@ -2,6 +2,7 @@ import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { AgentMessage } from '../core/agent/messages'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type { ToolPolicy } from '../core/agent/tool-policy'
 
 export type ChatToolName =
   | 'ReadFile'
@@ -120,6 +121,8 @@ export type ChatTurnInput = {
   signal?: AbortSignal
   /** 写工具确认回调，透传到 Agent Loop。 */
   confirm?: ConfirmHandler
+  /** 用户即时工具约束，透传到 Agent Loop。 */
+  toolPolicy?: ToolPolicy
 }
 
 export type ChatTurnResult = {

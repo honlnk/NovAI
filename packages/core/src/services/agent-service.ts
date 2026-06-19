@@ -5,6 +5,7 @@ import {
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import { parseToolPolicy } from '../core/agent/tool-policy'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
 
@@ -79,6 +80,8 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
     const confirm: ConfirmHandler | undefined = input.onEvent
       ? (request) => requestConfirmation(input.projectId, request, input.onEvent!)
       : undefined
+    // 用户即时工具约束：从 instruction 解析（如「不要读文件」「别改」），执行层强制禁用。
+    const toolPolicy = parseToolPolicy(input.instruction)
     const turn = await runChatTurn({
       session: previousSession,
       input: {
@@ -91,6 +94,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         activeFilePath: input.activeFilePath,
         signal: input.signal,
         confirm,
+        toolPolicy,
       },
       onEvent(event) {
         emitMessageEvent(event.message, input.onEvent)

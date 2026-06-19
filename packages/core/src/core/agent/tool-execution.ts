@@ -2,6 +2,7 @@ import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
+import { type ToolPolicy, isToolDisabledByPolicy, describePolicyDenial } from './tool-policy'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
@@ -29,6 +30,8 @@ export async function executeAgentTool(input: {
   readFileStates?: Map<string, ReadFileState>
   /** 写工具确认回调；未传时不做确认（测试/只读场景）。 */
   confirm?: ConfirmHandler
+  /** 用户即时工具约束；命中则直接拒绝，不走确认流程。 */
+  toolPolicy?: ToolPolicy
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage> {
   const tool = input.tools[input.call.name]
@@ -86,6 +89,25 @@ export async function executeAgentTool(input: {
     call: input.call,
     inputSummary: tool.core.summarizeInput(validatedInput),
   })
+
+  // 用户即时工具约束：命中则直接拒绝，不走确认流程。
+  // 这是硬约束，保证模型即使无视 system prompt 也拦得住。
+  if (input.toolPolicy && isToolDisabledByPolicy(tool, input.toolPolicy)) {
+    const reason = describePolicyDenial(tool, input.toolPolicy)
+    input.onEvent?.({
+      type: 'tool-result',
+      call: input.call,
+      ok: false,
+      resultSummary: `工具被禁用：${reason}`,
+    })
+
+    return {
+      role: 'tool',
+      toolCallId: input.call.id,
+      name: input.call.name,
+      content: `该工具本轮被禁用：${reason}。请遵守该约束，改用纯对话回答，或向用户确认是否解除限制后再试。`,
+    }
+  }
 
   // 写工具执行前确认：构造预览并等待用户决定。
   // 拒绝时不执行 run，返回「用户已拒绝」tool result 回灌模型，让其自然调整。
