@@ -3,10 +3,15 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
 import { shouldSubmitOnEnter } from '../../composables/keyboard'
+import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
 import MessageItem from '../chat/MessageItem.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import SceneChip from '../chat/SceneChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
+import ChapterPicker from '../chat/ChapterPicker.vue'
+import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
+import type { SlashCommandId } from '../../constants/slash-commands'
 
 /** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
 type SelectionQuote = {
@@ -26,6 +31,8 @@ const props = defineProps<{
   activeScenePromptPath: string | null
   /** 当前激活场景的显示名（已去扩展名），chip 展示用 */
   activeSceneName: string | null
+  /** 章节列表（chapters/*.txt|.md），供 /提取要素 选择（R6） */
+  chapters: ProjectFileNodeView[]
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +42,8 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活场景，path 为 null 表示关闭 */
   changeScene: [path: string | null]
+  /** 要素写入完成，通知 ProjectView 刷新文件树（R6） */
+  elementsWritten: []
 }>()
 
 const chatStore = useChatStore()
@@ -90,6 +99,37 @@ function handleStop() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // /提取要素 章节选择打开时：仅拦截 Esc（选择走鼠标点击）
+  if (isChapterPickerOpen.value) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      isChapterPickerOpen.value = false
+      return
+    }
+  }
+  // 斜杠命令菜单打开时：拦截导航键交给菜单
+  if (isSlashMenuOpen.value && slashMenuRef.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      slashMenuRef.value.moveDown()
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      slashMenuRef.value.moveUp()
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      slashMenuRef.value.confirm()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      isSlashMenuOpen.value = false
+      return
+    }
+  }
   // @场景 弹层打开时：拦截导航键交给弹层
   if (isSceneCommandOpen.value && scenePopoverRef.value) {
     if (event.key === 'ArrowDown') {
@@ -126,10 +166,10 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 
-/** textarea input 统一入口：自适应高度 + @场景 指令检测（R4） */
+/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素） */
 function onTextareaInput(event: Event) {
   autoResize(event)
-  detectSceneCommand()
+  detectCommands()
 }
 
 // ===== R4：@场景 指令检测 =====
@@ -149,47 +189,31 @@ const scenePopoverRef = ref<InstanceType<typeof SceneCommandPopover> | null>(nul
 const SCENE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
 
 /**
- * input 回调里调用：取光标位置，检测是否处于 @ 指令态。
- * 命中则打开弹层并设置 query；否则关闭。
+ * 清除光标处匹配指定正则的 token（@场景、/命令 共用）。
+ * 清除后光标回位并重新聚焦 textarea。
  */
-function detectSceneCommand() {
+function clearTokenAtCursor(re: RegExp) {
   const textarea = textareaRef.value
-  if (!textarea) {
-    isSceneCommandOpen.value = false
-    return
-  }
+  if (!textarea) return
   const cursor = textarea.selectionStart ?? 0
   const beforeCursor = inputText.value.slice(0, cursor)
-  const match = SCENE_COMMAND_RE.exec(beforeCursor)
-  if (match) {
-    sceneQuery.value = match[1]
-    isSceneCommandOpen.value = props.scenes.length > 0
-  } else {
-    isSceneCommandOpen.value = false
-  }
+  const afterCursor = inputText.value.slice(cursor)
+  const cleaned = beforeCursor.replace(re, '')
+  inputText.value = cleaned + afterCursor
+  nextTick(() => {
+    if (textareaRef.value) {
+      textareaRef.value.selectionStart = cleaned.length
+      textareaRef.value.selectionEnd = cleaned.length
+      textareaRef.value.focus()
+    }
+  })
 }
 
 /**
  * 选中场景后：清除输入框里的 @token（含筛选词），激活场景，关闭弹层。
  */
 function handleSelectScene(path: string) {
-  const textarea = textareaRef.value
-  if (textarea) {
-    const cursor = textarea.selectionStart ?? 0
-    const beforeCursor = inputText.value.slice(0, cursor)
-    const afterCursor = inputText.value.slice(cursor)
-    // 去掉匹配的 @token（含其前导的一个空白，若是行首则只去 @token）
-    const cleaned = beforeCursor.replace(SCENE_COMMAND_RE, '')
-    inputText.value = cleaned + afterCursor
-    // 光标移到清除点
-    nextTick(() => {
-      if (textareaRef.value) {
-        textareaRef.value.selectionStart = cleaned.length
-        textareaRef.value.selectionEnd = cleaned.length
-        textareaRef.value.focus()
-      }
-    })
-  }
+  clearTokenAtCursor(SCENE_COMMAND_RE)
   isSceneCommandOpen.value = false
   sceneQuery.value = ''
   emit('changeScene', path)
@@ -197,6 +221,97 @@ function handleSelectScene(path: string) {
 
 function handleCloseSceneCommand() {
   isSceneCommandOpen.value = false
+}
+
+// ===== R6：斜杠命令菜单 / 提取要素 =====
+
+/** 斜杠命令菜单是否打开（输入 / 后弹出命令列表） */
+const isSlashMenuOpen = ref(false)
+/** / 后的筛选词 */
+const slashQuery = ref('')
+/** 斜杠命令菜单组件引用（键盘导航用） */
+const slashMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null)
+/** /提取要素 章节多选弹层是否打开（选中命令后展开） */
+const isChapterPickerOpen = ref(false)
+/** 提取流程状态（composable 单例） */
+const extraction = useElementExtraction()
+
+/**
+ * 匹配光标前最近的 / 命令前缀。
+ * 规则与 @场景 同构：/ 前是行首或空白，/ 后到光标间不含空格/换行/。
+ * 捕获组即筛选词（可能为空）。
+ */
+const SLASH_COMMAND_RE = /(?:^|\s)\/([^\s/]*)$/
+
+/** 指令检测入口：input 回调统一调用 */
+function detectCommands() {
+  const textarea = textareaRef.value
+  if (!textarea) {
+    isSceneCommandOpen.value = false
+    isSlashMenuOpen.value = false
+    isChapterPickerOpen.value = false
+    return
+  }
+  const cursor = textarea.selectionStart ?? 0
+  const beforeCursor = inputText.value.slice(0, cursor)
+
+  // @场景、/ 命令、章节选择三层互斥，同一时刻只开一个
+  const sceneMatch = SCENE_COMMAND_RE.exec(beforeCursor)
+  const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
+
+  if (slashMatch) {
+    slashQuery.value = slashMatch[1]
+    isSlashMenuOpen.value = true
+    isSceneCommandOpen.value = false
+    isChapterPickerOpen.value = false
+  } else if (sceneMatch) {
+    sceneQuery.value = sceneMatch[1]
+    isSceneCommandOpen.value = props.scenes.length > 0
+    isSlashMenuOpen.value = false
+    isChapterPickerOpen.value = false
+  } else {
+    isSceneCommandOpen.value = false
+    isSlashMenuOpen.value = false
+    isChapterPickerOpen.value = false
+  }
+}
+
+/**
+ * 选中斜杠命令后：清除 / token，按命令类型展开二级界面。
+ */
+function handleSlashCommandSelect(id: SlashCommandId) {
+  // 清除输入框里的 / token（含筛选词）
+  clearTokenAtCursor(SLASH_COMMAND_RE)
+  isSlashMenuOpen.value = false
+  slashQuery.value = ''
+
+  if (id === 'extract') {
+    // 选中「提取要素」后展开章节多选
+    isChapterPickerOpen.value = props.chapters.length > 0
+  }
+}
+
+/**
+ * ChapterPicker 确认：启动提取流程。
+ */
+function handleChapterPickerConfirm(chapters: ChapterPick[]) {
+  isChapterPickerOpen.value = false
+  extraction.startExtraction(props.projectId, chapters)
+}
+
+function handleChapterPickerCancel() {
+  isChapterPickerOpen.value = false
+}
+
+/**
+ * 提取流程：确认写入。
+ */
+async function handleExtractionConfirm() {
+  const result = await extraction.confirmWrite()
+  if (result) {
+    // 写入成功，通知 ProjectView 刷新文件树
+    emit('elementsWritten')
+  }
 }
 </script>
 
@@ -277,6 +392,21 @@ function handleCloseSceneCommand() {
       </div>
     </div>
 
+    <!-- 要素提取流程面板（R6） -->
+    <ExtractionFlowPanel
+      v-if="extraction.phase.value !== 'idle'"
+      :phase="extraction.phase.value"
+      :extraction-result="extraction.extractionResult.value"
+      :write-result="extraction.writeResult.value"
+      :progress-current="extraction.progressCurrent.value"
+      :progress-total="extraction.progressTotal.value"
+      :progress-chapter-name="extraction.progressChapterName.value"
+      :error-message="extraction.errorMessage.value"
+      @confirm="handleExtractionConfirm"
+      @cancel="extraction.cancel()"
+      @dismiss="extraction.dismiss()"
+    />
+
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
@@ -304,6 +434,21 @@ function handleCloseSceneCommand() {
             :query="sceneQuery"
             @select="handleSelectScene"
             @close="handleCloseSceneCommand"
+          />
+          <!-- 斜杠命令菜单（R6） -->
+          <SlashCommandMenu
+            v-if="isSlashMenuOpen"
+            ref="slashMenuRef"
+            :query="slashQuery"
+            @select="handleSlashCommandSelect"
+            @close="isSlashMenuOpen = false"
+          />
+          <!-- /提取要素 章节多选弹层（R6） -->
+          <ChapterPicker
+            v-if="isChapterPickerOpen"
+            :chapters="chapters"
+            @confirm="handleChapterPickerConfirm"
+            @cancel="handleChapterPickerCancel"
           />
           <textarea
             ref="textareaRef"

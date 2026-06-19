@@ -71,6 +71,14 @@ const activeSceneName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
+/** 章节列表（chapters/*.txt|.md），供 ChatPanel 的 /提取要素 指令多选（R6） */
+const chapterList = computed(() => {
+  const files = projectStore.currentProject?.files ?? []
+  return pickDirectoryChildren(files, 'chapters').filter(
+    (n) => n.kind === 'file' && /\.(txt|md)$/i.test(n.name),
+  )
+})
+
 onMounted(async () => {
   // 如果没有当前项目，尝试恢复
   if (!projectStore.currentProject) {
@@ -258,11 +266,13 @@ async function handleElementsWritten() {
       :scenes="sceneList"
       :active-scene-prompt-path="activeScenePromptPath"
       :active-scene-name="activeSceneName"
+      :chapters="chapterList"
       @toggle-sidebar="toggleSidebar"
       @toggle-content-panel="toggleContentPanel"
       @toggle-mobile-sidebar="toggleMobileSidebar"
       @clear-quote="handleClearQuote"
       @change-scene="handleChangeScene"
+      @elements-written="handleElementsWritten"
     >
       <!-- 首次使用引导 -->
       <template #guide>
@@ -281,7 +291,6 @@ async function handleElementsWritten() {
       :file="projectStore.activeFile"
       :width="contentPanelWidth"
       @close="isContentPanelOpen = false"
-      @elements-written="handleElementsWritten"
       @save="handleSaveFile"
       @select-quote="handleSelectQuote"
       @resize="contentPanelWidth = $event"

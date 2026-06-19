@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { previewElementExtraction, writeExtractedElements } from '@novai/core/services/element-service'
-import type {
-  ElementExtractionResultView,
-  ElementWriteResultView,
-  FileContentView,
-} from '@novai/core/services/types'
+import type { FileContentView } from '@novai/core/services/types'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import Tooltip from '../ui/Tooltip.vue'
 import ResizeHandle from './ResizeHandle.vue'
@@ -20,7 +15,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
-  elementsWritten: [result: ElementWriteResultView]
   save: [path: string, content: string]
   selectQuote: [payload: { path: string; name: string; text: string }]
   /** 拖拽改宽：发出 clamp 后的目标宽度（R7） */
@@ -34,20 +28,6 @@ const editDraft = ref('')
 const isSaving = ref(false)
 /** 拖拽改宽进行中（R7）：暂停 aside 过渡动画，避免宽度变化滞后于光标 */
 const isResizing = ref(false)
-const extractionStatus = ref('尚未提取要素')
-const extractionPreview = ref<ElementExtractionResultView | null>(null)
-const elementWriteResult = ref<ElementWriteResultView | null>(null)
-const isExtracting = ref(false)
-const isWritingElements = ref(false)
-
-const canExtractElements = computed(() => {
-  return Boolean(
-    props.file &&
-    props.file.path.startsWith('chapters/') &&
-    /\.(txt|md)$/i.test(props.file.name) &&
-    props.file.content.trim(),
-  )
-})
 
 const canEdit = computed(() => {
   return Boolean(props.file && isEditablePath(props.file.path))
@@ -56,29 +36,9 @@ const canEdit = computed(() => {
 /** 草稿与磁盘内容不一致时为脏，用于显示「未保存」标记 */
 const isDirty = computed(() => editDraft.value !== (props.file?.content ?? ''))
 
-const extractionCount = computed(() => {
-  if (!extractionPreview.value) {
-    return 0
-  }
-
-  return countExtractionItems(extractionPreview.value)
-})
-
-const extractedPaths = computed(() => {
-  if (!elementWriteResult.value) {
-    return []
-  }
-
-  return [
-    ...elementWriteResult.value.created,
-    ...elementWriteResult.value.updated,
-  ]
-})
-
 watch(
   () => props.file?.path,
   () => {
-    resetExtractionState()
     // 切换文件时回到预览模式并重置草稿，避免跨文件残留编辑内容
     viewMode.value = 'preview'
     editDraft.value = ''
@@ -163,76 +123,6 @@ function handleContentMouseup() {
     name: props.file.name,
     text: trimmed,
   })
-}
-
-async function handlePreviewElements() {
-  if (!props.file || !canExtractElements.value || isExtracting.value) {
-    return
-  }
-
-  isExtracting.value = true
-  extractionStatus.value = '正在用 AI 提取要素...'
-  elementWriteResult.value = null
-
-  try {
-    extractionPreview.value = await previewElementExtraction({
-      projectId: props.projectId,
-      chapterContent: props.file.content,
-      chapterPath: props.file.path,
-    })
-
-    extractionStatus.value = extractionCount.value > 0
-      ? `已提取 ${extractionCount.value} 个候选要素`
-      : '未提取到可写入的要素'
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '要素提取失败'
-    extractionStatus.value = `AI 提取失败：${message}。请检查设置页的 LLM 配置。`
-  } finally {
-    isExtracting.value = false
-  }
-}
-
-async function handleWriteElements() {
-  if (!extractionPreview.value || isWritingElements.value) {
-    return
-  }
-
-  isWritingElements.value = true
-  extractionStatus.value = '正在写入要素文件...'
-
-  try {
-    elementWriteResult.value = await writeExtractedElements({
-      projectId: props.projectId,
-      extraction: extractionPreview.value,
-    })
-
-    const changedCount = elementWriteResult.value.created.length + elementWriteResult.value.updated.length
-    extractionStatus.value = changedCount > 0
-      ? `已写入 ${changedCount} 个要素文件`
-      : `没有新的要素需要写入，跳过 ${elementWriteResult.value.skipped.length} 个文件`
-    emit('elementsWritten', elementWriteResult.value)
-  } catch (error) {
-    extractionStatus.value = error instanceof Error ? error.message : '写入要素失败'
-  } finally {
-    isWritingElements.value = false
-  }
-}
-
-function resetExtractionState() {
-  extractionStatus.value = canExtractElements.value ? '尚未提取要素' : '当前文件不支持要素提取'
-  extractionPreview.value = null
-  elementWriteResult.value = null
-  isExtracting.value = false
-  isWritingElements.value = false
-}
-
-function countExtractionItems(result: ElementExtractionResultView) {
-  return result.characters.length +
-    result.locations.length +
-    result.entities.length +
-    result.timeline.length +
-    result.plots.length +
-    result.worldbuilding.length
 }
 </script>
 
@@ -351,103 +241,6 @@ function countExtractionItems(result: ElementExtractionResultView) {
 
       <!-- 文件内容 -->
       <div v-else-if="file" class="space-y-3">
-        <!-- 章节要素提取 -->
-        <div
-          v-if="canExtractElements"
-          class="space-y-3 rounded-lg border border-gray-200 bg-white p-3"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <div class="min-w-0">
-              <h3 class="text-sm font-semibold text-gray-800">故事要素</h3>
-              <p class="mt-0.5 truncate text-xs text-gray-500">{{ extractionStatus }}</p>
-            </div>
-            <div class="flex shrink-0 items-center gap-1">
-              <button
-                class="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40"
-                :disabled="isExtracting || isWritingElements"
-                title="提取要素"
-                @click="handlePreviewElements"
-              >
-                <svg
-                  v-if="isExtracting"
-                  class="h-4 w-4 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.5 14.25v-7.5A2.25 2.25 0 0017.25 4.5H6.75A2.25 2.25 0 004.5 6.75v10.5A2.25 2.25 0 006.75 19.5h7.5m2.25-3v6m3-3h-6" />
-                </svg>
-              </button>
-              <button
-                class="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40"
-                :disabled="!extractionPreview || extractionCount === 0 || isExtracting || isWritingElements"
-                title="写入 elements"
-                @click="handleWriteElements"
-              >
-                <svg
-                  v-if="isWritingElements"
-                  class="h-4 w-4 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.5 12.75l6 6 9-13.5" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div
-            v-if="extractionPreview"
-            class="grid grid-cols-3 gap-1 text-center text-xs"
-          >
-            <div class="rounded-md bg-gray-50 px-1 py-1">
-              <div class="font-semibold text-gray-800">{{ extractionPreview.characters.length }}</div>
-              <div class="text-gray-500">人物</div>
-            </div>
-            <div class="rounded-md bg-gray-50 px-1 py-1">
-              <div class="font-semibold text-gray-800">{{ extractionPreview.locations.length }}</div>
-              <div class="text-gray-500">地点</div>
-            </div>
-            <div class="rounded-md bg-gray-50 px-1 py-1">
-              <div class="font-semibold text-gray-800">{{ extractionPreview.entities.length }}</div>
-              <div class="text-gray-500">实体</div>
-            </div>
-            <div class="rounded-md bg-gray-50 px-1 py-1">
-              <div class="font-semibold text-gray-800">{{ extractionPreview.plots.length }}</div>
-              <div class="text-gray-500">情节</div>
-            </div>
-            <div class="rounded-md bg-gray-50 px-1 py-1">
-              <div class="font-semibold text-gray-800">{{ extractionPreview.timeline.length }}</div>
-              <div class="text-gray-500">时间</div>
-            </div>
-            <div class="rounded-md bg-gray-50 px-1 py-1">
-              <div class="font-semibold text-gray-800">{{ extractionPreview.worldbuilding.length }}</div>
-              <div class="text-gray-500">设定</div>
-            </div>
-          </div>
-
-          <div
-            v-if="extractedPaths.length > 0"
-            class="space-y-1 border-t border-gray-100 pt-2"
-          >
-            <p class="text-xs font-medium text-gray-600">已写入</p>
-            <p
-              v-for="path in extractedPaths.slice(0, 4)"
-              :key="path"
-              class="truncate text-xs text-gray-500"
-            >
-              {{ path }}
-            </p>
-          </div>
-        </div>
-
         <!-- 预览模式 -->
         <div
           v-if="viewMode === 'preview'"
