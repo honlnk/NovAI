@@ -12,6 +12,7 @@ import SettingsModal from '../components/settings/SettingsModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
+import { pickDirectoryChildren } from '../utils/file-tree'
 
 const route = useRoute()
 const router = useRouter()
@@ -53,6 +54,21 @@ watch(contentPanelWidth, (width) => {
 /** 从 currentProject 取配置里的激活场景路径（分类面板需读取它做高亮联动） */
 const activeScenePromptPath = computed(() => {
   return projectStore.currentProject?.config.settings.activeScenePromptPath ?? null
+})
+
+/** 场景提示词列表（prompts/scenes/*.md，拉平），供 ChatPanel 的 @ 指令选择（R4） */
+const sceneList = computed(() => {
+  const files = projectStore.currentProject?.files ?? []
+  return pickDirectoryChildren(files, 'prompts/scenes').filter(
+    (n) => n.kind === 'file' && n.path.endsWith('.md'),
+  )
+})
+
+/** 当前激活场景的显示名（去 .md 扩展名），ChatPanel 的场景 chip 展示用（R4） */
+const activeSceneName = computed(() => {
+  if (!activeScenePromptPath.value) return null
+  const node = sceneList.value.find((n) => n.path === activeScenePromptPath.value)
+  return node ? node.name.replace(/\.md$/i, '') : null
 })
 
 onMounted(async () => {
@@ -239,10 +255,14 @@ async function handleElementsWritten() {
       :is-sidebar-open="isCategoryOpen"
       :is-content-panel-open="isContentPanelOpen"
       :quote="selectionQuote"
+      :scenes="sceneList"
+      :active-scene-prompt-path="activeScenePromptPath"
+      :active-scene-name="activeSceneName"
       @toggle-sidebar="toggleSidebar"
       @toggle-content-panel="toggleContentPanel"
       @toggle-mobile-sidebar="toggleMobileSidebar"
       @clear-quote="handleClearQuote"
+      @change-scene="handleChangeScene"
     >
       <!-- 首次使用引导 -->
       <template #guide>

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
 import { shouldSubmitOnEnter } from '../../composables/keyboard'
 import MessageItem from '../chat/MessageItem.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
+import SceneChip from '../chat/SceneChip.vue'
+import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
 
 /** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
 type SelectionQuote = {
@@ -17,6 +20,12 @@ const props = defineProps<{
   isSidebarOpen: boolean
   isContentPanelOpen: boolean
   quote: SelectionQuote | null
+  /** 场景提示词列表（prompts/scenes/*.md），供 @ 指令选择 */
+  scenes: ProjectFileNodeView[]
+  /** 当前激活的场景路径，null 表示未激活 */
+  activeScenePromptPath: string | null
+  /** 当前激活场景的显示名（已去扩展名），chip 展示用 */
+  activeSceneName: string | null
 }>()
 
 const emit = defineEmits<{
@@ -24,6 +33,8 @@ const emit = defineEmits<{
   toggleContentPanel: []
   toggleMobileSidebar: []
   clearQuote: []
+  /** 切换激活场景，path 为 null 表示关闭 */
+  changeScene: [path: string | null]
 }>()
 
 const chatStore = useChatStore()
@@ -79,6 +90,29 @@ function handleStop() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // @场景 弹层打开时：拦截导航键交给弹层
+  if (isSceneCommandOpen.value && scenePopoverRef.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      scenePopoverRef.value.moveDown()
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      scenePopoverRef.value.moveUp()
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      scenePopoverRef.value.confirm()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleCloseSceneCommand()
+      return
+    }
+  }
   // Enter 发送，Shift+Enter 换行
   if (shouldSubmitOnEnter(event)) {
     event.preventDefault()
@@ -90,6 +124,79 @@ function autoResize(event: Event) {
   const textarea = event.target as HTMLTextAreaElement
   textarea.style.height = 'auto'
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
+}
+
+/** textarea input 统一入口：自适应高度 + @场景 指令检测（R4） */
+function onTextareaInput(event: Event) {
+  autoResize(event)
+  detectSceneCommand()
+}
+
+// ===== R4：@场景 指令检测 =====
+
+/** @场景 弹层是否打开 */
+const isSceneCommandOpen = ref(false)
+/** @ 后的筛选词 */
+const sceneQuery = ref('')
+/** 弹层组件引用（键盘导航用） */
+const scenePopoverRef = ref<InstanceType<typeof SceneCommandPopover> | null>(null)
+
+/**
+ * 匹配光标前最近的 @ 指令。
+ * 规则：@ 前是行首或空白，@ 后到光标间不含空格/换行/@。
+ * 捕获组即筛选词（可能为空字符串）。
+ */
+const SCENE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
+
+/**
+ * input 回调里调用：取光标位置，检测是否处于 @ 指令态。
+ * 命中则打开弹层并设置 query；否则关闭。
+ */
+function detectSceneCommand() {
+  const textarea = textareaRef.value
+  if (!textarea) {
+    isSceneCommandOpen.value = false
+    return
+  }
+  const cursor = textarea.selectionStart ?? 0
+  const beforeCursor = inputText.value.slice(0, cursor)
+  const match = SCENE_COMMAND_RE.exec(beforeCursor)
+  if (match) {
+    sceneQuery.value = match[1]
+    isSceneCommandOpen.value = props.scenes.length > 0
+  } else {
+    isSceneCommandOpen.value = false
+  }
+}
+
+/**
+ * 选中场景后：清除输入框里的 @token（含筛选词），激活场景，关闭弹层。
+ */
+function handleSelectScene(path: string) {
+  const textarea = textareaRef.value
+  if (textarea) {
+    const cursor = textarea.selectionStart ?? 0
+    const beforeCursor = inputText.value.slice(0, cursor)
+    const afterCursor = inputText.value.slice(cursor)
+    // 去掉匹配的 @token（含其前导的一个空白，若是行首则只去 @token）
+    const cleaned = beforeCursor.replace(SCENE_COMMAND_RE, '')
+    inputText.value = cleaned + afterCursor
+    // 光标移到清除点
+    nextTick(() => {
+      if (textareaRef.value) {
+        textareaRef.value.selectionStart = cleaned.length
+        textareaRef.value.selectionEnd = cleaned.length
+        textareaRef.value.focus()
+      }
+    })
+  }
+  isSceneCommandOpen.value = false
+  sceneQuery.value = ''
+  emit('changeScene', path)
+}
+
+function handleCloseSceneCommand() {
+  isSceneCommandOpen.value = false
 }
 </script>
 
@@ -173,23 +280,39 @@ function autoResize(event: Event) {
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
-        <!-- 选中引用 chip -->
-        <div v-if="quote" class="mb-2">
+        <!-- chip 区：引用 chip + 场景 chip -->
+        <div v-if="quote || activeSceneName" class="mb-2 flex flex-wrap items-center gap-2">
           <SelectionChip
+            v-if="quote"
             :file-name="quote.name"
             :text="quote.text"
             @remove="emit('clearQuote')"
           />
+          <SceneChip
+            v-if="activeSceneName"
+            :scene-name="activeSceneName"
+            @remove="emit('changeScene', null)"
+          />
         </div>
-        <div class="flex gap-2">
+        <div class="relative flex gap-2">
+          <!-- @场景 指令弹层（R4） -->
+          <SceneCommandPopover
+            v-if="isSceneCommandOpen"
+            ref="scenePopoverRef"
+            :scenes="scenes"
+            :active-scene-path="activeScenePromptPath"
+            :query="sceneQuery"
+            @select="handleSelectScene"
+            @close="handleCloseSceneCommand"
+          />
           <textarea
             ref="textareaRef"
             v-model="inputText"
             class="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行)"
+            placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)"
             rows="1"
             @keydown="handleKeydown"
-            @input="autoResize"
+            @input="onTextareaInput"
           />
           <button
             v-if="isStopping"
