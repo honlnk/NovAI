@@ -96,23 +96,6 @@ export type ChatTargetContext = {
 
 export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
 
-export type PendingFileChange =
-  | {
-      id: string
-      type: 'edit'
-      path: string
-      oldText: string
-      newText: string
-      createdAt: string
-    }
-  | {
-      id: string
-      type: 'create'
-      path: string
-      content: string
-      createdAt: string
-    }
-
 export type ChatSessionState = {
   sessionId: string
   projectId: string
@@ -121,25 +104,7 @@ export type ChatSessionState = {
   status: ChatSessionStatus
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
-  pendingFileChange?: PendingFileChange
   lastWrittenPath?: string
-  lastTaskType?: 'read-only' | 'edit-target' | 'create-chapter'
-}
-
-export type ToolRuntimeContext = {
-  project: ProjectSnapshot
-  config: ProjectConfig
-  target: ChatTargetContext | null
-  session: ChatSessionState
-}
-
-export type ToolDefinition<TInput, TOutput> = {
-  name: ChatToolName
-  description: string
-  validateInput: (input: unknown) => TInput
-  call: (input: TInput, context: ToolRuntimeContext) => Promise<TOutput>
-  summarizeInput: (input: TInput) => string
-  summarizeOutput: (output: TOutput) => string
 }
 
 export type ChatTurnInput = {
