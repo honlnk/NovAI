@@ -58,18 +58,20 @@ export const useChatStore = defineStore('chat', () => {
       return sessionView.value!
     }
 
-    return createNewSession(projectId)
+    // 无历史：新建。列表刚拉过且为空，跳过 createNewSession 内部的二次全量扫描，
+    // 直接本地插入新会话摘要。
+    return createNewSession(projectId, { skipReload: true })
   }
 
-  /** 拉取并刷新历史会话列表，同步当前激活 id。 */
+  /**
+   * 拉取并刷新历史会话列表。
+   * 只负责更新列表数据，**不修改 activeSessionId**——激活态的清理由明确语义的调用点
+   * （如 deleteSession）自行处理，避免列表刷新与激活态维护耦合产生的竞态误清。
+   */
   async function loadSessions(projectId: string) {
     isLoadingSessions.value = true
     try {
       sessions.value = await listAgentSessions(projectId)
-      // 列表里已不存在当前激活会话时清空（例如被删除）
-      if (activeSessionId.value && !sessions.value.some((s) => s.sessionId === activeSessionId.value)) {
-        activeSessionId.value = null
-      }
     } finally {
       isLoadingSessions.value = false
     }
@@ -90,12 +92,31 @@ export const useChatStore = defineStore('chat', () => {
     return view
   }
 
-  /** 新建会话：创建 + 激活 + 刷新列表。 */
-  async function createNewSession(projectId: string): Promise<ChatSessionView> {
+  /**
+   * 新建会话：创建 + 激活 + 刷新列表。
+   * skipReload=true 时跳过内部全量刷新（调用方已确知列表状态，如 initSessions 走过 loadSessions、
+   * 或 deleteSession 清空后），改为本地插入新会话摘要到列表头部。
+   */
+  async function createNewSession(
+    projectId: string,
+    options: { skipReload?: boolean } = {},
+  ): Promise<ChatSessionView> {
     const view = await createAgentSession(projectId)
     sessionView.value = view
     activeSessionId.value = view.sessionId
-    await loadSessions(projectId)
+
+    if (options.skipReload) {
+      sessions.value = [{
+        sessionId: view.sessionId,
+        projectId,
+        title: view.title ?? '新对话',
+        createdAt: view.createdAt ?? new Date().toISOString(),
+        updatedAt: view.updatedAt ?? new Date().toISOString(),
+        messageCount: 0,
+      }, ...sessions.value]
+    } else {
+      await loadSessions(projectId)
+    }
     return view
   }
 
@@ -112,18 +133,29 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** 删除会话；若删的是当前激活会话，则切到列表第一条或新建。 */
+  /**
+   * 删除会话；若删的是当前激活会话，则切到列表第一条或新建空会话。
+   * 删光后保留一个空「新对话」是有意为之：否则 UI 进入无活跃会话态，发消息会报错。
+   */
   async function deleteSession(projectId: string, sessionId: string): Promise<void> {
     await deleteAgentSession(projectId, sessionId)
-    await loadSessions(projectId)
 
-    if (activeSessionId.value === sessionId) {
-      if (sessions.value.length > 0) {
-        await selectSession(projectId, sessions.value[0].sessionId)
-      } else {
-        await createNewSession(projectId)
-      }
+    const wasActive = activeSessionId.value === sessionId
+    // 先从本地列表移除，避免 await 期间 UI 闪烁残留项
+    sessions.value = sessions.value.filter((s) => s.sessionId !== sessionId)
+
+    if (!wasActive) {
+      return
     }
+
+    // 删的是当前会话：切到剩余的第一条（列表已按 updatedAt 降序）
+    if (sessions.value.length > 0) {
+      await selectSession(projectId, sessions.value[0].sessionId)
+      return
+    }
+
+    // 列表已空：新建空会话并本地插入，省一次全量重扫（skipReload）
+    await createNewSession(projectId, { skipReload: true })
   }
 
   async function runServiceTurn(
@@ -135,6 +167,8 @@ export const useChatStore = defineStore('chat', () => {
       throw new Error('没有活跃的会话')
     }
     const currentSession = sessionView.value
+    // 记录本轮前标题，用于 finally 判断是否需要刷新列表（首轮会自动生成标题）
+    const titleBeforeTurn = currentSession.title
 
     agentEvents.value = []
     changedFiles.value = []
@@ -170,8 +204,12 @@ export const useChatStore = defineStore('chat', () => {
       isRunning.value = false
       isStopping.value = false
       activeAbortController = null
-      // 刷新历史列表（捕获首轮后的自动标题更新与 updatedAt 变化）
-      void loadSessions(currentSession.projectId)
+      // 仅当标题发生变化（典型：首轮发送后自动生成标题）才全量刷新列表，
+      // 避免每轮对话都全量重扫文件系统。updatedAt 的时间戳显示精度可接受滞后。
+      const titleAfterTurn = sessionView.value?.title
+      if (titleAfterTurn && titleAfterTurn !== titleBeforeTurn) {
+        void loadSessions(currentSession.projectId)
+      }
     }
   }
 
