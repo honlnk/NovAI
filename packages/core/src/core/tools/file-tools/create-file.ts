@@ -46,4 +46,7 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
   extractFileChange(output) {
     return { type: 'created', path: output.path }
   },
+  buildConfirmation(input) {
+    return { kind: 'create', path: input.path, content: input.content }
+  },
 }

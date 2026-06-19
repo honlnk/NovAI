@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 
 import {
   createSession as createAgentSession,
+  respondConfirmation as respondAgentConfirmation,
   runTurn as runAgentTurn,
 } from '@novai/core/services/agent-service'
 
@@ -11,6 +12,7 @@ import type {
   ChangedFileView,
   ChatMessageView,
   ChatSessionView,
+  FileChangeConfirmationView,
   RunAgentTurnInput,
   RunAgentTurnResult,
 } from '@novai/core/services/types'
@@ -23,6 +25,8 @@ export const useChatStore = defineStore('chat', () => {
   const isRunning = ref(false)
   // 用户已请求停止、正在等待当前工具执行完成
   const isStopping = ref(false)
+  // 当前等待用户确认的写操作；Agent Loop 在此暂停
+  const pendingConfirmation = ref<FileChangeConfirmationView | null>(null)
 
   // 当前运行持有的停止控制器；仅 isRunning 期间存在
   let activeAbortController: AbortController | null = null
@@ -118,6 +122,12 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    if (event.type === 'confirmation-required') {
+      pendingConfirmation.value = event.request
+      runStatus.value = '等待确认写入操作…'
+      return
+    }
+
     if (event.type === 'run-error') {
       runStatus.value = event.error.message
       return
@@ -148,18 +158,43 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
+  /** 用户确认当前待确认的写操作，唤醒 Agent Loop 继续执行。 */
+  function confirmWriteTool() {
+    const confirmation = pendingConfirmation.value
+    if (!confirmation) {
+      return
+    }
+    pendingConfirmation.value = null
+    respondAgentConfirmation(confirmation.id, true)
+    runStatus.value = 'Agent 正在执行...'
+  }
+
+  /** 用户拒绝当前待确认的写操作，Agent 收到拒绝结果后可调整。 */
+  function rejectWriteTool() {
+    const confirmation = pendingConfirmation.value
+    if (!confirmation) {
+      return
+    }
+    pendingConfirmation.value = null
+    respondAgentConfirmation(confirmation.id, false)
+    runStatus.value = 'Agent 正在执行...'
+  }
+
   return {
     agentEvents,
     changedFiles,
     isRunning,
     isStopping,
     messages,
+    pendingConfirmation,
     sessionView,
     runStatus,
     hasSessionView,
     abortRun,
+    confirmWriteTool,
     createSession,
     ensureSessionView,
+    rejectWriteTool,
     sendMessage,
     runServiceTurn,
     setRunStatus,

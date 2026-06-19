@@ -94,4 +94,7 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
   extractFileChange(output) {
     return { type: 'updated', path: output.path }
   },
+  buildConfirmation(input) {
+    return { kind: 'edit', path: input.path, oldText: input.oldText, newText: input.newText }
+  },
 }

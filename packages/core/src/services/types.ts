@@ -337,12 +337,19 @@ export type RunAgentTurnResult = {
   session: ChatSessionView
 }
 
+export type WriteConfirmationView =
+  | { kind: 'create'; path: string; content: string }
+  | { kind: 'edit'; path: string; oldText: string; newText: string }
+  | { kind: 'rename'; fromPath: string; toPath: string }
+  | { kind: 'delete'; path: string }
+
 export type FileChangeConfirmationView = {
   id: string
   toolName: ToolNameView
   title: string
   summary: string
-  changedFiles: ChangedFileView[]
+  /** 写工具执行前的预览数据，用于 UI 展示 diff。 */
+  confirmation: WriteConfirmationView
 }
 
 export type AgentUiEvent =

@@ -4,7 +4,8 @@ import {
 } from '../core/chat/session'
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
-import type { FileChange } from '../core/tools/types'
+import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
 
 import {
@@ -16,15 +17,25 @@ import type {
   ChatMessageView,
   ChatSessionView,
   ChatTargetView,
+  FileChangeConfirmationView,
   NovAiError,
   RunAgentTurnInput,
   RunAgentTurnResult,
   ToolCallView,
   ToolNameView,
   ToolResultView,
+  WriteConfirmationView,
 } from './types'
 
 const sessionMap = new Map<string, ChatSessionState>()
+
+// 确认注册表：confirmationId -> resolve。UI 调 respondConfirmation 时取出来 resolve，
+// 唤醒在 confirm 回调里 await 的 Agent Loop。
+type PendingConfirmation = {
+  projectId: string
+  resolve: (decision: { accepted: boolean }) => void
+}
+const confirmationMap = new Map<string, PendingConfirmation>()
 
 export function deriveTargetFromPath(path?: string | null): ChatTargetView | null {
   return toChatTargetView(deriveChatTargetFromPath(path))
@@ -64,6 +75,10 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       project.handle,
       project.config.settings.activeScenePromptPath,
     )
+    // 写工具确认回调：构造预览 → 发 confirmation-required 事件 → 等 UI 调 respondConfirmation。
+    const confirm: ConfirmHandler | undefined = input.onEvent
+      ? (request) => requestConfirmation(input.projectId, request, input.onEvent!)
+      : undefined
     const turn = await runChatTurn({
       session: previousSession,
       input: {
@@ -75,6 +90,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         scenePrompt,
         activeFilePath: input.activeFilePath,
         signal: input.signal,
+        confirm,
       },
       onEvent(event) {
         emitMessageEvent(event.message, input.onEvent)
@@ -99,6 +115,8 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
     input.onEvent?.({ type: 'run-finish', result })
     return result
   } catch (error) {
+    // 出错时清理未决确认，避免注册表泄漏 / UI 卡在等待态。
+    rejectPendingConfirmations(input.projectId)
     const serviceError = toNovAiError(error)
     input.onEvent?.({ type: 'run-error', error: serviceError })
     throw error
@@ -108,6 +126,90 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
 function findSessionById(projectId: string, sessionId: string) {
   const session = sessionMap.get(projectId)
   return session?.sessionId === sessionId ? session : null
+}
+
+/**
+ * 构造一次写工具确认：发 confirmation-required 事件，返回 Promise 等待 respondConfirmation。
+ * Agent Loop 在 confirm 回调里 await 它，从而在用户决定前暂停。
+ */
+function requestConfirmation(
+  projectId: string,
+  request: { call: { id: string; name: ToolNameView }; confirmation: WriteConfirmation },
+  onEvent: (event: AgentUiEvent) => void,
+): Promise<{ accepted: boolean }> {
+  const confirmationId = createRunId()
+  const view: FileChangeConfirmationView = {
+    id: confirmationId,
+    toolName: request.call.name,
+    title: buildConfirmationTitle(request.confirmation),
+    summary: buildConfirmationSummary(request.confirmation),
+    confirmation: toWriteConfirmationView(request.confirmation),
+  }
+
+  onEvent({ type: 'confirmation-required', request: view })
+
+  return new Promise<{ accepted: boolean }>((resolve) => {
+    confirmationMap.set(confirmationId, { projectId, resolve })
+  })
+}
+
+/** UI 调用：响应对某次写工具确认的接受/拒绝，唤醒等待中的 Agent Loop。 */
+export function respondConfirmation(confirmationId: string, accepted: boolean) {
+  const pending = confirmationMap.get(confirmationId)
+  if (!pending) {
+    return
+  }
+  confirmationMap.delete(confirmationId)
+  pending.resolve({ accepted })
+}
+
+/** 清理某项目的全部未决确认，按拒绝 resolve（出错/停止时调用）。 */
+function rejectPendingConfirmations(projectId: string) {
+  for (const [id, pending] of confirmationMap) {
+    if (pending.projectId === projectId) {
+      confirmationMap.delete(id)
+      pending.resolve({ accepted: false })
+    }
+  }
+}
+
+function toWriteConfirmationView(confirmation: WriteConfirmation): WriteConfirmationView {
+  switch (confirmation.kind) {
+    case 'create':
+      return { kind: 'create', path: confirmation.path, content: confirmation.content }
+    case 'edit':
+      return { kind: 'edit', path: confirmation.path, oldText: confirmation.oldText, newText: confirmation.newText }
+    case 'rename':
+      return { kind: 'rename', fromPath: confirmation.fromPath, toPath: confirmation.toPath }
+    case 'delete':
+      return { kind: 'delete', path: confirmation.path }
+  }
+}
+
+function buildConfirmationTitle(confirmation: WriteConfirmation): string {
+  switch (confirmation.kind) {
+    case 'create':
+      return `新建文件：${confirmation.path}`
+    case 'edit':
+      return `修改文件：${confirmation.path}`
+    case 'rename':
+      return `重命名：${confirmation.fromPath} → ${confirmation.toPath}`
+    case 'delete':
+      return `删除文件：${confirmation.path}`
+  }
+}
+
+function buildConfirmationSummary(confirmation: WriteConfirmation): string {
+  switch (confirmation.kind) {
+    case 'create':
+      return `将新建 ${confirmation.path}（${confirmation.content.length} 字符）`
+    case 'edit':
+      return `将修改 ${confirmation.path}（替换 ${confirmation.oldText.length} 字符）`
+    case 'rename':
+      return `将 ${confirmation.fromPath} 重命名为 ${confirmation.toPath}`
+    case 'delete':
+      return `将删除 ${confirmation.path}（移入回收站）`
+  }
 }
 
 function emitMessageEvent(

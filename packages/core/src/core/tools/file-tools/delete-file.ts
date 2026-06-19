@@ -48,6 +48,9 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
   extractFileChange(output) {
     return { type: 'deleted', path: output.path, trashPath: output.trashPath }
   },
+  buildConfirmation(input) {
+    return { kind: 'delete', path: input.path }
+  },
 }
 
 function createTrashPath(path: string) {

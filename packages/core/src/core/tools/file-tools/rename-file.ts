@@ -54,4 +54,7 @@ export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, Renam
   extractFileChange(output) {
     return { type: 'renamed', fromPath: output.fromPath, toPath: output.toPath }
   },
+  buildConfirmation(input) {
+    return { kind: 'rename', fromPath: input.fromPath, toPath: input.toPath }
+  },
 }

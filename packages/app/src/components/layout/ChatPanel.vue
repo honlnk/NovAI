@@ -10,6 +10,7 @@ import SceneChip from '../chat/SceneChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import type { SlashCommandId } from '../../constants/slash-commands'
 
@@ -405,6 +406,17 @@ async function handleExtractionConfirm() {
       @confirm="handleExtractionConfirm"
       @cancel="extraction.cancel()"
       @dismiss="extraction.dismiss()"
+    />
+
+    <!-- 写工具确认卡片（Agent Step 2/3） -->
+    <WriteConfirmationCard
+      v-if="chatStore.pendingConfirmation"
+      :confirmation="chatStore.pendingConfirmation.confirmation"
+      :tool-name="chatStore.pendingConfirmation.toolName"
+      :title="chatStore.pendingConfirmation.title"
+      :summary="chatStore.pendingConfirmation.summary"
+      @confirm="chatStore.confirmWriteTool()"
+      @reject="chatStore.rejectWriteTool()"
     />
 
     <!-- 输入区域 -->

@@ -17,12 +17,14 @@ function createCall(name: string, input: Record<string, unknown> = {}): AgentToo
 
 function createStubTool(options: {
   name: string
+  isReadOnly?: boolean
   run?: (input: unknown) => Promise<unknown>
   extractFileChange?: (output: unknown) => unknown
+  buildConfirmation?: (input: unknown) => unknown
 }): AgentRunnableTool {
   return {
     name: options.name as AgentRunnableTool['name'],
-    isReadOnly: false,
+    isReadOnly: options.isReadOnly ?? false,
     isConcurrencySafe: false,
     schema: {
       type: 'function',
@@ -35,6 +37,7 @@ function createStubTool(options: {
       summarizeInput: () => `调用 ${options.name}`,
       summarizeOutput: () => `${options.name} 执行完成`,
       extractFileChange: options.extractFileChange as never,
+      buildConfirmation: options.buildConfirmation as never,
     },
     formatResult: () => `${options.name} 结果`,
   }
@@ -61,6 +64,7 @@ describe('executeAgentTool', () => {
   it('leaves fileChange undefined for read-only tools without extractFileChange', async () => {
     const tool = createStubTool({
       name: 'ReadFile',
+      isReadOnly: true,
       run: async () => ({ path: 'chapters/001.txt', content: '内容' }),
     })
     const tools = { ReadFile: tool } as unknown as Record<string, AgentRunnableTool>
@@ -92,5 +96,95 @@ describe('executeAgentTool', () => {
 
     expect(result.fileChange).toBeUndefined()
     expect(result.content).toContain('文件已发生变化')
+  })
+})
+
+describe('executeAgentTool confirmation', () => {
+  it('executes the write tool after the user accepts confirmation', async () => {
+    const run = vi.fn().mockResolvedValue({ path: 'chapters/new.txt' })
+    const tool = createStubTool({
+      name: 'CreateFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'create', path: (input as { path: string }).path, content: (input as { content: string }).content }),
+    })
+    const tools = { CreateFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('CreateFile', { path: 'chapters/new.txt', content: '内容' }),
+      project: stubProject,
+      tools,
+      confirm: async () => ({ accepted: true }),
+    })
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(result.content).toBe('CreateFile 结果')
+  })
+
+  it('skips execution and returns a rejection result when the user rejects', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const tool = createStubTool({
+      name: 'EditFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'edit', path: (input as { path: string }).path, oldText: 'a', newText: 'b' }),
+    })
+    const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('EditFile', { path: 'chapters/001.txt' }),
+      project: stubProject,
+      tools,
+      confirm: async () => ({ accepted: false }),
+    })
+
+    // 未执行 run，文件不变
+    expect(run).not.toHaveBeenCalled()
+    // 返回拒绝结果回灌模型，不含 fileChange
+    expect(result.content).toContain('用户拒绝')
+    expect(result.fileChange).toBeUndefined()
+  })
+
+  it('does not trigger confirmation for read-only tools', async () => {
+    const run = vi.fn().mockResolvedValue({ path: 'chapters/001.txt', content: '内容' })
+    const tool = createStubTool({
+      name: 'ReadFile',
+      isReadOnly: true,
+      run,
+    })
+    const tools = { ReadFile: tool } as unknown as Record<string, AgentRunnableTool>
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+
+    await executeAgentTool({
+      call: createCall('ReadFile', { path: 'chapters/001.txt' }),
+      project: stubProject,
+      tools,
+      confirm,
+    })
+
+    // 只读工具不触发确认
+    expect(confirm).not.toHaveBeenCalled()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats a confirmation error (e.g. user stop) as rejection', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const tool = createStubTool({
+      name: 'DeleteFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'delete', path: (input as { path: string }).path }),
+    })
+    const tools = { DeleteFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('DeleteFile', { path: 'chapters/old.txt' }),
+      project: stubProject,
+      tools,
+      confirm: async () => {
+        throw new Error('aborted')
+      },
+    })
+
+    // 确认中断按拒绝处理，不执行
+    expect(run).not.toHaveBeenCalled()
+    expect(result.content).toContain('用户拒绝')
   })
 })

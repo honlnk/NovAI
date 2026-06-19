@@ -130,6 +130,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       messages: agentMessages,
       tools,
       signal: input.signal,
+      confirm: input.confirm,
       onEvent(event) {
         logAgentQueryEvent({
           project: input.project,

@@ -1,6 +1,6 @@
 import { streamAgentCompletion, AgentAbortedError } from './llm'
 import { runAgentTools } from './tool-orchestration'
-import type { ToolExecutionEvent } from './tool-execution'
+import type { ConfirmHandler, ToolExecutionEvent } from './tool-execution'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 import type {
   AgentAssistantMessage,
@@ -31,6 +31,8 @@ export async function query(input: {
   tools: AgentRunnableToolMap
   maxTurns?: number
   signal?: AbortSignal
+  /** 写工具确认回调，透传到工具执行层。 */
+  confirm?: ConfirmHandler
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   let messages = [...input.messages]
@@ -135,6 +137,7 @@ export async function query(input: {
       tools: input.tools,
       readFileStates,
       signal: input.signal,
+      confirm: input.confirm,
       onEvent: input.onEvent,
     })
 

@@ -1,5 +1,5 @@
 import { executeAgentTool } from './tool-execution'
-import type { ToolExecutionEvent } from './tool-execution'
+import type { ConfirmHandler, ToolExecutionEvent } from './tool-execution'
 import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
@@ -12,6 +12,8 @@ export async function runAgentTools(input: {
   readFileStates?: Map<string, ReadFileState>
   /** 用户停止信号：已停止时，批次内尚未开始执行的工具会被跳过。 */
   signal?: AbortSignal
+  /** 写工具确认回调，透传给 executeAgentTool。 */
+  confirm?: ConfirmHandler
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage[]> {
   const results: AgentToolResultMessage[] = []
@@ -46,6 +48,7 @@ export async function runAgentTools(input: {
       project: input.project,
       tools: input.tools,
       readFileStates: input.readFileStates,
+      confirm: input.confirm,
       onEvent: input.onEvent,
     }))
   }
