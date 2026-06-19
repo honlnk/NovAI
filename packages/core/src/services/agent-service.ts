@@ -4,7 +4,7 @@ import {
 } from '../core/chat/session'
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
-import type { AgentMessage, AgentToolCall } from '../core/agent/messages'
+import type { FileChange } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
 
 import {
@@ -231,90 +231,35 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
 
 function collectChangedFiles(session: ChatSessionState): ChangedFileView[] {
   const changes: ChangedFileView[] = []
-  const toolResultTextById = collectToolResultTextById(session.agentMessages ?? [])
 
   for (const message of session.agentMessages ?? []) {
-    if (message.role !== 'assistant' || !message.toolCalls?.length) {
+    if (message.role !== 'tool') {
       continue
     }
 
-    for (const call of message.toolCalls) {
-      const resultText = toolResultTextById.get(call.id) ?? ''
-      const change = toChangedFile(call, resultText)
-
-      if (change) {
-        changes.push(change)
-      }
+    // fileChange 由 tool-execution 在写工具成功执行后从 output 提取并挂载，
+    // 是结构化、可信的文件变更来源，不再依赖工具结果文本反推。
+    const change = message.fileChange
+    if (change) {
+      changes.push(toChangedFileView(change))
     }
   }
 
   return dedupeChangedFiles(changes)
 }
 
-function collectToolResultTextById(messages: AgentMessage[]) {
-  const result = new Map<string, string>()
-
-  for (const message of messages) {
-    if (message.role === 'tool') {
-      result.set(message.toolCallId, message.content)
-    }
+function toChangedFileView(change: FileChange): ChangedFileView {
+  // core 的 FileChange 与 service 的 ChangedFileView 形状一致；
+  // 显式映射而非直接透传，避免 service 层依赖 core 工具内部类型的结构。
+  if (change.type === 'renamed') {
+    return { type: 'renamed', fromPath: change.fromPath, toPath: change.toPath }
   }
 
-  return result
-}
-
-function toChangedFile(
-  call: AgentToolCall,
-  resultText: string,
-): ChangedFileView | null {
-  if (!isSuccessfulToolResult(resultText)) {
-    return null
+  if (change.type === 'deleted') {
+    return { type: 'deleted', path: change.path, trashPath: change.trashPath }
   }
 
-  if (call.name === 'CreateFile' && typeof call.input.path === 'string') {
-    return {
-      type: 'created',
-      path: call.input.path,
-    }
-  }
-
-  if (call.name === 'EditFile' && typeof call.input.path === 'string') {
-    return {
-      type: 'updated',
-      path: call.input.path,
-    }
-  }
-
-  if (
-    call.name === 'RenameFile' &&
-    typeof call.input.fromPath === 'string' &&
-    typeof call.input.toPath === 'string'
-  ) {
-    return {
-      type: 'renamed',
-      fromPath: call.input.fromPath,
-      toPath: call.input.toPath,
-    }
-  }
-
-  if (call.name === 'DeleteFile' && typeof call.input.path === 'string') {
-    return {
-      type: 'deleted',
-      path: call.input.path,
-      trashPath: extractTrashPath(resultText),
-    }
-  }
-
-  return null
-}
-
-function isSuccessfulToolResult(resultText: string) {
-  return /^(已读取|已修改|已新建|已将|已查看|已在)/.test(resultText)
-}
-
-function extractTrashPath(resultText: string) {
-  const match = resultText.match(/移入回收站\s+([^，\s]+)/)
-  return match?.[1]
+  return { type: change.type, path: change.path }
 }
 
 function dedupeChangedFiles(changes: ChangedFileView[]) {

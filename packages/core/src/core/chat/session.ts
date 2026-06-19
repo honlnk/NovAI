@@ -24,6 +24,7 @@ import type {
   ToolDefinition,
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
+import type { FileChange } from '../tools/types'
 
 type SessionEvent =
   | { type: 'message'; message: ChatMessage }
@@ -173,20 +174,9 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
         }
 
         if (event.type === 'tool-result') {
-          if (
-            event.ok &&
-            (event.call.name === 'EditFile' || event.call.name === 'CreateFile') &&
-            typeof event.call.input.path === 'string'
-          ) {
-            session.lastWrittenPath = event.call.input.path
-          }
-
-          if (
-            event.ok &&
-            event.call.name === 'RenameFile' &&
-            typeof event.call.input.toPath === 'string'
-          ) {
-            session.lastWrittenPath = event.call.input.toPath
+          // lastWrittenPath 取结构化 fileChange 的目标路径，不再从 input 猜。
+          if (event.ok && event.fileChange) {
+            session.lastWrittenPath = resolveWrittenPath(event.fileChange)
           }
 
           pushMessage(
@@ -937,4 +927,9 @@ function formatRecentChapters(chapters: Array<{ path: string; title: string; con
 
 function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+// 从结构化 fileChange 取最终落点：rename 取 toPath，其余取 path。
+function resolveWrittenPath(change: FileChange): string {
+  return change.type === 'renamed' ? change.toPath : change.path
 }

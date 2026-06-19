@@ -1,11 +1,11 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
-import type { ReadFileState } from '../tools/types'
+import type { FileChange, ReadFileState } from '../tools/types'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
-  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string }
+  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange }
 
 export async function executeAgentTool(input: {
   call: AgentToolCall
@@ -76,12 +76,15 @@ export async function executeAgentTool(input: {
       readFileStates: input.readFileStates,
     })
     const resultSummary = tool.core.summarizeOutput(output)
+    // 写工具成功执行后提取结构化文件变更，供 service 层推导 changedFiles
+    const fileChange = tool.core.extractFileChange?.(output)
 
     input.onEvent?.({
       type: 'tool-result',
       call: input.call,
       ok: true,
       resultSummary,
+      fileChange,
     })
 
     return {
@@ -89,6 +92,7 @@ export async function executeAgentTool(input: {
       toolCallId: input.call.id,
       name: input.call.name,
       content: tool.formatResult(output),
+      fileChange,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : `${tool.name} 执行失败`

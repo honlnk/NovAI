@@ -91,4 +91,7 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
   summarizeOutput(output) {
     return `已修改 ${output.path}，替换 ${output.occurrences} 处，当前 ${output.contentLength} 个字符`
   },
+  extractFileChange(output) {
+    return { type: 'updated', path: output.path }
+  },
 }

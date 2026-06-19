@@ -1,3 +1,5 @@
+import type { FileChange } from '../tools/types'
+
 export type AgentToolName =
   | 'ReadFile'
   | 'EditFile'
@@ -35,6 +37,12 @@ export type AgentToolResultMessage = {
   toolCallId: string
   name: AgentToolName
   content: string
+  /**
+   * 写工具成功执行后携带的结构化文件变更。
+   * 只读工具或失败的工具不携带（undefined）。
+   * service 层据此推导 changedFiles，不再依赖 content 文本反推。
+   */
+  fileChange?: FileChange
 }
 
 export type AgentMessage =

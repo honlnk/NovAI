@@ -43,4 +43,7 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
   summarizeOutput(output) {
     return `已新建 ${output.path}，共 ${output.linesAdded} 行，${output.contentLength} 个字符`
   },
+  extractFileChange(output) {
+    return { type: 'created', path: output.path }
+  },
 }
