@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 
 /**
@@ -35,13 +35,13 @@ const filteredScenes = computed(() => {
 })
 
 /** 当前高亮项索引（仅键盘导航用） */
-let highlightIndex = 0
+const highlightIndex = ref(0)
 
 /** query 或列表变化时重置高亮到第一项 */
 watch(
   () => [props.query, props.scenes.length] as const,
   () => {
-    highlightIndex = 0
+    highlightIndex.value = 0
   },
 )
 
@@ -49,16 +49,16 @@ defineExpose({
   /** 键盘 ↑：高亮上移（循环） */
   moveUp() {
     if (filteredScenes.value.length === 0) return
-    highlightIndex = (highlightIndex - 1 + filteredScenes.value.length) % filteredScenes.value.length
+    highlightIndex.value = (highlightIndex.value - 1 + filteredScenes.value.length) % filteredScenes.value.length
   },
   /** 键盘 ↓：高亮下移（循环） */
   moveDown() {
     if (filteredScenes.value.length === 0) return
-    highlightIndex = (highlightIndex + 1) % filteredScenes.value.length
+    highlightIndex.value = (highlightIndex.value + 1) % filteredScenes.value.length
   },
   /** 键盘 Enter：选中当前高亮项 */
   confirm() {
-    const scene = filteredScenes.value[highlightIndex]
+    const scene = filteredScenes.value[highlightIndex.value]
     if (scene) emit('select', scene.path)
   },
 })
@@ -66,34 +66,47 @@ defineExpose({
 function displayName(name: string): string {
   return name.replace(/\.md$/i, '')
 }
+
+function displayDirectory(path: string): string {
+  const parts = path.split('/')
+  parts.pop()
+  return parts.length > 0 ? `${parts.join('/')}/` : ''
+}
 </script>
 
 <template>
   <div
-    class="absolute bottom-full left-0 z-50 mb-1 w-64 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg"
+    class="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-[min(360px,56vh)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg shadow-gray-900/10 ring-1 ring-gray-900/5"
   >
-    <ul v-if="filteredScenes.length > 0" class="max-h-60 overflow-y-auto py-1">
+    <ul v-if="filteredScenes.length > 0" class="max-h-72 overflow-y-auto px-1.5 py-1.5">
       <li v-for="(scene, index) in filteredScenes" :key="scene.path">
         <button
           type="button"
           :class="[
-            'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors',
+            'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors',
             index === highlightIndex ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50',
           ]"
           @click="emit('select', scene.path)"
         >
-          <span class="shrink-0">🎬</span>
-          <span class="flex-1 truncate">{{ displayName(scene.name) }}</span>
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-50 text-xs text-blue-400">M↓</span>
+          <span class="min-w-0 flex-1">
+            <span class="align-baseline text-sm font-semibold leading-5">{{ displayName(scene.name) }}</span>
+            <span class="ml-2 align-baseline text-xs font-medium text-gray-400">{{ displayDirectory(scene.path) }}</span>
+          </span>
           <span
             v-if="scene.path === activeScenePath"
-            class="shrink-0 text-xs text-green-500"
+            class="shrink-0 text-xs text-emerald-400"
             title="当前激活"
           >●</span>
         </button>
       </li>
     </ul>
-    <div v-else class="px-3 py-4 text-center text-xs text-gray-400">
+    <div v-else class="px-4 py-6 text-center text-xs font-medium text-gray-400">
       {{ query ? '没有匹配的场景' : '暂无场景提示词' }}
+    </div>
+    <div class="flex items-center gap-2.5 border-t border-gray-100 px-4 py-3 text-xs font-semibold text-gray-400">
+      <span class="flex h-4 w-4 items-center justify-center rounded-full border border-gray-300 text-[10px] text-gray-500">i</span>
+      <span>输入内容以搜索场景</span>
     </div>
   </div>
 </template>

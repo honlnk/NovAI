@@ -62,26 +62,27 @@ function handleCancel() {
 
 <template>
   <div
-    class="absolute bottom-full left-0 z-50 mb-1 w-72 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg"
+    class="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-[min(400px,58vh)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg shadow-gray-900/10 ring-1 ring-gray-900/5"
   >
     <!-- 搜索框 -->
-    <div class="border-b border-gray-100 p-2">
+    <div class="border-b border-gray-100 px-4 py-3">
+      <p class="mb-2 text-xs font-semibold text-gray-400">选择章节</p>
       <input
         v-model="searchQuery"
         type="text"
-        class="w-full rounded-md border border-gray-200 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        class="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
         placeholder="筛选章节..."
         autofocus
       />
     </div>
 
     <!-- 章节列表 -->
-    <ul v-if="filteredChapters.length > 0" class="max-h-60 overflow-y-auto py-1">
+    <ul v-if="filteredChapters.length > 0" class="max-h-64 overflow-y-auto px-1.5 py-1.5">
       <li v-for="chapter in filteredChapters" :key="chapter.path">
         <button
           type="button"
           :class="[
-            'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors',
+            'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors',
             selectedPaths.has(chapter.path) ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50',
           ]"
           @click="toggleChapter(chapter.path)"
@@ -90,39 +91,45 @@ function handleCancel() {
             :class="[
               'flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors',
               selectedPaths.has(chapter.path)
-                ? 'border-blue-500 bg-blue-500 text-white'
+                ? 'border-blue-400 bg-blue-500 text-white'
                 : 'border-gray-300 bg-white',
             ]"
           >
-            <svg v-if="selectedPaths.has(chapter.path)" class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg v-if="selectedPaths.has(chapter.path)" class="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
             </svg>
           </span>
-          <span class="flex-1 truncate">{{ chapter.name }}</span>
+          <span class="flex-1 truncate text-sm font-semibold leading-5">{{ chapter.name }}</span>
         </button>
       </li>
     </ul>
-    <div v-else class="px-3 py-4 text-center text-xs text-gray-400">
+    <div v-else class="px-4 py-6 text-center text-xs font-medium text-gray-400">
       {{ chapters.length === 0 ? '暂无章节' : '没有匹配的章节' }}
     </div>
 
     <!-- 底部操作 -->
-    <div class="flex items-center justify-end gap-2 border-t border-gray-100 p-2">
+    <div class="flex items-center justify-between gap-3 border-t border-gray-100 px-4 py-3">
+      <div class="flex items-center gap-2.5 text-xs font-semibold text-gray-400">
+        <span class="flex h-4 w-4 items-center justify-center rounded-full border border-gray-300 text-[10px] text-gray-500">i</span>
+        <span>{{ selectedCount > 0 ? `已选择 ${selectedCount} 个章节` : '选择要提取要素的章节' }}</span>
+      </div>
+      <div class="flex items-center gap-2">
       <button
         type="button"
-        class="rounded-md px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100"
+        class="rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-800"
         @click="handleCancel"
       >
         取消
       </button>
       <button
         type="button"
-        class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+        class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
         :disabled="selectedCount === 0"
         @click="handleConfirm"
       >
         确认提取{{ selectedCount > 0 ? `(${selectedCount})` : '' }}
       </button>
+      </div>
     </div>
   </div>
 </template>

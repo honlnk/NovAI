@@ -317,7 +317,7 @@ async function handleExtractionConfirm() {
 </script>
 
 <template>
-  <section class="flex min-w-0 flex-1 flex-col">
+  <section class="relative flex min-w-0 flex-1 flex-col">
     <!-- 头部 -->
     <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex items-center gap-2">
