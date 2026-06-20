@@ -268,3 +268,100 @@ describe('executeAgentTool toolPolicy', () => {
     expect(run).not.toHaveBeenCalled()
   })
 })
+
+describe('executeAgentTool path policy (allowedWritePath)', () => {
+  it('blocks EditFile when its path differs from allowedWritePath', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+    const tool = createStubTool({
+      name: 'EditFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'edit', path: (input as { path: string }).path, oldText: 'a', newText: 'b' }),
+    })
+    const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('EditFile', { path: 'chapters/002.txt' }),
+      project: stubProject,
+      tools,
+      confirm,
+      toolPolicy: { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' },
+    })
+
+    // 写非当前文件被拒：不执行、不弹确认
+    expect(run).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(result.content).toContain('chapters/001.txt')
+    expect(result.fileChange).toBeUndefined()
+  })
+
+  it('allows EditFile through when its path matches allowedWritePath', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+    const tool = createStubTool({
+      name: 'EditFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'edit', path: (input as { path: string }).path, oldText: 'a', newText: 'b' }),
+    })
+    const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    await executeAgentTool({
+      call: createCall('EditFile', { path: 'chapters/001.txt' }),
+      project: stubProject,
+      tools,
+      confirm,
+      toolPolicy: { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' },
+    })
+
+    // 写当前文件放行（仍走确认流程）
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('always blocks RenameFile under path constraint', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+    const tool = createStubTool({
+      name: 'RenameFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'rename', fromPath: (input as { fromPath: string }).fromPath, toPath: (input as { toPath: string }).toPath }),
+    })
+    const tools = { RenameFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const result = await executeAgentTool({
+      call: createCall('RenameFile', { fromPath: 'chapters/001.txt', toPath: 'chapters/002.txt' }),
+      project: stubProject,
+      tools,
+      confirm,
+      toolPolicy: { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' },
+    })
+
+    // 即便 fromPath 是当前文件，RenameFile 仍被禁
+    expect(run).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(result.content).toContain('重命名')
+  })
+
+  it('path constraint takes precedence over confirmation', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+    const tool = createStubTool({
+      name: 'CreateFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'create', path: (input as { path: string }).path, content: '' }),
+    })
+    const tools = { CreateFile: tool } as unknown as Record<string, AgentRunnableTool>
+
+    await executeAgentTool({
+      call: createCall('CreateFile', { path: 'outline.txt' }),
+      project: stubProject,
+      tools,
+      confirm,
+      toolPolicy: { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' },
+    })
+
+    // 路径不匹配直接拒，不弹确认
+    expect(confirm).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+})

@@ -2,7 +2,7 @@ import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
-import { type ToolPolicy, isToolDisabledByPolicy, describePolicyDenial } from './tool-policy'
+import { type ToolPolicy, isToolDisabledByPolicy, describePolicyDenial, isWriteBlockedByPathPolicy } from './tool-policy'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
@@ -94,6 +94,26 @@ export async function executeAgentTool(input: {
   // 这是硬约束，保证模型即使无视 system prompt 也拦得住。
   if (input.toolPolicy && isToolDisabledByPolicy(tool, input.toolPolicy)) {
     const reason = describePolicyDenial(tool, input.toolPolicy)
+    input.onEvent?.({
+      type: 'tool-result',
+      call: input.call,
+      ok: false,
+      resultSummary: `工具被禁用：${reason}`,
+    })
+
+    return {
+      role: 'tool',
+      toolCallId: input.call.id,
+      name: input.call.name,
+      content: `该工具本轮被禁用：${reason}。请遵守该约束，改用纯对话回答，或向用户确认是否解除限制后再试。`,
+    }
+  }
+
+  // 路径级约束：写工具的路径必须落在允许的文件上（RenameFile 直接禁用）。
+  // 与上面的读/写布尔约束同属硬约束，同样在确认流程之前拦截。
+  const pathBlock = isWriteBlockedByPathPolicy(input.call.name, validatedInput, input.toolPolicy)
+  if (pathBlock.blocked) {
+    const reason = pathBlock.reason ?? '该工具本轮被用户约束禁用'
     input.onEvent?.({
       type: 'tool-result',
       call: input.call,

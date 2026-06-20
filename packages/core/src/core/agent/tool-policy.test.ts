@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseToolPolicy,
   isToolDisabledByPolicy,
+  isWriteBlockedByPathPolicy,
   describePolicyDenial,
   filterAvailableTools,
   describeActivePolicy,
@@ -45,6 +46,53 @@ describe('parseToolPolicy', () => {
     expect(parseToolPolicy('读一下第一章然后写第二章')).toEqual({ allowRead: true, allowWrite: true })
     expect(parseToolPolicy('请读取文件并修改')).toEqual({ allowRead: true, allowWrite: true })
   })
+
+  it('disables write tools on read-only intent phrases (只读不改)', () => {
+    // 「只读/只看不改」等正面表达意图是「只读不写」，应禁用写入工具但保留读取
+    expect(parseToolPolicy('只读不改')).toEqual({ allowRead: true, allowWrite: false })
+    expect(parseToolPolicy('只看不写')).toEqual({ allowRead: true, allowWrite: false })
+    expect(parseToolPolicy('只分析不修改文件')).toEqual({ allowRead: true, allowWrite: false })
+    expect(parseToolPolicy('这轮只看不改文件')).toEqual({ allowRead: true, allowWrite: false })
+  })
+
+  it('sets allowedWritePath on current-file intent when activeFilePath is provided', () => {
+    expect(parseToolPolicy('只改当前文件', 'chapters/001.txt')).toEqual({
+      allowRead: true,
+      allowWrite: true,
+      allowedWritePath: 'chapters/001.txt',
+    })
+    expect(parseToolPolicy('就在这个文件里改', 'chapters/002.txt')).toEqual({
+      allowRead: true,
+      allowWrite: true,
+      allowedWritePath: 'chapters/002.txt',
+    })
+    expect(parseToolPolicy('别动其他文件', 'elements/characters.md')).toEqual({
+      allowRead: true,
+      allowWrite: true,
+      allowedWritePath: 'elements/characters.md',
+    })
+    expect(parseToolPolicy('只改这个文件', 'prompts/system.md')).toEqual({
+      allowRead: true,
+      allowWrite: true,
+      allowedWritePath: 'prompts/system.md',
+    })
+  })
+
+  it('normalizes activeFilePath when setting allowedWritePath', () => {
+    // 反斜杠 / 前后空白在 normalizeProjectPath 里会被规整
+    expect(parseToolPolicy('只改当前文件', ' chapters\\001.txt ')).toEqual({
+      allowRead: true,
+      allowWrite: true,
+      allowedWritePath: 'chapters/001.txt',
+    })
+  })
+
+  it('degrades to allowWrite:false on current-file intent when activeFilePath is empty', () => {
+    // 用户要求「只改当前文件」但没有打开的文件，无法确定白名单，保守禁写
+    expect(parseToolPolicy('只改当前文件')).toEqual({ allowRead: true, allowWrite: false })
+    expect(parseToolPolicy('只改这个文件', undefined)).toEqual({ allowRead: true, allowWrite: false })
+    expect(parseToolPolicy('别动其他文件', null)).toEqual({ allowRead: true, allowWrite: false })
+  })
 })
 
 describe('isToolDisabledByPolicy', () => {
@@ -66,6 +114,39 @@ describe('isToolDisabledByPolicy', () => {
     const policy = { allowRead: true, allowWrite: false }
     expect(isToolDisabledByPolicy(readOnlyTool, policy)).toBe(false)
     expect(isToolDisabledByPolicy(writeTool, policy)).toBe(true)
+  })
+})
+
+describe('isWriteBlockedByPathPolicy', () => {
+  it('does not block when policy has no allowedWritePath', () => {
+    expect(isWriteBlockedByPathPolicy('EditFile', { path: 'chapters/001.txt' }, DEFAULT_TOOL_POLICY)).toEqual({ blocked: false })
+    expect(isWriteBlockedByPathPolicy('EditFile', { path: 'chapters/001.txt' }, undefined)).toEqual({ blocked: false })
+  })
+
+  it('does not block read-only tools', () => {
+    const policy = { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' }
+    expect(isWriteBlockedByPathPolicy('ReadFile', { path: 'chapters/002.txt' }, policy)).toEqual({ blocked: false })
+    expect(isWriteBlockedByPathPolicy('RagSearch', { query: 'something' }, policy)).toEqual({ blocked: false })
+  })
+
+  it('always blocks RenameFile under path constraint', () => {
+    const policy = { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' }
+    const result = isWriteBlockedByPathPolicy('RenameFile', { fromPath: 'chapters/001.txt', toPath: 'chapters/002.txt' }, policy)
+    expect(result.blocked).toBe(true)
+    expect(result.reason).toContain('重命名')
+  })
+
+  it('blocks EditFile/CreateFile/DeleteFile when path differs from allowed', () => {
+    const policy = { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' }
+    expect(isWriteBlockedByPathPolicy('EditFile', { path: 'chapters/002.txt' }, policy).blocked).toBe(true)
+    expect(isWriteBlockedByPathPolicy('CreateFile', { path: 'outline.txt' }, policy).blocked).toBe(true)
+    expect(isWriteBlockedByPathPolicy('DeleteFile', { path: 'elements/characters.md' }, policy).blocked).toBe(true)
+  })
+
+  it('allows EditFile/CreateFile/DeleteFile when path matches allowed', () => {
+    const policy = { allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' }
+    expect(isWriteBlockedByPathPolicy('EditFile', { path: 'chapters/001.txt' }, policy).blocked).toBe(false)
+    expect(isWriteBlockedByPathPolicy('DeleteFile', { path: 'chapters/001.txt' }, policy).blocked).toBe(false)
   })
 })
 
@@ -127,5 +208,11 @@ describe('describeActivePolicy', () => {
     const desc = describeActivePolicy({ allowRead: false, allowWrite: false })
     expect(desc).toContain('读取类工具')
     expect(desc).toContain('写入类工具')
+  })
+
+  it('mentions current-file constraint when allowedWritePath is set', () => {
+    const desc = describeActivePolicy({ allowRead: true, allowWrite: true, allowedWritePath: 'chapters/001.txt' })
+    expect(desc).toContain('chapters/001.txt')
+    expect(desc).toContain('RenameFile')
   })
 })

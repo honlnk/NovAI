@@ -200,8 +200,9 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
     const confirm: ConfirmHandler | undefined = input.onEvent
       ? (request) => requestConfirmation(input.projectId, request, input.onEvent!)
       : undefined
-    // 用户即时工具约束：从 instruction 解析（如「不要读文件」「别改」），执行层强制禁用。
-    const toolPolicy = parseToolPolicy(input.instruction)
+    // 用户即时工具约束：从 instruction 解析（如「不要读文件」「别改」「只读不改」「只改当前文件」），执行层强制禁用。
+    // 路径约束需结合当前活动文件解析，activeFilePath 无值时降级为禁写。
+    const toolPolicy = parseToolPolicy(input.instruction, input.activeFilePath)
     const turn = await runChatTurn({
       session: previousSession,
       input: {

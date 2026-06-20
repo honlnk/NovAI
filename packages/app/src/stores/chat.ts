@@ -22,6 +22,8 @@ import type {
   RunAgentTurnResult,
 } from '@novai/core/services/types'
 
+import { useProjectStore } from './project'
+
 export const useChatStore = defineStore('chat', () => {
   const sessionView = ref<ChatSessionView | null>(null)
   const agentEvents = ref<AgentUiEvent[]>([])
@@ -274,10 +276,14 @@ export const useChatStore = defineStore('chat', () => {
       throw new Error('没有活跃的会话')
     }
 
+    // 把当前打开的文件路径作为隐式上下文传入，供 Agent 工具约束（如「只改当前文件」）解析使用。
+    const projectStore = useProjectStore()
+    const activeFilePath = projectStore.activeFile?.path
     return runServiceTurn({
       projectId: sessionView.value.projectId,
       instruction: text,
       quote,
+      activeFilePath,
     })
   }
 
