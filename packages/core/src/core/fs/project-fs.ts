@@ -214,6 +214,35 @@ export async function rescanProject(snapshot: ProjectSnapshot): Promise<TreeNode
 }
 
 /**
+ * 列出项目内某子目录下所有文件的相对路径（不递归子目录）。
+ * 目录不存在时返回空数组，不抛错——调用方按「该目录无内容」处理即可。
+ *
+ * 相比 rescanProject 的全树扫描，这里只打开单个目标目录遍历，适合「只需要某个子目录文件清单」的场景
+ * （如 .novel/sessions/ 下的会话列表），避免无关目录的开销。
+ */
+export async function listFilesInDirectory(
+  rootHandle: FileSystemDirectoryHandle,
+  dirPath: string,
+): Promise<string[]> {
+  let directory: FileSystemDirectoryHandle
+  try {
+    directory = await resolveDirectoryHandle(rootHandle, dirPath)
+  } catch {
+    // 目录不存在（或路径非法）视为空
+    return []
+  }
+
+  const paths: string[] = []
+  const prefix = dirPath.endsWith('/') ? dirPath : `${dirPath}/`
+  for await (const entry of directory.values()) {
+    if (entry.kind === 'file') {
+      paths.push(`${prefix}${entry.name}`)
+    }
+  }
+  return paths
+}
+
+/**
  * 读取 `novel.config.json` 并返回当前项目配置。
  */
 export async function readProjectConfig(rootHandle: FileSystemDirectoryHandle): Promise<ProjectConfig> {

@@ -40,8 +40,15 @@ import type {
 /**
  * 会话内存态：key 为 sessionId（一个项目可同时驻留多个历史会话）。
  * 从「单项目单会话」升级为「多会话」，支持历史会话切换。
+ *
+ * 用 Map 的插入顺序天然作为 LRU：访问/写入时 delete+set 把条目移到末尾（最近），
+ * 超过 MAX_CACHED_SESSIONS 时从头部（最旧）淘汰。项目关闭时由 evictProjectSessions
+ * 整体清理该项目条目，避免长期累积内存泄漏。
  */
 const sessionMap = new Map<string, ChatSessionState>()
+
+/** 内存驻留会话上限。超过则按 LRU 淘汰最旧条目；冷数据回退到从盘读取。 */
+const MAX_CACHED_SESSIONS = 16
 
 // 确认注册表：confirmationId -> resolve。UI 调 respondConfirmation 时取出来 resolve，
 // 唤醒在 confirm 回调里 await 的 Agent Loop。
@@ -54,6 +61,48 @@ const confirmationMap = new Map<string, PendingConfirmation>()
 /** 每个项目当前激活的会话 id；新建/切换/删除时维护。 */
 const activeSessionByProject = new Map<string, string>()
 
+/**
+ * 写入会话缓存：delete 后 set 把条目移到 Map 末尾（标记为最近使用），
+ * 再在超限时淘汰头部（最旧）。所有缓存插入统一走这里，保证 LRU 一致性。
+ *
+ * 导出仅供单测直接驱动缓存（验证 LRU 淘汰 / 项目级清理），业务代码不应直接调用。
+ */
+export function cacheSession(session: ChatSessionState) {
+  sessionMap.delete(session.sessionId)
+  sessionMap.set(session.sessionId, session)
+  while (sessionMap.size > MAX_CACHED_SESSIONS) {
+    const oldest = sessionMap.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    sessionMap.delete(oldest)
+  }
+}
+
+/**
+ * 项目级清理：移除该项目的所有驻留会话 + 激活态。
+ * 供 closeProject / deleteRecentProject 在释放运行时项目时调用，避免历史会话累积泄漏。
+ */
+export function evictProjectSessions(projectId: string) {
+  for (const [id, session] of sessionMap) {
+    if (session.projectId === projectId) {
+      sessionMap.delete(id)
+    }
+  }
+  activeSessionByProject.delete(projectId)
+}
+
+/** 测试专用：重置 module-global 缓存，避免用例间状态串扰。 */
+export function _clearSessionCacheForTest() {
+  sessionMap.clear()
+  activeSessionByProject.clear()
+}
+
+/** 测试专用：读取当前缓存内的 sessionId 列表（按 LRU 顺序，最近使用在末尾）。 */
+export function _getCachedSessionIdsForTest(): string[] {
+  return Array.from(sessionMap.keys())
+}
+
 export function deriveTargetFromPath(path?: string | null): ChatTargetView | null {
   return toChatTargetView(deriveChatTargetFromPath(path))
 }
@@ -62,7 +111,7 @@ export async function createSession(projectId: string): Promise<ChatSessionView>
   const project = requireRuntimeProject(projectId)
 
   const session = createChatSession(projectId)
-  sessionMap.set(session.sessionId, session)
+  cacheSession(session)
   activeSessionByProject.set(projectId, session.sessionId)
 
   // 新建即落盘，确保列表能立即看到（即便用户还没发消息）
@@ -154,6 +203,8 @@ async function resolveSession(
 ): Promise<ChatSessionState | null> {
   const cached = sessionMap.get(sessionId)
   if (cached) {
+    // 命中即回插，刷新 LRU 顺序（最近使用移到末尾）
+    cacheSession(cached)
     return cached
   }
 
@@ -163,7 +214,7 @@ async function resolveSession(
     return null
   }
 
-  sessionMap.set(sessionId, loaded)
+  cacheSession(loaded)
   return loaded
 }
 
@@ -182,7 +233,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
   const hadNoUserMessage = !previousSession.messages.some((m) => m.role === 'user')
   const titleBeforeTurn = previousSession.title
 
-  sessionMap.set(previousSession.sessionId, previousSession)
+  cacheSession(previousSession)
   activeSessionByProject.set(input.projectId, previousSession.sessionId)
   input.onEvent?.({
     type: 'run-start',
@@ -227,7 +278,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       turn.session.title = deriveSessionTitle(input.instruction)
     }
 
-    sessionMap.set(turn.session.sessionId, turn.session)
+    cacheSession(turn.session)
     // 每轮结束落盘，刷新 updatedAt，保证历史列表排序与内容持久
     await saveSession(project, turn.session)
 
@@ -269,7 +320,7 @@ async function resolveActiveOrCreate(projectId: string): Promise<ChatSessionStat
 
   const project = requireRuntimeProject(projectId)
   const session = createChatSession(projectId)
-  sessionMap.set(session.sessionId, session)
+  cacheSession(session)
   activeSessionByProject.set(projectId, session.sessionId)
   await saveSession(project, session)
   return session

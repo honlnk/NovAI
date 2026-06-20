@@ -2,9 +2,9 @@ import {
   readProjectTextFile,
   writeProjectTextFile,
   removeProjectFile,
-  rescanProject,
+  listFilesInDirectory,
 } from '../fs/project-fs'
-import type { ProjectSnapshot, TreeNode } from '../../types/project'
+import type { ProjectSnapshot } from '../../types/project'
 import type { ChatSessionState } from '../../types/chat'
 
 /**
@@ -63,15 +63,15 @@ export async function deleteSessionFile(
 /**
  * 列出项目下所有历史会话的摘要，按 updatedAt 降序（最近更新的在前）。
  *
- * 实现走 rescanProject 拿全树后筛选 `.novel/sessions/*.json`，再逐个读全文解析元字段。
- * 之所以不维护 index.json：会话量在小说项目里很小，单文件自包含更可靠（对齐 agent-log 哲学），
- * 也避免 index 与单文件一致性维护的复杂度。
+ * 只打开 `.novel/sessions/` 这一个目录遍历文件，而非 rescanProject 的全树扫描——
+ * 会话列表的瓶颈在章节数众多的项目里，全树扫描会遍历 chapters/、elements/ 等无关目录。
+ * 单文件自包含、不维护 index.json，对齐 agent-log 哲学（会话量在小说项目里很小）。
  */
 export async function listSessionMetas(
   project: ProjectSnapshot,
 ): Promise<SessionMeta[]> {
-  const tree = await rescanProject(project)
-  const sessionPaths = collectSessionPaths(tree)
+  const allPaths = await listFilesInDirectory(project.handle, SESSIONS_DIR)
+  const sessionPaths = allPaths.filter((path) => path.endsWith('.json'))
   if (sessionPaths.length === 0) {
     return []
   }
@@ -98,36 +98,6 @@ export type SessionMeta = {
   createdAt: string
   updatedAt: string
   messageCount: number
-}
-
-/** 从会话文件树中收集 `.novel/sessions/*.json` 的完整路径。 */
-function collectSessionPaths(tree: TreeNode[]): string[] {
-  const paths: string[] = []
-
-  for (const node of tree) {
-    if (node.kind === 'file') {
-      if (node.path.startsWith(`${SESSIONS_DIR}/`) && node.path.endsWith('.json')) {
-        paths.push(node.path)
-      }
-      continue
-    }
-
-    // 只需深入 .novel 这一支，其余根目录（chapters/elements/prompts）不可能含 sessions
-    if (node.path === '.novel' && node.children?.length) {
-      const sessionsDir = node.children.find(
-        (child) => child.path === SESSIONS_DIR && child.kind === 'directory',
-      )
-      if (sessionsDir?.children?.length) {
-        for (const file of sessionsDir.children) {
-          if (file.kind === 'file' && file.path.endsWith('.json')) {
-            paths.push(file.path)
-          }
-        }
-      }
-    }
-  }
-
-  return paths
 }
 
 /** 解析会话全文为完整状态。解析失败返回 null。 */

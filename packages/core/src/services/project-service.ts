@@ -29,6 +29,7 @@ import {
   requireRuntimeProject,
   setRuntimeProject,
 } from './project-runtime'
+import { evictProjectSessions } from './agent-service'
 import { toProjectView } from './mappers'
 import type { LastProjectSummaryView, ProjectStatusView, ProjectView } from './types'
 
@@ -205,6 +206,8 @@ export async function deleteRecentProject(
   }
 
   removeRuntimeProject(projectId)
+  // 同步释放该项目驻留的会话缓存，避免历史会话累积内存泄漏
+  evictProjectSessions(projectId)
 }
 
 export async function closeProject(projectId: string): Promise<void> {
@@ -224,6 +227,8 @@ export async function closeProject(projectId: string): Promise<void> {
   })
 
   removeRuntimeProject(projectId)
+  // 关闭即释放该项目驻留的会话缓存，避免历史会话累积内存泄漏
+  evictProjectSessions(projectId)
 }
 
 export async function refreshProject(projectId: string): Promise<ProjectView> {
