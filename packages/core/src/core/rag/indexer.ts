@@ -6,6 +6,7 @@ import { hashContent } from '../util/hash'
 import type { ProjectSnapshot, TreeNode } from '../../types/project'
 import type { IndexBuildRequest, IndexBuildResult, ProjectIndexMeta } from '../../types/rag'
 
+import { buildOramaIndex, dropOramaIndex } from './orama-index'
 import { createRagIndexStore } from './index-store'
 import { buildRetrievalText } from './retrieval-text'
 
@@ -97,6 +98,13 @@ export async function buildProjectIndex(
     }
 
     await store.upsertDocuments(documents)
+
+    // 内存 Orama 索引必须与 IndexedDB 的全量当前状态保持一致：
+    // 增量更新时不 clear，IndexedDB 里是「旧 + 本次 upsert」的全集；
+    // 全量重建时已 clear，IndexedDB 里就是本次 documents 全集。
+    // 因此统一以 upsert 后的 IndexedDB 全量文档重建，避免增量场景下 Orama 丢失其他文档。
+    const allDocuments = await store.listProjectDocuments(project.id)
+    await buildOramaIndex(project.id, allDocuments)
 
     const meta: ProjectIndexMeta = {
       projectId: project.id,
