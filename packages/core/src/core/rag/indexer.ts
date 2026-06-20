@@ -4,9 +4,10 @@ import { readProjectFile } from '../fs/project-fs'
 import { hashContent } from '../util/hash'
 
 import type { ProjectSnapshot, TreeNode } from '../../types/project'
-import type { IndexBuildRequest, IndexBuildResult, ProjectIndexMeta } from '../../types/rag'
+import type { IndexedElementDocument, IndexBuildRequest, IndexBuildResult, ProjectIndexMeta } from '../../types/rag'
 
-import { buildOramaIndex, dropOramaIndex } from './orama-index'
+import { dispatchIndexChange } from './index-events'
+import { buildOramaIndex } from './orama-index'
 import { createRagIndexStore } from './index-store'
 import { buildRetrievalText } from './retrieval-text'
 
@@ -42,16 +43,49 @@ export async function buildProjectIndex(
 
   try {
     const elementPaths = collectElementPaths(project.tree, request.sourcePaths)
+    const isFullRebuild = request.reason === 'full-rebuild' || request.reason === 'manual-rebuild' || request.reason === 'initial-build'
 
-    if (request.reason === 'full-rebuild' || request.reason === 'manual-rebuild' || request.reason === 'initial-build') {
+    if (isFullRebuild) {
       await store.clearProject(project.id)
     }
 
+    // 预拉旧文档用于 contentHash 短路：按 sourcePath 索引，命中且 hash/model/version
+    // 全一致时复用旧 vector，跳过 Embedding 调用。
+    // 全量重建已 clear，旧文档为空，短路自然失效（全部重新 embed），逻辑统一。
+    const existingDocs = isFullRebuild ? [] : await store.listProjectDocuments(project.id)
+    const existingByPath = new Map(existingDocs.map((doc) => [doc.sourcePath, doc]))
+
     const documents = []
     let embeddingDim = 0
+    let skippedCount = 0
 
     for (const path of elementPaths) {
       const file = await readProjectFile(project, path)
+      const contentHash = computeContentHash(file.content)
+      const existing = existingByPath.get(path)
+
+      // 短路：内容未变、且 embedding 模型/维度/模板版本一致 → 复用旧向量。
+      // 注意 contentHash 口径已对齐 writer 的 normalizeForComparison（排除 updatedAt 行），
+      // 因此仅刷新 updatedAt 不会误触发重算。
+      if (
+        existing
+        && existing.contentHash === contentHash
+        && existing.embeddingModel === embeddingModel
+        && existing.embeddingDim > 0
+        && existing.embeddingTextVersion === project.config.settings.embeddingTextVersion
+      ) {
+        embeddingDim = existing.embeddingDim
+        skippedCount += 1
+
+        documents.push({
+          ...existing,
+          // 这些字段随当前文件状态刷新，即使向量复用
+          sourceModifiedAt: file.updatedAt,
+          indexedAt: new Date().toISOString(),
+        })
+        continue
+      }
+
       const parsed = parseElementFile(path, file.content)
       const name = parsed.frontmatter.name || inferNameFromPath(path)
       const type = parsed.frontmatter.type || inferTypeFromPath(path)
@@ -89,7 +123,7 @@ export async function buildProjectIndex(
         tags: parsed.frontmatter.tags,
         sourceModifiedAt: file.updatedAt,
         indexedAt: new Date().toISOString(),
-        contentHash: hashContent(file.content),
+        contentHash,
         embeddingProvider,
         embeddingModel,
         embeddingDim: embedding.dimension,
@@ -98,6 +132,19 @@ export async function buildProjectIndex(
     }
 
     await store.upsertDocuments(documents)
+
+    // 增量场景下清理已删除的要素：旧文档中 sourcePath 不在本次范围的移除。
+    // 全量重建已 clear，无需处理。
+    if (!isFullRebuild && existingDocs.length > 0) {
+      const currentPaths = new Set(elementPaths)
+      const removedIds = existingDocs
+        .filter((doc) => !currentPaths.has(doc.sourcePath))
+        .map((doc) => doc.id)
+
+      if (removedIds.length > 0) {
+        await store.removeDocuments(project.id, removedIds)
+      }
+    }
 
     // 内存 Orama 索引必须与 IndexedDB 的全量当前状态保持一致：
     // 增量更新时不 clear，IndexedDB 里是「旧 + 本次 upsert」的全集；
@@ -108,8 +155,8 @@ export async function buildProjectIndex(
 
     const meta: ProjectIndexMeta = {
       projectId: project.id,
-      status: documents.length > 0 ? 'ready' : 'empty',
-      documentCount: documents.length,
+      status: allDocuments.length > 0 ? 'ready' : 'empty',
+      documentCount: allDocuments.length,
       embeddingProvider,
       embeddingModel,
       embeddingDim,
@@ -124,20 +171,21 @@ export async function buildProjectIndex(
     }
 
     await store.saveProjectMeta(meta)
+    dispatchIndexChange(project.id, meta)
 
     return {
       projectId: project.id,
       status: meta.status,
       indexedCount: documents.length,
-      skippedCount: 0,
+      skippedCount,
       failedCount: 0,
       message:
-        documents.length > 0
-          ? `索引构建完成，共写入 ${documents.length} 条要素文档`
+        allDocuments.length > 0
+          ? `索引构建完成，共写入 ${documents.length} 条要素文档${skippedCount > 0 ? `（复用 ${skippedCount} 条未变向量）` : ''}`
           : '索引构建完成，但当前项目下还没有可索引的要素文件',
     }
   } catch (error) {
-    await store.saveProjectMeta({
+    const errorMeta: ProjectIndexMeta = {
       projectId: project.id,
       status: 'error',
       documentCount: 0,
@@ -149,7 +197,9 @@ export async function buildProjectIndex(
       rerankModel: project.config.rerank.model || undefined,
       lastBuildAt: new Date().toISOString(),
       lastError: error instanceof Error ? error.message : '索引构建失败',
-    })
+    }
+    await store.saveProjectMeta(errorMeta)
+    dispatchIndexChange(project.id, errorMeta)
 
     throw error
   }
@@ -162,7 +212,7 @@ export async function markProjectIndexStale(
   const store = createRagIndexStore()
   const meta = await store.getProjectMeta(projectId)
 
-  await store.saveProjectMeta({
+  const updatedMeta: ProjectIndexMeta = {
     projectId,
     status: 'stale',
     documentCount: meta?.documentCount ?? 0,
@@ -175,7 +225,10 @@ export async function markProjectIndexStale(
     lastBuildAt: meta?.lastBuildAt,
     lastFullRebuildAt: meta?.lastFullRebuildAt,
     lastError: reason,
-  })
+  }
+
+  await store.saveProjectMeta(updatedMeta)
+  dispatchIndexChange(projectId, updatedMeta)
 }
 
 function collectElementPaths(tree: TreeNode[], preferredPaths?: string[]) {
@@ -242,4 +295,16 @@ function summarizeBody(body: string) {
 
 function createStableElementId(path: string) {
   return `element-${hashContent(path)}`
+}
+
+/**
+ * 计算用于增量比对的内容 hash。
+ *
+ * 口径与 writer.normalizeForComparison 对齐：把 frontmatter 的 updatedAt 行
+ * 归一为固定占位符后再算 hash，这样「只刷新 updatedAt」不会让 contentHash 变化，
+ * 避免要素写入时无条件触发 Embedding 重算。
+ */
+function computeContentHash(content: string) {
+  const normalized = content.replace(/^updatedAt: .*$/m, 'updatedAt: <ignored>').trim()
+  return hashContent(normalized)
 }

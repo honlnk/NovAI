@@ -224,7 +224,7 @@ function handleDismiss() {
               <p>新增 {{ writeResult.created.length }} 个</p>
               <p>更新 {{ writeResult.updated.length }} 个</p>
               <p v-if="writeResult.skipped.length > 0">跳过 {{ writeResult.skipped.length }} 个（无变化）</p>
-              <p v-if="writeResult.staleIndex" class="mt-2 text-amber-600">RAG 索引已标记为过期，可在设置中重建。</p>
+              <p v-if="writeResult.staleIndex" class="mt-2 text-amber-600">索引已过期，可点底部状态栏重建。</p>
             </div>
 
             <div v-else-if="phase === 'error'" class="text-sm text-gray-600">

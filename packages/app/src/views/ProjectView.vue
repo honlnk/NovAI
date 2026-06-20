@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
+import { useIndexStore } from '../stores/index'
 import { useToast } from '../composables/useToast'
 import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
+import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
@@ -18,6 +20,7 @@ const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
 const chatStore = useChatStore()
+const indexStore = useIndexStore()
 const toast = useToast()
 
 const projectId = computed(() => route.params.id as string)
@@ -94,6 +97,9 @@ onMounted(async () => {
   // 初始化聊天会话（拉取历史列表，有历史则激活最近一条，否则新建）
   await chatStore.initSessions(projectId.value)
 
+  // 初始化 RAG 索引状态栏（订阅事件 + 首次读取 meta）
+  await indexStore.init(projectId.value)
+
   // 检查是否需要显示首次引导
   if (projectStore.currentProject) {
     const config = projectStore.currentProject.config
@@ -101,6 +107,10 @@ onMounted(async () => {
       showGuide.value = true
     }
   }
+})
+
+onUnmounted(() => {
+  indexStore.dispose()
 })
 
 // 监听文件变更，自动刷新分类面板数据
@@ -220,88 +230,94 @@ function handleGoToSettings() {
 
 async function handleElementsWritten() {
   await projectStore.refreshTree()
-  toast.success('要素文件已写入，RAG 索引已标记为过期')
+  // 索引过期状态由底部 IndexStatusBar 经事件总线自动反映，无需再弹 toast。
+  toast.success('要素文件已写入')
 }
 </script>
 
 <template>
-  <div class="flex h-screen bg-white">
-    <!-- 移动端分类面板遮罩 -->
-    <div
-      v-if="isMobileCategoryOpen"
-      class="fixed inset-0 z-40 bg-black/50 lg:hidden"
-      @click="isMobileCategoryOpen = false"
-    />
+  <div class="flex h-screen flex-col bg-white">
+    <div class="flex min-h-0 flex-1">
+      <!-- 移动端分类面板遮罩 -->
+      <div
+        v-if="isMobileCategoryOpen"
+        class="fixed inset-0 z-40 bg-black/50 lg:hidden"
+        @click="isMobileCategoryOpen = false"
+      />
 
-    <!-- Activity Bar（最左竖条） -->
-    <ActivityBar
-      :active-category="activeCategory"
-      @select="selectCategory"
-      @open-settings="handleOpenSettings"
-      @back-to-home="handleBackToHome"
-      @proofread="handleNotImplemented('校对')"
-      @organize="handleNotImplemented('章节整理')"
-      @version="handleNotImplemented('版本管理')"
-    />
+      <!-- Activity Bar（最左竖条） -->
+      <ActivityBar
+        :active-category="activeCategory"
+        @select="selectCategory"
+        @open-settings="handleOpenSettings"
+        @back-to-home="handleBackToHome"
+        @proofread="handleNotImplemented('校对')"
+        @organize="handleNotImplemented('章节整理')"
+        @version="handleNotImplemented('版本管理')"
+      />
 
-    <!-- 分类面板（随 Activity Bar 切换） -->
-    <CategoryPanel
-      :active-category="activeCategory"
-      :files="projectStore.currentProject?.files ?? []"
-      :active-file-path="projectStore.activeFile?.path"
-      :active-scene-prompt-path="activeScenePromptPath"
-      :sessions="chatStore.sessions"
-      :active-session-id="chatStore.activeSessionId"
-      :is-open="isCategoryOpen"
-      :is-mobile-open="isMobileCategoryOpen"
-      @select-file="handleSelectFile"
-      @change-scene="handleChangeScene"
-      @close-mobile="isMobileCategoryOpen = false"
-      @select-session="(sessionId) => chatStore.selectSession(projectId, sessionId)"
-      @create-session="chatStore.createNewSession(projectId)"
-      @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
-      @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
-    />
+      <!-- 分类面板（随 Activity Bar 切换） -->
+      <CategoryPanel
+        :active-category="activeCategory"
+        :files="projectStore.currentProject?.files ?? []"
+        :active-file-path="projectStore.activeFile?.path"
+        :active-scene-prompt-path="activeScenePromptPath"
+        :sessions="chatStore.sessions"
+        :active-session-id="chatStore.activeSessionId"
+        :is-open="isCategoryOpen"
+        :is-mobile-open="isMobileCategoryOpen"
+        @select-file="handleSelectFile"
+        @change-scene="handleChangeScene"
+        @close-mobile="isMobileCategoryOpen = false"
+        @select-session="(sessionId) => chatStore.selectSession(projectId, sessionId)"
+        @create-session="chatStore.createNewSession(projectId)"
+        @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
+        @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
+      />
 
-    <!-- 中间对话面板 -->
-    <ChatPanel
-      :project-id="projectId"
-      :is-sidebar-open="isCategoryOpen"
-      :is-content-panel-open="isContentPanelOpen"
-      :quote="selectionQuote"
-      :scenes="sceneList"
-      :active-scene-prompt-path="activeScenePromptPath"
-      :active-scene-name="activeSceneName"
-      :chapters="chapterList"
-      @toggle-sidebar="toggleSidebar"
-      @toggle-content-panel="toggleContentPanel"
-      @toggle-mobile-sidebar="toggleMobileSidebar"
-      @clear-quote="handleClearQuote"
-      @change-scene="handleChangeScene"
-      @elements-written="handleElementsWritten"
-    >
-      <!-- 首次使用引导 -->
-      <template #guide>
-        <FirstTimeGuide
-          v-if="showGuide"
-          @close="handleCloseGuide"
-          @go-to-settings="handleGoToSettings"
-        />
-      </template>
-    </ChatPanel>
+      <!-- 中间对话面板 -->
+      <ChatPanel
+        :project-id="projectId"
+        :is-sidebar-open="isCategoryOpen"
+        :is-content-panel-open="isContentPanelOpen"
+        :quote="selectionQuote"
+        :scenes="sceneList"
+        :active-scene-prompt-path="activeScenePromptPath"
+        :active-scene-name="activeSceneName"
+        :chapters="chapterList"
+        @toggle-sidebar="toggleSidebar"
+        @toggle-content-panel="toggleContentPanel"
+        @toggle-mobile-sidebar="toggleMobileSidebar"
+        @clear-quote="handleClearQuote"
+        @change-scene="handleChangeScene"
+        @elements-written="handleElementsWritten"
+      >
+        <!-- 首次使用引导 -->
+        <template #guide>
+          <FirstTimeGuide
+            v-if="showGuide"
+            @close="handleCloseGuide"
+            @go-to-settings="handleGoToSettings"
+          />
+        </template>
+      </ChatPanel>
 
-    <!-- 右侧内容面板 -->
-    <ContentPanel
-      :is-open="isContentPanelOpen"
-      :project-id="projectId"
-      :file="projectStore.activeFile"
-      :width="contentPanelWidth"
-      @close="isContentPanelOpen = false"
-      @save="handleSaveFile"
-      @select-quote="handleSelectQuote"
-      @resize="contentPanelWidth = $event"
-      @reset-width="contentPanelWidth = CONTENT_PANEL_DEFAULT"
-    />
+      <!-- 右侧内容面板 -->
+      <ContentPanel
+        :is-open="isContentPanelOpen"
+        :project-id="projectId"
+        :file="projectStore.activeFile"
+        :width="contentPanelWidth"
+        @close="isContentPanelOpen = false"
+        @save="handleSaveFile"
+        @select-quote="handleSelectQuote"
+        @resize="contentPanelWidth = $event"
+        @reset-width="contentPanelWidth = CONTENT_PANEL_DEFAULT"
+      />
+    </div>
+
+    <!-- 底部 RAG 索引状态栏（常驻，随项目激活） -->
+    <IndexStatusBar :project-id="projectId" />
 
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
     <SettingsModal
