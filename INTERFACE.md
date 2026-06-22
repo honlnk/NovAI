@@ -317,7 +317,7 @@ function resolvePreferredPath(changes: ChangedFileView[]) {
 - `changedFiles` 仍是 service 层推导，不是工具层结构化输出。
 - Agent 会话还没有持久化。
 - `RagSearch` 已作为正式 Agent 工具接入，但真实创作任务中的触发率和召回质量仍需验证。
-- 要素提取已能规则型提取并写入 `elements/`，但还不是 LLM 结构化提取，也缺少用户确认、去重合并和覆盖策略。
+- 要素提取已收敛为 LLM 唯一路径（不再有正则降级）并写入 `elements/`，但还缺少用户确认、去重合并和覆盖策略。
 - 旧的 `pendingFileChange / confirmPendingFileChange` 确认流程代码仍有残留，但当前主工作流没有接入。
 
 ## 协作规则

@@ -1,6 +1,7 @@
-import { streamAgentCompletion } from './llm'
+import { streamAgentCompletion, AgentAbortedError } from './llm'
 import { runAgentTools } from './tool-orchestration'
-import type { ToolExecutionEvent } from './tool-execution'
+import type { ConfirmHandler, ToolExecutionEvent } from './tool-execution'
+import { filterAvailableTools, type ToolPolicy } from './tool-policy'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 import type {
   AgentAssistantMessage,
@@ -19,9 +20,10 @@ export type AgentQueryEvent =
   | { type: 'model-tool-call-parse-warning'; step: number; finishReason?: string; diagnostics?: AgentLlmDiagnostics }
   | { type: 'tool-batch-start'; step: number; toolCallCount: number }
   | { type: 'tool-batch-finish'; step: number; toolResultCount: number }
+  | { type: 'aborted'; reason: 'user'; partialContent?: string }
   | { type: 'assistant-message'; message: AgentAssistantMessage }
   | ToolExecutionEvent
-  | { type: 'done'; messages: AgentMessage[] }
+  | { type: 'done'; messages: AgentMessage[]; aborted?: boolean }
 
 export async function query(input: {
   config: ProjectConfig
@@ -29,6 +31,11 @@ export async function query(input: {
   messages: AgentMessage[]
   tools: AgentRunnableToolMap
   maxTurns?: number
+  signal?: AbortSignal
+  /** 写工具确认回调，透传到工具执行层。 */
+  confirm?: ConfirmHandler
+  /** 用户即时工具约束，透传到工具执行层。 */
+  toolPolicy?: ToolPolicy
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   let messages = [...input.messages]
@@ -36,8 +43,19 @@ export async function query(input: {
   const readFileStates = new Map<string, ReadFileState>()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
 
+  // 被用户约束禁用的工具不发给模型（可见性过滤），从源头减少无效调用往返。
+  // input.tools（完整 map）仍传给 runAgentTools 做兜底，万一模型仍生成被禁工具调用，执行层会拦住。
+  const availableTools = filterAvailableTools(Object.values(input.tools), input.toolPolicy)
+
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const step = turn + 1
+
+    // 每一轮开始前检查用户是否已停止（工具执行完毕后停止的边界）
+    if (input.signal?.aborted) {
+      input.onEvent?.({ type: 'aborted', reason: 'user' })
+      input.onEvent?.({ type: 'done', messages, aborted: true })
+      return messages
+    }
 
     input.onEvent?.({ type: 'query-step-start', step })
     input.onEvent?.({
@@ -47,21 +65,41 @@ export async function query(input: {
         ? createModelStartDebugInfo({
           config: input.config,
           messages,
-          toolCount: Object.keys(input.tools).length,
+          toolCount: availableTools.length,
         })
         : undefined,
     })
 
-    const assistantResponse = await streamAgentCompletion(
-      {
-        baseUrl: input.config.llm.baseUrl,
-        apiKey: input.config.llm.apiKey,
-        model: input.config.llm.model,
-        messages,
-        tools: Object.values(input.tools).map((tool) => tool.schema),
-      },
-      () => {},
-    )
+    let assistantResponse
+    try {
+      assistantResponse = await streamAgentCompletion(
+        {
+          baseUrl: input.config.llm.baseUrl,
+          apiKey: input.config.llm.apiKey,
+          model: input.config.llm.model,
+          messages,
+          tools: availableTools.map((tool) => tool.schema),
+          signal: input.signal,
+        },
+        () => {},
+      )
+    } catch (error) {
+      // 用户主动停止 —— 保留已生成的内容作为 assistant 消息，优雅结束
+      if (error instanceof AgentAbortedError) {
+        if (error.partialContent.trim()) {
+          const partialMessage: AgentAssistantMessage = {
+            role: 'assistant',
+            content: error.partialContent,
+          }
+          messages = [...messages, partialMessage]
+          input.onEvent?.({ type: 'assistant-message', message: partialMessage })
+        }
+        input.onEvent?.({ type: 'aborted', reason: 'user', partialContent: error.partialContent })
+        input.onEvent?.({ type: 'done', messages, aborted: true })
+        return messages
+      }
+      throw error
+    }
 
     input.onEvent?.({
       type: 'model-finish',
@@ -105,6 +143,9 @@ export async function query(input: {
       project: input.project,
       tools: input.tools,
       readFileStates,
+      signal: input.signal,
+      confirm: input.confirm,
+      toolPolicy: input.toolPolicy,
       onEvent: input.onEvent,
     })
 

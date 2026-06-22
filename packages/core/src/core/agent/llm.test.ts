@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { streamAgentCompletion } from './llm'
+import { streamAgentCompletion, AgentAbortedError } from './llm'
 import type { AgentToolSchema } from './messages'
 
 const originalFetch = globalThis.fetch
@@ -185,6 +185,90 @@ describe('streamAgentCompletion', () => {
     await expect(errorPromise).resolves.toEqual(expect.objectContaining({
       message: expect.stringContaining('模型非流式 fallback超过 300 秒未完成'),
     }))
+  })
+
+  it('aborts immediately and does not fall back to non-streaming when the user signal aborts', async () => {
+    const userController = new AbortController()
+    const encoder = new TextEncoder()
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      // fetch 的 signal 既是超时也是用户 abort 的载体；这里让它与用户 controller 联动
+      init.signal?.addEventListener('abort', () => {
+        if (!userController.signal.aborted) userController.abort()
+      })
+
+      let firstChunkSent = false
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        // poll 循环：第一个 chunk 吐出后，后续每次 pull 都检查用户是否已 abort
+        async pull(controller) {
+          if (!firstChunkSent) {
+            firstChunkSent = true
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"前面这段"}}]}\n\n'))
+            return
+          }
+
+          // 等待用户 abort（最多等一小段，避免空转）
+          if (userController.signal.aborted) {
+            controller.error(new DOMException('Aborted', 'AbortError'))
+            return
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          if (userController.signal.aborted) {
+            controller.error(new DOMException('Aborted', 'AbortError'))
+          }
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }))
+    })
+
+    globalThis.fetch = fetchMock
+
+    // 启动后稍等让第一个 chunk 被消费，再触发用户停止
+    const promise = streamAgentCompletion({
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-ai/DeepSeek-V4-Pro',
+      messages: [{ role: 'user', content: '写第一章' }],
+      tools: [listDirectoryToolSchema],
+      signal: userController.signal,
+    }, () => {})
+
+    // 让第一个 delta 被消费
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    userController.abort()
+
+    const error = await promise.catch((e: unknown) => e)
+
+    // 关键：fetch 只调用一次（没有 fallback 到非流式重试）
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(error).toBeInstanceOf(AgentAbortedError)
+    expect((error as AgentAbortedError).partialContent).toBe('前面这段')
+  })
+
+  it('throws AgentAbortedError immediately if the signal is already aborted before the request', async () => {
+    const userController = new AbortController()
+    userController.abort()
+    const fetchMock = vi.fn()
+
+    globalThis.fetch = fetchMock
+
+    const promise = streamAgentCompletion({
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-ai/DeepSeek-V4-Pro',
+      messages: [
+        { role: 'user', content: '写第一章' },
+      ],
+      tools: [listDirectoryToolSchema],
+      signal: userController.signal,
+    }, () => {})
+    const error = await promise.catch((e: unknown) => e)
+
+    // 请求开始前已停止：根本不会发起任何 fetch
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(error).toBeInstanceOf(AgentAbortedError)
   })
 })
 

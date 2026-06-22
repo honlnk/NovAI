@@ -37,6 +37,26 @@ export type ToolExecution<TName extends CoreToolName = CoreToolName, TInput = un
   result: ToolResult<TName, TOutput>
 }
 
+/**
+ * 工具层声明的结构化文件变更，由写工具在执行成功后产出。
+ * service 层据此推导 changedFiles，不再依赖工具结果文本反推。
+ */
+export type FileChange =
+  | { type: 'created'; path: string }
+  | { type: 'updated'; path: string }
+  | { type: 'renamed'; fromPath: string; toPath: string }
+  | { type: 'deleted'; path: string; trashPath?: string }
+
+/**
+ * 写工具执行前构造的确认预览，用于「写入前确认」流程。
+ * create/edit 携带完整文本用于 diff；rename/delete 仅路径级预览。
+ */
+export type WriteConfirmation =
+  | { kind: 'create'; path: string; content: string }
+  | { kind: 'edit'; path: string; oldText: string; newText: string }
+  | { kind: 'rename'; fromPath: string; toPath: string }
+  | { kind: 'delete'; path: string }
+
 export type ToolDefinition<TName extends CoreToolName, TInput, TOutput> = {
   name: TName
   description: string
@@ -44,6 +64,16 @@ export type ToolDefinition<TName extends CoreToolName, TInput, TOutput> = {
   run(input: TInput, runtime: ToolRuntime): Promise<TOutput>
   summarizeInput(input: TInput): string
   summarizeOutput(output: TOutput): string
+  /**
+   * 写工具用它声明结构化文件变更；只读工具不实现。
+   * 返回 undefined 表示该 output 不产生文件变更。
+   */
+  extractFileChange?(output: TOutput): FileChange | undefined
+  /**
+   * 写工具用它构造写入前确认预览；只读工具不实现。
+   * 入参是经过 validateInput 校验的强类型 input，执行前调用。
+   */
+  buildConfirmation?(input: TInput): WriteConfirmation
 }
 
 export type ReadFileInput = {

@@ -2,6 +2,7 @@ import {
   readProjectFile,
   rescanProject,
   writeChapterFile,
+  writeProjectTextFile,
 } from '../core/fs/project-fs'
 
 import {
@@ -48,4 +49,19 @@ export async function writeChapter(
   const project = requireRuntimeProject(projectId)
   const savedName = await writeChapterFile(project.handle, fileName, content)
   return toFileContentView(await readProjectFile(project, `chapters/${savedName}`))
+}
+
+/**
+ * 按相对路径写入项目中的任意文本文件（自动创建中间目录）。
+ * 写盘后回读一次，返回含最新 updatedAt 的 FileContentView。
+ * 供内容面板编辑模式保存章节 / 提示词 / 要素三类文件使用。
+ */
+export async function writeFile(
+  projectId: string,
+  path: string,
+  content: string,
+): Promise<FileContentView> {
+  const project = requireRuntimeProject(projectId)
+  await writeProjectTextFile(project.handle, path, content)
+  return toFileContentView(await readProjectFile(project, path))
 }

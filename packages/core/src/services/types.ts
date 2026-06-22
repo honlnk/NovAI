@@ -208,6 +208,8 @@ export type LastProjectSummaryView = {
   name: string
   rootName: string
   lastOpenedAt: string
+  chapterCount: number
+  elementCount: number
 }
 
 export type FileContentView = {
@@ -283,6 +285,8 @@ export type ChatMessageView =
       role: 'user'
       kind: 'text'
       text: string
+      /** 引用的选中内容，渲染为用户气泡内的独立引用块 */
+      quote?: string
       createdAt: string
     }
   | {
@@ -311,13 +315,34 @@ export type ChatSessionView = {
   messages: ChatMessageView[]
   currentTargetPath?: string
   lastChangedFile?: ChangedFileView
+  /** 会话标题，可选以兼容旧 view */
+  title?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+/**
+ * 历史会话列表项：只携带列表展示所需的摘要字段，不含完整消息体。
+ * listSessions 返回该数组，供前端对话分类面板渲染。
+ */
+export type ChatSessionSummaryView = {
+  sessionId: string
+  projectId: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
 }
 
 export type RunAgentTurnInput = {
   projectId: string
   sessionId?: string
   instruction: string
+  /** 本轮引用的选中内容，注入到发给模型的 user context */
+  quote?: string
   activeFilePath?: string
+  /** 用户停止信号，透传到 Agent Loop。 */
+  signal?: AbortSignal
   onEvent?: (event: AgentUiEvent) => void
 }
 
@@ -329,12 +354,19 @@ export type RunAgentTurnResult = {
   session: ChatSessionView
 }
 
+export type WriteConfirmationView =
+  | { kind: 'create'; path: string; content: string }
+  | { kind: 'edit'; path: string; oldText: string; newText: string }
+  | { kind: 'rename'; fromPath: string; toPath: string }
+  | { kind: 'delete'; path: string }
+
 export type FileChangeConfirmationView = {
   id: string
   toolName: ToolNameView
   title: string
   summary: string
-  changedFiles: ChangedFileView[]
+  /** 写工具执行前的预览数据，用于 UI 展示 diff。 */
+  confirmation: WriteConfirmationView
 }
 
 export type AgentUiEvent =

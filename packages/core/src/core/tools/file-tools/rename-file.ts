@@ -51,4 +51,10 @@ export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, Renam
   summarizeOutput(output) {
     return `已将 ${output.fromPath} 移动到 ${output.toPath}，共 ${output.contentLength} 个字符`
   },
+  extractFileChange(output) {
+    return { type: 'renamed', fromPath: output.fromPath, toPath: output.toPath }
+  },
+  buildConfirmation(input) {
+    return { kind: 'rename', fromPath: input.fromPath, toPath: input.toPath }
+  },
 }

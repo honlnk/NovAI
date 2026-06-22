@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -52,6 +52,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
+  await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
 
   return loadProjectFromHandle(rootHandle)
 }
@@ -164,6 +165,12 @@ export async function repairProject(
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   }
 
+  // 项目总览 NovAI.md 缺失时补空骨架。它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），
+  // 因此不纳入 inspectProject 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
+  if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
+    await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  }
+
   return loadProjectFromHandle(rootHandle)
 }
 
@@ -211,6 +218,35 @@ export async function readProjectFile(snapshot: ProjectSnapshot, path: string): 
  */
 export async function rescanProject(snapshot: ProjectSnapshot): Promise<TreeNode[]> {
   return scanDirectory(snapshot.handle)
+}
+
+/**
+ * 列出项目内某子目录下所有文件的相对路径（不递归子目录）。
+ * 目录不存在时返回空数组，不抛错——调用方按「该目录无内容」处理即可。
+ *
+ * 相比 rescanProject 的全树扫描，这里只打开单个目标目录遍历，适合「只需要某个子目录文件清单」的场景
+ * （如 .novel/sessions/ 下的会话列表），避免无关目录的开销。
+ */
+export async function listFilesInDirectory(
+  rootHandle: FileSystemDirectoryHandle,
+  dirPath: string,
+): Promise<string[]> {
+  let directory: FileSystemDirectoryHandle
+  try {
+    directory = await resolveDirectoryHandle(rootHandle, dirPath)
+  } catch {
+    // 目录不存在（或路径非法）视为空
+    return []
+  }
+
+  const paths: string[] = []
+  const prefix = dirPath.endsWith('/') ? dirPath : `${dirPath}/`
+  for await (const entry of directory.values()) {
+    if (entry.kind === 'file') {
+      paths.push(`${prefix}${entry.name}`)
+    }
+  }
+  return paths
 }
 
 /**
@@ -345,6 +381,21 @@ export async function readScenePrompt(
 
   try {
     return await readText(rootHandle, scenePath)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 读取项目总览 `prompts/NovAI.md`。
+ *
+ * 该文件是项目级创作记忆，作用类似 Claude Code 的 CLAUDE.md：
+ * 每轮 Agent 运行时注入到 system prompt，让模型知道“写到哪了、有哪些人物、哪些伏笔待回收”。
+ * 文件缺失时返回空字符串，不抛错（旧项目或被删除的项目）。
+ */
+export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): Promise<string> {
+  try {
+    return await readText(rootHandle, 'prompts/NovAI.md')
   } catch {
     return ''
   }
@@ -626,6 +677,7 @@ function summarizeProject(
   manifest: ProjectManifest,
 ): RecentProject {
   const chapterDirectory = tree.find((node) => node.path === 'chapters')
+  const elementDirectory = tree.find((node) => node.path === 'elements')
   const updatedAt = config.project.updatedAt || manifest.lastOpenedAt || new Date().toISOString()
 
   return {
@@ -633,6 +685,7 @@ function summarizeProject(
     name: config.project.name,
     updatedAt,
     chapterCount: countFiles(chapterDirectory),
+    elementCount: countFiles(elementDirectory),
     wordCount: 0,
   }
 }

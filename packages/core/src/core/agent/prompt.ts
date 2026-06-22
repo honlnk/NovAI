@@ -1,24 +1,30 @@
 import type { ChatTargetContext } from '../../types/chat'
 import type { ProjectSnapshot } from '../../types/project'
+import { describeActivePolicy, type ToolPolicy } from './tool-policy'
 
 export function buildAgentSystemPrompt(input: {
   systemPrompt?: string
   scenePrompt?: string
+  novaiOverview?: string
 } = {}) {
   const userPrompt = input.systemPrompt?.trim()
   const scenePrompt = input.scenePrompt?.trim()
+  const overview = input.novaiOverview?.trim()
 
-  const head = scenePrompt
-    ? [
-        userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。',
-        '',
-        '---',
-        '',
-        '【当前场景提示词】',
-        '',
-        scenePrompt,
-      ].join('\n')
-    : userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。'
+  // 拼装可变头部：用户 system.md → 项目总览(NovAI.md) → 当前场景提示词。
+  // 项目总览是项目级累积记忆（写到哪了、人物、伏笔），相对稳定；
+  // 场景提示词是本轮最具体的上下文，放在最末。两者之后才是固定的 Agent 工作原则。
+  const headParts: string[] = [userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。']
+
+  if (overview) {
+    headParts.push('', '---', '', '【项目总览（prompts/NovAI.md）】', '', overview)
+  }
+
+  if (scenePrompt) {
+    headParts.push('', '---', '', '【当前场景提示词】', '', scenePrompt)
+  }
+
+  const head = headParts.join('\n')
 
   return [
     head,
@@ -60,19 +66,37 @@ export function buildAgentSystemPrompt(input: {
 
 export function buildAgentUserContext(input: {
   instruction: string
+  quote?: string
   project: ProjectSnapshot
   target: ChatTargetContext | null
+  /** 本轮工具约束；有禁用时注入显式声明，让模型在 prompt 层感知。 */
+  policy?: ToolPolicy
 }) {
   const target = input.target?.primaryPath
     ? `${input.target.displayName} (${input.target.primaryPath})`
     : input.target?.displayName || '当前项目'
 
-  return [
+  const lines = [
     `用户意图：${input.instruction}`,
+  ]
+
+  if (input.quote?.trim()) {
+    lines.push('', '用户引用的内容：', input.quote.trim())
+  }
+
+  // 本轮工具约束声明（软约束）：让模型主动避免调用被禁工具。
+  const policyNotice = input.policy ? describeActivePolicy(input.policy) : ''
+  if (policyNotice) {
+    lines.push('', policyNotice)
+  }
+
+  lines.push(
     '',
     `当前项目：${input.project.name}`,
     `默认目标：${target}`,
     '',
     '请按照系统要求，通过工具读取或修改文件。若任务已经完成，请直接总结。若需要写文件，直接调用合适的文件工具。',
-  ].join('\n')
+  )
+
+  return lines.join('\n')
 }

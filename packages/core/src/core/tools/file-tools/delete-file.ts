@@ -45,6 +45,12 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
   summarizeOutput(output) {
     return `已将 ${output.path} 移入回收站 ${output.trashPath}，原文件共 ${output.linesRemoved} 行，${output.contentLength} 个字符`
   },
+  extractFileChange(output) {
+    return { type: 'deleted', path: output.path, trashPath: output.trashPath }
+  },
+  buildConfirmation(input) {
+    return { kind: 'delete', path: input.path }
+  },
 }
 
 function createTrashPath(path: string) {

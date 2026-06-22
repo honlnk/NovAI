@@ -14,6 +14,8 @@ export type AgentLlmInput = {
   model: string
   messages: AgentMessage[]
   tools: AgentToolSchema[]
+  /** 外部停止信号（用户点击停止）。一旦 abort，立即中断流式，且不触发非流式 fallback。 */
+  signal?: AbortSignal
 }
 
 export type AgentLlmEvent =
@@ -21,6 +23,18 @@ export type AgentLlmEvent =
   | { type: 'delta'; text: string }
   | { type: 'finish'; response: AgentAssistantResponse }
   | { type: 'error'; message: string }
+
+/** 用户主动停止运行时抛出的错误，用于区分超时与 fallback。 */
+export class AgentAbortedError extends Error {
+  readonly aborted = true
+  readonly partialContent: string
+
+  constructor(partialContent: string) {
+    super('Agent 已被用户停止')
+    this.name = 'AgentAbortedError'
+    this.partialContent = partialContent
+  }
+}
 
 type PendingToolCall = {
   id?: string
@@ -46,6 +60,11 @@ export async function streamAgentCompletion(
     const message = '请先填写 LLM 的 API 地址、API Key 和模型名称'
     onEvent({ type: 'error', message })
     throw new Error(message)
+  }
+
+  // 用户在请求开始前就已经点了停止 —— 直接中止
+  if (input.signal?.aborted) {
+    throw new AgentAbortedError('')
   }
 
   onEvent({ type: 'start' })
@@ -81,7 +100,7 @@ export async function streamAgentCompletion(
     const reader = response.body.getReader()
 
     while (true) {
-      const { done, value } = await readStreamChunk(reader, timeout.signal)
+      const { done, value } = await readStreamChunk(reader, timeout.signal, input.signal)
 
       if (done) {
         break
@@ -136,6 +155,11 @@ export async function streamAgentCompletion(
       }
     }
   } catch (error) {
+    // 用户主动停止 —— 立即中断，保留已生成内容，不触发非流式 fallback
+    if (isUserAbort(error, input.signal)) {
+      throw new AgentAbortedError(content)
+    }
+
     const fallback = await fallbackToNonStreaming(
       input,
       baseUrl,
@@ -304,20 +328,33 @@ async function fallbackToNonStreaming(
 
 async function readStreamChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal,
+  timeoutSignal: AbortSignal,
+  userSignal?: AbortSignal,
 ) {
-  if (signal.aborted) {
-    throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason))
+  if (timeoutSignal.aborted) {
+    throw timeoutSignal.reason instanceof Error ? timeoutSignal.reason : new Error(String(timeoutSignal.reason))
   }
 
-  return Promise.race([
+  if (userSignal?.aborted) {
+    throw userSignal.reason instanceof Error ? userSignal.reason : new Error(String(userSignal.reason))
+  }
+
+  const settle = (resolve: (value: ReadableStreamReadResult<Uint8Array>) => void, reject: (error: unknown) => void, signal: AbortSignal) => {
+    signal.addEventListener('abort', () => {
+      reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
+    }, { once: true })
+  }
+
+  const competitors: Promise<ReadableStreamReadResult<Uint8Array>>[] = [
     reader.read(),
-    new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
-      signal.addEventListener('abort', () => {
-        reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
-      }, { once: true })
-    }),
-  ])
+    new Promise((_, reject) => settle(undefined as never, reject, timeoutSignal)),
+  ]
+
+  if (userSignal) {
+    competitors.push(new Promise((_, reject) => settle(undefined as never, reject, userSignal)))
+  }
+
+  return Promise.race(competitors)
 }
 
 function createRequestTimeout(timeoutMs: number, label: string) {
@@ -365,6 +402,26 @@ function isAbortError(error: unknown) {
     (error instanceof DOMException && error.name === 'AbortError') ||
     (error instanceof Error && error.message.includes('LLM ') && error.message.includes('超过'))
   )
+}
+
+/**
+ * 判定一个错误是否由用户主动停止触发。
+ * 三种来源：外部 signal 已 abort、错误本身是 AgentAbortedError、DOMException AbortError 且 signal 已 abort。
+ */
+function isUserAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (error instanceof AgentAbortedError) {
+    return true
+  }
+
+  if (!signal?.aborted) {
+    return false
+  }
+
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return true
+  }
+
+  return false
 }
 
 function toOpenAiMessage(message: AgentMessage) {

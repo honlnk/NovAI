@@ -3,6 +3,7 @@ import {
   findFirstReadableFile,
   inspectProject as inspectCoreProject,
   isFileSystemAccessSupported,
+  loadProjectFromHandle,
   pickProjectDirectory,
   repairProject,
   rescanProject,
@@ -18,6 +19,7 @@ import {
   requestProjectPermission,
   saveLastProject,
   toLastProjectSummary,
+  updateRecentProjectCounts,
 } from '../core/project/recent-projects'
 import type { ProjectSnapshot } from '../types/project'
 
@@ -27,6 +29,7 @@ import {
   requireRuntimeProject,
   setRuntimeProject,
 } from './project-runtime'
+import { evictProjectSessions } from './agent-service'
 import { toProjectView } from './mappers'
 import type { LastProjectSummaryView, ProjectStatusView, ProjectView } from './types'
 
@@ -124,6 +127,43 @@ export async function getRecentProjects(): Promise<LastProjectSummaryView[]> {
   return readRecentProjects()
 }
 
+/**
+ * 首屏静默刷新最近项目的章节数与要素数。
+ *
+ * 解决「必须打开一遍才显示计数」的体验问题：对每个最近项目，若目录句柄仍持有
+ * 读写权限（只查询、不弹权限框），就重新扫描目录算出计数并回写；没有权限或扫描
+ * 失败的项目原样保留旧值。整个过程不阻塞首屏（调用方应异步触发，不 await），
+ * 且不会修改 lastOpenedAt，避免破坏列表的时间排序。
+ *
+ * @returns 刷新完成后的最新最近项目列表
+ */
+export async function refreshRecentProjectCounts(): Promise<LastProjectSummaryView[]> {
+  const summaries = await readRecentProjects()
+
+  await Promise.all(
+    summaries.map(async (summary) => {
+      try {
+        const record = await readRecentProject(summary.projectId)
+        // 没有记录，或目录权限尚未授予（不主动请求），跳过保留旧值。
+        if (!record || !(await hasProjectPermission(record.handle))) {
+          return
+        }
+
+        const project = await loadProjectFromHandle(record.handle)
+        await updateRecentProjectCounts(
+          project.id,
+          project.metadata.chapterCount,
+          project.metadata.elementCount,
+        )
+      } catch {
+        // 单个项目刷新失败不影响其它项目。
+      }
+    }),
+  )
+
+  return readRecentProjects()
+}
+
 export async function forgetLastProject(): Promise<void> {
   await forgetStoredLastProject()
 }
@@ -166,6 +206,8 @@ export async function deleteRecentProject(
   }
 
   removeRuntimeProject(projectId)
+  // 同步释放该项目驻留的会话缓存，避免历史会话累积内存泄漏
+  evictProjectSessions(projectId)
 }
 
 export async function closeProject(projectId: string): Promise<void> {
@@ -185,6 +227,8 @@ export async function closeProject(projectId: string): Promise<void> {
   })
 
   removeRuntimeProject(projectId)
+  // 关闭即释放该项目驻留的会话缓存，避免历史会话累积内存泄漏
+  evictProjectSessions(projectId)
 }
 
 export async function refreshProject(projectId: string): Promise<ProjectView> {
@@ -227,6 +271,8 @@ async function activateProject(
     name: project.name,
     rootName: project.rootName,
     handle: project.handle,
+    chapterCount: project.metadata.chapterCount,
+    elementCount: project.metadata.elementCount,
   })
 
   await writeAgentLog(project, {

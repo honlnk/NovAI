@@ -1,6 +1,8 @@
 import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { AgentMessage } from '../core/agent/messages'
+import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type { ToolPolicy } from '../core/agent/tool-policy'
 
 export type ChatToolName =
   | 'ReadFile'
@@ -17,6 +19,8 @@ export type UserTextMessage = {
   role: 'user'
   kind: 'text'
   text: string
+  /** 用户在内容面板选中的引用内容，作为独立引用块展示在用户气泡内 */
+  quote?: string
   createdAt: string
 }
 
@@ -93,23 +97,6 @@ export type ChatTargetContext = {
 
 export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
 
-export type PendingFileChange =
-  | {
-      id: string
-      type: 'edit'
-      path: string
-      oldText: string
-      newText: string
-      createdAt: string
-    }
-  | {
-      id: string
-      type: 'create'
-      path: string
-      content: string
-      createdAt: string
-    }
-
 export type ChatSessionState = {
   sessionId: string
   projectId: string
@@ -118,9 +105,15 @@ export type ChatSessionState = {
   status: ChatSessionStatus
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
-  pendingFileChange?: PendingFileChange
   lastWrittenPath?: string
-  lastTaskType?: 'read-only' | 'edit-target' | 'create-chapter'
+  /** 当前会话已注入的 system message（systemPrompt + scenePrompt 拼接结果）hash，用于检测同会话内提示词变化并刷新。 */
+  systemPromptHash?: string
+  /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
+  title: string
+  /** 会话创建时间（ISO），落盘与列表排序用 */
+  createdAt: string
+  /** 会话最近更新时间（ISO），每轮保存刷新；列表按此降序 */
+  updatedAt: string
 }
 
 export type ToolRuntimeContext = {
@@ -141,11 +134,21 @@ export type ToolDefinition<TInput, TOutput> = {
 
 export type ChatTurnInput = {
   instruction: string
+  /** 本轮引用的选中内容，会注入到发给模型的 user context */
+  quote?: string
   project: ProjectSnapshot
   config: ProjectConfig
   systemPrompt: string
   scenePrompt?: string
+  /** 项目总览（prompts/NovAI.md），每轮注入到 system prompt 的项目级累积记忆。 */
+  novaiOverview?: string
   activeFilePath?: string | null
+  /** 用户停止信号，透传到 Agent Loop。 */
+  signal?: AbortSignal
+  /** 写工具确认回调，透传到 Agent Loop。 */
+  confirm?: ConfirmHandler
+  /** 用户即时工具约束，透传到 Agent Loop。 */
+  toolPolicy?: ToolPolicy
 }
 
 export type ChatTurnResult = {

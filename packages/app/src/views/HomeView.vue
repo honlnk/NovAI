@@ -163,7 +163,9 @@ async function handleConfirmDeleteProject() {
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <h3 class="truncate font-medium text-gray-900">{{ project.name }}</h3>
-                  <p class="mt-1 text-sm text-gray-500">{{ project.chapterCount }} 章</p>
+                  <p class="mt-1 text-sm text-gray-500">
+                    {{ project.chapterCount }} 章<span class="mx-1.5 text-gray-300">·</span>{{ project.elementCount }} 个要素
+                  </p>
                 </div>
                 <button
                   class="rounded-md p-1.5 text-gray-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 group-hover:opacity-100"

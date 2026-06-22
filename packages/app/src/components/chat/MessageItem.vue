@@ -25,6 +25,13 @@ function formatTime(dateStr: string) {
         </svg>
       </div>
       <div class="rounded-lg rounded-tr-none bg-blue-600 px-4 py-2.5">
+        <!-- 引用块：选中内容作为独立引用展示在正文上方 -->
+        <div
+          v-if="message.quote"
+          class="mb-2 border-l-2 border-blue-300 bg-blue-500/40 py-1 pl-2 pr-1"
+        >
+          <p class="whitespace-pre-wrap text-xs text-blue-100">{{ message.quote }}</p>
+        </div>
         <p class="whitespace-pre-wrap text-sm text-white">{{ message.text }}</p>
         <p class="mt-1 text-right text-xs text-blue-200">{{ formatTime(message.createdAt) }}</p>
       </div>

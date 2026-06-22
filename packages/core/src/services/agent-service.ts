@@ -1,11 +1,28 @@
 import {
   createChatSession,
   runChatTurn,
+  DEFAULT_SESSION_TITLE,
+  deriveSessionTitle,
 } from '../core/chat/session'
+import {
+  saveSession,
+  loadSession,
+  deleteSessionFile,
+  listSessionMetas,
+} from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
-import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
-import type { AgentMessage, AgentToolCall } from '../core/agent/messages'
+import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
+import type { ConfirmHandler } from '../core/agent/tool-execution'
+import { parseToolPolicy } from '../core/agent/tool-policy'
+import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
+import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
+
+/**
+ * /生成项目记忆 斜杠命令的驱动 prompt。
+ * app 层通过 services 入口导入，选中命令后作为用户意图发送给 Agent，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
+ */
+export { INIT_NOVEL_PROMPT }
 
 import {
   requireRuntimeProject,
@@ -14,44 +31,217 @@ import type {
   AgentUiEvent,
   ChangedFileView,
   ChatMessageView,
+  ChatSessionSummaryView,
   ChatSessionView,
   ChatTargetView,
+  FileChangeConfirmationView,
   NovAiError,
   RunAgentTurnInput,
   RunAgentTurnResult,
   ToolCallView,
   ToolNameView,
   ToolResultView,
+  WriteConfirmationView,
 } from './types'
 
+/**
+ * 会话内存态：key 为 sessionId（一个项目可同时驻留多个历史会话）。
+ * 从「单项目单会话」升级为「多会话」，支持历史会话切换。
+ *
+ * 用 Map 的插入顺序天然作为 LRU：访问/写入时 delete+set 把条目移到末尾（最近），
+ * 超过 MAX_CACHED_SESSIONS 时从头部（最旧）淘汰。项目关闭时由 evictProjectSessions
+ * 整体清理该项目条目，避免长期累积内存泄漏。
+ */
 const sessionMap = new Map<string, ChatSessionState>()
+
+/** 内存驻留会话上限。超过则按 LRU 淘汰最旧条目；冷数据回退到从盘读取。 */
+const MAX_CACHED_SESSIONS = 16
+
+// 确认注册表：confirmationId -> resolve。UI 调 respondConfirmation 时取出来 resolve，
+// 唤醒在 confirm 回调里 await 的 Agent Loop。
+type PendingConfirmation = {
+  projectId: string
+  resolve: (decision: { accepted: boolean }) => void
+}
+const confirmationMap = new Map<string, PendingConfirmation>()
+
+/** 每个项目当前激活的会话 id；新建/切换/删除时维护。 */
+const activeSessionByProject = new Map<string, string>()
+
+/**
+ * 写入会话缓存：delete 后 set 把条目移到 Map 末尾（标记为最近使用），
+ * 再在超限时淘汰头部（最旧）。所有缓存插入统一走这里，保证 LRU 一致性。
+ *
+ * 导出仅供单测直接驱动缓存（验证 LRU 淘汰 / 项目级清理），业务代码不应直接调用。
+ */
+export function cacheSession(session: ChatSessionState) {
+  sessionMap.delete(session.sessionId)
+  sessionMap.set(session.sessionId, session)
+  while (sessionMap.size > MAX_CACHED_SESSIONS) {
+    const oldest = sessionMap.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    sessionMap.delete(oldest)
+  }
+}
+
+/**
+ * 项目级清理：移除该项目的所有驻留会话 + 激活态。
+ * 供 closeProject / deleteRecentProject 在释放运行时项目时调用，避免历史会话累积泄漏。
+ */
+export function evictProjectSessions(projectId: string) {
+  for (const [id, session] of sessionMap) {
+    if (session.projectId === projectId) {
+      sessionMap.delete(id)
+    }
+  }
+  activeSessionByProject.delete(projectId)
+}
+
+/** 测试专用：重置 module-global 缓存，避免用例间状态串扰。 */
+export function _clearSessionCacheForTest() {
+  sessionMap.clear()
+  activeSessionByProject.clear()
+}
+
+/** 测试专用：读取当前缓存内的 sessionId 列表（按 LRU 顺序，最近使用在末尾）。 */
+export function _getCachedSessionIdsForTest(): string[] {
+  return Array.from(sessionMap.keys())
+}
 
 export function deriveTargetFromPath(path?: string | null): ChatTargetView | null {
   return toChatTargetView(deriveChatTargetFromPath(path))
 }
 
 export async function createSession(projectId: string): Promise<ChatSessionView> {
-  requireRuntimeProject(projectId)
+  const project = requireRuntimeProject(projectId)
 
   const session = createChatSession(projectId)
-  sessionMap.set(projectId, session)
+  cacheSession(session)
+  activeSessionByProject.set(projectId, session.sessionId)
+
+  // 新建即落盘，确保列表能立即看到（即便用户还没发消息）
+  await saveSession(project, session)
 
   return toChatSessionView(session)
 }
 
-export async function getSession(projectId: string): Promise<ChatSessionView | null> {
-  const session = sessionMap.get(projectId)
-  return session ? toChatSessionView(session) : null
+/**
+ * 取会话视图。sessionId 缺省时返回该项目当前激活会话。
+ * 内存未命中时从文件系统加载并缓存，支持「冷启动后查看历史会话」。
+ */
+export async function getSession(
+  projectId: string,
+  sessionId?: string,
+): Promise<ChatSessionView | null> {
+  const targetId = sessionId ?? activeSessionByProject.get(projectId)
+  if (!targetId) {
+    return null
+  }
+
+  const session = await resolveSession(projectId, targetId)
+  if (!session) {
+    return null
+  }
+
+  // 若传了 sessionId 且与当前激活不同，则切换激活
+  if (sessionId && activeSessionByProject.get(projectId) !== sessionId) {
+    activeSessionByProject.set(projectId, sessionId)
+  }
+
+  return toChatSessionView(session)
+}
+
+/** 列出项目下所有历史会话摘要（按 updatedAt 降序）。 */
+export async function listSessions(
+  projectId: string,
+): Promise<ChatSessionSummaryView[]> {
+  const project = requireRuntimeProject(projectId)
+  const metas = await listSessionMetas(project)
+
+  return metas.map((meta) => ({
+    sessionId: meta.sessionId,
+    projectId,
+    title: meta.title,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    messageCount: meta.messageCount,
+  }))
+}
+
+/** 重命名会话标题（只改 state.title，不动文件名）。返回更新后的视图。 */
+export async function renameSession(
+  projectId: string,
+  sessionId: string,
+  title: string,
+): Promise<ChatSessionView> {
+  const project = requireRuntimeProject(projectId)
+  const session = await resolveSession(projectId, sessionId)
+  if (!session) {
+    throw new Error(`会话不存在或已删除：${sessionId}`)
+  }
+
+  session.title = title.trim() || DEFAULT_SESSION_TITLE
+  await saveSession(project, session)
+
+  return toChatSessionView(session)
+}
+
+/** 删除会话：删文件 + 移出内存；若删的是激活会话则激活置空（由前端决定后续切到哪条）。 */
+export async function deleteSession(projectId: string, sessionId: string): Promise<void> {
+  const project = requireRuntimeProject(projectId)
+
+  await deleteSessionFile(project, sessionId)
+  sessionMap.delete(sessionId)
+
+  if (activeSessionByProject.get(projectId) === sessionId) {
+    activeSessionByProject.delete(projectId)
+  }
+}
+
+/**
+ * 取会话状态：内存优先，未命中则从盘读入并缓存。
+ * 这是 sessionMap 多会话化后的统一读取入口。
+ */
+async function resolveSession(
+  projectId: string,
+  sessionId: string,
+): Promise<ChatSessionState | null> {
+  const cached = sessionMap.get(sessionId)
+  if (cached) {
+    // 命中即回插，刷新 LRU 顺序（最近使用移到末尾）
+    cacheSession(cached)
+    return cached
+  }
+
+  const project = requireRuntimeProject(projectId)
+  const loaded = await loadSession(project, sessionId)
+  if (!loaded) {
+    return null
+  }
+
+  cacheSession(loaded)
+  return loaded
 }
 
 export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
   const project = requireRuntimeProject(input.projectId)
-  const previousSession = input.sessionId
-    ? findSessionById(input.projectId, input.sessionId) ?? createChatSession(input.projectId)
-    : sessionMap.get(input.projectId) ?? createChatSession(input.projectId)
+
+  // 按 sessionId 路由到对应历史会话；都没有则新建（并落盘）。
+  const resolved = input.sessionId
+    ? await resolveSession(input.projectId, input.sessionId)
+    : null
+  const previousSession = resolved
+    ?? await resolveActiveOrCreate(input.projectId)
   const runId = createRunId()
 
-  sessionMap.set(input.projectId, previousSession)
+  // 记录首轮发送前的状态，用于判断本轮是否为「首条用户消息」以自动生成标题
+  const hadNoUserMessage = !previousSession.messages.some((m) => m.role === 'user')
+  const titleBeforeTurn = previousSession.title
+
+  cacheSession(previousSession)
+  activeSessionByProject.set(input.projectId, previousSession.sessionId)
   input.onEvent?.({
     type: 'run-start',
     runId,
@@ -64,22 +254,43 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       project.handle,
       project.config.settings.activeScenePromptPath,
     )
+    // 项目总览（prompts/NovAI.md）：每轮注入 system prompt，让 Agent 知道写到哪了、有哪些人物和伏笔。
+    const novaiOverview = await readNovAiOverview(project.handle)
+    // 写工具确认回调：构造预览 → 发 confirmation-required 事件 → 等 UI 调 respondConfirmation。
+    const confirm: ConfirmHandler | undefined = input.onEvent
+      ? (request) => requestConfirmation(input.projectId, request, input.onEvent!)
+      : undefined
+    // 用户即时工具约束：从 instruction 解析（如「不要读文件」「别改」「只读不改」「只改当前文件」），执行层强制禁用。
+    // 路径约束需结合当前活动文件解析，activeFilePath 无值时降级为禁写。
+    const toolPolicy = parseToolPolicy(input.instruction, input.activeFilePath)
     const turn = await runChatTurn({
       session: previousSession,
       input: {
         instruction: input.instruction,
+        quote: input.quote,
         project,
         config: project.config,
         systemPrompt,
         scenePrompt,
+        novaiOverview,
         activeFilePath: input.activeFilePath,
+        signal: input.signal,
+        confirm,
+        toolPolicy,
       },
       onEvent(event) {
         emitMessageEvent(event.message, input.onEvent)
       },
     })
 
-    sessionMap.set(input.projectId, turn.session)
+    // 首轮用户消息后，若标题仍是默认值则用首句截断自动更新
+    if (hadNoUserMessage && titleBeforeTurn === DEFAULT_SESSION_TITLE) {
+      turn.session.title = deriveSessionTitle(input.instruction)
+    }
+
+    cacheSession(turn.session)
+    // 每轮结束落盘，刷新 updatedAt，保证历史列表排序与内容持久
+    await saveSession(project, turn.session)
 
     const changedFiles = collectChangedFiles(turn.session)
     const result: RunAgentTurnResult = {
@@ -97,15 +308,116 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
     input.onEvent?.({ type: 'run-finish', result })
     return result
   } catch (error) {
+    // 出错时清理未决确认，避免注册表泄漏 / UI 卡在等待态。
+    rejectPendingConfirmations(input.projectId)
     const serviceError = toNovAiError(error)
     input.onEvent?.({ type: 'run-error', error: serviceError })
     throw error
   }
 }
 
-function findSessionById(projectId: string, sessionId: string) {
-  const session = sessionMap.get(projectId)
-  return session?.sessionId === sessionId ? session : null
+/**
+ * 取当前激活会话；没有激活则新建并落盘。runTurn 在未显式传 sessionId 时走此路径。
+ */
+async function resolveActiveOrCreate(projectId: string): Promise<ChatSessionState> {
+  const activeId = activeSessionByProject.get(projectId)
+  if (activeId) {
+    const cached = await resolveSession(projectId, activeId)
+    if (cached) {
+      return cached
+    }
+  }
+
+  const project = requireRuntimeProject(projectId)
+  const session = createChatSession(projectId)
+  cacheSession(session)
+  activeSessionByProject.set(projectId, session.sessionId)
+  await saveSession(project, session)
+  return session
+}
+
+/**
+ * 构造一次写工具确认：发 confirmation-required 事件，返回 Promise 等待 respondConfirmation。
+ * Agent Loop 在 confirm 回调里 await 它，从而在用户决定前暂停。
+ */
+function requestConfirmation(
+  projectId: string,
+  request: { call: { id: string; name: ToolNameView }; confirmation: WriteConfirmation },
+  onEvent: (event: AgentUiEvent) => void,
+): Promise<{ accepted: boolean }> {
+  const confirmationId = createRunId()
+  const view: FileChangeConfirmationView = {
+    id: confirmationId,
+    toolName: request.call.name,
+    title: buildConfirmationTitle(request.confirmation),
+    summary: buildConfirmationSummary(request.confirmation),
+    confirmation: toWriteConfirmationView(request.confirmation),
+  }
+
+  onEvent({ type: 'confirmation-required', request: view })
+
+  return new Promise<{ accepted: boolean }>((resolve) => {
+    confirmationMap.set(confirmationId, { projectId, resolve })
+  })
+}
+
+/** UI 调用：响应对某次写工具确认的接受/拒绝，唤醒等待中的 Agent Loop。 */
+export function respondConfirmation(confirmationId: string, accepted: boolean) {
+  const pending = confirmationMap.get(confirmationId)
+  if (!pending) {
+    return
+  }
+  confirmationMap.delete(confirmationId)
+  pending.resolve({ accepted })
+}
+
+/** 清理某项目的全部未决确认，按拒绝 resolve（出错/停止时调用）。 */
+function rejectPendingConfirmations(projectId: string) {
+  for (const [id, pending] of confirmationMap) {
+    if (pending.projectId === projectId) {
+      confirmationMap.delete(id)
+      pending.resolve({ accepted: false })
+    }
+  }
+}
+
+function toWriteConfirmationView(confirmation: WriteConfirmation): WriteConfirmationView {
+  switch (confirmation.kind) {
+    case 'create':
+      return { kind: 'create', path: confirmation.path, content: confirmation.content }
+    case 'edit':
+      return { kind: 'edit', path: confirmation.path, oldText: confirmation.oldText, newText: confirmation.newText }
+    case 'rename':
+      return { kind: 'rename', fromPath: confirmation.fromPath, toPath: confirmation.toPath }
+    case 'delete':
+      return { kind: 'delete', path: confirmation.path }
+  }
+}
+
+function buildConfirmationTitle(confirmation: WriteConfirmation): string {
+  switch (confirmation.kind) {
+    case 'create':
+      return `新建文件：${confirmation.path}`
+    case 'edit':
+      return `修改文件：${confirmation.path}`
+    case 'rename':
+      return `重命名：${confirmation.fromPath} → ${confirmation.toPath}`
+    case 'delete':
+      return `删除文件：${confirmation.path}`
+  }
+}
+
+function buildConfirmationSummary(confirmation: WriteConfirmation): string {
+  switch (confirmation.kind) {
+    case 'create':
+      return `将新建 ${confirmation.path}（${confirmation.content.length} 字符）`
+    case 'edit':
+      return `将修改 ${confirmation.path}（替换 ${confirmation.oldText.length} 字符）`
+    case 'rename':
+      return `将 ${confirmation.fromPath} 重命名为 ${confirmation.toPath}`
+    case 'delete':
+      return `将删除 ${confirmation.path}（移入回收站）`
+  }
 }
 
 function emitMessageEvent(
@@ -157,6 +469,9 @@ function toChatSessionView(
     messages: session.messages.map(toChatMessageView),
     currentTargetPath: session.currentTarget?.primaryPath,
     lastChangedFile,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
   }
 }
 
@@ -167,6 +482,8 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
       role: message.role,
       kind: 'text',
       text: message.text,
+      // 仅 user text 消息有 quote；assistant text 无此字段，undefined 自动忽略
+      quote: 'quote' in message ? message.quote : undefined,
       createdAt: message.createdAt,
     }
   }
@@ -227,90 +544,35 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
 
 function collectChangedFiles(session: ChatSessionState): ChangedFileView[] {
   const changes: ChangedFileView[] = []
-  const toolResultTextById = collectToolResultTextById(session.agentMessages ?? [])
 
   for (const message of session.agentMessages ?? []) {
-    if (message.role !== 'assistant' || !message.toolCalls?.length) {
+    if (message.role !== 'tool') {
       continue
     }
 
-    for (const call of message.toolCalls) {
-      const resultText = toolResultTextById.get(call.id) ?? ''
-      const change = toChangedFile(call, resultText)
-
-      if (change) {
-        changes.push(change)
-      }
+    // fileChange 由 tool-execution 在写工具成功执行后从 output 提取并挂载，
+    // 是结构化、可信的文件变更来源，不再依赖工具结果文本反推。
+    const change = message.fileChange
+    if (change) {
+      changes.push(toChangedFileView(change))
     }
   }
 
   return dedupeChangedFiles(changes)
 }
 
-function collectToolResultTextById(messages: AgentMessage[]) {
-  const result = new Map<string, string>()
-
-  for (const message of messages) {
-    if (message.role === 'tool') {
-      result.set(message.toolCallId, message.content)
-    }
+function toChangedFileView(change: FileChange): ChangedFileView {
+  // core 的 FileChange 与 service 的 ChangedFileView 形状一致；
+  // 显式映射而非直接透传，避免 service 层依赖 core 工具内部类型的结构。
+  if (change.type === 'renamed') {
+    return { type: 'renamed', fromPath: change.fromPath, toPath: change.toPath }
   }
 
-  return result
-}
-
-function toChangedFile(
-  call: AgentToolCall,
-  resultText: string,
-): ChangedFileView | null {
-  if (!isSuccessfulToolResult(resultText)) {
-    return null
+  if (change.type === 'deleted') {
+    return { type: 'deleted', path: change.path, trashPath: change.trashPath }
   }
 
-  if (call.name === 'CreateFile' && typeof call.input.path === 'string') {
-    return {
-      type: 'created',
-      path: call.input.path,
-    }
-  }
-
-  if (call.name === 'EditFile' && typeof call.input.path === 'string') {
-    return {
-      type: 'updated',
-      path: call.input.path,
-    }
-  }
-
-  if (
-    call.name === 'RenameFile' &&
-    typeof call.input.fromPath === 'string' &&
-    typeof call.input.toPath === 'string'
-  ) {
-    return {
-      type: 'renamed',
-      fromPath: call.input.fromPath,
-      toPath: call.input.toPath,
-    }
-  }
-
-  if (call.name === 'DeleteFile' && typeof call.input.path === 'string') {
-    return {
-      type: 'deleted',
-      path: call.input.path,
-      trashPath: extractTrashPath(resultText),
-    }
-  }
-
-  return null
-}
-
-function isSuccessfulToolResult(resultText: string) {
-  return /^(已读取|已修改|已新建|已将|已查看|已在)/.test(resultText)
-}
-
-function extractTrashPath(resultText: string) {
-  const match = resultText.match(/移入回收站\s+([^，\s]+)/)
-  return match?.[1]
+  return { type: change.type, path: change.path }
 }
 
 function dedupeChangedFiles(changes: ChangedFileView[]) {

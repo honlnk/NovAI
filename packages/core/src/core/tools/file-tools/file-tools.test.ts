@@ -126,6 +126,58 @@ describe('file tools', () => {
     await expect(readProjectText(runtime.project.handle, output.trashPath)).resolves.toBe('废稿')
     await expect(readProjectText(runtime.project.handle, 'chapters/old.txt')).rejects.toThrow('Not found')
   })
+
+  describe('extractFileChange', () => {
+    // 写工具成功执行后必须声明结构化文件变更，供 service 层推导 changedFiles，
+    // 不再依赖工具结果文本反推。
+    it('CreateFile declares a created change', async () => {
+      const runtime = createRuntime({})
+      const output = await createFileTool.run({ path: 'chapters/new.txt', content: '内容' }, runtime)
+
+      expect(createFileTool.extractFileChange?.(output)).toEqual({ type: 'created', path: 'chapters/new.txt' })
+    })
+
+    it('EditFile declares an updated change', async () => {
+      const runtime = createRuntime({ 'chapters/001.txt': '第一段\n第二段' })
+      await readFileTool.run({ path: 'chapters/001.txt' }, runtime)
+      const output = await editFileTool.run({
+        path: 'chapters/001.txt',
+        oldText: '第二段',
+        newText: '第二段修改',
+      }, runtime)
+
+      expect(editFileTool.extractFileChange?.(output)).toEqual({ type: 'updated', path: 'chapters/001.txt' })
+    })
+
+    it('RenameFile declares a renamed change', async () => {
+      const runtime = createRuntime({ 'chapters/source.txt': '源内容' })
+      const output = await renameFileTool.run({
+        fromPath: 'chapters/source.txt',
+        toPath: 'chapters/renamed.txt',
+      }, runtime)
+
+      expect(renameFileTool.extractFileChange?.(output)).toEqual({
+        type: 'renamed',
+        fromPath: 'chapters/source.txt',
+        toPath: 'chapters/renamed.txt',
+      })
+    })
+
+    it('DeleteFile declares a deleted change with trashPath', async () => {
+      const runtime = createRuntime({ 'chapters/old.txt': '废稿' })
+      const output = await deleteFileTool.run({ path: 'chapters/old.txt' }, runtime)
+
+      expect(deleteFileTool.extractFileChange?.(output)).toEqual({
+        type: 'deleted',
+        path: 'chapters/old.txt',
+        trashPath: output.trashPath,
+      })
+    })
+
+    it('read-only tools do not declare file changes', () => {
+      expect(readFileTool.extractFileChange).toBeUndefined()
+    })
+  })
 })
 
 function createRuntime(files: Record<string, string>): ToolRuntime {
