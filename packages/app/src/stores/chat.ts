@@ -24,11 +24,16 @@ import type {
 
 import { useProjectStore } from './project'
 
+/** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
+export type RunStatusType = 'idle' | 'running' | 'error'
+
 export const useChatStore = defineStore('chat', () => {
   const sessionView = ref<ChatSessionView | null>(null)
   const agentEvents = ref<AgentUiEvent[]>([])
   const changedFiles = ref<ChangedFileView[]>([])
   const runStatus = ref('还没有开始执行。')
+  // runStatus 的语义类型，供状态栏按类型上色（idle 灰 / running 蓝 / error 红）
+  const runStatusType = ref<RunStatusType>('idle')
   const isRunning = ref(false)
   // 用户已请求停止、正在等待当前工具执行完成
   const isStopping = ref(false)
@@ -174,7 +179,7 @@ export const useChatStore = defineStore('chat', () => {
 
     agentEvents.value = []
     changedFiles.value = []
-    runStatus.value = '正在执行本轮 Agent...'
+    setRunStatus('正在执行本轮 Agent...', 'running')
     isRunning.value = true
     isStopping.value = false
 
@@ -194,13 +199,15 @@ export const useChatStore = defineStore('chat', () => {
 
       sessionView.value = result.session
       changedFiles.value = result.changedFiles
-      runStatus.value = result.changedFiles.length > 0
-        ? `本轮执行完成，变更 ${result.changedFiles.length} 个文件`
-        : '本轮执行完成，未修改任何文件'
+      setRunStatus(
+        result.changedFiles.length > 0
+          ? `本轮执行完成，变更 ${result.changedFiles.length} 个文件`
+          : '本轮执行完成，未修改任何文件',
+      )
 
       return result
     } catch (error) {
-      runStatus.value = error instanceof Error ? error.message : '执行会话失败'
+      setRunStatus(error instanceof Error ? error.message : '执行会话失败', 'error')
       throw error
     } finally {
       isRunning.value = false
@@ -222,19 +229,24 @@ export const useChatStore = defineStore('chat', () => {
       activeAbortController = null
       // 立即进入「停止中」态：UI 反馈 + 等待当前工具完成
       isStopping.value = true
-      runStatus.value = '已请求停止，等待当前工具执行完成…'
+      setRunStatus('已请求停止，等待当前工具执行完成…', 'running')
     }
   }
 
-  function setRunStatus(nextStatus: string) {
+  /**
+   * 统一的 runStatus 写入入口：同时设置文案与语义类型，
+   * UI（状态栏）按 type 上色，无需靠字符串匹配。
+   */
+  function setRunStatus(nextStatus: string, type: RunStatusType = 'idle') {
     runStatus.value = nextStatus
+    runStatusType.value = type
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
     agentEvents.value = [...agentEvents.value, event]
 
     if (event.type === 'run-start') {
-      runStatus.value = 'Agent 正在执行...'
+      setRunStatus('Agent 正在执行...', 'running')
       return
     }
 
@@ -253,21 +265,23 @@ export const useChatStore = defineStore('chat', () => {
 
     if (event.type === 'confirmation-required') {
       pendingConfirmation.value = event.request
-      runStatus.value = '等待确认写入操作…'
+      setRunStatus('等待确认写入操作…')
       return
     }
 
     if (event.type === 'run-error') {
-      runStatus.value = event.error.message
+      setRunStatus(event.error.message, 'error')
       return
     }
 
     if (event.type === 'run-finish') {
       sessionView.value = event.result.session
       changedFiles.value = event.result.changedFiles
-      runStatus.value = event.result.changedFiles.length > 0
-        ? `本轮执行完成，变更 ${event.result.changedFiles.length} 个文件`
-        : '本轮执行完成，未修改任何文件'
+      setRunStatus(
+        event.result.changedFiles.length > 0
+          ? `本轮执行完成，变更 ${event.result.changedFiles.length} 个文件`
+          : '本轮执行完成，未修改任何文件',
+      )
     }
   }
 
@@ -295,7 +309,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     pendingConfirmation.value = null
     respondAgentConfirmation(confirmation.id, true)
-    runStatus.value = 'Agent 正在执行...'
+    setRunStatus('Agent 正在执行...', 'running')
   }
 
   /** 用户拒绝当前待确认的写操作，Agent 收到拒绝结果后可调整。 */
@@ -306,7 +320,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     pendingConfirmation.value = null
     respondAgentConfirmation(confirmation.id, false)
-    runStatus.value = 'Agent 正在执行...'
+    setRunStatus('Agent 正在执行...', 'running')
   }
 
   return {
@@ -321,6 +335,7 @@ export const useChatStore = defineStore('chat', () => {
     sessions,
     activeSessionId,
     runStatus,
+    runStatusType,
     hasSessionView,
     abortRun,
     confirmWriteTool,

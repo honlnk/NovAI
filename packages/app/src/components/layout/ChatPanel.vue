@@ -6,7 +6,6 @@ import { shouldSubmitOnEnter } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
 import MessageItem from '../chat/MessageItem.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
-import SceneChip from '../chat/SceneChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
@@ -30,8 +29,6 @@ const props = defineProps<{
   scenes: ProjectFileNodeView[]
   /** 当前激活的场景路径，null 表示未激活 */
   activeScenePromptPath: string | null
-  /** 当前激活场景的显示名（已去扩展名），chip 展示用 */
-  activeSceneName: string | null
   /** 章节列表（chapters/*.txt|.md），供 /提取要素 选择（R6） */
   chapters: ProjectFileNodeView[]
 }>()
@@ -422,18 +419,13 @@ async function handleExtractionConfirm() {
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
-        <!-- chip 区：引用 chip + 场景 chip -->
-        <div v-if="quote || activeSceneName" class="mb-2 flex flex-wrap items-center gap-2">
+        <!-- chip 区：引用 chip（场景 chip 已移至底部状态栏） -->
+        <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
           <SelectionChip
             v-if="quote"
             :file-name="quote.name"
             :text="quote.text"
             @remove="emit('clearQuote')"
-          />
-          <SceneChip
-            v-if="activeSceneName"
-            :scene-name="activeSceneName"
-            @remove="emit('changeScene', null)"
           />
         </div>
         <div class="relative flex gap-2">
@@ -508,7 +500,6 @@ async function handleExtractionConfirm() {
             </svg>
           </button>
         </div>
-        <p class="mt-1 text-xs text-gray-500">{{ chatStore.runStatus }}</p>
       </div>
     </div>
   </section>

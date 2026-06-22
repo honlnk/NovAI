@@ -124,18 +124,6 @@ watch(
   },
 )
 
-// 监听运行状态，显示 Toast 提示
-watch(
-  () => chatStore.runStatus,
-  (status) => {
-    if (status.includes('执行完成')) {
-      toast.success(status)
-    } else if (status.includes('失败') || status.includes('错误')) {
-      toast.error(status)
-    }
-  },
-)
-
 // 切换文件时清空选中引用（引用绑定当前文件，避免跨文件残留）
 watch(
   () => projectStore.activeFile?.path,
@@ -283,7 +271,6 @@ async function handleElementsWritten() {
         :quote="selectionQuote"
         :scenes="sceneList"
         :active-scene-prompt-path="activeScenePromptPath"
-        :active-scene-name="activeSceneName"
         :chapters="chapterList"
         @toggle-sidebar="toggleSidebar"
         @toggle-content-panel="toggleContentPanel"
@@ -316,8 +303,14 @@ async function handleElementsWritten() {
       />
     </div>
 
-    <!-- 底部 RAG 索引状态栏（常驻，随项目激活） -->
-    <IndexStatusBar :project-id="projectId" />
+    <!-- 底部项目状态栏：索引状态 + 当前场景 + 本轮执行状态（常驻，随项目激活） -->
+    <IndexStatusBar
+      :project-id="projectId"
+      :active-scene-name="activeSceneName"
+      :run-status="chatStore.runStatus"
+      :run-status-type="chatStore.runStatusType"
+      @clear-scene="handleChangeScene(null)"
+    />
 
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
     <SettingsModal
