@@ -11,11 +11,18 @@ import {
   listSessionMetas,
 } from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
-import { readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
+import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { parseToolPolicy } from '../core/agent/tool-policy'
+import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
+
+/**
+ * /生成项目记忆 斜杠命令的驱动 prompt。
+ * app 层通过 services 入口导入，选中命令后作为用户意图发送给 Agent，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
+ */
+export { INIT_NOVEL_PROMPT }
 
 import {
   requireRuntimeProject,
@@ -247,6 +254,8 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       project.handle,
       project.config.settings.activeScenePromptPath,
     )
+    // 项目总览（prompts/NovAI.md）：每轮注入 system prompt，让 Agent 知道写到哪了、有哪些人物和伏笔。
+    const novaiOverview = await readNovAiOverview(project.handle)
     // 写工具确认回调：构造预览 → 发 confirmation-required 事件 → 等 UI 调 respondConfirmation。
     const confirm: ConfirmHandler | undefined = input.onEvent
       ? (request) => requestConfirmation(input.projectId, request, input.onEvent!)
@@ -263,6 +272,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         config: project.config,
         systemPrompt,
         scenePrompt,
+        novaiOverview,
         activeFilePath: input.activeFilePath,
         signal: input.signal,
         confirm,

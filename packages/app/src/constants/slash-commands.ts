@@ -5,7 +5,7 @@
  * 每个命令选中后展开对应的二级交互界面（目前只有 extract）。
  * 后续可扩展 /校对、/整理 等。
  */
-export type SlashCommandId = 'extract'
+export type SlashCommandId = 'extract' | 'init'
 
 export type SlashCommand = {
   /** 命令唯一标识 */
@@ -25,5 +25,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: '/提取要素',
     description: '从章节中提取人物、地点、剧情等要素',
     icon: '✨',
+  },
+  {
+    id: 'init',
+    label: '/生成项目记忆',
+    description: '扫描项目生成/更新 prompts/NovAI.md 项目总览',
+    icon: '📋',
   },
 ]

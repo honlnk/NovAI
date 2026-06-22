@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
+import { INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 import { useChatStore } from '../../stores/chat'
 import { shouldSubmitOnEnter } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
@@ -286,6 +287,13 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   if (id === 'extract') {
     // 选中「提取要素」后展开章节多选
     isChapterPickerOpen.value = props.chapters.length > 0
+    return
+  }
+
+  if (id === 'init') {
+    // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
+    // 不需要二级交互界面，复用普通对话发送链路。
+    void chatStore.sendMessage(INIT_NOVEL_PROMPT)
   }
 }
 

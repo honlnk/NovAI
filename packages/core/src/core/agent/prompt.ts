@@ -5,21 +5,26 @@ import { describeActivePolicy, type ToolPolicy } from './tool-policy'
 export function buildAgentSystemPrompt(input: {
   systemPrompt?: string
   scenePrompt?: string
+  novaiOverview?: string
 } = {}) {
   const userPrompt = input.systemPrompt?.trim()
   const scenePrompt = input.scenePrompt?.trim()
+  const overview = input.novaiOverview?.trim()
 
-  const head = scenePrompt
-    ? [
-        userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。',
-        '',
-        '---',
-        '',
-        '【当前场景提示词】',
-        '',
-        scenePrompt,
-      ].join('\n')
-    : userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。'
+  // 拼装可变头部：用户 system.md → 项目总览(NovAI.md) → 当前场景提示词。
+  // 项目总览是项目级累积记忆（写到哪了、人物、伏笔），相对稳定；
+  // 场景提示词是本轮最具体的上下文，放在最末。两者之后才是固定的 Agent 工作原则。
+  const headParts: string[] = [userPrompt || '你是 NovAI，一个通过工具读写本地小说项目文件的写作 Agent。']
+
+  if (overview) {
+    headParts.push('', '---', '', '【项目总览（prompts/NovAI.md）】', '', overview)
+  }
+
+  if (scenePrompt) {
+    headParts.push('', '---', '', '【当前场景提示词】', '', scenePrompt)
+  }
+
+  const head = headParts.join('\n')
 
   return [
     head,

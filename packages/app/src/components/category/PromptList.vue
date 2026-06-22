@@ -29,6 +29,13 @@ const systemPrompt = computed<ProjectFileNodeView | null>(() => {
   ) ?? null
 })
 
+/** 项目总览：prompts/NovAI.md。每轮注入到 system prompt 的项目级累积记忆，可手动编辑或用 /生成项目记忆 刷新 */
+const novaiOverview = computed<ProjectFileNodeView | null>(() => {
+  return promptRootChildren.value.find(
+    n => n.kind === 'file' && n.path === 'prompts/NovAI.md',
+  ) ?? null
+})
+
 /** 场景提示词：prompts/scenes/ 目录下的所有 .md 文件（拉平） */
 const scenePrompts = computed<ProjectFileNodeView[]>(() => {
   const sceneChildren = pickDirectoryChildren(props.files, 'prompts/scenes')
@@ -66,6 +73,28 @@ function isSceneActive(path: string): boolean {
         </button>
         <p v-else class="px-2 py-2 text-xs text-gray-600">
           未找到系统提示词（prompts/system.md）
+        </p>
+      </div>
+
+      <!-- 项目总览 -->
+      <div class="mb-2">
+        <p class="px-2 py-1 text-xs font-medium uppercase tracking-wide text-gray-500">项目总览</p>
+        <button
+          v-if="novaiOverview"
+          :class="[
+            'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+            novaiOverview.path === activeFilePath
+              ? 'bg-white/15 text-white'
+              : 'text-gray-400 hover:bg-white/10 hover:text-gray-200',
+          ]"
+          @click="emit('selectFile', novaiOverview.path)"
+        >
+          <span class="shrink-0">📋</span>
+          <span class="truncate">{{ novaiOverview.name }}</span>
+          <span class="ml-auto shrink-0 text-xs text-gray-500">恒注入</span>
+        </button>
+        <p v-else class="px-2 py-2 text-xs text-gray-600">
+          未找到项目总览（prompts/NovAI.md）
         </p>
       </div>
 

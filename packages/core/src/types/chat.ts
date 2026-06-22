@@ -140,6 +140,8 @@ export type ChatTurnInput = {
   config: ProjectConfig
   systemPrompt: string
   scenePrompt?: string
+  /** 项目总览（prompts/NovAI.md），每轮注入到 system prompt 的项目级累积记忆。 */
+  novaiOverview?: string
   activeFilePath?: string | null
   /** 用户停止信号，透传到 Agent Loop。 */
   signal?: AbortSignal

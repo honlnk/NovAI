@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -52,6 +52,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
+  await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
 
   return loadProjectFromHandle(rootHandle)
 }
@@ -162,6 +163,12 @@ export async function repairProject(
 
   if (!(await pathExists(rootHandle, 'prompts/system.md', 'file'))) {
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
+  }
+
+  // 项目总览 NovAI.md 缺失时补空骨架。它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），
+  // 因此不纳入 inspectProject 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
+  if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
+    await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
   }
 
   return loadProjectFromHandle(rootHandle)
@@ -374,6 +381,21 @@ export async function readScenePrompt(
 
   try {
     return await readText(rootHandle, scenePath)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 读取项目总览 `prompts/NovAI.md`。
+ *
+ * 该文件是项目级创作记忆，作用类似 Claude Code 的 CLAUDE.md：
+ * 每轮 Agent 运行时注入到 system prompt，让模型知道“写到哪了、有哪些人物、哪些伏笔待回收”。
+ * 文件缺失时返回空字符串，不抛错（旧项目或被删除的项目）。
+ */
+export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): Promise<string> {
+  try {
+    return await readText(rootHandle, 'prompts/NovAI.md')
   } catch {
     return ''
   }

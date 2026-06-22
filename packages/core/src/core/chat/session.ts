@@ -86,6 +86,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   const newSystemContent = buildAgentSystemPrompt({
     systemPrompt: input.systemPrompt,
     scenePrompt: input.scenePrompt,
+    novaiOverview: input.novaiOverview,
   })
   const newSystemHash = hashContent(newSystemContent)
   if (session.agentMessages && session.systemPromptHash !== newSystemHash) {
@@ -99,6 +100,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     quote: input.quote,
     systemPrompt: input.systemPrompt,
     scenePrompt: input.scenePrompt,
+    novaiOverview: input.novaiOverview,
     project: input.project,
     target,
     toolPolicy: input.toolPolicy,
@@ -476,6 +478,7 @@ function buildAgentMessages(input: {
   quote?: string
   systemPrompt: string
   scenePrompt?: string
+  novaiOverview?: string
   project: ChatTurnInput['project']
   target: ChatTargetContext | null
   toolPolicy?: ChatTurnInput['toolPolicy']
@@ -501,6 +504,7 @@ function buildAgentMessages(input: {
       content: buildAgentSystemPrompt({
         systemPrompt: input.systemPrompt,
         scenePrompt: input.scenePrompt,
+        novaiOverview: input.novaiOverview,
       }),
     },
     nextUserMessage,
