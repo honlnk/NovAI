@@ -11,6 +11,7 @@ import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
+import OrganizeChaptersModal from '../components/organize/OrganizeChaptersModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
@@ -30,6 +31,7 @@ const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
+const isOrganizeOpen = ref(false)
 /** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
 
@@ -144,6 +146,10 @@ function handleOpenSettings() {
   isSettingsOpen.value = true
 }
 
+function handleOpenOrganize() {
+  isOrganizeOpen.value = true
+}
+
 /**
  * 功能占位项统一反馈。
  * 校对、章节整理、版本管理暂未实现，保留入口但提示「即将推出」。
@@ -240,7 +246,7 @@ async function handleElementsWritten() {
         @open-settings="handleOpenSettings"
         @back-to-home="handleBackToHome"
         @proofread="handleNotImplemented('校对')"
-        @organize="handleNotImplemented('章节整理')"
+        @organize="handleOpenOrganize"
         @version="handleNotImplemented('版本管理')"
       />
 
@@ -317,6 +323,13 @@ async function handleElementsWritten() {
       v-if="isSettingsOpen"
       :project-id="projectId"
       @close="isSettingsOpen = false"
+    />
+
+    <!-- 章节整理模态框（扫描不规范章节，确认后批量改名） -->
+    <OrganizeChaptersModal
+      v-if="isOrganizeOpen"
+      :project-id="projectId"
+      @close="isOrganizeOpen = false"
     />
 
     <!-- Toast 提示 -->

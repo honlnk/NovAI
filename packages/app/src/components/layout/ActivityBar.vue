@@ -28,14 +28,14 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
 ]
 
 /**
- * 底部功能占位项（暂未实现）。
- * 仅保留入口，点击触发对应 emit，由 ProjectView 决定如何反馈。
+ * 底部功能项。
+ * enabled 标记是否已实现：已实现的正常态可点击，未实现的灰一档提示「即将推出」。
  * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理。
  */
-const actionItems: { key: 'proofread' | 'organize' | 'version'; label: string; icon: string }[] = [
-  { key: 'proofread', label: '校对', icon: 'check' },
-  { key: 'organize', label: '章节整理', icon: 'list' },
-  { key: 'version', label: '版本管理', icon: 'branch' },
+const actionItems: { key: 'proofread' | 'organize' | 'version'; label: string; icon: string; enabled: boolean }[] = [
+  { key: 'proofread', label: '校对', icon: 'check', enabled: false },
+  { key: 'organize', label: '章节整理', icon: 'list', enabled: true },
+  { key: 'version', label: '版本管理', icon: 'branch', enabled: false },
 ]
 
 /**
@@ -92,16 +92,21 @@ function emitAction(key: 'proofread' | 'organize' | 'version') {
 
     <!-- 底部动作项：功能占位 + 设置 + 返回首页 -->
     <div class="flex flex-col items-center gap-1">
-      <!-- 功能占位项（暂未实现，灰一档提示） -->
+      <!-- 功能项：已实现的正常态，未实现的灰一档提示「即将推出」 -->
       <Tooltip
         v-for="item in actionItems"
         :key="item.key"
-        :text="`${item.label}（即将推出）`"
+        :text="item.enabled ? item.label : `${item.label}（即将推出）`"
         :delay="300"
         preferred-placement="right"
       >
         <button
-          class="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-white/10 hover:text-gray-400"
+          :class="[
+            'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+            item.enabled
+              ? 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
+              : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
+          ]"
           @click="emitAction(item.key)"
         >
           <!-- 校对 -->
