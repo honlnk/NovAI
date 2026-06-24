@@ -1,6 +1,7 @@
 import { getProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import type { EditFileInput, EditFileOutput, ToolDefinition } from '../types'
 import { assertTextFilePath, normalizeProjectPath } from '../path'
+import { assertChapterNameFormat, isChapterPath } from '../chapter-name'
 import { asRecord, countLines, readString } from './common'
 import {
   assertFreshReadFileState,
@@ -26,6 +27,11 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       : readReadFileState(value.readFileState, 'EditFile.readFileState')
 
     assertTextFilePath(path)
+
+    // chapters/ 下对称强制命名规范：不规范章节不可编辑内容，必须先整理改名
+    if (isChapterPath(path)) {
+      assertChapterNameFormat(path)
+    }
 
     if (oldText === newText) {
       throw new Error('EditFile.oldText 和 EditFile.newText 完全相同，没有可修改内容')

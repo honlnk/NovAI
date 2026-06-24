@@ -1,5 +1,6 @@
 import { moveProjectTextFile, readProjectTextFile } from '../../fs/project-fs'
 import { assertWritableTextFilePath, isNotFoundError, normalizeProjectPath } from '../path'
+import { assertChapterNumberAvailable, isChapterPath } from '../chapter-name'
 import type { RenameFileInput, RenameFileOutput, ToolDefinition } from '../types'
 import { asRecord, assertMutableDocumentPath, assertWritableDocumentPath, readString } from './common'
 
@@ -25,6 +26,11 @@ export const renameFileTool: ToolDefinition<'RenameFile', RenameFileInput, Renam
   },
   async run(input, runtime) {
     assertWritableTextFilePath(input.toPath)
+
+    // 目标在 chapters/ 下时检测编号是否被占用（排除 fromPath 自身）
+    if (isChapterPath(input.toPath)) {
+      await assertChapterNumberAvailable(runtime.project.handle, input.toPath, input.fromPath)
+    }
 
     const content = await readProjectTextFile(runtime.project.handle, input.fromPath)
 

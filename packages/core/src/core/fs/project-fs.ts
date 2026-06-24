@@ -409,21 +409,6 @@ export async function writeSystemPrompt(rootHandle: FileSystemDirectoryHandle, c
 }
 
 /**
- * 将生成结果保存为章节文件，并返回最终采用的文件名。
- * 如果调用方没有提供合法名称，这里会自动生成一个可落盘的默认值。
- */
-export async function writeChapterFile(
-  rootHandle: FileSystemDirectoryHandle,
-  fileName: string,
-  content: string,
-) {
-  // 测试页允许直接输入文件名，这里统一兜底成稳定的 .txt 文件名。
-  const normalizedName = normalizeChapterFileName(fileName)
-  await writeText(rootHandle, `chapters/${normalizedName}`, content)
-  return normalizedName
-}
-
-/**
  * 从文件树中找到第一个可直接预览的文本文件路径。
  * 适合项目激活时给测试页提供一个默认打开目标。
  */
@@ -459,25 +444,6 @@ function inferFormat(name: string): ProjectFileContent['format'] {
   }
 
   return 'text'
-}
-
-function normalizeChapterFileName(fileName: string) {
-  const trimmed = fileName.trim()
-
-  if (!trimmed) {
-    const now = new Date()
-    const stamp = [
-      now.getFullYear(),
-      `${now.getMonth() + 1}`.padStart(2, '0'),
-      `${now.getDate()}`.padStart(2, '0'),
-      `${now.getHours()}`.padStart(2, '0'),
-      `${now.getMinutes()}`.padStart(2, '0'),
-      `${now.getSeconds()}`.padStart(2, '0'),
-    ].join('')
-    return `chapter-${stamp}.txt`
-  }
-
-  return trimmed.endsWith('.txt') ? trimmed : `${trimmed.replace(/\.md$/i, '')}.txt`
 }
 
 async function scanDirectory(

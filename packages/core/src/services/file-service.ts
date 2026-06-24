@@ -1,7 +1,6 @@
 import {
   readProjectFile,
   rescanProject,
-  writeChapterFile,
   writeProjectTextFile,
 } from '../core/fs/project-fs'
 
@@ -39,16 +38,6 @@ export async function refreshFiles(projectId: string): Promise<ProjectFileNodeVi
   })
 
   return toProjectFileNodeViews(tree)
-}
-
-export async function writeChapter(
-  projectId: string,
-  fileName: string,
-  content: string,
-): Promise<FileContentView> {
-  const project = requireRuntimeProject(projectId)
-  const savedName = await writeChapterFile(project.handle, fileName, content)
-  return toFileContentView(await readProjectFile(project, `chapters/${savedName}`))
 }
 
 /**

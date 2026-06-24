@@ -4,7 +4,7 @@ export const DEFAULT_SYSTEM_PROMPT = `# SYSTEM Prompt
 
 ## 文件格式约定
 - 章节正文写入 chapters/*.txt，正文使用纯文本。
-- 章节文件第一行写章节标题，例如：第001章 章节标题。
+- 章节文件名形如 第001章-章节标题.txt，编号至少 3 位补零，标题非空。
 - 章节正文不要使用 Markdown 标题、列表、引用、分割线等格式符号。
 - 人物、地点、实体、情节、时间线、世界观等要素写入 elements/**/*.md。
 - SYSTEM 与 SCENE 提示词写入 prompts/**/*.md。`

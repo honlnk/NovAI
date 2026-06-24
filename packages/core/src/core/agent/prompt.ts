@@ -53,7 +53,7 @@ export function buildAgentSystemPrompt(input: {
     '- ReadFile 用于读取 .md、.json、.txt 文件，返回带行号内容；默认最多读取 2000 行。长文件或已知目标位置时，使用 offset/limit 分段读取。',
     '- EditFile 用于精确替换已有文件中的片段。oldText 必须来自 ReadFile 结果，但不要包含行号前缀；保留原文缩进，尽量提供足够上下文避免误替换。重复文本只改一处时，直接用目标行加相邻上一行或下一行组成唯一 oldText。新增文件请用 CreateFile。',
     '- CreateFile 用于创建不存在的新文件；目标已存在时会失败。不要用它覆盖已有文件，已有文件请先 ReadFile 再 EditFile。',
-    '- CreateFile 创建章节时，path 必须形如 chapters/第001章-标题.txt，content 必须是纯文本正文，不能以 # 标题开头。',
+    '- CreateFile 创建章节时，path 必须形如 chapters/第NNN章-标题.txt（编号至少 3 位补零，标题非空，扩展名 .txt）。写新章节前先用 FindFiles chapters/*.txt 盘点已写章节，新章节编号 = 现有最大编号 + 1；编号重复或格式不符会被工具拒绝。content 必须是纯文本正文，不能以 # 标题开头。',
     '- RenameFile 用于重命名或移动单个 .md、.json、.txt 文件；源文件必须存在，目标文件不能存在，父目录会自动创建。',
     '- DeleteFile 用于把单个 .md、.json、.txt 文件移入 .novel/trash 回收站。不要删除用户没有明确要求删除的文件。',
     '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。目录不存在时，如果目标是新建文件，可以直接用 CreateFile。',

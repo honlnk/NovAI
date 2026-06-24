@@ -1,3 +1,5 @@
+import { assertChapterNameFormat, isChapterPath } from './chapter-name'
+
 const TEXT_FILE_EXTENSIONS = ['.md', '.json', '.txt'] as const
 
 export function normalizeProjectPath(path: string): string {
@@ -59,6 +61,11 @@ export function assertWritableTextFilePath(path: string): void {
 
   if (path.startsWith('chapters/') && !path.toLowerCase().endsWith('.txt')) {
     throw new Error('章节正文必须写入 chapters/*.txt；要素和提示词才使用 .md')
+  }
+
+  // chapters/ 下必须符合「第NNN章-标题.txt」命名规范
+  if (isChapterPath(path)) {
+    assertChapterNameFormat(path)
   }
 }
 

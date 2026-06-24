@@ -1,5 +1,6 @@
 import { readProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import { assertWritableTextFilePath, isNotFoundError } from '../path'
+import { assertChapterNumberAvailable, isChapterPath } from '../chapter-name'
 import type { CreateFileInput, CreateFileOutput, ToolDefinition } from '../types'
 import { asRecord, countLines, normalizeTextFilePath, readString } from './common'
 
@@ -18,6 +19,11 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
   },
   async run(input, runtime) {
     assertWritableTextFilePath(input.path)
+
+    // chapters/ 下检测章节编号是否已被占用
+    if (isChapterPath(input.path)) {
+      await assertChapterNumberAvailable(runtime.project.handle, input.path)
+    }
 
     try {
       await readProjectTextFile(runtime.project.handle, input.path)
