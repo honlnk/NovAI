@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import type { ProjectConfigView } from '@novai/core/services/types'
+import { useProjectStore } from '../../stores/project'
 import { useSettingsStore } from '../../stores/settings'
 import PasswordInput from '../ui/PasswordInput.vue'
 
@@ -12,8 +14,9 @@ const emit = defineEmits<{
 }>()
 
 const settingsStore = useSettingsStore()
+const projectStore = useProjectStore()
 
-const activeTab = ref<'llm' | 'embedding' | 'rerank' | 'project'>('llm')
+const activeTab = ref<'llm' | 'embedding' | 'rerank' | 'completion' | 'project'>('llm')
 
 // 表单状态
 const llmForm = ref({
@@ -35,6 +38,15 @@ const rerankForm = ref({
   model: '',
   mode: 'text' as 'text' | 'multimodal',
   topN: 8,
+})
+
+const completionForm = ref({
+  enabled: false,
+  baseUrl: 'https://api.deepseek.com/beta',
+  apiKey: '',
+  model: 'deepseek-chat',
+  debounceMs: 600,
+  maxTokens: 64,
 })
 
 const projectForm = ref({
@@ -82,6 +94,16 @@ onMounted(async () => {
         topN: settingsStore.config.rerank.topN ?? 8,
       }
     }
+    if (settingsStore.config.completion) {
+      completionForm.value = {
+        enabled: settingsStore.config.completion.enabled ?? false,
+        baseUrl: settingsStore.config.completion.baseUrl ?? 'https://api.deepseek.com/beta',
+        apiKey: settingsStore.config.completion.apiKey ?? '',
+        model: settingsStore.config.completion.model ?? 'deepseek-chat',
+        debounceMs: settingsStore.config.completion.debounceMs ?? 600,
+        maxTokens: settingsStore.config.completion.maxTokens ?? 64,
+      }
+    }
     if (settingsStore.config.settings) {
       applyProjectSettings(settingsStore.config.settings)
     }
@@ -111,15 +133,35 @@ async function handleTestEmbedding() {
 }
 
 async function handleSaveLlm() {
-  await settingsStore.saveConfig(projectId.value, { llm: llmForm.value })
+  const saved = await settingsStore.saveConfig(projectId.value, { llm: llmForm.value })
+  syncCurrentProjectConfig(saved)
 }
 
 async function handleSaveEmbedding() {
-  await settingsStore.saveConfig(projectId.value, { embedding: embeddingForm.value })
+  const saved = await settingsStore.saveConfig(projectId.value, { embedding: embeddingForm.value })
+  syncCurrentProjectConfig(saved)
 }
 
 async function handleSaveRerank() {
-  await settingsStore.saveConfig(projectId.value, { rerank: rerankForm.value })
+  const saved = await settingsStore.saveConfig(projectId.value, { rerank: rerankForm.value })
+  syncCurrentProjectConfig(saved)
+}
+
+async function handleSaveCompletion() {
+  const saved = await settingsStore.saveConfig(projectId.value, { completion: completionForm.value })
+  syncCurrentProjectConfig(saved)
+}
+
+/**
+ * 保存配置后同步到 projectStore.currentProject.config。
+ *
+ * settingsStore 与 projectStore 各持有一份配置副本，若不同步，ChatPanel 读 projectStore 侧
+ * 会拿到过期数据（如输入补全开关刚打开，ChatPanel 却读不到 enabled）。
+ */
+function syncCurrentProjectConfig(saved: ProjectConfigView | null) {
+  if (saved) {
+    projectStore.updateCurrentProjectConfig(saved)
+  }
 }
 
 async function handleSaveProject() {
@@ -138,6 +180,7 @@ async function handleSaveProject() {
   }
 
   applyProjectSettings(savedConfig.settings)
+  syncCurrentProjectConfig(savedConfig)
   testResult.value = {
     ok: true,
     message: '项目设置已保存',
@@ -188,6 +231,7 @@ function applyProjectSettings(settings: NonNullable<typeof settingsStore.config>
               { key: 'llm', label: 'LLM 配置' },
               { key: 'embedding', label: 'Embedding 配置' },
               { key: 'rerank', label: 'Rerank 配置' },
+              { key: 'completion', label: '输入补全' },
               { key: 'project', label: '项目设置' },
             ]"
             :key="tab.key"
@@ -355,8 +399,85 @@ function applyProjectSettings(settings: NonNullable<typeof settingsStore.config>
             </div>
           </div>
 
+          <!-- 输入补全配置 -->
+          <div v-if="activeTab === 'completion'" class="space-y-4">
+            <div class="flex items-center gap-3">
+              <label class="text-sm font-medium text-gray-700">启用输入补全</label>
+              <button
+                :class="[
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                  completionForm.enabled ? 'bg-gray-900' : 'bg-gray-300',
+                ]"
+                @click="completionForm.enabled = !completionForm.enabled"
+              >
+                <span
+                  :class="[
+                    'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                    completionForm.enabled ? 'translate-x-6' : 'translate-x-1',
+                  ]"
+                />
+              </button>
+            </div>
+            <div v-if="completionForm.enabled" class="space-y-4">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">API 地址</label>
+                <p class="mb-1 text-xs text-gray-500">DeepSeek FIM 补全需带 /beta，如 https://api.deepseek.com/beta</p>
+                <input
+                  v-model="completionForm.baseUrl"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  placeholder="https://api.deepseek.com/beta"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">API Key</label>
+                <PasswordInput v-model="completionForm.apiKey" placeholder="sk-..." />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">模型名称</label>
+                <input
+                  v-model="completionForm.model"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  placeholder="deepseek-chat"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">防抖时长（毫秒）</label>
+                <p class="mb-1 text-xs text-gray-500">停顿该时长后才发起补全请求，平衡响应性与成本</p>
+                <input
+                  v-model.number="completionForm.debounceMs"
+                  type="number"
+                  min="200"
+                  max="3000"
+                  step="100"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">单次最大 Token</label>
+                <p class="mb-1 text-xs text-gray-500">提示词补全不需要长，建议保持较小值以控制成本</p>
+                <input
+                  v-model.number="completionForm.maxTokens"
+                  type="number"
+                  min="16"
+                  max="256"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div class="pt-2">
+              <button
+                type="button"
+                class="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+                @click="handleSaveCompletion"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+
           <!-- 项目设置 -->
           <div v-if="activeTab === 'project'" class="space-y-6">
+            <!-- 生成设置 -->
             <!-- 生成设置 -->
             <div>
               <h3 class="mb-3 text-sm font-semibold text-gray-800">生成设置</h3>

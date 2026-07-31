@@ -83,6 +83,14 @@ export const DEFAULT_CONFIG = {
     mode: 'text',
     topN: 8,
   },
+  completion: {
+    enabled: false,
+    baseUrl: 'https://api.deepseek.com/beta',
+    apiKey: '',
+    model: 'deepseek-chat',
+    debounceMs: 600,
+    maxTokens: 64,
+  },
   settings: {
     generationRecentChapters: 3,
     ragCandidateLimit: 20,

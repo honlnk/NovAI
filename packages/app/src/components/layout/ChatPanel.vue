@@ -3,13 +3,16 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 import { useChatStore } from '../../stores/chat'
-import { shouldSubmitOnEnter } from '../../composables/keyboard'
+import { isImeComposing, shouldSubmitOnEnter } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
+import { useInlineCompletion } from '../../composables/useInlineCompletion'
+import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import type { SlashCommandId } from '../../constants/slash-commands'
@@ -46,6 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const chatStore = useChatStore()
+const projectStore = useProjectStore()
 const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -54,6 +58,14 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const isSending = computed(() => chatStore.isRunning)
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
+
+// ===== 输入框 AI 补全（FIM ghost text） =====
+const completionConfig = computed(() => projectStore.currentProject?.config.completion)
+const { suggestion: completionSuggestion, scheduleCompletion, acceptNextSegment, clearSuggestion } = useInlineCompletion()
+/** 补全是否处于可显示状态（开启 + 有建议 + 非发送中） */
+const isCompletionVisible = computed(
+  () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !isSending.value,
+)
 
 // 自动滚动到底部
 async function scrollToBottom() {
@@ -74,6 +86,7 @@ watch(
 async function handleSend() {
   if (!inputText.value.trim() || isSending.value) return
 
+  clearSuggestion()
   const message = inputText.value.trim()
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
@@ -98,6 +111,22 @@ function handleStop() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // 输入框 AI 补全交互（最高优先级，贴近光标）：
+  // - IME 组合态放行，避免在中文选词时误触 Tab/Esc
+  // - Tab 接受建议的首个分词单位；Esc 丢弃剩余建议
+  // - 仅当 ghost text 可见时拦截，避免吞掉其他场景的 Tab/Esc
+  if (!isImeComposing(event) && isCompletionVisible.value) {
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      acceptCompletionSegment()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      clearSuggestion()
+      return
+    }
+  }
   // /提取要素 章节选择打开时：仅拦截 Esc（选择走鼠标点击）
   if (isChapterPickerOpen.value) {
     if (event.key === 'Escape') {
@@ -165,10 +194,47 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 
-/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素） */
+/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素）+ 输入补全调度 */
 function onTextareaInput(event: Event) {
   autoResize(event)
   detectCommands()
+  scheduleInlineCompletion()
+}
+
+/**
+ * 调度输入补全。命令菜单 / @场景 / 章节选择打开时不调度，避免与这些交互冲突。
+ */
+function scheduleInlineCompletion() {
+  if (isSlashMenuOpen.value || isSceneCommandOpen.value || isChapterPickerOpen.value) {
+    clearSuggestion()
+    return
+  }
+  const cursor = textareaRef.value?.selectionStart ?? 0
+  scheduleCompletion(inputText.value, cursor, completionConfig.value)
+}
+
+/**
+ * 接受建议的首个分词单位：拼到 inputText 末尾，吃光后清空状态并重置高度。
+ */
+function acceptCompletionSegment() {
+  const { accepted, hasMore } = acceptNextSegment()
+  if (accepted) {
+    inputText.value += accepted
+    // 同步光标到末尾，让后续补全基于新光标位置
+    nextTick(() => {
+      if (textareaRef.value) {
+        const end = inputText.value.length
+        textareaRef.value.selectionStart = end
+        textareaRef.value.selectionEnd = end
+        textareaRef.value.style.height = 'auto'
+        textareaRef.value.style.height = `${Math.min(textareaRef.value.scrollHeight, 200)}px`
+      }
+    })
+  }
+  if (!hasMore) {
+    // 建议已吃完，基于新内容重新调度一次（可能续出下一段）
+    scheduleInlineCompletion()
+  }
 }
 
 // ===== R4：@场景 指令检测 =====
@@ -436,7 +502,7 @@ async function handleExtractionConfirm() {
             @remove="emit('clearQuote')"
           />
         </div>
-        <div class="relative flex gap-2">
+        <div class="relative">
           <!-- @场景 指令弹层（R4） -->
           <SceneCommandPopover
             v-if="isSceneCommandOpen"
@@ -462,51 +528,58 @@ async function handleExtractionConfirm() {
             @confirm="handleChapterPickerConfirm"
             @cancel="handleChapterPickerCancel"
           />
-          <textarea
-            ref="textareaRef"
-            v-model="inputText"
-            class="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)"
-            rows="1"
-            @keydown="handleKeydown"
-            @input="onTextareaInput"
-          />
-          <button
-            v-if="isStopping"
-            class="self-end rounded-lg border border-gray-200 bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-400"
-            title="正在停止…"
-            disabled
-          >
-            <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-          </button>
-          <button
-            v-else-if="isSending"
-            class="self-end rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-            title="停止运行"
-            @click="handleStop"
-          >
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
-            </svg>
-          </button>
-          <button
-            v-else
-            class="self-end rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
-            :disabled="!inputText.trim()"
-            @click="handleSend"
-          >
-            <svg
-              class="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
-          </button>
+          <!-- 卡片式输入框：textarea + ghost text 覆盖层 + 工具行（发送按钮） -->
+          <div class="chat-input-card">
+            <!-- textarea + ghost text 覆盖层（补全开启且有建议时） -->
+            <div class="relative">
+              <GhostTextOverlay
+                v-if="isCompletionVisible"
+                :input-text="inputText"
+                :suggestion="completionSuggestion"
+              />
+              <textarea
+                ref="textareaRef"
+                v-model="inputText"
+                class="chat-input-base resize-none bg-transparent text-gray-800 outline-none placeholder:text-gray-400"
+                placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)"
+                rows="2"
+                @keydown="handleKeydown"
+                @input="onTextareaInput"
+              />
+            </div>
+            <!-- 工具行：发送/停止按钮右对齐 -->
+            <div class="mt-1 flex items-center justify-end">
+              <button
+                v-if="isStopping"
+                class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
+                title="正在停止…"
+                disabled
+              >
+                <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              </button>
+              <button
+                v-else-if="isSending"
+                class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                title="停止运行"
+                @click="handleStop"
+              >
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+                </svg>
+              </button>
+              <button
+                v-else
+                class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
+                :disabled="!inputText.trim()"
+                @click="handleSend"
+              >
+                {{ '发送' }}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

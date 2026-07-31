@@ -29,6 +29,7 @@ export function toProjectConfigView(config: ProjectConfig): ProjectConfigView {
     llm: { ...config.llm },
     embedding: { ...config.embedding },
     rerank: { ...config.rerank },
+    completion: { ...config.completion },
     settings: { ...config.settings },
   }
 }

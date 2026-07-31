@@ -298,6 +298,10 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       ...DEFAULT_CONFIG.rerank,
       ...config.rerank,
     },
+    completion: {
+      ...DEFAULT_CONFIG.completion,
+      ...config.completion,
+    },
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...config.settings,

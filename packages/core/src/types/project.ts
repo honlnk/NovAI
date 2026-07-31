@@ -41,6 +41,20 @@ export type ProjectConfig = {
     mode: 'text' | 'multimodal'
     topN: number
   }
+  /**
+   * 对话输入框 AI 补全（FIM）配置。
+   *
+   * 默认关闭，需用户在设置中主动开启并填写 DeepSeek FIM 的地址、Key、模型，
+   * 开启后才会在对话输入框触发 ghost text 补全。与主 LLM 独立，互不影响。
+   */
+  completion: {
+    enabled: boolean
+    baseUrl: string
+    apiKey: string
+    model: string
+    debounceMs: number
+    maxTokens: number
+  }
   settings: {
     generationRecentChapters: number
     ragCandidateLimit: number

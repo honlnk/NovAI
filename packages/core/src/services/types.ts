@@ -30,6 +30,14 @@ export type ProjectConfigView = {
     mode: 'text' | 'multimodal'
     topN: number
   }
+  completion: {
+    enabled: boolean
+    baseUrl: string
+    apiKey: string
+    model: string
+    debounceMs: number
+    maxTokens: number
+  }
   settings: {
     generationRecentChapters: number
     ragCandidateLimit: number
@@ -53,6 +61,8 @@ export type EmbeddingConfigView = ProjectConfigView['embedding']
 
 export type RerankConfigView = ProjectConfigView['rerank']
 
+export type CompletionConfigView = ProjectConfigView['completion']
+
 export type ProjectSettingsView = ProjectConfigView['settings']
 
 export type ProjectConfigPatch = Partial<{
@@ -60,6 +70,7 @@ export type ProjectConfigPatch = Partial<{
   llm: Partial<LlmConfigView>
   embedding: Partial<EmbeddingConfigView>
   rerank: Partial<RerankConfigView>
+  completion: Partial<CompletionConfigView>
   settings: Partial<ProjectSettingsView>
 }>
 
@@ -93,6 +104,29 @@ export type LlmStreamInputView = {
   model: string
   systemPrompt?: string
   instruction: string
+}
+
+/**
+ * 对话输入框 AI 补全（FIM）事件流，与 LlmStreamEventView 同构。
+ */
+export type FimCompletionEventView =
+  | { type: 'start' }
+  | { type: 'delta'; text: string }
+  | { type: 'finish'; text: string }
+  | { type: 'error'; message: string }
+
+/**
+ * FIM 补全请求输入。prompt 为光标前文本（前缀），suffix 为光标后文本（后缀，提示词场景通常为空）。
+ * signal 用于在用户继续打字时中断上一次未完成的请求。
+ */
+export type FimCompletionInputView = {
+  baseUrl: string
+  apiKey: string
+  model: string
+  prompt: string
+  suffix?: string
+  maxTokens?: number
+  signal?: AbortSignal
 }
 
 export type ElementTypeView = 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'

@@ -51,6 +51,10 @@ export async function updateConfig(
       ...currentConfig.rerank,
       ...patch.rerank,
     },
+    completion: {
+      ...currentConfig.completion,
+      ...patch.completion,
+    },
     settings: {
       ...currentConfig.settings,
       ...patch.settings,
