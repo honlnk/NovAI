@@ -1,4 +1,5 @@
 import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse, resolveApiUrl } from '../ai/shared'
+import { testConnectionViaModelList } from '../ai/models-client'
 
 import type {
   LlmStreamEvent,
@@ -8,45 +9,20 @@ import type {
 } from '../../types/ai'
 
 /**
- * 使用 OpenAI 兼容的 `/models` 接口测试 LLM 配置是否可用。
- * 返回值已经整理成适合直接展示给用户的结果结构。
+ * 测试 LLM 配置是否可用：拉取模型列表验证可达与鉴权，
+ * 已填写模型名时顺带检查模型是否在列表中。
  */
 export async function testLlmConnection(
   input: Omit<ModelConnectionInput, 'kind'>,
 ): Promise<ModelConnectionResult> {
-  const baseUrl = normalizeBaseUrl(input.baseUrl)
-
-  if (!baseUrl || !input.apiKey.trim()) {
-    return {
-      ok: false,
-      message: '请先填写 API 地址和 API Key',
-    }
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/models`, {
-      method: 'GET',
-      headers: createJsonHeaders(input.apiKey, baseUrl),
-    })
-
-    if (!response.ok) {
-      const payload = await readJsonResponse(response)
-      return {
-        ok: false,
-        message: extractErrorMessage(payload, 'LLM 测试连接失败'),
-      }
-    }
-
-    return {
-      ok: true,
-      message: 'LLM 连接成功',
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : 'LLM 测试连接失败',
-    }
-  }
+  return testConnectionViaModelList({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    protocol: input.protocol,
+    model: input.model,
+    label: 'LLM',
+    requiredMessage: '请先填写 API 地址和 API Key',
+  })
 }
 
 /**

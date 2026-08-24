@@ -28,6 +28,14 @@ export function createJsonHeaders(apiKey: string, baseUrl?: string) {
     Authorization: `Bearer ${apiKey.trim()}`,
   }
 
+  return appendProxyHeader(headers, baseUrl)
+}
+
+/**
+ * 在非 Bearer 鉴权的自定义请求头上补充 DEV 代理所需的目标地址头。
+ * anthropic / gemini 等协议的请求头不走 Bearer，但 DEV 代理同样需要 x-target-base。
+ */
+export function appendProxyHeader(headers: Record<string, string>, baseUrl?: string) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl ?? '')
 
   if (shouldUseDevProxy(normalizedBaseUrl)) {

@@ -1,3 +1,5 @@
+import type { ModelProtocol } from './ai'
+
 export type ProjectSummary = {
   id: string
   name: string
@@ -27,6 +29,11 @@ export type ProjectConfig = {
     baseUrl: string
     apiKey: string
     model: string
+    /**
+     * LLM 服务的 API 协议。当前生成链路仅实现 OpenAI 兼容协议，
+     * anthropic / gemini 仅在配置层（拉取模型列表、测试连接）支持。
+     */
+    protocol: ModelProtocol
   }
   embedding: {
     baseUrl: string

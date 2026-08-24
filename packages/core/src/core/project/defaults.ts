@@ -69,6 +69,7 @@ export const DEFAULT_CONFIG = {
     baseUrl: '',
     apiKey: '',
     model: '',
+    protocol: 'openai',
   },
   embedding: {
     baseUrl: '',

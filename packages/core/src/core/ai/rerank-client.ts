@@ -1,4 +1,5 @@
 import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse, resolveApiUrl } from '../ai/shared'
+import { isDashScopeBaseUrl, testConnectionViaModelList } from './models-client'
 
 import type { ModelConnectionResult } from '../../types/ai'
 import type { RerankInput, RerankResult } from '../../types/rag'
@@ -9,42 +10,21 @@ export type RerankConnectionInput = {
   model?: string
 }
 
+/**
+ * 测试 Rerank 配置是否可用：拉取模型列表验证可达与鉴权。
+ * DashScope 原生地址会自动改走 compatible-mode 拉取（原生地址没有 /models）。
+ */
 export async function testRerankConnection(
   input: RerankConnectionInput,
 ): Promise<ModelConnectionResult> {
-  const baseUrl = normalizeBaseUrl(input.baseUrl)
-
-  if (!baseUrl || !input.apiKey.trim()) {
-    return {
-      ok: false,
-      message: '请先填写 Rerank 的 API 地址和 API Key',
-    }
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/models`, {
-      method: 'GET',
-      headers: createJsonHeaders(input.apiKey, baseUrl),
-    })
-
-    if (!response.ok) {
-      const payload = await readJsonResponse(response)
-      return {
-        ok: false,
-        message: extractErrorMessage(payload, 'Rerank 测试连接失败'),
-      }
-    }
-
-    return {
-      ok: true,
-      message: 'Rerank 连接成功',
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : 'Rerank 测试连接失败',
-    }
-  }
+  return testConnectionViaModelList({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    model: input.model,
+    purpose: 'rerank',
+    label: 'Rerank',
+    requiredMessage: '请先填写 Rerank 的 API 地址和 API Key',
+  })
 }
 
 export async function rerankCandidates(
@@ -182,8 +162,4 @@ function buildRerankRequest(baseUrl: string, input: RerankConnectionInput & Rera
       documents: input.candidates.map((candidate) => candidate.retrievalText),
     },
   }
-}
-
-function isDashScopeBaseUrl(baseUrl: string) {
-  return /dashscope(-intl)?\.aliyuncs\.com/.test(baseUrl)
 }

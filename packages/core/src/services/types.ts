@@ -16,6 +16,8 @@ export type ProjectConfigView = {
     baseUrl: string
     apiKey: string
     model: string
+    /** LLM 服务的 API 协议；生成链路当前仅实现 openai（Chat Completions 兼容）。 */
+    protocol: 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
   }
   embedding: {
     baseUrl: string
@@ -78,6 +80,25 @@ export type ConnectionTestResultView = {
   ok: boolean
   message: string
 }
+
+/** 拉取模型列表的输入；protocol 仅 LLM 配置使用，其余配置固定 OpenAI 兼容协议。 */
+export type ListModelsInputView = {
+  baseUrl: string
+  apiKey: string
+  protocol?: 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
+}
+
+/**
+ * models 为服务返回的全量列表，filtered 为按用途过滤后的子集（未指定 purpose 时两者相同）。
+ * source 为 builtin 时表示结果来自内置清单（百炼 embedding / rerank 不走 API 拉取）。
+ */
+export type ListModelsResultView = {
+  models: string[]
+  filtered: string[]
+  source: 'api' | 'builtin'
+}
+
+export type ModelListPurposeView = 'llm' | 'embedding' | 'rerank' | 'completion'
 
 export type ChatTargetView = {
   type:

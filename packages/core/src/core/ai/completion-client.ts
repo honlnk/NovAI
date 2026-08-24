@@ -1,4 +1,5 @@
 import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse, resolveApiUrl } from '../ai/shared'
+import { testConnectionViaModelList } from './models-client'
 
 import type { ModelConnectionInput, ModelConnectionResult } from '../../types/ai'
 
@@ -164,44 +165,19 @@ export async function streamFimCompletion(
 }
 
 /**
- * 测试补全模型连接是否可用（走 `/models`）。
+ * 测试补全模型连接是否可用：拉取模型列表验证可达与鉴权，
+ * 已填写模型名时顺带检查模型是否在列表中。
  */
 export async function testCompletionConnection(
   input: Omit<ModelConnectionInput, 'kind'>,
 ): Promise<ModelConnectionResult> {
-  const baseUrl = normalizeBaseUrl(input.baseUrl)
-
-  if (!baseUrl || !input.apiKey.trim()) {
-    return {
-      ok: false,
-      message: '请先填写补全模型的 API 地址和 API Key',
-    }
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/models`, {
-      method: 'GET',
-      headers: createJsonHeaders(input.apiKey, baseUrl),
-    })
-
-    if (!response.ok) {
-      const payload = await readJsonResponse(response)
-      return {
-        ok: false,
-        message: extractErrorMessage(payload, '补全模型测试连接失败'),
-      }
-    }
-
-    return {
-      ok: true,
-      message: '补全模型连接成功',
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : '补全模型测试连接失败',
-    }
-  }
+  return testConnectionViaModelList({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    model: input.model,
+    label: '补全模型',
+    requiredMessage: '请先填写补全模型的 API 地址和 API Key',
+  })
 }
 
 /**
