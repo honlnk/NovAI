@@ -4,6 +4,7 @@ import { defineStore } from 'pinia'
 import {
   getConfig,
   readSystemPrompt,
+  testCompletion,
   testEmbedding,
   testLlm,
   testRerank,
@@ -11,6 +12,7 @@ import {
   writeSystemPrompt,
 } from '@novai/core/services/settings-service'
 import type {
+  CompletionConfigView,
   ConnectionTestResultView,
   EmbeddingConfigView,
   LlmConfigView,
@@ -72,8 +74,14 @@ export const useSettingsStore = defineStore('settings', () => {
     return runConnectionTest(() => testEmbedding(input))
   }
 
-  async function testRerankConfig(input: RerankConfigView) {
+  async function testRerankConfig(input: Pick<RerankConfigView, 'baseUrl' | 'apiKey' | 'model'>) {
     return runConnectionTest(() => testRerank(input))
+  }
+
+  async function testCompletionConfig(
+    input: Pick<CompletionConfigView, 'baseUrl' | 'apiKey' | 'model'>,
+  ) {
+    return runConnectionTest(() => testCompletion(input))
   }
 
   function resetSettings() {
@@ -120,6 +128,7 @@ export const useSettingsStore = defineStore('settings', () => {
     resetSettings,
     saveConfig,
     saveSystemPrompt,
+    testCompletionConfig,
     testEmbeddingConfig,
     testLlmConfig,
     testRerankConfig,

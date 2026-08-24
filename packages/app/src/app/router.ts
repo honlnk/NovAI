@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import HomeView from '../views/HomeView.vue'
+import ModelDocsView from '../views/ModelDocsView.vue'
 import ProjectView from '../views/ProjectView.vue'
 
 export const router = createRouter({
@@ -15,6 +16,11 @@ export const router = createRouter({
       path: '/project/:id',
       name: 'project',
       component: ProjectView,
+    },
+    {
+      path: '/model-docs',
+      name: 'model-docs',
+      component: ModelDocsView,
     },
   ],
 })
