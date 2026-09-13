@@ -2,14 +2,11 @@
 import ToggleSwitch from '../ui/ToggleSwitch.vue'
 
 /**
- * 项目设置面板：生成 / RAG / 对话 / 校对整理的数值参数与调试开关。
+ * 项目设置面板：RAG / 对话的数值参数与调试开关。
  * 分组间用 border-t 分隔（照抄 gpt-image-studio 的面板内二级分区规范）。
  */
 defineProps<{
   form: {
-    proofreadDefaultChapters: number
-    organizeDefaultChapters: number
-    generationRecentChapters: number
     ragCandidateLimit: number
     ragContextMaxItems: number
     conversationTokenLimit: number
@@ -27,26 +24,8 @@ defineProps<{
     </p>
 
     <div class="mt-4 space-y-4">
-      <!-- 生成设置 -->
-      <div>
-        <h4 class="text-sm font-semibold text-gray-900">生成设置</h4>
-        <div class="mt-3 space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-gray-700">生成上下文章节数</label>
-            <input
-              v-model.number="form.generationRecentChapters"
-              type="number"
-              min="0"
-              max="20"
-              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
-            />
-            <p class="mt-1.5 text-xs text-gray-500">生成时携带最近 N 章的原文作为上下文</p>
-          </div>
-        </div>
-      </div>
-
       <!-- RAG 设置 -->
-      <div class="border-t border-gray-200 pt-5">
+      <div>
         <h4 class="text-sm font-semibold text-gray-900">RAG 设置</h4>
         <div class="mt-3 space-y-4">
           <div>
@@ -78,28 +57,36 @@ defineProps<{
       <div class="border-t border-gray-200 pt-5">
         <h4 class="text-sm font-semibold text-gray-900">对话设置</h4>
         <div class="mt-3 space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-gray-700">对话上下文 Token 上限</label>
+          <div class="opacity-60">
+            <label class="mb-1 flex items-center gap-2 text-sm font-medium text-gray-700">
+              对话上下文 Token 上限
+              <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-700">即将上线</span>
+            </label>
             <input
               v-model.number="form.conversationTokenLimit"
               type="number"
               min="1000"
               max="200000"
               step="1000"
-              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+              disabled
+              class="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 outline-none"
             />
-            <p class="mt-1.5 text-xs text-gray-500">接近上限时触发上下文压缩</p>
+            <p class="mt-1.5 text-xs text-gray-500">规划中：上下文自动压缩功能上线后，对话历史接近此阈值时将触发压缩</p>
           </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-gray-700">压缩保留轮数</label>
+          <div class="opacity-60">
+            <label class="mb-1 flex items-center gap-2 text-sm font-medium text-gray-700">
+              压缩保留轮数
+              <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-700">即将上线</span>
+            </label>
             <input
               v-model.number="form.compressionKeepRecentTurns"
               type="number"
               min="1"
               max="20"
-              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+              disabled
+              class="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 outline-none"
             />
-            <p class="mt-1.5 text-xs text-gray-500">上下文压缩时保留最近 N 轮对话的原文</p>
+            <p class="mt-1.5 text-xs text-gray-500">规划中：上下文压缩时保留最近 N 轮对话的原文</p>
           </div>
           <div class="flex items-start justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5">
             <div>
@@ -107,35 +94,6 @@ defineProps<{
               <p class="mt-0.5 text-xs text-gray-500">记录模型配置、请求摘要和工具调用解析诊断；正式使用建议关闭</p>
             </div>
             <ToggleSwitch v-model="form.enableDebugLogging" />
-          </div>
-        </div>
-      </div>
-
-      <!-- 校对与整理 -->
-      <div class="border-t border-gray-200 pt-5">
-        <h4 class="text-sm font-semibold text-gray-900">校对与整理</h4>
-        <div class="mt-3 space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-gray-700">校对默认章节数</label>
-            <input
-              v-model.number="form.proofreadDefaultChapters"
-              type="number"
-              min="1"
-              max="50"
-              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
-            />
-            <p class="mt-1.5 text-xs text-gray-500">自动校对最近 N 章</p>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-gray-700">整理默认章节数</label>
-            <input
-              v-model.number="form.organizeDefaultChapters"
-              type="number"
-              min="1"
-              max="50"
-              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
-            />
-            <p class="mt-1.5 text-xs text-gray-500">自动整理最近 N 章</p>
           </div>
         </div>
       </div>

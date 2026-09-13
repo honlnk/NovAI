@@ -12,7 +12,7 @@ defineProps<{
     baseUrl: string
     apiKey: string
     model: string
-    mode: 'text' | 'multimodal'
+    mode: 'text'
     topN: number
   }
 }>()

@@ -29,7 +29,7 @@ export type ProjectConfigView = {
     baseUrl: string
     apiKey: string
     model: string
-    mode: 'text' | 'multimodal'
+    mode: 'text'
     topN: number
   }
   completion: {
@@ -41,15 +41,11 @@ export type ProjectConfigView = {
     maxTokens: number
   }
   settings: {
-    generationRecentChapters: number
     ragCandidateLimit: number
     ragContextMaxItems: number
-    proofreadDefaultChapters: number
-    organizeDefaultChapters: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
     embeddingTextVersion: number
-    enableBackgroundIndexing: boolean
     enableDebugLogging: boolean
     activeScenePromptPath: string | null
   }

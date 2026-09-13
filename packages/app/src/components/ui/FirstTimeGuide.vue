@@ -60,7 +60,7 @@ function handleGoToSettings() {
               <div class="flex h-6 w-6 items-center justify-center rounded-full bg-blue-200 text-xs font-semibold text-blue-800">
                 3
               </div>
-              <span class="text-sm text-blue-800">设置系统提示词（指导 AI 创作风格）</span>
+              <span class="text-sm text-blue-800">在左侧「提示词」分类中编辑 prompts/system.md（指导 AI 创作风格）</span>
             </div>
           </div>
           <div class="mt-4 flex gap-3">

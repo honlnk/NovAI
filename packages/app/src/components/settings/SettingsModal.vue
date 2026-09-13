@@ -58,7 +58,7 @@ const rerankForm = reactive({
   baseUrl: '',
   apiKey: '',
   model: '',
-  mode: 'text' as 'text' | 'multimodal',
+  mode: 'text' as 'text',
   topN: 8,
 })
 
@@ -72,12 +72,9 @@ const completionForm = reactive({
 })
 
 const projectForm = reactive({
-  proofreadDefaultChapters: 3,
-  organizeDefaultChapters: 10,
-  generationRecentChapters: 3,
   ragCandidateLimit: 20,
   ragContextMaxItems: 8,
-  conversationTokenLimit: 8000,
+  conversationTokenLimit: 12000,
   compressionKeepRecentTurns: 5,
   enableDebugLogging: false,
 })
@@ -131,12 +128,9 @@ onMounted(async () => {
     const settings = config.settings
     if (settings) {
       Object.assign(projectForm, {
-        proofreadDefaultChapters: settings.proofreadDefaultChapters ?? 3,
-        organizeDefaultChapters: settings.organizeDefaultChapters ?? 10,
-        generationRecentChapters: settings.generationRecentChapters ?? 3,
         ragCandidateLimit: settings.ragCandidateLimit ?? 20,
         ragContextMaxItems: settings.ragContextMaxItems ?? 8,
-        conversationTokenLimit: settings.conversationTokenLimit ?? 8000,
+        conversationTokenLimit: settings.conversationTokenLimit ?? 12000,
         compressionKeepRecentTurns: settings.compressionKeepRecentTurns ?? 5,
         enableDebugLogging: settings.enableDebugLogging ?? false,
       })

@@ -406,13 +406,6 @@ export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): 
 }
 
 /**
- * 写回项目中的 `prompts/system.md`。
- */
-export async function writeSystemPrompt(rootHandle: FileSystemDirectoryHandle, content: string) {
-  await writeText(rootHandle, 'prompts/system.md', content)
-}
-
-/**
  * 从文件树中找到第一个可直接预览的文本文件路径。
  * 适合项目激活时给测试页提供一个默认打开目标。
  */

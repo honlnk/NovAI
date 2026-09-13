@@ -11,9 +11,7 @@ import { testRerankConnection } from '../core/ai/rerank-client'
 import { testEmbeddingConnection } from '../core/embedding/client'
 import {
   readProjectConfig,
-  readSystemPrompt as readCoreSystemPrompt,
   writeProjectConfig,
-  writeSystemPrompt as writeCoreSystemPrompt,
 } from '../core/fs/project-fs'
 import { testLlmConnection } from '../core/llm/client'
 
@@ -83,19 +81,6 @@ export async function updateConfig(
   })
 
   return toProjectConfigView(savedConfig)
-}
-
-export async function readSystemPrompt(projectId: string): Promise<string> {
-  const project = requireRuntimeProject(projectId)
-  return readCoreSystemPrompt(project.handle)
-}
-
-export async function writeSystemPrompt(
-  projectId: string,
-  content: string,
-): Promise<void> {
-  const project = requireRuntimeProject(projectId)
-  await writeCoreSystemPrompt(project.handle, content)
 }
 
 export async function testLlm(config: LlmConfigView): Promise<ConnectionTestResultView> {

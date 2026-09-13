@@ -1,7 +1,6 @@
 import { streamAgentCompletion, AgentAbortedError } from './llm'
 import { runAgentTools } from './tool-orchestration'
 import type { ConfirmHandler, ToolExecutionEvent } from './tool-execution'
-import { filterAvailableTools, type ToolPolicy } from './tool-policy'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 import type {
   AgentAssistantMessage,
@@ -34,8 +33,6 @@ export async function query(input: {
   signal?: AbortSignal
   /** 写工具确认回调，透传到工具执行层。 */
   confirm?: ConfirmHandler
-  /** 用户即时工具约束，透传到工具执行层。 */
-  toolPolicy?: ToolPolicy
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   let messages = [...input.messages]
@@ -43,9 +40,7 @@ export async function query(input: {
   const readFileStates = new Map<string, ReadFileState>()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
 
-  // 被用户约束禁用的工具不发给模型（可见性过滤），从源头减少无效调用往返。
-  // input.tools（完整 map）仍传给 runAgentTools 做兜底，万一模型仍生成被禁工具调用，执行层会拦住。
-  const availableTools = filterAvailableTools(Object.values(input.tools), input.toolPolicy)
+  const availableTools = Object.values(input.tools)
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const step = turn + 1
@@ -145,7 +140,6 @@ export async function query(input: {
       readFileStates,
       signal: input.signal,
       confirm: input.confirm,
-      toolPolicy: input.toolPolicy,
       onEvent: input.onEvent,
     })
 

@@ -13,7 +13,6 @@ import {
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
-import { parseToolPolicy } from '../core/agent/tool-policy'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
@@ -260,9 +259,6 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
     const confirm: ConfirmHandler | undefined = input.onEvent
       ? (request) => requestConfirmation(input.projectId, request, input.onEvent!)
       : undefined
-    // 用户即时工具约束：从 instruction 解析（如「不要读文件」「别改」「只读不改」「只改当前文件」），执行层强制禁用。
-    // 路径约束需结合当前活动文件解析，activeFilePath 无值时降级为禁写。
-    const toolPolicy = parseToolPolicy(input.instruction, input.activeFilePath)
     const turn = await runChatTurn({
       session: previousSession,
       input: {
@@ -276,7 +272,6 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         activeFilePath: input.activeFilePath,
         signal: input.signal,
         confirm,
-        toolPolicy,
       },
       onEvent(event) {
         emitMessageEvent(event.message, input.onEvent)

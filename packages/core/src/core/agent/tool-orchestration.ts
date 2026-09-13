@@ -1,6 +1,5 @@
 import { executeAgentTool } from './tool-execution'
 import type { ConfirmHandler, ToolExecutionEvent } from './tool-execution'
-import type { ToolPolicy } from './tool-policy'
 import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
@@ -15,8 +14,6 @@ export async function runAgentTools(input: {
   signal?: AbortSignal
   /** 写工具确认回调，透传给 executeAgentTool。 */
   confirm?: ConfirmHandler
-  /** 用户即时工具约束，透传给 executeAgentTool。 */
-  toolPolicy?: ToolPolicy
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage[]> {
   const results: AgentToolResultMessage[] = []
@@ -52,7 +49,6 @@ export async function runAgentTools(input: {
       tools: input.tools,
       readFileStates: input.readFileStates,
       confirm: input.confirm,
-      toolPolicy: input.toolPolicy,
       onEvent: input.onEvent,
     }))
   }

@@ -45,7 +45,7 @@ export type ProjectConfig = {
     baseUrl: string
     apiKey: string
     model: string
-    mode: 'text' | 'multimodal'
+    mode: 'text'
     topN: number
   }
   /**
@@ -63,15 +63,11 @@ export type ProjectConfig = {
     maxTokens: number
   }
   settings: {
-    generationRecentChapters: number
     ragCandidateLimit: number
     ragContextMaxItems: number
-    proofreadDefaultChapters: number
-    organizeDefaultChapters: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
     embeddingTextVersion: number
-    enableBackgroundIndexing: boolean
     enableDebugLogging: boolean
     /**
      * 当前激活的场景级提示词路径（相对于项目根，如 prompts/scenes/scene-001.md）。
