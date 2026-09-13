@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { query, type AgentQueryEvent } from './query'
 import { AgentAbortedError, streamAgentCompletion } from './llm'
+import { createModelView, type ModelView } from './model-view'
 import type { AgentMessage } from './messages'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
@@ -15,17 +16,25 @@ vi.mock('./llm', async (importOriginal) => {
 
 const mockedStream = vi.mocked(streamAgentCompletion)
 
-const stubConfig = {
-  llm: { baseUrl: 'https://example.com', apiKey: 'key', model: 'model' },
-  settings: { enableDebugLogging: false },
-} as unknown as ProjectConfig
+function createStubConfig(overrides: { conversationTokenLimit?: number } = {}): ProjectConfig {
+  return {
+    llm: { baseUrl: 'https://example.com', apiKey: 'key', model: 'model' },
+    settings: {
+      enableDebugLogging: false,
+      conversationTokenLimit: overrides.conversationTokenLimit ?? 12000,
+      compressionKeepRecentTurns: 5,
+    },
+  } as unknown as ProjectConfig
+}
 
 const stubProject = { handle: {} } as unknown as ProjectSnapshot
 
-const baseMessages: AgentMessage[] = [
-  { role: 'system', content: '系统提示' },
-  { role: 'user', content: '介绍一下这个项目' },
-]
+function createBaseView(): ModelView {
+  return createModelView([
+    { role: 'system', content: '系统提示' },
+    { role: 'user', content: '介绍一下这个项目' },
+  ])
+}
 
 function collectEvents(): { events: AgentQueryEvent[]; onEvent: (event: AgentQueryEvent) => void } {
   const events: AgentQueryEvent[] = []
@@ -46,10 +55,11 @@ describe('query assistant-delta 转发', () => {
     })
 
     const { events, onEvent } = collectEvents()
+    const view = createBaseView()
     const messages = await query({
-      config: stubConfig,
+      config: createStubConfig(),
       project: stubProject,
-      messages: baseMessages,
+      view,
       tools: {},
       onEvent,
     })
@@ -67,6 +77,8 @@ describe('query assistant-delta 转发', () => {
 
     expect(events.at(-1)).toMatchObject({ type: 'done' })
     expect(messages.at(-1)).toEqual({ role: 'assistant', content: '这是一个项目', toolCalls: [] })
+    // 视图同步更新（模型层唯一来源）
+    expect(view.messages.at(-1)).toEqual({ role: 'assistant', content: '这是一个项目', toolCalls: [] })
   })
 
   it('emits no assistant-delta when the stream produces only tool calls', async () => {
@@ -78,9 +90,9 @@ describe('query assistant-delta 转发', () => {
 
     const { events, onEvent } = collectEvents()
     await query({
-      config: stubConfig,
+      config: createStubConfig(),
       project: stubProject,
-      messages: baseMessages,
+      view: createBaseView(),
       tools: {},
       onEvent,
     })
@@ -95,10 +107,11 @@ describe('query assistant-delta 转发', () => {
     })
 
     const { events, onEvent } = collectEvents()
+    const view = createBaseView()
     const messages = await query({
-      config: stubConfig,
+      config: createStubConfig(),
       project: stubProject,
-      messages: baseMessages,
+      view,
       tools: {},
       onEvent,
     })
@@ -111,5 +124,142 @@ describe('query assistant-delta 转发', () => {
     expect(events).toContainEqual({ type: 'aborted', reason: 'user', partialContent: '已生成一半' })
     expect(events.at(-1)).toMatchObject({ type: 'done', aborted: true })
     expect(messages.at(-1)).toEqual({ role: 'assistant', content: '已生成一半' })
+  })
+})
+
+describe('query 上下文压缩接入', () => {
+  beforeEach(() => {
+    mockedStream.mockReset()
+  })
+
+  function createHeavyView(): ModelView {
+    // 足够长：总 token 明显超过 300 的阈值，且有可压区间
+    const messages: AgentMessage[] = [
+      { role: 'system', content: '系统提示' },
+      ...Array.from({ length: 8 }, (_, i) =>
+        i % 2 === 0
+          ? { role: 'user' as const, content: '用户长消息'.repeat(20) }
+          : { role: 'assistant' as const, content: '助手长回复'.repeat(20) }),
+    ]
+    return createModelView(messages)
+  }
+
+  it('压力触发：请求前超过阈值先压缩，再发真实请求', async () => {
+    const summaryResponse = { content: '## Primary Request and Intent\n写小说', toolCalls: [], finishReason: 'stop' }
+    const realResponse = { content: '好的，继续', toolCalls: [], finishReason: 'stop' }
+    const calls: Array<{ toolCount: number; lastMessageIsInstruction: boolean }> = []
+    mockedStream.mockImplementation(async (input) => {
+      calls.push({
+        toolCount: input.tools.length,
+        lastMessageIsInstruction: input.messages.at(-1)?.content.includes('检查点') ?? false,
+      })
+      // 第一次调用是压缩（末条为压缩指令、无 tools），第二次是真实请求
+      return calls.length === 1 ? summaryResponse : realResponse
+    })
+
+    const { events, onEvent } = collectEvents()
+    const view = createHeavyView()
+    const messagesBefore = view.messages.length
+    await query({
+      config: createStubConfig({ conversationTokenLimit: 300 }),
+      project: stubProject,
+      view,
+      tools: {},
+      onEvent,
+    })
+
+    // 第一次调用是压缩请求（无 tools、末条为压缩指令）
+    expect(calls[0]).toEqual({ toolCount: 0, lastMessageIsInstruction: true })
+    // 压缩事件已发（显示层据此提示用户）
+    expect(events).toContainEqual({
+      type: 'context-compacted',
+      compactedMessageCount: expect.any(Number),
+      originalTokens: expect.any(Number),
+      summaryTokens: expect.any(Number),
+    })
+    // 视图收缩：system + 摘要 + 后续 assistant 输出
+    expect(view.messages.length).toBeLessThan(messagesBefore + 1)
+    expect(view.messages[1].content).toContain('<compacted-summary>')
+    // system 提示仍在头部
+    expect(view.messages[0].role).toBe('system')
+  })
+
+  it('未达阈值时不压缩，直接发真实请求', async () => {
+    mockedStream.mockResolvedValue({ content: '直接回答', toolCalls: [], finishReason: 'stop' })
+
+    const { events, onEvent } = collectEvents()
+    const view = createBaseView()
+    await query({
+      config: createStubConfig({ conversationTokenLimit: 12000 }),
+      project: stubProject,
+      view,
+      tools: {},
+      onEvent,
+    })
+
+    expect(mockedStream).toHaveBeenCalledTimes(1)
+    expect(events.filter((event) => event.type === 'context-compacted')).toHaveLength(0)
+  })
+
+  it('溢出触发：context 超限错误 → 强制压缩一次 → 重试请求成功', async () => {
+    const summaryResponse = { content: '## Critical Context\n要点', toolCalls: [], finishReason: 'stop' }
+    const realResponse = { content: '重试成功', toolCalls: [], finishReason: 'stop' }
+    let call = 0
+    mockedStream.mockImplementation(async () => {
+      call += 1
+      if (call === 1) {
+        throw new Error("This model's maximum context length is 4096 tokens")
+      }
+      if (call === 2) {
+        return summaryResponse // 压缩调用
+      }
+      return realResponse // 重试的真实请求
+    })
+
+    const { events, onEvent } = collectEvents()
+    const view = createModelView([
+      { role: 'system', content: '系统' },
+      { role: 'user', content: '一'.repeat(1000) },
+      { role: 'assistant', content: '二'.repeat(1000) },
+      { role: 'user', content: '三'.repeat(1000) },
+      { role: 'assistant', content: '四'.repeat(1000) },
+    ])
+    const result = await query({
+      config: createStubConfig({ conversationTokenLimit: 12000 }),
+      project: stubProject,
+      view,
+      tools: {},
+      onEvent,
+    })
+
+    // 三次调用：失败 → 压缩 → 重试
+    expect(mockedStream).toHaveBeenCalledTimes(3)
+    expect(events.filter((event) => event.type === 'context-compacted')).toHaveLength(1)
+    expect(result.at(-1)).toMatchObject({ role: 'assistant', content: '重试成功' })
+    expect(view.messages[1].content).toContain('<compacted-summary>')
+  })
+
+  it('溢出后压缩失败（无可压区间）时原样抛错', async () => {
+    let call = 0
+    mockedStream.mockImplementation(async () => {
+      call += 1
+      if (call === 1) {
+        throw new Error('context window exceeded')
+      }
+      // 第二次（压缩）也失败
+      throw new Error('压缩调用失败')
+    })
+
+    const view = createModelView([
+      { role: 'system', content: '系统' },
+      { role: 'user', content: '只有一轮' },
+    ])
+
+    await expect(query({
+      config: createStubConfig({ conversationTokenLimit: 12000 }),
+      project: stubProject,
+      view,
+      tools: {},
+    })).rejects.toThrow('context window exceeded')
   })
 })

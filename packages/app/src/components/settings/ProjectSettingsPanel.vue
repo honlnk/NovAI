@@ -57,36 +57,28 @@ defineProps<{
       <div class="border-t border-gray-200 pt-5">
         <h4 class="text-sm font-semibold text-gray-900">对话设置</h4>
         <div class="mt-3 space-y-4">
-          <div class="opacity-60">
-            <label class="mb-1 flex items-center gap-2 text-sm font-medium text-gray-700">
-              对话上下文 Token 上限
-              <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-700">即将上线</span>
-            </label>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">对话上下文 Token 阈值</label>
             <input
               v-model.number="form.conversationTokenLimit"
               type="number"
               min="1000"
               max="200000"
               step="1000"
-              disabled
-              class="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 outline-none"
+              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
-            <p class="mt-1.5 text-xs text-gray-500">规划中：上下文自动压缩功能上线后，对话历史接近此阈值时将触发压缩</p>
+            <p class="mt-1.5 text-xs text-gray-500">对话历史接近此 token 量时自动压缩：早期消息浓缩为检查点摘要，近期原文保留</p>
           </div>
-          <div class="opacity-60">
-            <label class="mb-1 flex items-center gap-2 text-sm font-medium text-gray-700">
-              压缩保留轮数
-              <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-700">即将上线</span>
-            </label>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">压缩保留轮数</label>
             <input
               v-model.number="form.compressionKeepRecentTurns"
               type="number"
               min="1"
               max="20"
-              disabled
-              class="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 outline-none"
+              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
-            <p class="mt-1.5 text-xs text-gray-500">规划中：上下文压缩时保留最近 N 轮对话的原文</p>
+            <p class="mt-1.5 text-xs text-gray-500">自动压缩时至少保留最近 N 轮对话的原文不进摘要</p>
           </div>
           <div class="flex items-start justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5">
             <div>

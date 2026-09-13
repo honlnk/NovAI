@@ -80,9 +80,14 @@ const MESSAGE_OVERHEAD_TOKENS = 4
  * 只用于压缩阈值判断，不需要精确——稳定、单调、量级正确即可。
  */
 export function estimateTokens(view: ModelView): number {
+  return estimateMessagesTokens(view.messages)
+}
+
+/** 估算任意消息序列的 token 量（压缩选区、收缩校验共用）。 */
+export function estimateMessagesTokens(messages: AgentMessage[]): number {
   let total = 0
 
-  for (const message of view.messages) {
+  for (const message of messages) {
     total += MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(message.content)
     if (message.role === 'assistant' && message.toolCalls?.length) {
       total += estimateTextTokens(JSON.stringify(message.toolCalls))

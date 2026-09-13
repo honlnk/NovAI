@@ -137,10 +137,10 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   }
 
   try {
-    modelView.messages = await query({
+    await query({
       config: input.config,
       project: input.project,
-      messages: requestMessages,
+      view: modelView,
       tools,
       signal: input.signal,
       confirm: input.confirm,
@@ -161,6 +161,21 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
             event: 'agent_run_aborted',
             message: 'Agent 被用户停止',
           })
+          return
+        }
+
+        if (event.type === 'context-compacted') {
+          pushMessage(
+            session,
+            {
+              id: createId('message'),
+              role: 'system',
+              kind: 'context-summary',
+              summary: `已自动压缩 ${event.compactedMessageCount} 条早期消息（约 ${event.originalTokens} → ${event.summaryTokens} token），此前对话以检查点摘要继续`,
+              createdAt: new Date().toISOString(),
+            },
+            onEvent,
+          )
           return
         }
 
@@ -370,6 +385,17 @@ function logAgentQueryEvent(input: {
         content: input.event.message.content,
         toolCalls: input.event.message.toolCalls,
       },
+    })
+    return
+  }
+
+  if (input.event.type === 'context-compacted') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'info',
+      event: 'context_compacted',
+      message: `上下文已压缩：${input.event.compactedMessageCount} 条消息浓缩为检查点（${input.event.originalTokens} → ${input.event.summaryTokens} token）`,
+      data: input.event,
     })
     return
   }
