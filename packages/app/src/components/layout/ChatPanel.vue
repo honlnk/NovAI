@@ -458,6 +458,7 @@ async function handleExtractionConfirm() {
             v-for="message in chatStore.messages"
             :key="message.id"
             :message="message"
+            :streaming="message.id === chatStore.streamingMessageId"
           />
 
         </div>

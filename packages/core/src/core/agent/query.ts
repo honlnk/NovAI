@@ -15,6 +15,7 @@ const DEFAULT_MAX_TURNS = 8
 export type AgentQueryEvent =
   | { type: 'query-step-start'; step: number }
   | { type: 'model-start'; step: number; debug?: ModelStartDebugInfo }
+  | { type: 'assistant-delta'; text: string }
   | { type: 'model-finish'; step: number; toolCallCount: number; finishReason?: string; diagnostics?: AgentLlmDiagnostics }
   | { type: 'model-tool-call-parse-warning'; step: number; finishReason?: string; diagnostics?: AgentLlmDiagnostics }
   | { type: 'tool-batch-start'; step: number; toolCallCount: number }
@@ -76,7 +77,12 @@ export async function query(input: {
           tools: availableTools.map((tool) => tool.schema),
           signal: input.signal,
         },
-        () => {},
+        (event) => {
+          // 流式 delta 向上透传（UI 实时渲染用）；最终完整文本仍由 assistant-message 事件落盘。
+          if (event.type === 'delta') {
+            input.onEvent?.({ type: 'assistant-delta', text: event.text })
+          }
+        },
       )
     } catch (error) {
       // 用户主动停止 —— 保留已生成的内容作为 assistant 消息，优雅结束

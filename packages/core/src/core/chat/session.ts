@@ -19,6 +19,8 @@ import type { FileChange } from '../tools/types'
 
 type SessionEvent =
   | { type: 'message'; message: ChatMessage }
+  /** 模型流式输出的文本增量（瞬态渲染态，不落盘）；同一条 assistant 消息共享稳定 messageId。 */
+  | { type: 'message-delta'; messageId: string; text: string }
 
 type RunChatTurnOptions = {
   session: ChatSessionState
@@ -107,6 +109,9 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   const tools = createAgentTools()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false
+  // 当前正在流式输出的 assistant 消息 id：delta 事件携带它，最终的 assistant 落盘消息复用它，
+  // 让 UI 能把连续 delta 累积到同一条气泡上、并用完成事件原位替换。
+  let streamingMessageId: string | null = null
 
   if (enableDebugLogging) {
     void writeAgentLog(input.project, {
@@ -150,10 +155,22 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
           return
         }
 
+        if (event.type === 'assistant-delta') {
+          streamingMessageId ??= createId('message')
+          onEvent?.({ type: 'message-delta', messageId: streamingMessageId, text: event.text })
+          return
+        }
+
         if (event.type === 'assistant-message') {
           if (event.message.content.trim()) {
-            pushMessage(session, createAssistantText(event.message.content.trim()), onEvent)
+            pushMessage(
+              session,
+              createAssistantText(event.message.content.trim(), streamingMessageId ?? undefined),
+              onEvent,
+            )
           }
+          // 本条 assistant 消息完结（无论是否有正文），下一条流式文本属于新气泡
+          streamingMessageId = null
           return
         }
 
@@ -548,9 +565,9 @@ function createUserMessage(text: string, quote?: string): ChatMessage {
   }
 }
 
-function createAssistantText(text: string): ChatMessage {
+function createAssistantText(text: string, id?: string): ChatMessage {
   return {
-    id: createId('message'),
+    id: id ?? createId('message'),
     role: 'assistant',
     kind: 'text',
     text,

@@ -423,6 +423,8 @@ export type FileChangeConfirmationView = {
 export type AgentUiEvent =
   | { type: 'run-start'; runId: string; sessionId: string }
   | { type: 'message'; message: ChatMessageView }
+  /** 模型流式输出的文本增量（瞬态渲染态）；同一条 assistant 消息共享稳定 messageId，最终由 message 事件原位落盘。 */
+  | { type: 'message-delta'; sessionId: string; messageId: string; text: string }
   | { type: 'model-start'; step: number }
   | { type: 'model-finish'; step: number; toolCallCount: number; finishReason?: string }
   | { type: 'tool-call'; toolCall: ToolCallView }

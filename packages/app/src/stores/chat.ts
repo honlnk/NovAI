@@ -39,6 +39,8 @@ export const useChatStore = defineStore('chat', () => {
   const isStopping = ref(false)
   // 当前等待用户确认的写操作；Agent Loop 在此暂停
   const pendingConfirmation = ref<FileChangeConfirmationView | null>(null)
+  // 当前正在流式输出的消息 id（供消息气泡显示「生成中」光标）；无流式消息时为 null
+  const streamingMessageId = ref<string | null>(null)
 
   // 历史会话列表（对话分类面板渲染），按 updatedAt 降序
   const sessions = ref<ChatSessionSummaryView[]>([])
@@ -96,6 +98,7 @@ export const useChatStore = defineStore('chat', () => {
     // 切换会话时清空上一轮的运行态残留，避免跨会话串扰
     agentEvents.value = []
     changedFiles.value = []
+    streamingMessageId.value = null
     return view
   }
 
@@ -179,6 +182,7 @@ export const useChatStore = defineStore('chat', () => {
 
     agentEvents.value = []
     changedFiles.value = []
+    streamingMessageId.value = null
     setRunStatus('正在执行本轮 Agent...', 'running')
     isRunning.value = true
     isStopping.value = false
@@ -251,10 +255,44 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'message' && sessionView.value) {
+      // 流式消息的完成事件与占位消息同 id：原位替换而非追加，避免重复气泡
+      const exists = sessionView.value.messages.some((m) => m.id === event.message.id)
       sessionView.value = {
         ...sessionView.value,
-        messages: [...sessionView.value.messages, event.message],
+        messages: exists
+          ? sessionView.value.messages.map((m) => (m.id === event.message.id ? event.message : m))
+          : [...sessionView.value.messages, event.message],
       }
+      if (streamingMessageId.value === event.message.id) {
+        streamingMessageId.value = null
+      }
+      return
+    }
+
+    if (event.type === 'message-delta' && sessionView.value) {
+      const target = sessionView.value.messages.find((m) => m.id === event.messageId)
+      if (target && target.kind === 'text') {
+        // 已有占位/累积中的消息：追加文本
+        sessionView.value = {
+          ...sessionView.value,
+          messages: sessionView.value.messages.map((m) =>
+            m.id === event.messageId && m.kind === 'text' ? { ...m, text: m.text + event.text } : m,
+          ),
+        }
+      } else {
+        // 首个 delta：创建占位 assistant 文本消息
+        sessionView.value = {
+          ...sessionView.value,
+          messages: [...sessionView.value.messages, {
+            id: event.messageId,
+            role: 'assistant',
+            kind: 'text',
+            text: event.text,
+            createdAt: new Date().toISOString(),
+          }],
+        }
+      }
+      streamingMessageId.value = event.messageId
       return
     }
 
@@ -270,11 +308,13 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'run-error') {
+      streamingMessageId.value = null
       setRunStatus(event.error.message, 'error')
       return
     }
 
     if (event.type === 'run-finish') {
+      streamingMessageId.value = null
       sessionView.value = event.result.session
       changedFiles.value = event.result.changedFiles
       setRunStatus(
@@ -337,6 +377,7 @@ export const useChatStore = defineStore('chat', () => {
     runStatus,
     runStatusType,
     hasSessionView,
+    streamingMessageId,
     abortRun,
     confirmWriteTool,
     createNewSession,

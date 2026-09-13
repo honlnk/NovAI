@@ -4,6 +4,8 @@ import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 defineProps<{
   message: ChatMessageView
+  /** 该消息正在流式输出中（渲染「生成中」光标） */
+  streaming?: boolean
 }>()
 
 function formatTime(dateStr: string) {
@@ -51,6 +53,11 @@ function formatTime(dateStr: string) {
       </div>
       <div class="rounded-lg rounded-tl-none bg-gray-100 px-4 py-2.5">
         <MarkdownRenderer :content="message.text" />
+        <span
+          v-if="streaming"
+          class="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-sm bg-gray-400 align-text-bottom"
+          aria-label="正在生成"
+        />
         <p class="mt-1 text-xs text-gray-500">{{ formatTime(message.createdAt) }}</p>
       </div>
     </div>

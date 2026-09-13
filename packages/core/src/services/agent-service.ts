@@ -274,6 +274,16 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
         confirm,
       },
       onEvent(event) {
+        // 流式 delta 原样转发（附会话 id 供 UI 路由），不进 emitMessageEvent
+        if (event.type === 'message-delta') {
+          input.onEvent?.({
+            type: 'message-delta',
+            sessionId: previousSession.sessionId,
+            messageId: event.messageId,
+            text: event.text,
+          })
+          return
+        }
         emitMessageEvent(event.message, input.onEvent)
       },
     })
