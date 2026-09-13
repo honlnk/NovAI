@@ -1,8 +1,8 @@
 import { getProjectTextFile } from '../../fs/project-fs'
 import type { ReadFileInput, ReadFileOutput, ToolDefinition } from '../types'
-import { asRecord, readString } from './common'
+import { asRecord, assertMutableDocumentPath, readString } from './common'
 import { createReadFileState } from './read-file-state'
-import { assertTextFilePath, normalizeProjectPath } from '../path'
+import { normalizeProjectPath } from '../path'
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_READ_LIMIT = 2000
@@ -14,7 +14,8 @@ export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOut
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeProjectPath(readString(value.path, 'ReadFile.path'))
-    assertTextFilePath(path)
+    // .novel/ 内部数据（会话、日志、spill 文件）不可读：防 read→spill→read 把全文读回上下文
+    assertMutableDocumentPath(path, 'ReadFile.path')
 
     const offset = readOptionalPositiveInteger(value.offset, 'ReadFile.offset')
     const limit = readOptionalPositiveInteger(value.limit, 'ReadFile.limit')

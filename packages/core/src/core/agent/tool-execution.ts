@@ -3,6 +3,7 @@ import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
 import { decideWriteToolPermission, toApprovalOutcome } from './permission'
+import { maybeSpill, SPILLABLE_TOOLS } from './spill'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
@@ -132,6 +133,13 @@ export async function executeAgentTool(input: {
     // 写工具成功执行后提取结构化文件变更，供 service 层推导 changedFiles
     const fileChange = tool.core.extractFileChange?.(output)
 
+    // 超长工具结果 spill：只对内容型只读工具（ReadFile/RagSearch），
+    // 全文落盘 .novel/spill/，进上下文的只有预览 + 引用路径。
+    let content = tool.formatResult(output)
+    if ((SPILLABLE_TOOLS as readonly string[]).includes(input.call.name)) {
+      content = await maybeSpill(content, input.project)
+    }
+
     input.onEvent?.({
       type: 'tool-result',
       call: input.call,
@@ -144,7 +152,7 @@ export async function executeAgentTool(input: {
       role: 'tool',
       toolCallId: input.call.id,
       name: input.call.name,
-      content: tool.formatResult(output),
+      content,
       fileChange,
     }
   } catch (error) {
