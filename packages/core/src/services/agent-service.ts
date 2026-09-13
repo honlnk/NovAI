@@ -550,7 +550,7 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
 function collectChangedFiles(session: ChatSessionState): ChangedFileView[] {
   const changes: ChangedFileView[] = []
 
-  for (const message of session.agentMessages ?? []) {
+  for (const message of session.modelView?.messages ?? []) {
     if (message.role !== 'tool') {
       continue
     }

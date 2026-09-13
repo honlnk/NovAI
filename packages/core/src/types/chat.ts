@@ -1,6 +1,6 @@
 import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
-import type { AgentMessage } from '../core/agent/messages'
+import type { ModelView } from '../core/agent/model-view'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 
 export type ChatToolName =
@@ -100,7 +100,12 @@ export type ChatSessionState = {
   sessionId: string
   projectId: string
   messages: ChatMessage[]
-  agentMessages?: AgentMessage[]
+  /**
+   * 模型视图：发给 LLM 的消息序列唯一来源，持久化的是压缩后的当前视图。
+   * 与显示层 messages（全量 transcript）彻底分离。旧会话文件的 agentMessages
+   * 在加载时迁移到此字段。
+   */
+  modelView?: ModelView
   status: ChatSessionStatus
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null

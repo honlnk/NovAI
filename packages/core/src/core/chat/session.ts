@@ -1,6 +1,12 @@
 import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
 import { query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
+import {
+  appendUserMessage,
+  createModelView,
+  setSystemMessage,
+  toRequestMessages,
+} from '../agent/model-view'
 import { createLogId, writeAgentLog } from '../logging/agent-log'
 import { hashContent } from '../util/hash'
 import type { AgentQueryEvent } from '../agent/query'
@@ -34,6 +40,7 @@ export function createChatSession(projectId: string): ChatSessionState {
     sessionId: createId('session'),
     projectId,
     messages: [],
+    modelView: createModelView(),
     status: 'idle',
     currentTarget: null,
     lastRagResult: null,
@@ -83,29 +90,31 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     onEvent,
   )
 
-  // 同会话内 system.md 或场景提示词变化时，刷新 agentMessages 里的 system message。
-  // buildAgentMessages 的复用分支会原样保留首轮 system message，这里先 in-place 替换为最新内容。
+  // 模型视图：发给 LLM 的消息序列唯一来源。与显示层 messages 彻底分离——
+  // 显示层是全量 transcript（持久化 + UI），模型层持久化的是压缩后的当前视图。
+  // 拷贝建视图，本回合的变更不污染传入的会话对象。
+  const modelView = createModelView(session.modelView?.messages ?? [])
+  session.modelView = modelView
+
+  // 同会话内 system.md 或场景提示词变化时，刷新视图里的 system message（恒在 index 0）。
   const newSystemContent = buildAgentSystemPrompt({
     systemPrompt: input.systemPrompt,
     scenePrompt: input.scenePrompt,
     novaiOverview: input.novaiOverview,
   })
   const newSystemHash = hashContent(newSystemContent)
-  if (session.agentMessages && session.systemPromptHash !== newSystemHash) {
-    session.agentMessages = refreshSystemMessageContent(session.agentMessages, newSystemContent)
+  if (modelView.messages.length === 0 || session.systemPromptHash !== newSystemHash) {
+    setSystemMessage(modelView, newSystemContent)
   }
   session.systemPromptHash = newSystemHash
 
-  const agentMessages = buildAgentMessages({
-    previousMessages: session.agentMessages,
+  appendUserMessage(modelView, buildAgentUserContext({
     instruction: input.instruction,
     quote: input.quote,
-    systemPrompt: input.systemPrompt,
-    scenePrompt: input.scenePrompt,
-    novaiOverview: input.novaiOverview,
     project: input.project,
     target,
-  })
+  }))
+  const requestMessages = toRequestMessages(modelView)
   const tools = createAgentTools()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false
@@ -121,17 +130,17 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       event: 'agent_messages_debug',
       message: 'Agent 模型输入消息调试信息',
       data: {
-        messageCount: agentMessages.length,
-        messages: summarizeAgentMessages(agentMessages),
+        messageCount: requestMessages.length,
+        messages: summarizeAgentMessages(requestMessages),
       },
     })
   }
 
   try {
-    session.agentMessages = await query({
+    modelView.messages = await query({
       config: input.config,
       project: input.project,
-      messages: agentMessages,
+      messages: requestMessages,
       tools,
       signal: input.signal,
       confirm: input.confirm,
@@ -278,7 +287,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       : 'Agent 本轮完成，未写入文件',
     data: {
       writtenPath: session.lastWrittenPath,
-      agentMessageCount: session.agentMessages?.length ?? 0,
+      agentMessageCount: session.modelView?.messages.length ?? 0,
     },
   })
 
@@ -471,59 +480,6 @@ function previewLogText(text: string) {
   const normalized = text.replace(/\s+/g, ' ').trim()
   return normalized.length > 600 ? `${normalized.slice(0, 600)}...` : normalized
 }
-
-/**
- * 同会话内 system prompt 变化时，in-place 替换 agentMessages 里 system message 的 content。
- * system message 恒在 index 0（query 循环只 push assistant/tool，从不新增 system），
- * 替换不破坏消息序列合法性。若无 system message（异常情况）则原样返回。
- */
-export function refreshSystemMessageContent(
-  messages: AgentMessage[],
-  newContent: string,
-): AgentMessage[] {
-  if (messages.length === 0 || messages[0].role !== 'system') {
-    return messages
-  }
-  return [{ ...messages[0], content: newContent }, ...messages.slice(1)]
-}
-
-function buildAgentMessages(input: {
-  previousMessages?: AgentMessage[]
-  instruction: string
-  quote?: string
-  systemPrompt: string
-  scenePrompt?: string
-  novaiOverview?: string
-  project: ChatTurnInput['project']
-  target: ChatTargetContext | null
-}): AgentMessage[] {
-  const nextUserMessage: AgentMessage = {
-    role: 'user',
-    content: buildAgentUserContext({
-      instruction: input.instruction,
-      quote: input.quote,
-      project: input.project,
-      target: input.target,
-    }),
-  }
-
-  if (input.previousMessages?.length) {
-    return [...input.previousMessages, nextUserMessage]
-  }
-
-  return [
-    {
-      role: 'system',
-      content: buildAgentSystemPrompt({
-        systemPrompt: input.systemPrompt,
-        scenePrompt: input.scenePrompt,
-        novaiOverview: input.novaiOverview,
-      }),
-    },
-    nextUserMessage,
-  ]
-}
-
 
 function pushMessage(
   session: ChatSessionState,

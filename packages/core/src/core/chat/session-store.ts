@@ -4,6 +4,8 @@ import {
   removeProjectFile,
   listFilesInDirectory,
 } from '../fs/project-fs'
+import { createModelView } from '../agent/model-view'
+import type { AgentMessage } from '../agent/messages'
 import type { ProjectSnapshot } from '../../types/project'
 import type { ChatSessionState } from '../../types/chat'
 
@@ -131,13 +133,21 @@ function parseSessionMeta(text: string): SessionMeta | null {
 
 /**
  * 容错归一化：兼容缺少 title/createdAt/updatedAt 的旧文件（理论上当前不存在，但落盘数据要稳）。
+ * 同时完成旧字段迁移：agentMessages（双结构时代）→ modelView（模型视图）。
  */
 function normalizeSession(session: ChatSessionState): ChatSessionState {
   const now = new Date().toISOString()
-  return {
+  const legacy = session as ChatSessionState & { agentMessages?: AgentMessage[] }
+
+  const normalized: ChatSessionState = {
     ...session,
+    modelView: session.modelView ?? (legacy.agentMessages ? createModelView(legacy.agentMessages) : undefined),
     title: session.title ?? '未命名对话',
     createdAt: session.createdAt ?? now,
     updatedAt: session.updatedAt ?? now,
   }
+
+  // 迁移后删掉旧字段，避免下次保存时继续落盘
+  delete (normalized as Record<string, unknown>).agentMessages
+  return normalized
 }
