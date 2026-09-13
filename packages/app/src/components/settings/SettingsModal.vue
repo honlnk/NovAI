@@ -76,6 +76,7 @@ const projectForm = reactive({
   ragContextMaxItems: 8,
   conversationTokenLimit: 12000,
   compressionKeepRecentTurns: 5,
+  agentMaxTurns: 8,
   enableDebugLogging: false,
 })
 
@@ -132,6 +133,7 @@ onMounted(async () => {
         ragContextMaxItems: settings.ragContextMaxItems ?? 8,
         conversationTokenLimit: settings.conversationTokenLimit ?? 12000,
         compressionKeepRecentTurns: settings.compressionKeepRecentTurns ?? 5,
+        agentMaxTurns: settings.agentMaxTurns ?? 8,
         enableDebugLogging: settings.enableDebugLogging ?? false,
       })
     }

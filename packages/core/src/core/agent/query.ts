@@ -28,6 +28,7 @@ export type AgentQueryEvent =
   | { type: 'tool-batch-start'; step: number; toolCallCount: number }
   | { type: 'tool-batch-finish'; step: number; toolResultCount: number }
   | { type: 'context-compacted'; compactedMessageCount: number; originalTokens: number; summaryTokens: number }
+  | { type: 'turn-limit-reached'; maxTurns: number }
   | { type: 'aborted'; reason: 'user'; partialContent?: string }
   | { type: 'assistant-message'; message: AgentAssistantMessage }
   | ToolExecutionEvent
@@ -46,7 +47,8 @@ export async function query(input: {
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   const view = input.view
-  const maxTurns = input.maxTurns ?? DEFAULT_MAX_TURNS
+  // 轮次上限可配置：config.settings.agentMaxTurns（默认 8），显式传参仅测试用
+  const maxTurns = input.maxTurns ?? input.config.settings.agentMaxTurns ?? DEFAULT_MAX_TURNS
   const readFileStates = new Map<string, ReadFileState>()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   const thresholdTokens = input.config.settings.conversationTokenLimit
@@ -204,13 +206,9 @@ export async function query(input: {
     appendToolResults(view, toolResults)
   }
 
-  const limitMessage: AgentAssistantMessage = {
-    role: 'assistant',
-    content: `已达到本轮 Agent 最大循环次数（${maxTurns}）。我先停在这里，避免无限调用工具。`,
-  }
-
-  appendAssistantMessage(view, limitMessage)
-  input.onEvent?.({ type: 'assistant-message', message: limitMessage })
+  // 轮次上限优雅收尾：不再硬塞 assistant 话术——发事件告知用户已达上限，
+  // 模型视图原样保留（末尾停在最后的工具结果，序列合法），用户继续发消息即可续接。
+  input.onEvent?.({ type: 'turn-limit-reached', maxTurns })
   input.onEvent?.({ type: 'done', messages: view.messages })
   return view.messages
 }

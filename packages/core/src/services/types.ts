@@ -45,6 +45,7 @@ export type ProjectConfigView = {
     ragContextMaxItems: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
+    agentMaxTurns: number
     embeddingTextVersion: number
     enableDebugLogging: boolean
     activeScenePromptPath: string | null

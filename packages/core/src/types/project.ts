@@ -67,6 +67,8 @@ export type ProjectConfig = {
     ragContextMaxItems: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
+    /** Agent 单轮最大循环次数（模型调用×工具执行的回合数），超限优雅收尾可续接。 */
+    agentMaxTurns: number
     embeddingTextVersion: number
     enableDebugLogging: boolean
     /**

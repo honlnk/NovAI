@@ -164,6 +164,21 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
           return
         }
 
+        if (event.type === 'turn-limit-reached') {
+          pushMessage(
+            session,
+            {
+              id: createId('message'),
+              role: 'system',
+              kind: 'context-summary',
+              summary: `本轮 Agent 已达最大循环次数（${event.maxTurns}），先停在这里。上下文已保留，继续发送消息即可让它接着完成。`,
+              createdAt: new Date().toISOString(),
+            },
+            onEvent,
+          )
+          return
+        }
+
         if (event.type === 'context-compacted') {
           pushMessage(
             session,
@@ -385,6 +400,17 @@ function logAgentQueryEvent(input: {
         content: input.event.message.content,
         toolCalls: input.event.message.toolCalls,
       },
+    })
+    return
+  }
+
+  if (input.event.type === 'turn-limit-reached') {
+    void writeAgentLog(input.project, {
+      ...base,
+      level: 'warn',
+      event: 'turn_limit_reached',
+      message: `已达 Agent 单轮最大循环次数（${input.event.maxTurns}），优雅收尾`,
+      data: input.event,
     })
     return
   }

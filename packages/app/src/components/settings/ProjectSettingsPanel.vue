@@ -11,6 +11,7 @@ defineProps<{
     ragContextMaxItems: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
+    agentMaxTurns: number
     enableDebugLogging: boolean
   }
 }>()
@@ -79,6 +80,17 @@ defineProps<{
               class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
             <p class="mt-1.5 text-xs text-gray-500">自动压缩时至少保留最近 N 轮对话的原文不进摘要</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">Agent 单轮最大循环次数</label>
+            <input
+              v-model.number="form.agentMaxTurns"
+              type="number"
+              min="1"
+              max="50"
+              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+            />
+            <p class="mt-1.5 text-xs text-gray-500">单轮内「模型调用 + 工具执行」的回合上限；达到上限会优雅停下，继续发消息可续接</p>
           </div>
           <div class="flex items-start justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5">
             <div>

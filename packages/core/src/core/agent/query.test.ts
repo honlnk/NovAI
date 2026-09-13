@@ -23,6 +23,7 @@ function createStubConfig(overrides: { conversationTokenLimit?: number } = {}): 
       enableDebugLogging: false,
       conversationTokenLimit: overrides.conversationTokenLimit ?? 12000,
       compressionKeepRecentTurns: 5,
+      agentMaxTurns: 8,
     },
   } as unknown as ProjectConfig
 }
@@ -261,5 +262,42 @@ describe('query 上下文压缩接入', () => {
       view,
       tools: {},
     })).rejects.toThrow('context window exceeded')
+  })
+})
+
+describe('query 轮次上限', () => {
+  beforeEach(() => {
+    mockedStream.mockReset()
+  })
+
+  it('轮次从 config.settings.agentMaxTurns 读取；超限优雅收尾（事件提示而非死话术，可续接）', async () => {
+    // 每轮都返回一个工具调用，驱动循环直到触顶
+    mockedStream.mockImplementation(async () => ({
+      content: '',
+      toolCalls: [{ id: 'call_1', name: 'ReadFile', input: { path: 'chapters/001.txt' } }],
+      finishReason: 'tool_calls',
+    }))
+
+    const { events, onEvent } = collectEvents()
+    const view = createBaseView()
+    const messages = await query({
+      config: { ...createStubConfig(), settings: { ...createStubConfig().settings, agentMaxTurns: 2 } },
+      project: stubProject,
+      view,
+      tools: {},
+      onEvent,
+    })
+
+    // 模型调用次数 = agentMaxTurns
+    expect(mockedStream).toHaveBeenCalledTimes(2)
+    // 优雅收尾事件而非硬编码 assistant 话术
+    expect(events).toContainEqual({ type: 'turn-limit-reached', maxTurns: 2 })
+    const limitAssistantMessages = events.filter(
+      (event) => event.type === 'assistant-message' && event.message.content.includes('最大循环次数'),
+    )
+    expect(limitAssistantMessages).toHaveLength(0)
+    // 模型视图保留完整上下文（末尾停在工具结果），用户可继续发消息续接
+    expect(messages.filter((m) => m.role === 'tool')).toHaveLength(2)
+    expect(events.at(-1)).toMatchObject({ type: 'done' })
   })
 })
