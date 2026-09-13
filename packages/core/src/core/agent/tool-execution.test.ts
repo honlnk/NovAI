@@ -99,8 +99,8 @@ describe('executeAgentTool', () => {
   })
 })
 
-describe('executeAgentTool confirmation', () => {
-  it('executes the write tool after the user accepts confirmation', async () => {
+describe('executeAgentTool 范围权限与确认', () => {
+  it('项目工作区内写入静默放行：不弹确认直接执行', async () => {
     const run = vi.fn().mockResolvedValue({ path: 'chapters/new.txt' })
     const tool = createStubTool({
       name: 'CreateFile',
@@ -108,19 +108,43 @@ describe('executeAgentTool confirmation', () => {
       buildConfirmation: (input) => ({ kind: 'create', path: (input as { path: string }).path, content: (input as { content: string }).content }),
     })
     const tools = { CreateFile: tool } as unknown as Record<string, AgentRunnableTool>
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
 
     const result = await executeAgentTool({
       call: createCall('CreateFile', { path: 'chapters/new.txt', content: '内容' }),
       project: stubProject,
       tools,
-      confirm: async () => ({ accepted: true }),
+      confirm,
     })
 
+    // 确认疲劳消失：工作区内不再确认
+    expect(confirm).not.toHaveBeenCalled()
     expect(run).toHaveBeenCalledTimes(1)
     expect(result.content).toBe('CreateFile 结果')
   })
 
-  it('skips execution and returns a rejection result when the user rejects', async () => {
+  it('越界路径弹一次确认，用户接受后执行', async () => {
+    const run = vi.fn().mockResolvedValue({})
+    const tool = createStubTool({
+      name: 'EditFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'edit', path: (input as { path: string }).path, oldText: 'a', newText: 'b' }),
+    })
+    const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+
+    await executeAgentTool({
+      call: createCall('EditFile', { path: '../项目外/敏感.md' }),
+      project: stubProject,
+      tools,
+      confirm,
+    })
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('越界路径用户未授权则跳过执行，结果回灌模型', async () => {
     const run = vi.fn().mockResolvedValue({})
     const tool = createStubTool({
       name: 'EditFile',
@@ -130,7 +154,7 @@ describe('executeAgentTool confirmation', () => {
     const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
 
     const result = await executeAgentTool({
-      call: createCall('EditFile', { path: 'chapters/001.txt' }),
+      call: createCall('EditFile', { path: '../项目外/敏感.md' }),
       project: stubProject,
       tools,
       confirm: async () => ({ accepted: false }),
@@ -138,8 +162,7 @@ describe('executeAgentTool confirmation', () => {
 
     // 未执行 run，文件不变
     expect(run).not.toHaveBeenCalled()
-    // 返回拒绝结果回灌模型，不含 fileChange
-    expect(result.content).toContain('用户拒绝')
+    expect(result.content).toContain('未授权')
     expect(result.fileChange).toBeUndefined()
   })
 
@@ -175,7 +198,7 @@ describe('executeAgentTool confirmation', () => {
     const tools = { DeleteFile: tool } as unknown as Record<string, AgentRunnableTool>
 
     const result = await executeAgentTool({
-      call: createCall('DeleteFile', { path: 'chapters/old.txt' }),
+      call: createCall('DeleteFile', { path: '../项目外/old.txt' }),
       project: stubProject,
       tools,
       confirm: async () => {
@@ -185,6 +208,6 @@ describe('executeAgentTool confirmation', () => {
 
     // 确认中断按拒绝处理，不执行
     expect(run).not.toHaveBeenCalled()
-    expect(result.content).toContain('用户拒绝')
+    expect(result.content).toContain('未授权')
   })
 })

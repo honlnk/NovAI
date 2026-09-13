@@ -2,6 +2,7 @@ import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
+import { decideWriteToolPermission, toApprovalOutcome } from './permission'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
@@ -87,32 +88,37 @@ export async function executeAgentTool(input: {
     inputSummary: tool.core.summarizeInput(validatedInput),
   })
 
-  // 写工具执行前确认：构造预览并等待用户决定。
-  // 拒绝时不执行 run，返回「用户已拒绝」tool result 回灌模型，让其自然调整。
+  // 写工具执行前的范围权限：项目工作区内静默放行（不确认），越界才走确认流程。
+  // 授权永远一次性（没有 always-allow）；硬安全（.novel/ 写保护、命名规范等）仍在工具校验层。
   if (!tool.isReadOnly && tool.core.buildConfirmation && input.confirm) {
-    const confirmation = tool.core.buildConfirmation(validatedInput)
-    let decision: ConfirmDecision
-    try {
-      decision = await input.confirm({ call: input.call, confirmation })
-    } catch {
-      // 确认等待被中断（如用户停止），按拒绝处理，交由 query Loop 的 abort 检查接管。
-      decision = { accepted: false }
-    }
+    const permission = decideWriteToolPermission(input.call.name, validatedInput, input.project)
 
-    if (!decision.accepted) {
-      const rejectedSummary = `用户已拒绝${summarizeConfirmation(confirmation)}，未修改文件`
-      input.onEvent?.({
-        type: 'tool-result',
-        call: input.call,
-        ok: false,
-        resultSummary: rejectedSummary,
-      })
+    if (permission.kind === 'ask') {
+      const confirmation = tool.core.buildConfirmation(validatedInput)
+      let decision: ConfirmDecision
+      try {
+        decision = await input.confirm({ call: input.call, confirmation })
+      } catch {
+        // 确认等待被中断（如用户停止），按拒绝处理，交由 query Loop 的 abort 检查接管。
+        decision = { accepted: false }
+      }
 
-      return {
-        role: 'tool',
-        toolCallId: input.call.id,
-        name: input.call.name,
-        content: `用户拒绝执行该操作，文件未修改。请改用其他方式完成任务，或向用户确认后再试。`,
+      const outcome = toApprovalOutcome(decision)
+      if (outcome !== 'allowed-once') {
+        const rejectedSummary = `用户未授权${summarizeConfirmation(confirmation)}，未修改文件`
+        input.onEvent?.({
+          type: 'tool-result',
+          call: input.call,
+          ok: false,
+          resultSummary: rejectedSummary,
+        })
+
+        return {
+          role: 'tool',
+          toolCallId: input.call.id,
+          name: input.call.name,
+          content: `用户未授权执行该操作（${permission.reason}），文件未修改。请改用其他方式完成任务，或向用户确认后再试。`,
+        }
       }
     }
   }
