@@ -265,6 +265,79 @@ describe('query 上下文压缩接入', () => {
   })
 })
 
+describe('query 压缩期停止归类（abort 不误报为 error）', () => {
+  beforeEach(() => {
+    mockedStream.mockReset()
+  })
+
+  it('压力触发的压缩期用户停止：归类 aborted + done，不上抛 error', async () => {
+    // 摘要调用（第一个调用，末条为压缩指令）期间用户点停止
+    mockedStream.mockImplementation(async (input) => {
+      const isCompaction = input.messages.at(-1)?.content.includes('检查点') ?? false
+      if (isCompaction) {
+        throw new AgentAbortedError('半截摘要')
+      }
+      return { content: '不应到达', toolCalls: [], finishReason: 'stop' }
+    })
+
+    const { events, onEvent } = collectEvents()
+    const view = createModelView([
+      { role: 'system', content: '系统提示' },
+      ...Array.from({ length: 8 }, (_, i) =>
+        i % 2 === 0
+          ? { role: 'user' as const, content: '用户长消息'.repeat(20) }
+          : { role: 'assistant' as const, content: '助手长回复'.repeat(20) }),
+    ])
+
+    // 不 reject：停止是正常退出路径
+    const messages = await query({
+      config: createStubConfig({ conversationTokenLimit: 300 }),
+      project: stubProject,
+      view,
+      tools: {},
+      onEvent,
+    })
+
+    expect(events).toContainEqual({ type: 'aborted', reason: 'user' })
+    expect(events.at(-1)).toMatchObject({ type: 'done', aborted: true })
+    // 压缩摘要的半截内容不是用户内容，不落盘
+    expect(messages.some((m) => m.role === 'assistant' && m.content.includes('半截摘要'))).toBe(false)
+    // 真实请求未发出（在压缩阶段就停了）
+    expect(mockedStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('溢出重试的压缩期用户停止：同样归类 aborted + done，不上抛 error', async () => {
+    let call = 0
+    mockedStream.mockImplementation(async () => {
+      call += 1
+      if (call === 1) {
+        throw new Error('Range of input length should be [1, 30720]') // 百炼溢出文案
+      }
+      throw new AgentAbortedError('') // 压缩调用期间用户停止
+    })
+
+    const { events, onEvent } = collectEvents()
+    const view = createModelView([
+      { role: 'system', content: '系统' },
+      { role: 'user', content: '一'.repeat(1000) },
+      { role: 'assistant', content: '二'.repeat(1000) },
+      { role: 'user', content: '三'.repeat(1000) },
+    ])
+
+    const messages = await query({
+      config: createStubConfig({ conversationTokenLimit: 12000 }),
+      project: stubProject,
+      view,
+      tools: {},
+      onEvent,
+    })
+
+    expect(events).toContainEqual({ type: 'aborted', reason: 'user' })
+    expect(events.at(-1)).toMatchObject({ type: 'done', aborted: true })
+    expect(messages.some((m) => m.content.includes('compacted-summary'))).toBe(false)
+  })
+})
+
 describe('query 轮次上限', () => {
   beforeEach(() => {
     mockedStream.mockReset()

@@ -6,6 +6,7 @@ import {
   isContextOverflowError,
   runCompaction,
   shouldCompact,
+  type CompactionResult,
 } from './compaction'
 import { appendAssistantMessage, appendToolResults, toRequestMessages, type ModelView } from './model-view'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
@@ -80,7 +81,17 @@ export async function query(input: {
       return view.messages
     }
 
-    await compactIfOverThreshold()
+    // 压缩期用户停止：与流式中断同口径归类 aborted，绝不上抛成 run-error
+    try {
+      await compactIfOverThreshold()
+    } catch (error) {
+      if (error instanceof AgentAbortedError) {
+        input.onEvent?.({ type: 'aborted', reason: 'user' })
+        input.onEvent?.({ type: 'done', messages: view.messages, aborted: true })
+        return view.messages
+      }
+      throw error
+    }
 
     let messages = toRequestMessages(view)
 
@@ -138,9 +149,20 @@ export async function query(input: {
         if (!overflowRetried && isContextOverflowError(error)) {
           overflowRetried = true
           const retainTokens = computeRetainTokens(view.messages, thresholdTokens, keepRecentTurns)
-          const result = await runCompaction({ config: input.config, view, retainTokens, signal: input.signal })
-          if (result) {
-            input.onEvent?.({ type: 'context-compacted', ...result })
+          let compactionResult: CompactionResult | null
+          try {
+            compactionResult = await runCompaction({ config: input.config, view, retainTokens, signal: input.signal })
+          } catch (compactionError) {
+            // 压缩期用户停止：归类 aborted；压缩摘要的半截内容不是用户内容，不落盘
+            if (compactionError instanceof AgentAbortedError) {
+              input.onEvent?.({ type: 'aborted', reason: 'user' })
+              input.onEvent?.({ type: 'done', messages: view.messages, aborted: true })
+              return view.messages
+            }
+            throw compactionError
+          }
+          if (compactionResult) {
+            input.onEvent?.({ type: 'context-compacted', ...compactionResult })
             messages = toRequestMessages(view)
             continue
           }

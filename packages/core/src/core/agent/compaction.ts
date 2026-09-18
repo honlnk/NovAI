@@ -26,6 +26,9 @@ export const COMPACTED_SUMMARY_CLOSE = '</compacted-summary>'
 /** 尾部保留比例（dsh：contextWindow × 16% 的原文永不进摘要）。 */
 export const RETAIN_TOKEN_RATIO = 0.16
 
+/** 摘要调用的输出 token 上限（dsh compaction 默认 8192）。配合 finishReason==='length' 拒落地构成安全阀。 */
+export const SUMMARY_MAX_TOKENS = 8192
+
 /** 是否达到压缩阈值（压力触发）。 */
 export function shouldCompact(view: ModelView, thresholdTokens: number): boolean {
   return estimateTokens(view) >= thresholdTokens
@@ -150,6 +153,9 @@ export function isContextOverflowError(error: unknown): boolean {
     text.includes('context_length_exceeded')
     || text.includes('maximum context length')
     || (text.includes('context') && (text.includes('length') || text.includes('window') || text.includes('exceed')))
+    // 百炼（DashScope）："Range of input length should be [1, xxx]"（400 InvalidParameter），不含 context 字样
+    || text.includes('range of input length')
+    || (text.includes('input length') && (text.includes('exceed') || text.includes('should be') || text.includes('too long')))
   )
 }
 
@@ -193,6 +199,7 @@ export async function runCompaction(input: {
         model: input.config.llm.model,
         messages: buildCompactionRequest(input.view, range),
         tools: [],
+        maxTokens: SUMMARY_MAX_TOKENS,
         signal: input.signal,
       },
       () => {},

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { repairProject } from './project-fs'
+import { createDefaultConfig } from '../project/defaults'
+import { readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
 
 describe('project fs repair', () => {
   it('does not recreate the default scene prompt after it has been deleted or renamed', async () => {
@@ -30,6 +31,65 @@ describe('project fs repair', () => {
     }))
     await expect(readProjectText(rootHandle, 'prompts/scenes/scene-001.md')).rejects.toThrow('Not found')
     await expect(readProjectText(rootHandle, 'prompts/scenes/renamed-scene.md')).resolves.toBe('# Renamed Scene Prompt')
+  })
+})
+
+describe('project config 数值钳制', () => {
+  it('越界值钳到 UI 边界，非法值回退默认；agentMaxTurns 不钳（W6 安全阀语义预留）', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    const config = createDefaultConfig('novel')
+    const saved = await writeProjectConfig(rootHandle, {
+      ...config,
+      rerank: { ...config.rerank, topN: 0 },
+      completion: { ...config.completion, debounceMs: 10, maxTokens: 9999 },
+      settings: {
+        ...config.settings,
+        ragCandidateLimit: -3,
+        ragContextMaxItems: 500,
+        conversationTokenLimit: 5,
+        compressionKeepRecentTurns: 0,
+        agentMaxTurns: 0,
+      },
+    })
+
+    expect(saved.settings.conversationTokenLimit).toBe(1000)
+    expect(saved.settings.compressionKeepRecentTurns).toBe(1)
+    expect(saved.settings.ragCandidateLimit).toBe(1)
+    expect(saved.settings.ragContextMaxItems).toBe(50)
+    expect(saved.completion.debounceMs).toBe(200)
+    expect(saved.completion.maxTokens).toBe(256)
+    expect(saved.rerank.topN).toBe(1)
+    // W6 前不钳 agentMaxTurns：0 原样保留
+    expect(saved.settings.agentMaxTurns).toBe(0)
+
+    // 上限方向也钳
+    const savedHigh = await writeProjectConfig(rootHandle, {
+      ...config,
+      settings: {
+        ...config.settings,
+        conversationTokenLimit: 999999,
+        compressionKeepRecentTurns: 100,
+      },
+    })
+    expect(savedHigh.settings.conversationTokenLimit).toBe(200000)
+    expect(savedHigh.settings.compressionKeepRecentTurns).toBe(20)
+  })
+
+  it('JSON 里的非数值（null/字符串/缺失）回退默认值', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: {
+        conversationTokenLimit: null,
+        compressionKeepRecentTurns: 'abc',
+        ragCandidateLimit: 30,
+      },
+    }))
+
+    const config = await readProjectConfig(rootHandle)
+
+    expect(config.settings.conversationTokenLimit).toBe(12000)
+    expect(config.settings.compressionKeepRecentTurns).toBe(5)
+    expect(config.settings.ragCandidateLimit).toBe(30)
   })
 })
 

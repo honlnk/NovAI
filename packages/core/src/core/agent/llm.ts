@@ -14,6 +14,8 @@ export type AgentLlmInput = {
   model: string
   messages: AgentMessage[]
   tools: AgentToolSchema[]
+  /** 输出 token 上限（映射 OpenAI max_tokens）。缺省不传，由 provider 默认。压缩摘要调用必须传。 */
+  maxTokens?: number
   /** 外部停止信号（用户点击停止）。一旦 abort，立即中断流式，且不触发非流式 fallback。 */
   signal?: AbortSignal
 }
@@ -222,6 +224,7 @@ async function requestChatCompletion(
       messages: input.messages.map(toOpenAiMessage),
       tools: input.tools,
       tool_choice: 'auto',
+      ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
     }),
   })
 }

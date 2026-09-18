@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   COMPACTED_SUMMARY_CLOSE,
   COMPACTED_SUMMARY_OPEN,
+  SUMMARY_MAX_TOKENS,
   buildCompactionRequest,
   buildSummaryMessage,
   computeRetainTokens,
@@ -217,8 +218,9 @@ describe('runCompaction', () => {
     expect(view.messages[1].content).toContain(COMPACTED_SUMMARY_OPEN) // 区间被摘要替换
     expect(view.messages.length).toBeLessThan(13)
     expect(estimateTextTokens(view.messages.map((m) => m.content).join(''))).toBeLessThan(tokensBefore)
-    // 摘要调用不带 tools
+    // 摘要调用不带 tools，且带输出上限（防 provider 默认不设防、配合 length 截断拒落地）
     expect(mockedStream.mock.calls[0][0].tools).toEqual([])
+    expect(mockedStream.mock.calls[0][0].maxTokens).toBe(SUMMARY_MAX_TOKENS)
   })
 
   it('摘要比原文长时放弃，视图不变', async () => {
@@ -299,9 +301,19 @@ describe('isContextOverflowError', () => {
     expect(isContextOverflowError(new Error('prompt is too long: context window exceeded'))).toBe(true)
   })
 
+  it('识别百炼（DashScope）溢出文案：Range of input length should be [1, xxx]', () => {
+    expect(isContextOverflowError(new Error('Range of input length should be [1, 30720]'))).toBe(true)
+    expect(isContextOverflowError(new Error('InternalError.Algo.InvalidParameter: Range of input length should be [1,131072]'))).toBe(true)
+    expect(isContextOverflowError(new Error('input length exceeds the limit'))).toBe(true)
+  })
+
   it('普通错误与未知类型不误判', () => {
     expect(isContextOverflowError(new Error('连接超时'))).toBe(false)
     expect(isContextOverflowError('字符串错误')).toBe(false)
     expect(isContextOverflowError(undefined)).toBe(false)
+  })
+
+  it('百炼 max_tokens 参数越界（输出上限问题）不误判为上下文溢出', () => {
+    expect(isContextOverflowError(new Error('Range of max_tokens should be [1, 2048]'))).toBe(false)
   })
 })

@@ -297,16 +297,35 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     rerank: {
       ...DEFAULT_CONFIG.rerank,
       ...config.rerank,
+      topN: clampInt(config.rerank?.topN, 1, 50, DEFAULT_CONFIG.rerank.topN),
     },
     completion: {
       ...DEFAULT_CONFIG.completion,
       ...config.completion,
+      debounceMs: clampInt(config.completion?.debounceMs, 200, 3000, DEFAULT_CONFIG.completion.debounceMs),
+      maxTokens: clampInt(config.completion?.maxTokens, 16, 256, DEFAULT_CONFIG.completion.maxTokens),
     },
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...config.settings,
+      ragCandidateLimit: clampInt(config.settings?.ragCandidateLimit, 1, 100, DEFAULT_CONFIG.settings.ragCandidateLimit),
+      ragContextMaxItems: clampInt(config.settings?.ragContextMaxItems, 1, 50, DEFAULT_CONFIG.settings.ragContextMaxItems),
+      conversationTokenLimit: clampInt(config.settings?.conversationTokenLimit, 1000, 200000, DEFAULT_CONFIG.settings.conversationTokenLimit),
+      compressionKeepRecentTurns: clampInt(config.settings?.compressionKeepRecentTurns, 1, 20, DEFAULT_CONFIG.settings.compressionKeepRecentTurns),
+      // agentMaxTurns 的钳制语义与循环升级联动（0=不限的安全阀口径），留待 W6 随设置文案一起处理
     },
   }
+}
+
+/**
+ * 数值配置钳制：UI 的 min/max 属性只影响步进按钮，手输/手改 JSON 可越界，且 v-model.number
+ * 空值会产生 NaN。读写配置的收口处统一钳到合法区间；非有限数回退默认值。边界与设置面板一致。
+ */
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(max, Math.max(min, Math.round(value)))
 }
 
 async function hasRequiredElementDirectories(rootHandle: FileSystemDirectoryHandle) {
