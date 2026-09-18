@@ -10,7 +10,7 @@ import type { IndexStatusView } from '@novai/core/services/types'
  * 底部常驻项目状态栏。
  *
  * 三段式布局（h-7 矮栏，与 VS Code 风格一致）：
- * - 左：RAG 索引状态（项目层，慢变）。stale/error 可点击触发增量重建。
+ * - 左：RAG 索引状态（项目层，慢变）。未初始化/空/过期/异常可点击触发全量构建。
  * - 左：当前激活场景提示词（项目层）。无壳内联样式，点 × 关闭。
  * - 右：本轮 Agent 执行状态（会话层，瞬时）。按 type 上色（idle/running/error）。
  *
@@ -55,10 +55,8 @@ const indexLabel = computed(() => {
   return `${base} · ${count} 项`
 })
 
-/** 点击态：仅 stale/error 且非 busy 时可触发重建。 */
-const actionable = computed(
-  () => !isBusy.value && (status.value === 'stale' || status.value === 'error'),
-)
+/** 点击态：可构建/重建的状态（含未初始化，即首次构建入口），唯一定义在 store 的 canRebuild。 */
+const actionable = computed(() => indexStore.canRebuild)
 
 const dotClass = computed(() => {
   if (isBusy.value) {
@@ -71,7 +69,7 @@ const dotClass = computed(() => {
 const tooltipText = computed(() => {
   const meta = indexStore.indexMeta
   if (!meta) {
-    return '当前项目还没有索引记录'
+    return '当前项目还没有索引记录，点击开始构建（需先配置 Embedding）'
   }
 
   const parts: string[] = []

@@ -25,10 +25,18 @@ export const useIndexStore = defineStore('rag-index', () => {
   const status = computed<IndexStatusView | null>(() => indexMeta.value?.status ?? null)
   const documentCount = computed(() => indexMeta.value?.documentCount ?? 0)
 
-  /** 索引是否处于「可点击重建」的过期/异常态。 */
-  const canRebuild = computed(
-    () => !isBusy.value && (status.value === 'stale' || status.value === 'error' || status.value === 'ready' || status.value === 'empty'),
-  )
+  /**
+   * 状态栏角标是否可点击触发全量构建（rebuild 不传 sourcePaths，manual-rebuild）。
+   * 未初始化/空/过期/异常可点——未初始化点击即为首次构建入口。
+   * ready 不可点：全量重建会清空后全部重新 Embedding，就绪态误触代价太高。
+   */
+  const canRebuild = computed(() => {
+    if (isBusy.value) {
+      return false
+    }
+    const s = status.value
+    return s === null || s === 'empty' || s === 'stale' || s === 'error'
+  })
 
   async function init(projectId: string) {
     // 重新 init 前先退订旧订阅，避免泄漏。
