@@ -12,6 +12,7 @@ import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import OrganizeChaptersModal from '../components/organize/OrganizeChaptersModal.vue'
+import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
@@ -32,6 +33,7 @@ const isContentPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
 const isOrganizeOpen = ref(false)
+const isRagOpen = ref(false)
 /** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
 
@@ -248,6 +250,7 @@ async function handleElementsWritten() {
         @proofread="handleNotImplemented('校对')"
         @organize="handleOpenOrganize"
         @version="handleNotImplemented('版本管理')"
+        @rag="isRagOpen = true"
       />
 
       <!-- 分类面板（随 Activity Bar 切换） -->
@@ -330,6 +333,13 @@ async function handleElementsWritten() {
       v-if="isOrganizeOpen"
       :project-id="projectId"
       @close="isOrganizeOpen = false"
+    />
+
+    <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->
+    <RagIndexModal
+      v-if="isRagOpen"
+      :project-id="projectId"
+      @close="isRagOpen = false"
     />
 
     <!-- Toast 提示 -->
