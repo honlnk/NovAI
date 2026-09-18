@@ -270,6 +270,11 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'message-delta' && sessionView.value) {
+      // 跨会话串扰防护：delta 携带来源 sessionId。用户切换会话后旧运行仍在流式时，
+      // 其残留 delta 不得写进当前会话视图。
+      if (event.sessionId !== sessionView.value.sessionId) {
+        return
+      }
       const target = sessionView.value.messages.find((m) => m.id === event.messageId)
       if (target && target.kind === 'text') {
         // 已有占位/累积中的消息：追加文本
