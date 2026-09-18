@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-import { createChatSession, runChatDriver, runChatTurn, _getActiveChatDriverCountForTest } from './session'
+import { createChatSession, enqueueChatMessage, runChatDriver, _getActiveChatDriverCountForTest } from './session'
 import { enqueueToInbox } from './inbox'
 import { query } from '../agent/query'
 import type { AgentMessage } from '../agent/messages'
@@ -54,8 +54,10 @@ describe('runChatTurn 流式 delta 转发', () => {
     })
 
     const events: Array<{ type: string; messageId?: string; text?: string; message?: { id: string; kind: string; text?: string } }> = []
-    const result = await runChatTurn({
-      session: createChatSession('proj-test'),
+    const session = createChatSession('proj-test')
+    enqueueChatMessage(session, 'next-turn', { text: '改一下第一章' })
+    const result = await runChatDriver({
+      session,
       input: {
         instruction: '改一下第一章',
         project: stubProject,
@@ -102,8 +104,10 @@ describe('runChatTurn 上下文压缩联动', () => {
       return input.view.messages
     })
 
-    const result = await runChatTurn({
-      session: createChatSession('proj-test'),
+    const session = createChatSession('proj-test')
+    enqueueChatMessage(session, 'next-turn', { text: '继续写' })
+    const result = await runChatDriver({
+      session,
       input: {
         instruction: '继续写',
         project: stubProject,

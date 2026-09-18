@@ -97,12 +97,13 @@ async function handleSend() {
     textareaRef.value.style.height = 'auto'
   }
 
-  try {
-    await chatStore.sendMessage(message, quoteText)
+  const ok = await chatStore.sendMessage(message, quoteText)
+  if (ok) {
     // 发送成功后清除引用 chip
     emit('clearQuote')
-  } catch {
-    // 错误已在 store 中写入 runStatus，这里静默处理
+  } else {
+    // 发送失败草稿恢复：把文本填回输入框（dsh restoreFailedDrafts 简单版）
+    inputText.value = message
   }
 }
 

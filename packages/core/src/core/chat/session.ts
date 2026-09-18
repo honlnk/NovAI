@@ -15,7 +15,9 @@ import {
   claimTurnStartBatch,
   claimFromInbox,
   enqueueToInbox,
+  hasPendingMessages,
 } from './inbox'
+import type { InboxTarget } from './inbox'
 import { deriveChatTargetFromPath } from './target'
 
 import type {
@@ -32,11 +34,20 @@ type SessionEvent =
   | { type: 'message'; message: ChatMessage; session: ChatSessionState }
   /** 模型流式输出的文本增量（瞬态渲染态，不落盘）；同一条 assistant 消息共享稳定 messageId。 */
   | { type: 'message-delta'; messageId: string; text: string }
+  /** 收件箱在 driver 运行中被抽干/变化（首批 claim、steer 抽干点）；service 层据此广播 queue-updated。 */
+  | { type: 'inbox-updated'; session: ChatSessionState }
 
-type RunChatTurnOptions = {
+/** driver 生命周期事件：service 层据此广播 run-start / run-finish / run-error。 */
+type ChatDriverLifecycleEvent =
+  | { type: 'driver-start'; session: ChatSessionState }
+  | { type: 'driver-finish'; session: ChatSessionState }
+  | { type: 'driver-error'; session: ChatSessionState; error: unknown }
+
+type RunChatDriverOptions = {
   session: ChatSessionState
   input: ChatTurnInput
   onEvent?: (event: SessionEvent) => void
+  onLifecycle?: (event: ChatDriverLifecycleEvent) => void
 }
 
 export function createChatSession(projectId: string): ChatSessionState {
@@ -57,13 +68,15 @@ export function createChatSession(projectId: string): ChatSessionState {
 
 /**
  * 活跃 driver 注册表（运行态，不落盘）：sessionId → 句柄。
- * 「入队永远先于唤醒」的配套：driver 活着时新消息只入队（进 driver 的工作会话），
- * 不重复唤醒——它会在下一抽干点/下一 turn 首批自己取走。
+ * 「入队永远先于唤醒」的配套：driver 活着时新消息只入队（同一个会话对象，driver 在
+ * 抽干点/首批自己取走）；停止后即刻再发送的竞态由 pendingWake 闩锁兜底（收敛后再唤醒）。
  */
 type ChatDriverHandle = {
   abort: AbortController
-  /** driver 的工作会话副本：多 turn 连续期间的状态所有权在 driver 手里 */
+  /** driver 的工作会话：与 service 层权威会话是同一对象（共享可变，收件箱变更即时可见） */
   session: ChatSessionState
+  /** 运行/收敛期间到达的唤醒请求（携带新 input）；driver 收敛后若收件箱非空则重新唤醒 */
+  pendingWake?: RunChatDriverOptions
 }
 const activeChatDrivers = new Map<string, ChatDriverHandle>()
 
@@ -75,56 +88,66 @@ export function stopChatDriver(sessionId: string): void {
   activeChatDrivers.get(sessionId)?.abort.abort()
 }
 
+/** 指定会话的 driver 是否活着（service 层「立即插话仅运行中可用」等判定用）。 */
+export function isChatDriverActive(sessionId: string): boolean {
+  return activeChatDrivers.has(sessionId)
+}
+
+/**
+ * 入队（入队永远先于唤醒）：把消息追加到会话收件箱并返回消息本体。
+ * 直接改传入会话对象——service 层持有权威会话，driver 工作时与其共享同一对象。
+ * 调用方负责随后 saveSession 落盘与 queue-updated 广播。
+ */
+export function enqueueChatMessage(
+  session: ChatSessionState,
+  target: InboxTarget,
+  input: { text: string; quote?: string },
+): QueuedMessage {
+  const enqueued = enqueueToInbox(session.inbox, target, input)
+  session.inbox = enqueued.state
+  return enqueued.message
+}
+
+/**
+ * 唤醒 driver（fire-and-forget）：空闲则启动；活着则记 pendingWake 闩锁——
+ * driver 收敛后若收件箱非空则带着新 input 重新唤醒
+ * （覆盖「停止后立刻再发送」的竞态：旧 driver 还没收尾，新消息不能只入队不唤醒）。
+ */
+export function wakeChatDriver(options: RunChatDriverOptions): void {
+  const existing = activeChatDrivers.get(options.session.sessionId)
+  if (existing) {
+    existing.pendingWake = options
+    return
+  }
+  // 监管壳：生命周期事件统一在这里发（pendingWake 再唤醒走同一入口，自带其 options 的回调闭包）。
+  void (async () => {
+    options.onLifecycle?.({ type: 'driver-start', session: options.session })
+    try {
+      await runChatDriver(options)
+      options.onLifecycle?.({ type: 'driver-finish', session: options.session })
+    } catch (error) {
+      options.onLifecycle?.({ type: 'driver-error', session: options.session, error })
+    }
+  })()
+}
+
 /** 测试专用：活跃 driver 数（断言闩锁清理）。 */
 export function _getActiveChatDriverCountForTest(): number {
   return activeChatDrivers.size
 }
 
 /**
- * 发送入口：入队永远先于唤醒——用户指令先耐久入队 next-turn，
- * driver 空闲才启动；driver 活着则不重复唤醒（它在抽干点自己取）。
- */
-export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurnResult> {
-  const active = activeChatDrivers.get(options.session.sessionId)
-  if (active) {
-    const enqueued = enqueueToInbox(active.session.inbox, 'next-turn', {
-      text: options.input.instruction,
-      quote: options.input.quote,
-    })
-    active.session.inbox = enqueued.state
-    return {
-      session: active.session,
-      target: active.session.currentTarget,
-    }
-  }
-
-  const enqueued = enqueueToInbox(options.session.inbox, 'next-turn', {
-    text: options.input.instruction,
-    quote: options.input.quote,
-  })
-  const session: ChatSessionState = { ...options.session, inbox: enqueued.state }
-  return runChatDriver({ session, input: options.input, onEvent: options.onEvent })
-}
-
-type RunChatDriverOptions = {
-  session: ChatSessionState
-  input: ChatTurnInput
-  onEvent?: (event: SessionEvent) => void
-}
-
-/**
  * driver（照抄 dsh 三层循环的 driver 层，`kick(): while(await turn())`）：
  * 一次唤醒连续跑多个 turn，直到收件箱抽干或被停止。
  *
+ * 直接工作于传入的会话对象（与 service 层权威会话同一对象，运行中入队即时可见）。
  * 每个 turn：claim 首批（next-step 全量 + next-turn 恰 1 条）→ 显示层/模型视图逐条追加
- * → 跑 query（turn 层）→ turn 收尾（action-summary 等）。停止（abort）后队列保留、不自动续跑。
+ * → 跑 query（turn 层）→ turn 收尾（change-summary 等）。停止（abort）后队列保留、不自动续跑。
  */
 export async function runChatDriver(options: RunChatDriverOptions): Promise<ChatTurnResult> {
   const { input, onEvent } = options
-  const session: ChatSessionState = {
-    ...options.session,
-    status: 'running',
-  }
+  const session = options.session
+  session.status = 'running'
 
   // 唤醒闩锁：本 driver 运行期间的统一 abort 源，调用方 signal 与 stopChatDriver 都汇聚到它。
   const driverAbort = new AbortController()
@@ -143,6 +166,7 @@ export async function runChatDriver(options: RunChatDriverOptions): Promise<Chat
       // turn 首批：next-step 全量 + next-turn 恰 1 条（claim 即消费，抽干不回滚）
       const batch = claimTurnStartBatch(session.inbox)
       session.inbox = batch.state
+      onEvent?.({ type: 'inbox-updated', session })
 
       // 首批为空 = 收件箱抽干 → 收工
       if (!batch.followup && batch.steering.length === 0) {
@@ -159,7 +183,12 @@ export async function runChatDriver(options: RunChatDriverOptions): Promise<Chat
   } finally {
     input.signal?.removeEventListener('abort', linkCallerSignal)
     // 清闩锁：driver 收敛。收件箱剩余消息留在会话里，等用户下次发送时随首批带走。
+    // 收敛期间到达过唤醒请求且收件箱非空 → 带新 input 重新唤醒（dsh wakeRequested 闩锁语义）。
+    const pendingWake = activeChatDrivers.get(session.sessionId)?.pendingWake
     activeChatDrivers.delete(session.sessionId)
+    if (pendingWake && hasPendingMessages(session.inbox)) {
+      wakeChatDriver(pendingWake)
+    }
   }
 
   session.status = 'waiting-user'
@@ -294,6 +323,9 @@ async function runDriverTurn(options: {
         drain() {
           const claimed = claimFromInbox(session.inbox, 'next-step')
           session.inbox = claimed.state
+          if (claimed.messages.length > 0) {
+            onEvent?.({ type: 'inbox-updated', session })
+          }
           return claimed.messages
         },
         hasPending() {

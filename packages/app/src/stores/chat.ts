@@ -4,7 +4,11 @@ import { defineStore } from 'pinia'
 import {
   createSession as createAgentSession,
   respondConfirmation as respondAgentConfirmation,
-  runTurn as runAgentTurn,
+  enqueueMessage as enqueueAgentMessage,
+  updateQueuedMessage as updateAgentQueuedMessage,
+  stopAgentRun,
+  isAgentRunActive,
+  subscribeAgentEvents,
   getSession as getAgentSession,
   listSessions as listAgentSessions,
   renameSession as renameAgentSession,
@@ -18,8 +22,8 @@ import type {
   ChatSessionSummaryView,
   ChatSessionView,
   FileChangeConfirmationView,
-  RunAgentTurnInput,
-  RunAgentTurnResult,
+  FileChangeRecordView,
+  QueuedMessageView,
 } from '@novai/core/services/types'
 
 import { useProjectStore } from './project'
@@ -29,11 +33,14 @@ export type RunStatusType = 'idle' | 'running' | 'error'
 
 export const useChatStore = defineStore('chat', () => {
   const sessionView = ref<ChatSessionView | null>(null)
-  const agentEvents = ref<AgentUiEvent[]>([])
+  /** 会话级改动清单（按目标路径去重；来源：run-finish 全量 / 会话 view / file-changed 实时合并） */
   const changedFiles = ref<ChangedFileView[]>([])
+  /** 收件箱队列快照（QueueDock 渲染用），由 queue-updated 事件同步、切换会话时从 view 重建 */
+  const queue = ref<QueuedMessageView[]>([])
   const runStatus = ref('还没有开始执行。')
   // runStatus 的语义类型，供状态栏按类型上色（idle 灰 / running 蓝 / error 红）
   const runStatusType = ref<RunStatusType>('idle')
+  // 事件驱动：run-start 置真、run-finish/run-error 置假（driver 后台跑，不再由单次 await 的 finally 控制）
   const isRunning = ref(false)
   // 用户已请求停止、正在等待当前工具执行完成
   const isStopping = ref(false)
@@ -44,12 +51,9 @@ export const useChatStore = defineStore('chat', () => {
 
   // 历史会话列表（对话分类面板渲染），按 updatedAt 降序
   const sessions = ref<ChatSessionSummaryView[]>([])
-  // 当前激活会话 id（高亮 + runTurn 路由用）
+  // 当前激活会话 id（高亮 + 事件路由用）
   const activeSessionId = ref<string | null>(null)
   const isLoadingSessions = ref(false)
-
-  // 当前运行持有的停止控制器；仅 isRunning 期间存在
-  let activeAbortController: AbortController | null = null
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
@@ -95,10 +99,13 @@ export const useChatStore = defineStore('chat', () => {
 
     sessionView.value = view
     activeSessionId.value = sessionId
-    // 切换会话时清空上一轮的运行态残留，避免跨会话串扰
-    agentEvents.value = []
-    changedFiles.value = []
+    // 切换会话时清空上一轮的运行态残留，避免跨会话串扰；
+    // 队列/改动清单/运行态从目标会话的 view 与 driver 注册表重建
+    changedFiles.value = view.changedFiles ?? []
+    queue.value = view.queuedMessages ?? []
     streamingMessageId.value = null
+    isRunning.value = isAgentRunActive(sessionId)
+    isStopping.value = false
     return view
   }
 
@@ -114,6 +121,10 @@ export const useChatStore = defineStore('chat', () => {
     const view = await createAgentSession(projectId)
     sessionView.value = view
     activeSessionId.value = view.sessionId
+    changedFiles.value = []
+    queue.value = []
+    isRunning.value = false
+    isStopping.value = false
 
     if (options.skipReload) {
       sessions.value = [{
@@ -168,73 +179,82 @@ export const useChatStore = defineStore('chat', () => {
     await createNewSession(projectId, { skipReload: true })
   }
 
-  async function runServiceTurn(
-    input: Omit<RunAgentTurnInput, 'sessionId' | 'onEvent'> & {
-      onEvent?: (event: AgentUiEvent) => void
-    },
-  ): Promise<RunAgentTurnResult> {
+  /**
+   * 发送入口：入队先于唤醒，立即返回（driver 在后台跑，进展经事件总线回流）。
+   * - mode 'queue'：next-turn 排队（空闲时效果等同直接发送）；
+   * - mode 'steer'：next-step 插话，下一 step 边界生效（仅运行中有意义）。
+   * 返回是否入队成功：失败时 UI 负责把草稿填回输入框（dsh restoreFailedDrafts 简单版）。
+   */
+  async function sendMessage(
+    text: string,
+    quote?: string,
+    mode: 'queue' | 'steer' = 'queue',
+  ): Promise<boolean> {
     if (!sessionView.value) {
-      throw new Error('没有活跃的会话')
+      setRunStatus('没有活跃的会话', 'error')
+      return false
     }
-    const currentSession = sessionView.value
-    // 记录本轮前标题，用于 finally 判断是否需要刷新列表（首轮会自动生成标题）
-    const titleBeforeTurn = currentSession.title
 
-    agentEvents.value = []
-    changedFiles.value = []
-    streamingMessageId.value = null
-    setRunStatus('正在执行本轮 Agent...', 'running')
-    isRunning.value = true
-    isStopping.value = false
-
-    // 每轮新建 controller，signal 透传到 core Agent Loop
-    activeAbortController = new AbortController()
-
+    // 把当前打开的文件路径作为隐式上下文传入，供 Agent 工具约束（如「只改当前文件」）解析使用。
+    const projectStore = useProjectStore()
     try {
-      const result = await runAgentTurn({
-        ...input,
-        sessionId: currentSession.sessionId,
-        signal: activeAbortController.signal,
-        onEvent(event) {
-          handleAgentEvent(event)
-          input.onEvent?.(event)
-        },
+      await enqueueAgentMessage({
+        projectId: sessionView.value.projectId,
+        sessionId: sessionView.value.sessionId,
+        text,
+        quote,
+        mode,
+        activeFilePath: projectStore.activeFile?.path ?? null,
       })
-
-      sessionView.value = result.session
-      changedFiles.value = result.changedFiles
-      setRunStatus(
-        result.changedFiles.length > 0
-          ? `本轮执行完成，变更 ${result.changedFiles.length} 个文件`
-          : '本轮执行完成，未修改任何文件',
-      )
-
-      return result
+      return true
     } catch (error) {
-      setRunStatus(error instanceof Error ? error.message : '执行会话失败', 'error')
-      throw error
-    } finally {
-      isRunning.value = false
-      isStopping.value = false
-      activeAbortController = null
-      // 仅当标题发生变化（典型：首轮发送后自动生成标题）才全量刷新列表，
-      // 避免每轮对话都全量重扫文件系统。updatedAt 的时间戳显示精度可接受滞后。
-      const titleAfterTurn = sessionView.value?.title
-      if (titleAfterTurn && titleAfterTurn !== titleBeforeTurn) {
-        void loadSessions(currentSession.projectId)
-      }
+      setRunStatus(error instanceof Error ? error.message : '发送失败', 'error')
+      return false
     }
   }
 
-  /** 用户点击停止：中断当前模型流式请求，Agent Loop 会在边界优雅结束。 */
+  /** QueueDock 行内编辑排队消息；失败抛错由 UI toast。 */
+  async function editQueuedMessage(id: string, text: string): Promise<void> {
+    if (!sessionView.value) return
+    await updateAgentQueuedMessage({
+      projectId: sessionView.value.projectId,
+      sessionId: sessionView.value.sessionId,
+      id,
+      action: { kind: 'edit', text },
+    })
+  }
+
+  /** QueueDock 撤回排队消息；失败抛错由 UI toast。 */
+  async function removeQueuedMessage(id: string): Promise<void> {
+    if (!sessionView.value) return
+    await updateAgentQueuedMessage({
+      projectId: sessionView.value.projectId,
+      sessionId: sessionView.value.sessionId,
+      id,
+      action: { kind: 'remove' },
+    })
+  }
+
+  /** QueueDock 把排队消息升级为插话（仅运行中可用，service 层校验）；失败抛错由 UI toast。 */
+  async function steerQueuedMessage(id: string): Promise<void> {
+    if (!sessionView.value) return
+    await updateAgentQueuedMessage({
+      projectId: sessionView.value.projectId,
+      sessionId: sessionView.value.sessionId,
+      id,
+      action: { kind: 'steer' },
+    })
+  }
+
+  /** 用户点击停止：abort 当前 turn，driver 在边界优雅收尾；队列保留不自动续跑。 */
   function abortRun() {
-    if (activeAbortController) {
-      activeAbortController.abort()
-      activeAbortController = null
-      // 立即进入「停止中」态：UI 反馈 + 等待当前工具完成
-      isStopping.value = true
-      setRunStatus('已请求停止，等待当前工具执行完成…', 'running')
+    if (!activeSessionId.value || !isRunning.value) {
+      return
     }
+    stopAgentRun(activeSessionId.value)
+    // 立即进入「停止中」态：UI 反馈 + 等待当前工具完成
+    isStopping.value = true
+    setRunStatus('已请求停止，等待当前工具执行完成…', 'running')
   }
 
   /**
@@ -246,10 +266,28 @@ export const useChatStore = defineStore('chat', () => {
     runStatusType.value = type
   }
 
+  /** file-changed 实时合并进会话级清单（目标路径去重、last-wins）；权威清单以 run-finish / 会话 view 为准。 */
+  function applyFileChangeRecord(record: FileChangeRecordView) {
+    const change = record.change
+    const keyOf = (file: ChangedFileView) => (file.type === 'renamed' ? file.toPath : file.path)
+    const key = keyOf(change)
+    changedFiles.value = [
+      ...changedFiles.value.filter(
+        (file) => keyOf(file) !== key && !(change.type === 'renamed' && keyOf(file) === change.fromPath),
+      ),
+      change,
+    ]
+  }
+
   function handleAgentEvent(event: AgentUiEvent) {
-    agentEvents.value = [...agentEvents.value, event]
+    // 事件总线是全局的：只消费当前激活会话的事件（后台会话的 driver 仍在跑，UI 不跟随）
+    if (!activeSessionId.value || event.sessionId !== activeSessionId.value) {
+      return
+    }
 
     if (event.type === 'run-start') {
+      isRunning.value = true
+      isStopping.value = false
       setRunStatus('Agent 正在执行...', 'running')
       return
     }
@@ -270,11 +308,6 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'message-delta' && sessionView.value) {
-      // 跨会话串扰防护：delta 携带来源 sessionId。用户切换会话后旧运行仍在流式时，
-      // 其残留 delta 不得写进当前会话视图。
-      if (event.sessionId !== sessionView.value.sessionId) {
-        return
-      }
       const target = sessionView.value.messages.find((m) => m.id === event.messageId)
       if (target && target.kind === 'text') {
         // 已有占位/累积中的消息：追加文本
@@ -302,7 +335,13 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'file-changed') {
-      changedFiles.value = [...changedFiles.value, event.file]
+      // 实时合并（文件树自动刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖
+      applyFileChangeRecord(event.file)
+      return
+    }
+
+    if (event.type === 'queue-updated') {
+      queue.value = event.queue
       return
     }
 
@@ -313,38 +352,35 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'run-error') {
+      isRunning.value = false
+      isStopping.value = false
       streamingMessageId.value = null
       setRunStatus(event.error.message, 'error')
       return
     }
 
     if (event.type === 'run-finish') {
+      isRunning.value = false
+      isStopping.value = false
       streamingMessageId.value = null
       sessionView.value = event.result.session
-      changedFiles.value = event.result.changedFiles
-      setRunStatus(
-        event.result.changedFiles.length > 0
-          ? `本轮执行完成，变更 ${event.result.changedFiles.length} 个文件`
-          : '本轮执行完成，未修改任何文件',
-      )
+      changedFiles.value = event.result.session.changedFiles ?? []
+      queue.value = event.result.session.queuedMessages ?? []
+      // 状态栏常态显示会话级总数；本轮明细由 change-summary 面板承担
+      const count = event.result.sessionChangedFileCount
+      setRunStatus(count > 0 ? `本会话共修改 ${count} 个文件` : '本轮执行完成，未修改任何文件')
+
+      // 仅当标题发生变化（典型：首轮发送后自动生成标题）才全量刷新列表，
+      // 避免每轮对话都全量重扫文件系统。
+      const entry = sessions.value.find((s) => s.sessionId === event.sessionId)
+      if (entry && event.result.session.title && entry.title !== event.result.session.title) {
+        void loadSessions(event.result.projectId)
+      }
     }
   }
 
-  async function sendMessage(text: string, quote?: string) {
-    if (!sessionView.value) {
-      throw new Error('没有活跃的会话')
-    }
-
-    // 把当前打开的文件路径作为隐式上下文传入，供 Agent 工具约束（如「只改当前文件」）解析使用。
-    const projectStore = useProjectStore()
-    const activeFilePath = projectStore.activeFile?.path
-    return runServiceTurn({
-      projectId: sessionView.value.projectId,
-      instruction: text,
-      quote,
-      activeFilePath,
-    })
-  }
+  // store 单例订阅全局事件总线（driver 后台跑，所有进展经此回流）
+  subscribeAgentEvents(handleAgentEvent)
 
   /** 用户确认当前待确认的写操作，唤醒 Agent Loop 继续执行。 */
   function confirmWriteTool() {
@@ -369,8 +405,8 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   return {
-    agentEvents,
     changedFiles,
+    queue,
     isRunning,
     isStopping,
     isLoadingSessions,
@@ -387,13 +423,15 @@ export const useChatStore = defineStore('chat', () => {
     confirmWriteTool,
     createNewSession,
     deleteSession,
+    editQueuedMessage,
     initSessions,
     loadSessions,
     rejectWriteTool,
+    removeQueuedMessage,
     renameSession,
-    runServiceTurn,
     selectSession,
     sendMessage,
     setRunStatus,
+    steerQueuedMessage,
   }
 })

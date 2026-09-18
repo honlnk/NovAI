@@ -397,8 +397,12 @@ export type ChatSessionView = {
   status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   messages: ChatMessageView[]
   currentTargetPath?: string
-  /** 会话级改动文件总数（按目标路径去重，从改动账本派生；重载后不丢） */
+  /** 会话级改动清单（按目标路径去重，从改动账本派生；重载后不丢） */
+  changedFiles: ChangedFileView[]
+  /** 会话级改动文件总数（changedFiles 的长度，从改动账本派生） */
   changedFileCount?: number
+  /** 收件箱队列快照（QueueDock 切换会话时重建用） */
+  queuedMessages?: QueuedMessageView[]
   /** 会话标题，可选以兼容旧 view */
   title?: string
   createdAt?: string
@@ -418,23 +422,46 @@ export type ChatSessionSummaryView = {
   messageCount: number
 }
 
-export type RunAgentTurnInput = {
+/** 发送入口参数：入队先于唤醒，立即返回；mode = 'queue' 排队（空闲等同直接发送）/ 'steer' 插话。 */
+export type EnqueueMessageInput = {
   projectId: string
   sessionId?: string
-  instruction: string
-  /** 本轮引用的选中内容，注入到发给模型的 user context */
+  text: string
+  /** 引用的选中内容，随消息入队快照 */
   quote?: string
-  activeFilePath?: string
-  /** 用户停止信号，透传到 Agent Loop。 */
-  signal?: AbortSignal
-  onEvent?: (event: AgentUiEvent) => void
+  mode: 'queue' | 'steer'
+  /** 发送时打开的文件路径（隐式上下文快照，目标解析用） */
+  activeFilePath?: string | null
 }
 
+/** 排队消息操作：edit 行内编辑 / remove 撤回 / steer 升级为插话（仅运行中可用）。 */
+export type UpdateQueuedMessageInput = {
+  projectId: string
+  sessionId: string
+  id: string
+  action: { kind: 'edit'; text: string } | { kind: 'remove' } | { kind: 'steer' }
+}
+
+/** QueueDock 渲染用排队消息视图：placement = queued（next-turn 排队）/ steering（next-step 插话）。 */
+export type QueuedMessageView = {
+  id: string
+  text: string
+  quote?: string
+  at: string
+  placement: 'queued' | 'steering'
+}
+
+/**
+ * 一次连续运行（driver run）的收尾结果。
+ * turnChanges = 本次运行期间账本新增记录（跨 turn 全量，含 diff）；
+ * sessionChangedFileCount = 会话级去重总数（喂右下角）。
+ */
 export type RunAgentTurnResult = {
   projectId: string
   sessionId: string
   targetPath?: string
-  changedFiles: ChangedFileView[]
+  turnChanges: FileChangeRecordView[]
+  sessionChangedFileCount: number
   session: ChatSessionView
 }
 
@@ -455,17 +482,21 @@ export type FileChangeConfirmationView = {
 
 export type AgentUiEvent =
   | { type: 'run-start'; runId: string; sessionId: string }
-  | { type: 'message'; message: ChatMessageView }
+  | { type: 'message'; sessionId: string; message: ChatMessageView }
   /** 模型流式输出的文本增量（瞬态渲染态）；同一条 assistant 消息共享稳定 messageId，最终由 message 事件原位落盘。 */
   | { type: 'message-delta'; sessionId: string; messageId: string; text: string }
-  | { type: 'model-start'; step: number }
-  | { type: 'model-finish'; step: number; toolCallCount: number; finishReason?: string }
-  | { type: 'tool-call'; toolCall: ToolCallView }
-  | { type: 'tool-result'; toolResult: ToolResultView }
-  | { type: 'file-changed'; file: ChangedFileView }
-  | { type: 'confirmation-required'; request: FileChangeConfirmationView }
-  | { type: 'run-error'; error: NovAiError }
-  | { type: 'run-finish'; result: RunAgentTurnResult }
+  | { type: 'model-start'; sessionId: string; step: number }
+  | { type: 'model-finish'; sessionId: string; step: number; toolCallCount: number; finishReason?: string }
+  | { type: 'tool-call'; sessionId: string; toolCall: ToolCallView }
+  | { type: 'tool-result'; sessionId: string; toolResult: ToolResultView }
+  /** 写工具落盘后广播（载荷为完整账本记录）；文件树刷新用。 */
+  | { type: 'file-changed'; sessionId: string; file: FileChangeRecordView }
+  /** 收件箱任何变化（入队/抽干/编辑/删除）时广播全量快照。 */
+  | { type: 'queue-updated'; sessionId: string; queue: QueuedMessageView[] }
+  | { type: 'confirmation-required'; sessionId: string; request: FileChangeConfirmationView }
+  | { type: 'run-error'; sessionId: string; error: NovAiError }
+  /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
+  | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }
 
 export type NovAiErrorCode =
   | 'PROJECT_NOT_OPEN'

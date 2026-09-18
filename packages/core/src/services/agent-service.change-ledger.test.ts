@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createSession, runTurn, _clearSessionCacheForTest } from './agent-service'
+import {
+  createSession,
+  enqueueMessage,
+  subscribeAgentEvents,
+  _clearSessionCacheForTest,
+} from './agent-service'
 import { setRuntimeProject, clearRuntimeProjects } from './project-runtime'
 import { query } from '../core/agent/query'
 import type { AgentQueryEvent } from '../core/agent/query'
 import type { ProjectConfig, ProjectSnapshot } from '../types/project'
-import type { AgentUiEvent, ChatMessageView } from './types'
+import type { AgentUiEvent, ChatMessageView, RunAgentTurnResult } from './types'
 
 /**
  * 改动账本（changeLedger）service 层测试：
@@ -60,13 +65,27 @@ function emitToolResult(
   })
 }
 
+/**
+ * 发送一条消息并等待本次连续运行收敛（driver fire-and-forget，经事件总线收 run-finish）。
+ * 返回收尾 result 与全程事件流。
+ */
 async function runOneTurn(instruction: string) {
   const events: AgentUiEvent[] = []
-  const result = await runTurn({
-    projectId: 'proj-ledger',
-    instruction,
-    onEvent: (event) => events.push(event),
+  const finished = new Promise<RunAgentTurnResult>((resolve, reject) => {
+    const unsubscribe = subscribeAgentEvents((event) => {
+      events.push(event)
+      if (event.type === 'run-finish') {
+        unsubscribe()
+        resolve(event.result)
+      }
+      if (event.type === 'run-error') {
+        unsubscribe()
+        reject(new Error(event.error.message))
+      }
+    })
   })
+  await enqueueMessage({ projectId: 'proj-ledger', text: instruction, mode: 'queue' })
+  const result = await finished
   return { result, events }
 }
 
@@ -106,8 +125,8 @@ describe('改动账本 service 层', () => {
     const { result, events } = await runOneTurn('写第一章并完善设定')
 
     // Bug 2：三个文件全在，不再只报最后一个
-    expect(result.changedFiles).toHaveLength(3)
-    const changedPaths = result.changedFiles.map((f) => ('path' in f ? f.path : ''))
+    expect(result.session.changedFiles).toHaveLength(3)
+    const changedPaths = result.session.changedFiles.map((f) => ('path' in f ? f.path : ''))
     expect(changedPaths).toContain('chapters/第001章-初遇.txt')
     expect(changedPaths).toContain('elements/characters/主角.md')
 
@@ -167,7 +186,7 @@ describe('改动账本 service 层', () => {
     const { result } = await runOneTurn('改两章')
 
     // 旧实现翻 modelView 会在压缩后丢光；账本与 modelView 无关 → 压缩后仍准确
-    expect(result.changedFiles).toHaveLength(2)
+    expect(result.session.changedFiles).toHaveLength(2)
     expect(result.session.changedFileCount).toBe(2)
     const summaries = findChangeSummaries(result.session.messages)
     expect(summaries.length).toBe(1)
@@ -214,7 +233,7 @@ describe('改动账本 service 层', () => {
     const { result } = await runOneTurn('这个角色叫什么好')
 
     expect(findChangeSummaries(result.session.messages)).toHaveLength(0)
-    expect(result.changedFiles).toHaveLength(0)
+    expect(result.session.changedFiles).toHaveLength(0)
     expect(result.session.changedFileCount).toBe(0)
   })
 
