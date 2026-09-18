@@ -193,9 +193,10 @@ describe('runChatDriver 分层循环（driver 层）', () => {
     expect(result.session.inbox?.nextTurn.map((m) => m.text)).toEqual(['第二条', '第三条'])
     expect(result.session.status).toBe('waiting-user')
     expect(_getActiveChatDriverCountForTest()).toBe(0)
-    // 停止的 turn 有「已被停止」收尾摘要
-    const summaries = result.session.messages.filter((m) => m.kind === 'action-summary')
-    expect(summaries.at(-1)?.summary).toContain('已被用户停止')
+    // 停止的 turn 一律 push change-summary（aborted 标记；本轮无改动 → UI 渲染为一行「已被用户停止」）
+    const changeSummaries = result.session.messages.filter((m) => m.kind === 'change-summary')
+    expect(changeSummaries).toHaveLength(1)
+    expect(changeSummaries[0]).toMatchObject({ aborted: true })
   })
 
   it('首批顺序：steer 全量在前、followup 在后；steer 气泡带 steered 标记且包装进模型视图', async () => {

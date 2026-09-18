@@ -27,10 +27,9 @@ import type {
   QueuedMessage,
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
-import type { FileChange } from '../tools/types'
 
 type SessionEvent =
-  | { type: 'message'; message: ChatMessage }
+  | { type: 'message'; message: ChatMessage; session: ChatSessionState }
   /** 模型流式输出的文本增量（瞬态渲染态，不落盘）；同一条 assistant 消息共享稳定 messageId。 */
   | { type: 'message-delta'; messageId: string; text: string }
 
@@ -96,7 +95,6 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     return {
       session: active.session,
       target: active.session.currentTarget,
-      writtenPath: active.session.lastWrittenPath,
     }
   }
 
@@ -168,7 +166,6 @@ export async function runChatDriver(options: RunChatDriverOptions): Promise<Chat
   return {
     session,
     target: session.currentTarget,
-    writtenPath: session.lastWrittenPath,
   }
 }
 
@@ -190,7 +187,6 @@ async function runDriverTurn(options: {
 }): Promise<{ aborted: boolean }> {
   const { input, batch, signal, onEvent } = options
   const session = options.session
-  session.lastWrittenPath = undefined
 
   const target = deriveChatTargetFromPath(input.activeFilePath)
   session.currentTarget = target
@@ -396,9 +392,19 @@ async function runDriverTurn(options: {
         }
 
         if (event.type === 'tool-result') {
-          // lastWrittenPath 取结构化 fileChange 的目标路径，不再从 input 猜。
+          // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
+          // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
           if (event.ok && event.fileChange) {
-            session.lastWrittenPath = resolveWrittenPath(event.fileChange)
+            session.changeLedger = [
+              ...(session.changeLedger ?? []),
+              {
+                id: createId('change'),
+                runId,
+                at: new Date().toISOString(),
+                change: event.fileChange,
+                ...(event.diff ? { diff: event.diff } : {}),
+              },
+            ]
           }
 
           pushMessage(
@@ -431,17 +437,20 @@ async function runDriverTurn(options: {
     throw error
   }
 
+  // 本轮账本切片（change-summary 只存 runId，面板数据渲染时按 runId 从账本解析）
+  const turnChanges = (session.changeLedger ?? []).filter((record) => record.runId === runId)
+
   if (aborted) {
+    // 被停止：一律 push change-summary——有改动渲染为面板并带「已停止」标记；
+    // 无改动渲染为一行「本轮已被用户停止」。
     pushMessage(
       session,
       {
         id: createId('message'),
-        role: 'assistant',
-        kind: 'action-summary',
-        summary: session.lastWrittenPath
-          ? `本轮 Agent 已被停止，停止前已写回 ${session.lastWrittenPath}`
-          : '本轮 Agent 已被用户停止。',
-        targetPath: session.lastWrittenPath,
+        role: 'system',
+        kind: 'change-summary',
+        runId,
+        aborted: true,
         createdAt: new Date().toISOString(),
       },
       onEvent,
@@ -450,31 +459,31 @@ async function runDriverTurn(options: {
     return { aborted: true }
   }
 
-  pushMessage(
-    session,
-    {
-      id: createId('message'),
-      role: 'assistant',
-      kind: 'action-summary',
-      summary: session.lastWrittenPath
-        ? `本轮 Agent Loop 完成，已写回 ${session.lastWrittenPath}`
-        : '本轮 Agent Loop 完成，未写入文件。',
-      targetPath: session.lastWrittenPath,
-      createdAt: new Date().toISOString(),
-    },
-    onEvent,
-  )
+  // 正常结束：本轮账本非空才 push change-summary 面板；纯问答轮什么都不 push（无「回答完毕」噪音）
+  if (turnChanges.length > 0) {
+    pushMessage(
+      session,
+      {
+        id: createId('message'),
+        role: 'system',
+        kind: 'change-summary',
+        runId,
+        createdAt: new Date().toISOString(),
+      },
+      onEvent,
+    )
+  }
 
   void writeAgentLog(input.project, {
     sessionId: session.sessionId,
     runId,
     level: 'info',
     event: 'agent_run_finish',
-    message: session.lastWrittenPath
-      ? `Agent 本轮完成并写回 ${session.lastWrittenPath}`
+    message: turnChanges.length > 0
+      ? `Agent 本轮完成，产生 ${turnChanges.length} 处文件变更`
       : 'Agent 本轮完成，未写入文件',
     data: {
-      writtenPath: session.lastWrittenPath,
+      changeCount: turnChanges.length,
       agentMessageCount: session.modelView?.messages.length ?? 0,
     },
   })
@@ -693,7 +702,8 @@ function pushMessage(
   onEvent?: (event: SessionEvent) => void,
 ) {
   session.messages = [...session.messages, message]
-  onEvent?.({ type: 'message', message })
+  // 携带会话引用：change-summary 等消息在 service 层转 view 时需按 runId 从 changeLedger 解析
+  onEvent?.({ type: 'message', message, session })
 }
 
 function pushErrorMessage(
@@ -764,11 +774,6 @@ function createContextSummary(target: ChatTargetContext | null): ChatMessage {
 
 function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-// 从结构化 fileChange 取最终落点：rename 取 toPath，其余取 path。
-function resolveWrittenPath(change: FileChange): string {
-  return change.type === 'renamed' ? change.toPath : change.path
 }
 
 /** 新会话默认标题，首轮用户消息后会被首句截断覆盖 */

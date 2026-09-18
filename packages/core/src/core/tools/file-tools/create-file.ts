@@ -43,6 +43,7 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
       contentLength: input.content.length,
       linesAdded: countLines(input.content),
       created: true,
+      content: input.content,
     }
   },
   summarizeInput(input) {
@@ -53,6 +54,14 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
   },
   extractFileChange(output) {
     return { type: 'created', path: output.path }
+  },
+  extractChangeDiff(output) {
+    return {
+      oldText: '',
+      newText: output.content,
+      linesAdded: output.linesAdded,
+      linesRemoved: 0,
+    }
   },
   buildConfirmation(input) {
     return { kind: 'create', path: input.path, content: input.content }

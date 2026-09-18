@@ -2,6 +2,7 @@ import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { ModelView } from '../core/agent/model-view'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type { ChangeDiff, FileChange } from '../core/tools/types'
 
 export type ChatToolName =
   | 'ReadFile'
@@ -79,6 +80,21 @@ export type ContextSummaryMessage = {
   createdAt: string
 }
 
+/**
+ * 改动汇总消息（取代 action-summary 生态位；任务完成 diff 面板在消息流里的占位）。
+ * 只存 runId：面板数据渲染时从会话 changeLedger 按 runId 解析，不重复存 diff。
+ * 随消息持久化，重载后每一轮的面板都在原位。
+ */
+export type ChangeSummaryMessage = {
+  id: string
+  role: 'system'
+  kind: 'change-summary'
+  runId: string
+  /** 被停止的轮次：有改动渲染为面板并带「已停止」标记，无改动渲染为一行「本轮已被用户停止」 */
+  aborted?: boolean
+  createdAt: string
+}
+
 export type ChatMessage =
   | UserTextMessage
   | AssistantTextMessage
@@ -87,6 +103,7 @@ export type ChatMessage =
   | ToolResultMessage
   | ErrorMessage
   | ContextSummaryMessage
+  | ChangeSummaryMessage
 
 export type ChatTargetContext = {
   type: 'chapter' | 'prompt-system' | 'prompt-scene' | 'element' | 'project'
@@ -119,6 +136,20 @@ export type InboxState = {
   nextStep: QueuedMessage[]
 }
 
+/**
+ * 改动账本的一条记录（append-only，与 modelView 彻底无关 → 天然免疫压缩）。
+ * diff 仅 created/updated 有；renamed/deleted 无（删除原文去回收站 trashPath 看）。
+ */
+export type FileChangeRecord = {
+  id: string
+  /** 哪一轮任务产生（driver 每 turn 一个 runId） */
+  runId: string
+  /** ISO 时间 */
+  at: string
+  change: FileChange
+  diff?: ChangeDiff
+}
+
 export type ChatSessionState = {
   sessionId: string
   projectId: string
@@ -128,6 +159,11 @@ export type ChatSessionState = {
    */
   inbox?: InboxState
   /**
+   * 改动账本：append-only，随会话 JSON 落盘。可选字段：旧会话无此字段，视为空数组，无需迁移。
+   * 「本轮改了哪些文件」的唯一可靠来源（修复压缩丢清单 + 总结只报一个文件两个 bug）。
+   */
+  changeLedger?: FileChangeRecord[]
+  /**
    * 模型视图：发给 LLM 的消息序列唯一来源，持久化的是压缩后的当前视图。
    * 与显示层 messages（全量 transcript）彻底分离。旧会话文件的 agentMessages
    * 在加载时迁移到此字段。
@@ -136,7 +172,6 @@ export type ChatSessionState = {
   status: ChatSessionStatus
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
-  lastWrittenPath?: string
   /** 当前会话已注入的 system message（systemPrompt + scenePrompt 拼接结果）hash，用于检测同会话内提示词变化并刷新。 */
   systemPromptHash?: string
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
@@ -183,5 +218,4 @@ export type ChatTurnInput = {
 export type ChatTurnResult = {
   session: ChatSessionState
   target: ChatTargetContext | null
-  writtenPath?: string
 }

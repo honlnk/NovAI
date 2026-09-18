@@ -1,13 +1,14 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
-import type { FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
+import type { ChangeDiff, FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
 import { decideWriteToolPermission, toApprovalOutcome } from './permission'
 import { maybeSpill, SPILLABLE_TOOLS } from './spill'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
-  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange }
+  /** fileChange/diff 仅在写工具成功执行后存在；diff 是片段级 before/after（改动账本用，不进模型视图）。 */
+  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff }
 
 /** 写工具执行前的确认请求，交由上层（service）转交 UI 等待用户决定。 */
 export type WriteConfirmationRequest = {
@@ -130,8 +131,9 @@ export async function executeAgentTool(input: {
       readFileStates: input.readFileStates,
     })
     const resultSummary = tool.core.summarizeOutput(output)
-    // 写工具成功执行后提取结构化文件变更，供 service 层推导 changedFiles
+    // 写工具成功执行后提取结构化文件变更与片段级 diff，供改动账本累积
     const fileChange = tool.core.extractFileChange?.(output)
+    const diff = tool.core.extractChangeDiff?.(output)
 
     // 超长工具结果 spill：只对 RagSearch（无分页能力的内容型工具）。
     // ReadFile 已被三道闸豁免（单次 ≤50KB 字节）；spill 路径自身豁免二次 spill。
@@ -147,6 +149,7 @@ export async function executeAgentTool(input: {
       ok: true,
       resultSummary,
       fileChange,
+      diff,
     })
 
     return {

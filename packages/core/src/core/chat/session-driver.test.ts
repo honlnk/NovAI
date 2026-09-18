@@ -161,11 +161,12 @@ describe('driver 全链路（真实 query + 假 SSE）', () => {
     // 只跑了一个 turn：剩余两条留在收件箱，不自动续跑
     expect(fetchCalls).toHaveLength(1)
     expect(result.session.inbox?.nextTurn.map((m) => m.text)).toEqual(['第二条', '第三条'])
-    // 优雅收尾：半截内容保留为 assistant 消息 + 停止摘要
+    // 优雅收尾：半截内容保留为 assistant 消息 + change-summary 带已停止标记（本轮无改动，UI 渲染降级行）
     const assistantTexts = result.session.messages.filter((m) => m.kind === 'text' && m.role === 'assistant')
     expect(assistantTexts.some((m) => m.kind === 'text' && m.text === '写到一半')).toBe(true)
-    const actionSummaries = result.session.messages.filter((m) => m.kind === 'action-summary')
-    expect(actionSummaries.at(-1)).toMatchObject({ summary: expect.stringContaining('已被用户停止') })
+    const changeSummaries = result.session.messages.filter((m) => m.kind === 'change-summary')
+    expect(changeSummaries).toHaveLength(1)
+    expect(changeSummaries[0]).toMatchObject({ aborted: true })
     expect(result.session.status).toBe('waiting-user')
     expect(_getActiveChatDriverCountForTest()).toBe(0)
   })

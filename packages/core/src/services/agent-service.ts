@@ -15,7 +15,7 @@ import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
-import type { ChatMessage, ChatSessionState, ChatTargetContext } from '../types/chat'
+import type { ChatMessage, ChatSessionState, ChatTargetContext, FileChangeRecord } from '../types/chat'
 
 /**
  * /生成项目记忆 斜杠命令的驱动 prompt。
@@ -29,6 +29,7 @@ import {
 import type {
   AgentUiEvent,
   ChangedFileView,
+  FileChangeRecordView,
   ChatMessageView,
   ChatSessionSummaryView,
   ChatSessionView,
@@ -284,7 +285,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
           })
           return
         }
-        emitMessageEvent(event.message, input.onEvent)
+        emitMessageEvent(event.message, input.onEvent, event.session.changeLedger)
       },
     })
 
@@ -303,7 +304,7 @@ export async function runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnRes
       sessionId: turn.session.sessionId,
       targetPath: turn.target?.primaryPath,
       changedFiles,
-      session: toChatSessionView(turn.session, changedFiles[changedFiles.length - 1]),
+      session: toChatSessionView(turn.session),
     }
 
     for (const file of changedFiles) {
@@ -428,8 +429,9 @@ function buildConfirmationSummary(confirmation: WriteConfirmation): string {
 function emitMessageEvent(
   message: ChatMessage,
   onEvent?: (event: AgentUiEvent) => void,
+  ledger?: FileChangeRecord[],
 ) {
-  const view = toChatMessageView(message)
+  const view = toChatMessageView(message, ledger)
   onEvent?.({ type: 'message', message: view })
 
   if (message.kind === 'tool-call') {
@@ -463,24 +465,30 @@ function emitMessageEvent(
   }
 }
 
-function toChatSessionView(
-  session: ChatSessionState,
-  lastChangedFile?: ChangedFileView,
-): ChatSessionView {
+function toChatSessionView(session: ChatSessionState): ChatSessionView {
   return {
     sessionId: session.sessionId,
     projectId: session.projectId,
     status: session.status,
-    messages: session.messages.map(toChatMessageView),
+    messages: session.messages.map((message) => toChatMessageView(message, session.changeLedger)),
     currentTargetPath: session.currentTarget?.primaryPath,
-    lastChangedFile,
+    changedFileCount: countSessionChangedFiles(session),
     title: session.title,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   }
 }
 
-function toChatMessageView(message: ChatMessage): ChatMessageView {
+/** 会话级改动文件总数：按目标路径去重（renamed 取 toPath），从改动账本派生——免疫压缩，重载不丢。 */
+function countSessionChangedFiles(session: ChatSessionState): number {
+  const paths = new Set<string>()
+  for (const record of session.changeLedger ?? []) {
+    paths.add(record.change.type === 'renamed' ? record.change.toPath : record.change.path)
+  }
+  return paths.size
+}
+
+function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): ChatMessageView {
   if (message.kind === 'text') {
     return {
       id: message.id,
@@ -538,6 +546,23 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
     }
   }
 
+  if (message.kind === 'change-summary') {
+    // 面板数据按 runId 从账本解析（消息本体只存 runId，不重复存 diff）；
+    // 账本缺该 runId（异常旧数据）时 changes 为空数组，UI 降级为一行文本。
+    const changes = (ledger ?? [])
+      .filter((record) => record.runId === message.runId)
+      .map(toFileChangeRecordView)
+    return {
+      id: message.id,
+      role: 'system',
+      kind: 'change-summary',
+      runId: message.runId,
+      aborted: message.aborted,
+      changes,
+      createdAt: message.createdAt,
+    }
+  }
+
   return {
     id: message.id,
     role: 'system',
@@ -548,22 +573,20 @@ function toChatMessageView(message: ChatMessage): ChatMessageView {
 }
 
 function collectChangedFiles(session: ChatSessionState): ChangedFileView[] {
-  const changes: ChangedFileView[] = []
-
-  for (const message of session.modelView?.messages ?? []) {
-    if (message.role !== 'tool') {
-      continue
-    }
-
-    // fileChange 由 tool-execution 在写工具成功执行后从 output 提取并挂载，
-    // 是结构化、可信的文件变更来源，不再依赖工具结果文本反推。
-    const change = message.fileChange
-    if (change) {
-      changes.push(toChangedFileView(change))
-    }
-  }
-
+  // 改读改动账本（事件驱动 append-only，免疫压缩），不再翻 modelView——
+  // 旧实现翻 modelView.messages 找带 fileChange 的 tool 消息，压缩把旧 tool 消息换成摘要后清单全丢（Bug 1）。
+  const changes = (session.changeLedger ?? []).map((record) => toChangedFileView(record.change))
   return dedupeChangedFiles(changes)
+}
+
+function toFileChangeRecordView(record: FileChangeRecord): FileChangeRecordView {
+  return {
+    id: record.id,
+    runId: record.runId,
+    at: record.at,
+    change: toChangedFileView(record.change),
+    ...(record.diff ? { diff: { ...record.diff } } : {}),
+  }
 }
 
 function toChangedFileView(change: FileChange): ChangedFileView {

@@ -335,6 +335,23 @@ export type ChangedFileView =
       trashPath?: string
     }
 
+/**
+ * 改动账本记录的视图（change-summary 面板数据：按 runId 从账本解析后装进消息 view）。
+ * diff 仅 created/updated 有。
+ */
+export type FileChangeRecordView = {
+  id: string
+  runId: string
+  at: string
+  change: ChangedFileView
+  diff?: {
+    oldText: string
+    newText: string
+    linesAdded: number
+    linesRemoved: number
+  }
+}
+
 export type ChatMessageView =
   | {
       id: string
@@ -357,6 +374,16 @@ export type ChatMessageView =
   | {
       id: string
       role: 'system'
+      kind: 'change-summary'
+      runId: string
+      aborted?: boolean
+      /** 本轮改动记录（面板数据，从会话账本按 runId 解析；账本缺该 runId 时为空数组，UI 降级渲染） */
+      changes: FileChangeRecordView[]
+      createdAt: string
+    }
+  | {
+      id: string
+      role: 'system'
       kind: 'tool-call' | 'tool-result' | 'context-summary' | 'error'
       text: string
       ok?: boolean
@@ -370,7 +397,8 @@ export type ChatSessionView = {
   status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   messages: ChatMessageView[]
   currentTargetPath?: string
-  lastChangedFile?: ChangedFileView
+  /** 会话级改动文件总数（按目标路径去重，从改动账本派生；重载后不丢） */
+  changedFileCount?: number
   /** 会话标题，可选以兼容旧 view */
   title?: string
   createdAt?: string

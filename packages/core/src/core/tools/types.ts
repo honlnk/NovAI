@@ -48,6 +48,20 @@ export type FileChange =
   | { type: 'deleted'; path: string; trashPath?: string }
 
 /**
+ * 片段级 diff（改动账本 FileChangeRecord 的唯一 diff 载体，抄 dsh 写时 before/after 机制）：
+ * 只存被替换的片段，不存整文件。created 时 oldText 为 ''（全新内容），deleted/renamed 不产生 diff。
+ * modelView 里的 tool 消息不挂 diff（模型不需要逐行 diff，省 token）。
+ */
+export type ChangeDiff = {
+  /** 被替换掉的原文片段；CreateFile 时为 '' */
+  oldText: string
+  /** 替换后的新片段；DeleteFile 时为 '' */
+  newText: string
+  linesAdded: number
+  linesRemoved: number
+}
+
+/**
  * 写工具执行前构造的确认预览，用于「写入前确认」流程。
  * create/edit 携带完整文本用于 diff；rename/delete 仅路径级预览。
  */
@@ -69,6 +83,11 @@ export type ToolDefinition<TName extends CoreToolName, TInput, TOutput> = {
    * 返回 undefined 表示该 output 不产生文件变更。
    */
   extractFileChange?(output: TOutput): FileChange | undefined
+  /**
+   * 写工具用它产出片段级 diff（改动账本用）；EditFile/CreateFile 实现，RenameFile/DeleteFile 不实现。
+   * 返回 undefined 表示该 output 无 diff 可存。
+   */
+  extractChangeDiff?(output: TOutput): ChangeDiff | undefined
   /**
    * 写工具用它构造写入前确认预览；只读工具不实现。
    * 入参是经过 validateInput 校验的强类型 input，执行前调用。
@@ -120,6 +139,10 @@ export type EditFileOutput = {
   contentLength: number
   linesAdded: number
   linesRemoved: number
+  /** 实际应用的原文片段（经 findActualText/preserveQuoteStyle 校正，非模型入参原样）；改动账本 diff 用 */
+  oldText: string
+  /** 实际写入的新片段 */
+  newText: string
 }
 
 export type CreateFileInput = {
@@ -132,6 +155,8 @@ export type CreateFileOutput = {
   contentLength: number
   linesAdded: number
   created: true
+  /** 新建的完整内容；改动账本 diff 用（oldText 为 ''，全绿） */
+  content: string
 }
 
 export type RenameFileInput = {

@@ -191,6 +191,48 @@ describe('file tools', () => {
     })
   })
 
+  describe('extractChangeDiff（改动账本的片段级 diff）', () => {
+    it('EditFile diff 携带实际应用的 oldText/newText（经校正）与行数', async () => {
+      const runtime = createRuntime({ 'chapters/第001章-初遇.txt': '第一段\n第二段' })
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段',
+        newText: '第二段修改\n第三段新增',
+      }, runtime)
+
+      // output 直接携带实际应用文本（非模型入参原样）
+      expect(output.oldText).toBe('第二段')
+      expect(output.newText).toBe('第二段修改\n第三段新增')
+
+      expect(editFileTool.extractChangeDiff?.(output)).toEqual({
+        oldText: '第二段',
+        newText: '第二段修改\n第三段新增',
+        linesAdded: 1,
+        linesRemoved: 0,
+      })
+    })
+
+    it('CreateFile diff：oldText 为空、newText 为完整新内容（全绿）', async () => {
+      const runtime = createRuntime({})
+      const output = await createFileTool.run({ path: 'chapters/第001章-新建.txt', content: '第一行\n第二行' }, runtime)
+
+      expect(output.content).toBe('第一行\n第二行')
+      expect(createFileTool.extractChangeDiff?.(output)).toEqual({
+        oldText: '',
+        newText: '第一行\n第二行',
+        linesAdded: 2,
+        linesRemoved: 0,
+      })
+    })
+
+    it('RenameFile/DeleteFile/只读工具不产出 diff', () => {
+      expect(renameFileTool.extractChangeDiff).toBeUndefined()
+      expect(deleteFileTool.extractChangeDiff).toBeUndefined()
+      expect(readFileTool.extractChangeDiff).toBeUndefined()
+    })
+  })
+
   describe('.novel/ 与配置文件写防护（任何档位不例外，连确认卡都不弹）', () => {    it('CreateFile 禁止在 .novel/ 下新建、禁止指向 novel.config.json', async () => {
       const runtime = createRuntime({})
 

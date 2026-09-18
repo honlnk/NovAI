@@ -88,6 +88,8 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       contentLength: nextContent.length,
       linesAdded: countLines(actualNewText) - countLines(actualOldText),
       linesRemoved: Math.max(countLines(actualOldText) - countLines(actualNewText), 0),
+      oldText: actualOldText,
+      newText: actualNewText,
     }
   },
   summarizeInput(input) {
@@ -100,6 +102,14 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
   },
   extractFileChange(output) {
     return { type: 'updated', path: output.path }
+  },
+  extractChangeDiff(output) {
+    return {
+      oldText: output.oldText,
+      newText: output.newText,
+      linesAdded: output.linesAdded,
+      linesRemoved: output.linesRemoved,
+    }
   },
   buildConfirmation(input) {
     return { kind: 'edit', path: input.path, oldText: input.oldText, newText: input.newText }
