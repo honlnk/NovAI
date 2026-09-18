@@ -91,6 +91,8 @@ export type ReadFileOutput = {
   endLine: number
   totalLines: number
   truncated: boolean
+  /** 第三道闸命中：返回内容达单次字节上限被截断（用 offset=endLine+1 继续读）。 */
+  truncatedByBytes?: boolean
   empty: boolean
   offsetBeyondEnd: boolean
   fileSizeBytes: number

@@ -77,6 +77,7 @@ const projectForm = reactive({
   conversationTokenLimit: 12000,
   compressionKeepRecentTurns: 5,
   agentMaxTurns: 8,
+  permissionPreset: 'chapter-material' as 'review' | 'chapter' | 'material' | 'chapter-material' | 'full',
   enableDebugLogging: false,
 })
 
@@ -134,6 +135,7 @@ onMounted(async () => {
         conversationTokenLimit: settings.conversationTokenLimit ?? 12000,
         compressionKeepRecentTurns: settings.compressionKeepRecentTurns ?? 5,
         agentMaxTurns: settings.agentMaxTurns ?? 8,
+        permissionPreset: settings.permissionPreset ?? 'chapter-material',
         enableDebugLogging: settings.enableDebugLogging ?? false,
       })
     }

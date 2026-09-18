@@ -1,5 +1,12 @@
 import type { ModelProtocol } from './ai'
 
+/**
+ * 写工具权限档位：review=仅审阅 / chapter=章节内容 / material=素材内容 /
+ * chapter-material=章节+素材（默认） / full=完全访问。
+ * 判定规则见 core/agent/permission.ts。
+ */
+export type PermissionPreset = 'review' | 'chapter' | 'material' | 'chapter-material' | 'full'
+
 export type ProjectSummary = {
   id: string
   name: string
@@ -69,6 +76,8 @@ export type ProjectConfig = {
     compressionKeepRecentTurns: number
     /** Agent 单轮最大循环次数（模型调用×工具执行的回合数），超限优雅收尾可续接。 */
     agentMaxTurns: number
+    /** 写工具权限档位：哪些修改免确认；结构操作除 full 档外一律弹卡。旧配置缺省回填默认档。 */
+    permissionPreset: PermissionPreset
     embeddingTextVersion: number
     enableDebugLogging: boolean
     /**

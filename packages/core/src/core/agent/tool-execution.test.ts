@@ -109,21 +109,39 @@ describe('executeAgentTool 长文本 spill', () => {
     },
   } as unknown as ProjectSnapshot
 
-  it('ReadFile 超长结果被 spill：结果内容替换为预览 + 引用', async () => {
+  it('ReadFile 已退出 spill 白名单：超长结果原样通过（三道闸字节封顶兜底，不再 spill）', async () => {
     const longContent = '章'.repeat(SPILL_THRESHOLD_CHARS + 100)
     const tool = createStubTool({
       name: 'ReadFile',
       isReadOnly: true,
       run: async () => ({ path: 'chapters/001.txt', content: longContent }),
     })
-    // formatResult 直接返回长内容，触发 spill 分支
     ;(tool as { formatResult: () => string }).formatResult = () => longContent
     const tools = { ReadFile: tool } as unknown as Record<string, AgentRunnableTool>
 
-    // 用可写盘的项目验证落盘：这里给一个能写的 handle 太重，改用未超阈值的对照 + 阈值判断
-    const writableProject = { handle: createWritableMemoryHandle() } as unknown as ProjectSnapshot
+    // spillProject 的 handle 一落盘就抛错：原样返回即证明没有尝试 spill
     const result = await executeAgentTool({
       call: createCall('ReadFile', { path: 'chapters/001.txt' }),
+      project: spillProject,
+      tools,
+    })
+
+    expect(result.content).toBe(longContent)
+  })
+
+  it('RagSearch 超长结果被 spill：结果内容替换为预览 + 可取回的指引', async () => {
+    const longContent = '索'.repeat(SPILL_THRESHOLD_CHARS + 100)
+    const tool = createStubTool({
+      name: 'RagSearch',
+      isReadOnly: true,
+      run: async () => ({ query: 'q', candidates: [] }),
+    })
+    ;(tool as { formatResult: () => string }).formatResult = () => longContent
+    const tools = { RagSearch: tool } as unknown as Record<string, AgentRunnableTool>
+
+    const writableProject = { handle: createWritableMemoryHandle() } as unknown as ProjectSnapshot
+    const result = await executeAgentTool({
+      call: createCall('RagSearch', { query: 'q' }),
       project: writableProject,
       tools,
     })
@@ -131,19 +149,22 @@ describe('executeAgentTool 长文本 spill', () => {
     expect(result.content.length).toBeLessThan(SPILL_THRESHOLD_CHARS)
     expect(result.content).toContain('已省略')
     expect(result.content).toContain('.novel/spill/')
+    // 取回指引：明确告诉模型用 ReadFile + offset/limit 读回（活指针，不再是死指针）
+    expect(result.content).toContain('ReadFile')
+    expect(result.content).toContain('offset/limit')
   })
 
-  it('未超阈值的结果原样通过', async () => {
+  it('未超阈值的 RagSearch 结果原样通过', async () => {
     const tool = createStubTool({
-      name: 'ReadFile',
+      name: 'RagSearch',
       isReadOnly: true,
-      run: async () => ({ path: 'chapters/001.txt', content: '短内容' }),
+      run: async () => ({ query: 'q', candidates: [] }),
     })
     ;(tool as { formatResult: () => string }).formatResult = () => '短内容'
-    const tools = { ReadFile: tool } as unknown as Record<string, AgentRunnableTool>
+    const tools = { RagSearch: tool } as unknown as Record<string, AgentRunnableTool>
 
     const result = await executeAgentTool({
-      call: createCall('ReadFile', { path: 'chapters/001.txt' }),
+      call: createCall('RagSearch', { query: 'q' }),
       project: spillProject,
       tools,
     })
@@ -220,7 +241,29 @@ function createWritableMemoryHandle(): FileSystemDirectoryHandle {
 
 describe('executeAgentTool 范围权限与确认', () => {
 
-  it('项目工作区内写入静默放行：不弹确认直接执行', async () => {
+  it('默认档（章节+素材）：EditFile 改 chapters/ 正文静默放行，不弹确认', async () => {
+    const run = vi.fn().mockResolvedValue({ path: 'chapters/第001章-开头.txt' })
+    const tool = createStubTool({
+      name: 'EditFile',
+      run,
+      buildConfirmation: (input) => ({ kind: 'edit', path: (input as { path: string }).path, oldText: 'a', newText: 'b' }),
+    })
+    const tools = { EditFile: tool } as unknown as Record<string, AgentRunnableTool>
+    const confirm = vi.fn().mockResolvedValue({ accepted: true })
+
+    const result = await executeAgentTool({
+      call: createCall('EditFile', { path: 'chapters/第001章-开头.txt', oldText: 'a', newText: 'b' }),
+      project: stubProject,
+      tools,
+      confirm,
+    })
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(result.content).toBe('EditFile 结果')
+  })
+
+  it('默认档：结构操作（CreateFile）弹一次确认，用户接受后执行', async () => {
     const run = vi.fn().mockResolvedValue({ path: 'chapters/new.txt' })
     const tool = createStubTool({
       name: 'CreateFile',
@@ -237,8 +280,8 @@ describe('executeAgentTool 范围权限与确认', () => {
       confirm,
     })
 
-    // 确认疲劳消失：工作区内不再确认
-    expect(confirm).not.toHaveBeenCalled()
+    // 结构操作除「完全访问」档外一律弹卡（五档规则，不再是工作区内一律放行）
+    expect(confirm).toHaveBeenCalledTimes(1)
     expect(run).toHaveBeenCalledTimes(1)
     expect(result.content).toBe('CreateFile 结果')
   })

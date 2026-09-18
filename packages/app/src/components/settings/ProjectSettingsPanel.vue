@@ -2,7 +2,7 @@
 import ToggleSwitch from '../ui/ToggleSwitch.vue'
 
 /**
- * 项目设置面板：RAG / 对话的数值参数与调试开关。
+ * 项目设置面板：RAG / 对话的数值参数、写工具权限档位与调试开关。
  * 分组间用 border-t 分隔（照抄 gpt-image-studio 的面板内二级分区规范）。
  */
 defineProps<{
@@ -12,9 +12,19 @@ defineProps<{
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
     agentMaxTurns: number
+    permissionPreset: 'review' | 'chapter' | 'material' | 'chapter-material' | 'full'
     enableDebugLogging: boolean
   }
 }>()
+
+/** 写工具权限五档（与 core/agent/permission.ts 的判定规则一一对应） */
+const permissionPresetOptions = [
+  { value: 'review', label: '仅审阅', hint: '任何修改都弹卡确认，批一次改一次' },
+  { value: 'chapter', label: '章节内容', hint: '改 chapters/ 已有章节正文免确认，其余都问' },
+  { value: 'material', label: '素材内容', hint: '改 elements/ 已有要素文件免确认，其余都问' },
+  { value: 'chapter-material', label: '章节 + 素材', hint: '改章节与素材免确认，新建/删除/重命名与提示词修改都问' },
+  { value: 'full', label: '完全访问', hint: '所有允许的修改都免确认（.novel/ 与项目配置仍永远禁改）' },
+] as const
 </script>
 
 <template>
@@ -91,6 +101,24 @@ defineProps<{
               class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
             <p class="mt-1.5 text-xs text-gray-500">单轮内「模型调用 + 工具执行」的回合上限；达到上限会优雅停下，继续发消息可续接</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">写工具权限档位</label>
+            <select
+              v-model="form.permissionPreset"
+              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+            >
+              <option
+                v-for="option in permissionPresetOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+            <p class="mt-1.5 text-xs text-gray-500">
+              {{ permissionPresetOptions.find((o) => o.value === form.permissionPreset)?.hint }}
+            </p>
           </div>
           <div class="flex items-start justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5">
             <div>

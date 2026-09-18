@@ -1,8 +1,8 @@
 import { readProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
-import { assertWritableTextFilePath, isNotFoundError } from '../path'
+import { isNotFoundError } from '../path'
 import { assertChapterNumberAvailable, isChapterPath } from '../chapter-name'
 import type { CreateFileInput, CreateFileOutput, ToolDefinition } from '../types'
-import { asRecord, countLines, normalizeTextFilePath, readString } from './common'
+import { asRecord, assertWritableDocumentPath, countLines, normalizeTextFilePath, readString } from './common'
 
 export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, CreateFileOutput> = {
   name: 'CreateFile',
@@ -10,6 +10,8 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeTextFilePath(value.path, 'CreateFile.path')
+    // .novel/ 与 novel.config.json 永远禁写（大小写变体同拦），连确认卡都不弹
+    assertWritableDocumentPath(path, 'CreateFile.path')
     const content = readString(value.content, 'CreateFile.content')
 
     return {
@@ -18,7 +20,7 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
     }
   },
   async run(input, runtime) {
-    assertWritableTextFilePath(input.path)
+    assertWritableDocumentPath(input.path, 'CreateFile.path')
 
     // chapters/ 下检测章节编号是否已被占用
     if (isChapterPath(input.path)) {

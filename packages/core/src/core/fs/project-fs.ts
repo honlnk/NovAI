@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -312,6 +312,10 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       ragContextMaxItems: clampInt(config.settings?.ragContextMaxItems, 1, 50, DEFAULT_CONFIG.settings.ragContextMaxItems),
       conversationTokenLimit: clampInt(config.settings?.conversationTokenLimit, 1000, 200000, DEFAULT_CONFIG.settings.conversationTokenLimit),
       compressionKeepRecentTurns: clampInt(config.settings?.compressionKeepRecentTurns, 1, 20, DEFAULT_CONFIG.settings.compressionKeepRecentTurns),
+      // 权限档位：旧配置无此字段回填默认档；非法值同回退
+      permissionPreset: isPermissionPreset(config.settings?.permissionPreset)
+        ? config.settings.permissionPreset
+        : DEFAULT_CONFIG.settings.permissionPreset,
       // agentMaxTurns 的钳制语义与循环升级联动（0=不限的安全阀口径），留待 W6 随设置文案一起处理
     },
   }

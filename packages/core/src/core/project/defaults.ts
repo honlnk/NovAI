@@ -98,11 +98,21 @@ export const DEFAULT_CONFIG = {
     conversationTokenLimit: 12000,
     compressionKeepRecentTurns: 5,
     agentMaxTurns: 8,
+    permissionPreset: 'chapter-material',
     embeddingTextVersion: 1,
     enableDebugLogging: false,
     activeScenePromptPath: null,
   },
 } as const
+
+/** 写工具权限档位的合法值表与默认值（档位语义见 types/project.ts 的 PermissionPreset）。 */
+export const PERMISSION_PRESETS = ['review', 'chapter', 'material', 'chapter-material', 'full'] as const
+
+export const DEFAULT_PERMISSION_PRESET = DEFAULT_CONFIG.settings.permissionPreset
+
+export function isPermissionPreset(value: unknown): value is (typeof PERMISSION_PRESETS)[number] {
+  return typeof value === 'string' && (PERMISSION_PRESETS as readonly string[]).includes(value)
+}
 
 export function createDefaultConfig(projectName: string) {
   const now = new Date().toISOString()

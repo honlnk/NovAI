@@ -1,3 +1,5 @@
+import type { PermissionPreset } from '../types/project'
+
 export type ProjectFileNodeView = {
   name: string
   path: string
@@ -46,6 +48,8 @@ export type ProjectConfigView = {
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
     agentMaxTurns: number
+    /** 写工具权限档位（五档，判定规则见 core/agent/permission.ts） */
+    permissionPreset: PermissionPreset
     embeddingTextVersion: number
     enableDebugLogging: boolean
     activeScenePromptPath: string | null

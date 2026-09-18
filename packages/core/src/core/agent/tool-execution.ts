@@ -133,11 +133,12 @@ export async function executeAgentTool(input: {
     // 写工具成功执行后提取结构化文件变更，供 service 层推导 changedFiles
     const fileChange = tool.core.extractFileChange?.(output)
 
-    // 超长工具结果 spill：只对内容型只读工具（ReadFile/RagSearch），
-    // 全文落盘 .novel/spill/，进上下文的只有预览 + 引用路径。
+    // 超长工具结果 spill：只对 RagSearch（无分页能力的内容型工具）。
+    // ReadFile 已被三道闸豁免（单次 ≤50KB 字节）；spill 路径自身豁免二次 spill。
     let content = tool.formatResult(output)
     if ((SPILLABLE_TOOLS as readonly string[]).includes(input.call.name)) {
-      content = await maybeSpill(content, input.project)
+      const sourcePath = readSourcePath(validatedInput)
+      content = await maybeSpill(content, input.project, sourcePath)
     }
 
     input.onEvent?.({
@@ -184,4 +185,13 @@ function summarizeConfirmation(confirmation: WriteConfirmation): string {
     case 'delete':
       return `删除 ${confirmation.path}`
   }
+}
+
+/** 从已校验 input 取来源路径（如有），供 spill 的「spill 路径豁免二次 spill」判定。 */
+function readSourcePath(validatedInput: unknown): string | undefined {
+  if (!validatedInput || typeof validatedInput !== 'object') {
+    return undefined
+  }
+  const path = (validatedInput as Record<string, unknown>).path
+  return typeof path === 'string' ? path : undefined
 }

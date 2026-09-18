@@ -191,6 +191,141 @@ describe('file tools', () => {
     })
   })
 
+  describe('.novel/ 与配置文件写防护（任何档位不例外，连确认卡都不弹）', () => {    it('CreateFile 禁止在 .novel/ 下新建、禁止指向 novel.config.json', async () => {
+      const runtime = createRuntime({})
+
+      await expect(createFileTool.run({
+        path: '.novel/spill/abc.txt',
+        content: '写入内部目录',
+      }, runtime)).rejects.toThrow('不能指向项目配置或 .novel 内部文件')
+
+      await expect(createFileTool.run({
+        path: '.novel/logs/today.json',
+        content: '{}',
+      }, runtime)).rejects.toThrow('不能指向项目配置或 .novel 内部文件')
+
+      // validateInput 层同样拦（第一道闸）
+      expect(() => createFileTool.validateInput({
+        path: '.novel/spill/abc.txt',
+        content: 'x',
+      })).toThrow('不能指向项目配置或 .novel 内部文件')
+    })
+
+    it('EditFile 禁止改 .novel/ 与 novel.config.json（validateInput 层拦截）', () => {
+      expect(() => editFileTool.validateInput({
+        path: 'novel.config.json',
+        oldText: 'a',
+        newText: 'b',
+      })).toThrow('不能指向项目配置或 .novel 内部文件')
+
+      expect(() => editFileTool.validateInput({
+        path: '.novel/sessions/s1.json',
+        oldText: 'a',
+        newText: 'b',
+      })).toThrow('不能指向项目配置或 .novel 内部文件')
+    })
+
+    it('大小写变体同样被拒（APFS 大小写不敏感，Novel.Config.JSON 命中真实配置）', () => {
+      expect(() => createFileTool.validateInput({
+        path: '.NOVEL/spill/abc.txt',
+        content: 'x',
+      })).toThrow('不能指向项目配置或 .novel 内部文件')
+
+      expect(() => editFileTool.validateInput({
+        path: 'Novel.Config.JSON',
+        oldText: 'a',
+        newText: 'b',
+      })).toThrow('不能指向项目配置或 .novel 内部文件')
+
+      expect(() => editFileTool.validateInput({
+        path: '.Novel/Spill/abc.txt',
+        oldText: 'a',
+        newText: 'b',
+      })).toThrow('不能指向项目配置或 .novel 内部文件')
+    })
+
+    it('spill 文件仍禁写/删/改名（只放行读）', () => {
+      expect(() => deleteFileTool.validateInput({ path: '.novel/spill/abc.txt' }))
+        .toThrow('不能指向项目配置或 .novel 内部文件')
+      expect(() => renameFileTool.validateInput({ fromPath: 'a.md', toPath: '.novel/spill/b.txt' }))
+        .toThrow('不能指向项目配置或 .novel 内部文件')
+    })
+  })
+
+  describe('ReadFile 三道闸（照搬 dsh：行分页 + 单行截断 + 50KB 字节封顶）', () => {
+    it('单行超过 2000 字符被截断并附标记', async () => {
+      const longLine = '汉'.repeat(3000)
+      const runtime = createRuntime({ 'chapters/第001章-长行.txt': `${longLine}\n第二行` })
+
+      const output = await readFileTool.run({ path: 'chapters/第001章-长行.txt' }, runtime)
+
+      expect(output.numberedContent).toContain('本行过长，已截断至 2000 字符')
+      expect(output.numberedContent).not.toContain(longLine)
+      expect(output.numberedContent).toContain('第二行')
+    })
+
+    it('总字节封顶：超 50KB 按行粒度截断，提示用 offset 继续（不切开多字节字符）', async () => {
+      // 100 个中文字 ≈ 300 字节/行 × 300 行 ≈ 90KB > 50KB
+      const lines = Array.from({ length: 300 }, (_, i) => `第${i}行` + '文'.repeat(100))
+      const runtime = createRuntime({ 'chapters/第001章-超长.txt': lines.join('\n') })
+
+      const output = await readFileTool.run({ path: 'chapters/第001章-超长.txt' }, runtime)
+
+      expect(output.truncatedByBytes).toBe(true)
+      expect(output.notice).toContain('字节')
+      expect(output.notice).toContain(`offset=${output.endLine + 1}`)
+      // 接收行数少于总行数，且总量在字节封顶内（含每行换行符）
+      expect(output.endLine).toBeLessThan(300)
+      const bytes = new TextEncoder().encode(output.content).length
+      expect(bytes).toBeLessThanOrEqual(50 * 1024)
+      // 行粒度截断：最后一行是完整行（结尾不是半个字符）
+      expect(output.content.endsWith('文'.repeat(100))).toBe(true)
+
+      // 用提示的 offset 续读能拿到后续内容（截断点真实可续）
+      const resumed = await readFileTool.run(
+        { path: 'chapters/第001章-超长.txt', offset: output.endLine + 1 },
+        runtime,
+      )
+      expect(resumed.startLine).toBe(output.endLine + 1)
+      expect(resumed.content.length).toBeGreaterThan(0)
+    })
+
+    it('正常长度章节（2000~4000 字）不被字节截断（回归保护）', async () => {
+      const chapter = Array.from({ length: 60 }, () => '正常的章节正文段落。'.repeat(10)).join('\n')
+      const runtime = createRuntime({ 'chapters/第001章-正常.txt': chapter })
+
+      const output = await readFileTool.run({ path: 'chapters/第001章-正常.txt' }, runtime)
+
+      expect(output.truncatedByBytes ?? false).toBe(false)
+      expect(output.truncated).toBe(false)
+      expect(output.content).toBe(chapter)
+    })
+  })
+
+  describe('ReadFile 的 .novel/ 读防护开 spill 口子', () => {
+    it('.novel/spill/ 可读（取回通道），.novel/ 其余路径与配置文件仍禁读', async () => {
+      const runtime = createRuntime({
+        '.novel/spill/abc.txt': 'spill 完整内容',
+        '.novel/logs/today.json': '{}',
+      })
+
+      // validateInput 是生产链路的第一道闸（tool-execution 先 validate 后 run）：spill 路径不抛错
+      expect(() => readFileTool.validateInput({ path: '.novel/spill/abc.txt' })).not.toThrow()
+      const output = await readFileTool.run(readFileTool.validateInput({ path: '.novel/spill/abc.txt' }), runtime)
+      expect(output.content).toBe('spill 完整内容')
+
+      expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
+        .toThrow('不能指向项目配置或 .novel 内部文件')
+      expect(() => readFileTool.validateInput({ path: '.novel/sessions/s1.json' }))
+        .toThrow('不能指向项目配置或 .novel 内部文件')
+      expect(() => readFileTool.validateInput({ path: 'novel.config.json' }))
+        .toThrow('不能指向项目配置或 .novel 内部文件')
+      // 大小写变体同规则
+      expect(() => readFileTool.validateInput({ path: '.NOVEL/logs/today.json' }))
+        .toThrow('不能指向项目配置或 .novel 内部文件')
+    })
+  })
+
   describe('chapter naming convention', () => {
     it('CreateFile rejects chapter names that do not match the convention', async () => {
       const runtime = createRuntime({})

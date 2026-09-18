@@ -1,8 +1,8 @@
 import { getProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import type { EditFileInput, EditFileOutput, ToolDefinition } from '../types'
-import { assertTextFilePath, normalizeProjectPath } from '../path'
+import { normalizeProjectPath } from '../path'
 import { assertChapterNameFormat, isChapterPath } from '../chapter-name'
-import { asRecord, countLines, readString } from './common'
+import { asRecord, assertMutableDocumentPath, countLines, readString } from './common'
 import {
   assertFreshReadFileState,
   createReadFileState,
@@ -26,7 +26,8 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       ? undefined
       : readReadFileState(value.readFileState, 'EditFile.readFileState')
 
-    assertTextFilePath(path)
+    // .novel/ 与 novel.config.json 永远禁改（大小写变体同拦），连确认卡都不弹
+    assertMutableDocumentPath(path, 'EditFile.path')
 
     // chapters/ 下对称强制命名规范：不规范章节不可编辑内容，必须先整理改名
     if (isChapterPath(path)) {

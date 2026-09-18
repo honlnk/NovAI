@@ -9,6 +9,7 @@ import {
   rescanProject,
 } from '../core/fs/project-fs'
 import { writeAgentLog } from '../core/logging/agent-log'
+import { sweepExpiredSpillFiles } from '../core/agent/spill'
 import {
   forgetLastProject as forgetStoredLastProject,
   forgetRecentProject as forgetStoredRecentProject,
@@ -265,6 +266,9 @@ async function activateProject(
   data?: unknown,
 ) {
   setRuntimeProject(project)
+
+  // spill 启动清理（保留期 7 天）：best-effort，fire-and-forget，不阻塞项目打开
+  void sweepExpiredSpillFiles(project)
 
   await saveLastProject({
     projectId: project.id,

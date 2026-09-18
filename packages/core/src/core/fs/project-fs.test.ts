@@ -91,6 +91,27 @@ describe('project config 数值钳制', () => {
     expect(config.settings.compressionKeepRecentTurns).toBe(5)
     expect(config.settings.ragCandidateLimit).toBe(30)
   })
+
+  it('权限档位：旧配置缺字段回填默认档，非法值回退默认档', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
+
+    const config = await readProjectConfig(rootHandle)
+    expect(config.settings.permissionPreset).toBe('chapter-material')
+
+    await writeProjectConfig(rootHandle, {
+      ...config,
+      settings: { ...config.settings, permissionPreset: 'nonsense' as never },
+    })
+    expect((await readProjectConfig(rootHandle)).settings.permissionPreset).toBe('chapter-material')
+
+    // 合法档位原样保留
+    await writeProjectConfig(rootHandle, {
+      ...config,
+      settings: { ...config.settings, permissionPreset: 'review' },
+    })
+    expect((await readProjectConfig(rootHandle)).settings.permissionPreset).toBe('review')
+  })
 })
 
 type MemoryFileEntry = {
