@@ -1,5 +1,5 @@
 import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
-import { query } from '../agent/query'
+import { buildSteeringContent, query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
 import {
   appendUserMessage,
@@ -11,6 +11,11 @@ import { createLogId, writeAgentLog } from '../logging/agent-log'
 import { hashContent } from '../util/hash'
 import type { AgentQueryEvent } from '../agent/query'
 
+import {
+  claimTurnStartBatch,
+  claimFromInbox,
+  enqueueToInbox,
+} from './inbox'
 import { deriveChatTargetFromPath } from './target'
 
 import type {
@@ -19,6 +24,7 @@ import type {
   ChatTargetContext,
   ChatTurnInput,
   ChatTurnResult,
+  QueuedMessage,
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
 import type { FileChange } from '../tools/types'
@@ -50,13 +56,141 @@ export function createChatSession(projectId: string): ChatSessionState {
   }
 }
 
+/**
+ * 活跃 driver 注册表（运行态，不落盘）：sessionId → 句柄。
+ * 「入队永远先于唤醒」的配套：driver 活着时新消息只入队（进 driver 的工作会话），
+ * 不重复唤醒——它会在下一抽干点/下一 turn 首批自己取走。
+ */
+type ChatDriverHandle = {
+  abort: AbortController
+  /** driver 的工作会话副本：多 turn 连续期间的状态所有权在 driver 手里 */
+  session: ChatSessionState
+}
+const activeChatDrivers = new Map<string, ChatDriverHandle>()
+
+/**
+ * 停止指定会话的 driver：abort 当前 turn；当前 turn 优雅收尾后 driver 收敛，
+ * 收件箱队列保留、不自动续跑（dsh cancel 语义：pending 等用户下次发送时随首批带走）。
+ */
+export function stopChatDriver(sessionId: string): void {
+  activeChatDrivers.get(sessionId)?.abort.abort()
+}
+
+/** 测试专用：活跃 driver 数（断言闩锁清理）。 */
+export function _getActiveChatDriverCountForTest(): number {
+  return activeChatDrivers.size
+}
+
+/**
+ * 发送入口：入队永远先于唤醒——用户指令先耐久入队 next-turn，
+ * driver 空闲才启动；driver 活着则不重复唤醒（它在抽干点自己取）。
+ */
 export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurnResult> {
+  const active = activeChatDrivers.get(options.session.sessionId)
+  if (active) {
+    const enqueued = enqueueToInbox(active.session.inbox, 'next-turn', {
+      text: options.input.instruction,
+      quote: options.input.quote,
+    })
+    active.session.inbox = enqueued.state
+    return {
+      session: active.session,
+      target: active.session.currentTarget,
+      writtenPath: active.session.lastWrittenPath,
+    }
+  }
+
+  const enqueued = enqueueToInbox(options.session.inbox, 'next-turn', {
+    text: options.input.instruction,
+    quote: options.input.quote,
+  })
+  const session: ChatSessionState = { ...options.session, inbox: enqueued.state }
+  return runChatDriver({ session, input: options.input, onEvent: options.onEvent })
+}
+
+type RunChatDriverOptions = {
+  session: ChatSessionState
+  input: ChatTurnInput
+  onEvent?: (event: SessionEvent) => void
+}
+
+/**
+ * driver（照抄 dsh 三层循环的 driver 层，`kick(): while(await turn())`）：
+ * 一次唤醒连续跑多个 turn，直到收件箱抽干或被停止。
+ *
+ * 每个 turn：claim 首批（next-step 全量 + next-turn 恰 1 条）→ 显示层/模型视图逐条追加
+ * → 跑 query（turn 层）→ turn 收尾（action-summary 等）。停止（abort）后队列保留、不自动续跑。
+ */
+export async function runChatDriver(options: RunChatDriverOptions): Promise<ChatTurnResult> {
   const { input, onEvent } = options
   const session: ChatSessionState = {
     ...options.session,
     status: 'running',
-    lastWrittenPath: undefined,
   }
+
+  // 唤醒闩锁：本 driver 运行期间的统一 abort 源，调用方 signal 与 stopChatDriver 都汇聚到它。
+  const driverAbort = new AbortController()
+  const linkCallerSignal = () => driverAbort.abort()
+  if (input.signal) {
+    if (input.signal.aborted) {
+      driverAbort.abort()
+    } else {
+      input.signal.addEventListener('abort', linkCallerSignal, { once: true })
+    }
+  }
+  activeChatDrivers.set(session.sessionId, { abort: driverAbort, session })
+
+  try {
+    while (true) {
+      // turn 首批：next-step 全量 + next-turn 恰 1 条（claim 即消费，抽干不回滚）
+      const batch = claimTurnStartBatch(session.inbox)
+      session.inbox = batch.state
+
+      // 首批为空 = 收件箱抽干 → 收工
+      if (!batch.followup && batch.steering.length === 0) {
+        break
+      }
+
+      const outcome = await runDriverTurn({ session, input, batch, signal: driverAbort.signal, onEvent })
+
+      // 停止：当前 turn 已优雅收尾，队列保留不自动续跑
+      if (outcome.aborted) {
+        break
+      }
+    }
+  } finally {
+    input.signal?.removeEventListener('abort', linkCallerSignal)
+    // 清闩锁：driver 收敛。收件箱剩余消息留在会话里，等用户下次发送时随首批带走。
+    activeChatDrivers.delete(session.sessionId)
+  }
+
+  session.status = 'waiting-user'
+  return {
+    session,
+    target: session.currentTarget,
+    writtenPath: session.lastWrittenPath,
+  }
+}
+
+type DriverTurnBatch = {
+  steering: QueuedMessage[]
+  followup?: QueuedMessage
+}
+
+/**
+ * driver 内的单个 turn：对应旧 runChatTurn 的一次执行。
+ * 首批消息在此进显示层与模型视图（steer 在前、followup 在后）；turn 间 runId 各自独立。
+ */
+async function runDriverTurn(options: {
+  session: ChatSessionState
+  input: ChatTurnInput
+  batch: DriverTurnBatch
+  signal?: AbortSignal
+  onEvent?: (event: SessionEvent) => void
+}): Promise<{ aborted: boolean }> {
+  const { input, batch, signal, onEvent } = options
+  const session = options.session
+  session.lastWrittenPath = undefined
 
   const target = deriveChatTargetFromPath(input.activeFilePath)
   session.currentTarget = target
@@ -69,14 +203,23 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     event: 'agent_run_start',
     message: 'Agent 开始处理用户输入',
     data: {
-      instruction: input.instruction,
-      quote: input.quote,
+      instruction: batch.followup?.text,
+      quote: batch.followup?.quote,
+      steeringCount: batch.steering.length,
       activeFilePath: input.activeFilePath,
       target,
     },
   })
 
-  pushMessage(session, createUserMessage(input.instruction, input.quote), onEvent)
+  // 显示层逐条 push（批次内顺序 = 先全部 steer 气泡，后 followup 气泡）：
+  // followup = 普通 user 气泡，是任务组边界；steer 批次 = steering 气泡（steered 标记），不是边界。
+  for (const message of batch.steering) {
+    pushMessage(session, createSteeringMessage(message), onEvent)
+  }
+  if (batch.followup) {
+    pushMessage(session, createUserMessage(batch.followup.text, batch.followup.quote), onEvent)
+  }
+  // 每 turn 的两条 context-summary 保持每 turn push；steer 续 turn 在 query 内发生，不产生新条目
   pushMessage(session, createContextSummary(target), onEvent)
   pushMessage(
     session,
@@ -108,12 +251,18 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
   }
   session.systemPromptHash = newSystemHash
 
-  appendUserMessage(modelView, buildAgentUserContext({
-    instruction: input.instruction,
-    quote: input.quote,
-    project: input.project,
-    target,
-  }))
+  // 模型视图追加（同批次顺序）：steer 包装为「执行中插话」，followup 走完整用户上下文
+  for (const message of batch.steering) {
+    appendUserMessage(modelView, buildSteeringContent(message))
+  }
+  if (batch.followup) {
+    appendUserMessage(modelView, buildAgentUserContext({
+      instruction: batch.followup.text,
+      quote: batch.followup.quote,
+      project: input.project,
+      target,
+    }))
+  }
   const requestMessages = toRequestMessages(modelView)
   const tools = createAgentTools()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
@@ -142,8 +291,19 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       project: input.project,
       view: modelView,
       tools,
-      signal: input.signal,
+      signal,
       confirm: input.confirm,
+      // 插话收件箱访问口：query 在每个 step 边界抽干 next-step（claim 即消费，同步更新会话 inbox）
+      steering: {
+        drain() {
+          const claimed = claimFromInbox(session.inbox, 'next-step')
+          session.inbox = claimed.state
+          return claimed.messages
+        },
+        hasPending() {
+          return (session.inbox?.nextStep.length ?? 0) > 0
+        },
+      },
       onEvent(event) {
         logAgentQueryEvent({
           project: input.project,
@@ -161,6 +321,12 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
             event: 'agent_run_aborted',
             message: 'Agent 被用户停止',
           })
+          return
+        }
+
+        if (event.type === 'steering-message') {
+          // 抽干点取到的插话：已进模型视图，这里补显示层气泡（与普通用户气泡零视觉区别）
+          pushMessage(session, createSteeringMessage(event.message), onEvent)
           return
         }
 
@@ -281,13 +447,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
       onEvent,
     )
 
-    session.status = 'waiting-user'
-
-    return {
-      session,
-      target,
-      writtenPath: session.lastWrittenPath,
-    }
+    return { aborted: true }
   }
 
   pushMessage(
@@ -305,8 +465,6 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     onEvent,
   )
 
-  session.status = 'waiting-user'
-
   void writeAgentLog(input.project, {
     sessionId: session.sessionId,
     runId,
@@ -321,11 +479,7 @@ export async function runChatTurn(options: RunChatTurnOptions): Promise<ChatTurn
     },
   })
 
-  return {
-    session,
-    target,
-    writtenPath: session.lastWrittenPath,
-  }
+  return { aborted: false }
 }
 
 function logAgentQueryEvent(input: {
@@ -570,6 +724,19 @@ function createUserMessage(text: string, quote?: string): ChatMessage {
     text,
     quote,
     createdAt: new Date().toISOString(),
+  }
+}
+
+/** steering 气泡：渲染与普通用户气泡零视觉区别（dsh 同款），仅 steered 数据标记供分组规则判定。 */
+function createSteeringMessage(message: QueuedMessage): ChatMessage {
+  return {
+    id: createId('message'),
+    role: 'user',
+    kind: 'text',
+    text: message.text,
+    quote: message.quote,
+    steered: true,
+    createdAt: message.at,
   }
 }
 

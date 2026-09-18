@@ -97,7 +97,7 @@ export const DEFAULT_CONFIG = {
     ragContextMaxItems: 8,
     conversationTokenLimit: 12000,
     compressionKeepRecentTurns: 5,
-    agentMaxTurns: 8,
+    agentMaxTurns: 0,
     permissionPreset: 'chapter-material',
     embeddingTextVersion: 1,
     enableDebugLogging: false,

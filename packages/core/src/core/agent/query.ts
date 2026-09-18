@@ -8,8 +8,9 @@ import {
   shouldCompact,
   type CompactionResult,
 } from './compaction'
-import { appendAssistantMessage, appendToolResults, toRequestMessages, type ModelView } from './model-view'
+import { appendAssistantMessage, appendToolResults, appendUserMessage, toRequestMessages, type ModelView } from './model-view'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
+import type { QueuedMessage } from '../../types/chat'
 import type {
   AgentAssistantMessage,
   AgentMessage,
@@ -18,7 +19,16 @@ import type {
 import type { AgentRunnableToolMap } from './tools'
 import type { ReadFileState } from '../tools/types'
 
-const DEFAULT_MAX_TURNS = 8
+/** 轮次安全阀默认值：0 = 不限（照抄 dsh 无内置轮次预算）；>0 时超限优雅收尾。 */
+const DEFAULT_MAX_TURNS = 0
+
+/** 插话（steer）收件箱访问口：由 session 层注入，query 不持有状态所有权。 */
+export type SteeringAccess = {
+  /** 抽干 next-step 队列（claim 即消费，调用方负责状态更新与持久化） */
+  drain(): QueuedMessage[]
+  /** next-step 是否还有未抽干的插话（steer 续命判定） */
+  hasPending(): boolean
+}
 
 export type AgentQueryEvent =
   | { type: 'query-step-start'; step: number }
@@ -32,6 +42,8 @@ export type AgentQueryEvent =
   | { type: 'turn-limit-reached'; maxTurns: number }
   | { type: 'aborted'; reason: 'user'; partialContent?: string }
   | { type: 'assistant-message'; message: AgentAssistantMessage }
+  /** 抽干点取到的插话消息（已追加进模型视图）；session 层据此 push 显示层气泡。 */
+  | { type: 'steering-message'; message: QueuedMessage }
   | ToolExecutionEvent
   | { type: 'done'; messages: AgentMessage[]; aborted?: boolean }
 
@@ -41,14 +53,17 @@ export async function query(input: {
   /** 模型视图：query 循环直接在其上追加/压缩，视图是发给 LLM 消息序列的唯一来源。 */
   view: ModelView
   tools: AgentRunnableToolMap
+  /** 轮次安全阀：0/undefined = 不限；显式传参仅测试用。 */
   maxTurns?: number
   signal?: AbortSignal
   /** 写工具确认回调，透传到工具执行层。 */
   confirm?: ConfirmHandler
+  /** 插话收件箱访问口（steer）：每个 step 边界抽干，结局前非空则续命。 */
+  steering?: SteeringAccess
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   const view = input.view
-  // 轮次上限可配置：config.settings.agentMaxTurns（默认 8），显式传参仅测试用
+  // 轮次上限可关闭的安全阀：config.settings.agentMaxTurns（默认 0=不限，照抄 dsh 无内置预算）
   const maxTurns = input.maxTurns ?? input.config.settings.agentMaxTurns ?? DEFAULT_MAX_TURNS
   const readFileStates = new Map<string, ReadFileState>()
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
@@ -71,14 +86,25 @@ export async function query(input: {
     return false
   }
 
-  for (let turn = 0; turn < maxTurns; turn += 1) {
-    const step = turn + 1
+  // turn 层：while(true) 跑 step（照抄 dsh 分层循环；step 层 = 溢出重试 while(true)，保持不动）
+  let step = 0
+  while (true) {
+    step += 1
 
     // 每一轮开始前检查用户是否已停止（工具执行完毕后停止的边界）
     if (input.signal?.aborted) {
       input.onEvent?.({ type: 'aborted', reason: 'user' })
       input.onEvent?.({ type: 'done', messages: view.messages, aborted: true })
       return view.messages
+    }
+
+    // ① 抽干点：先抽干（插话进模型视图）再压缩判定——顺序与 dsh 一致（claim 在前、压缩钩子在后）
+    if (input.steering) {
+      const claimed = input.steering.drain()
+      for (const message of claimed) {
+        appendUserMessage(view, buildSteeringContent(message))
+        input.onEvent?.({ type: 'steering-message', message })
+      }
     }
 
     // 压缩期用户停止：与流式中断同口径归类 aborted，绝不上抛成 run-error
@@ -199,6 +225,10 @@ export async function query(input: {
     input.onEvent?.({ type: 'assistant-message', message: assistantMessage })
 
     if (assistantResponse.toolCalls.length === 0) {
+      // steer 续命：结局已定但插话队列非空 → turn 不闭合，继续 loop（下一抽干点整批取到）
+      if (input.steering?.hasPending()) {
+        continue
+      }
       input.onEvent?.({ type: 'done', messages: view.messages })
       return view.messages
     }
@@ -226,13 +256,24 @@ export async function query(input: {
     })
 
     appendToolResults(view, toolResults)
-  }
 
-  // 轮次上限优雅收尾：不再硬塞 assistant 话术——发事件告知用户已达上限，
-  // 模型视图原样保留（末尾停在最后的工具结果，序列合法），用户继续发消息即可续接。
-  input.onEvent?.({ type: 'turn-limit-reached', maxTurns })
-  input.onEvent?.({ type: 'done', messages: view.messages })
-  return view.messages
+    // 轮次安全阀：0 = 不限；>0 且达到上限时优雅收尾——发事件告知用户，
+    // 模型视图原样保留（末尾停在最后的工具结果，序列合法），用户继续发消息即可续接。
+    if (maxTurns > 0 && step >= maxTurns) {
+      input.onEvent?.({ type: 'turn-limit-reached', maxTurns })
+      input.onEvent?.({ type: 'done', messages: view.messages })
+      return view.messages
+    }
+  }
+}
+
+/** 插话消息进模型视图的包装：标注「执行中插话」，模型据此优先响应最新意图。session 层 turn 首批与 query 抽干点共用。 */
+export function buildSteeringContent(message: QueuedMessage): string {
+  const lines = [`用户插话（任务执行中发送，优先响应最新意图）：${message.text}`]
+  if (message.quote?.trim()) {
+    lines.push('', '用户引用的内容：', message.quote.trim())
+  }
+  return lines.join('\n')
 }
 
 type ModelStartDebugInfo = {

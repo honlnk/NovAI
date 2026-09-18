@@ -20,6 +20,8 @@ export type UserTextMessage = {
   text: string
   /** 用户在内容面板选中的引用内容，作为独立引用块展示在用户气泡内 */
   quote?: string
+  /** 插话（steer）标记：渲染与普通用户气泡零视觉区别，仅供任务组分组规则判定（不是组边界）。 */
+  steered?: boolean
   createdAt: string
 }
 
@@ -96,10 +98,35 @@ export type ChatTargetContext = {
 
 export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
 
+/** 收件箱里的一条排队消息（followup 或 steer）。 */
+export type QueuedMessage = {
+  id: string
+  text: string
+  /** 排队时快照的引用内容 */
+  quote?: string
+  /** 入队时间（ISO） */
+  at: string
+}
+
+/**
+ * 双队列收件箱（照抄 dsh 语义）：
+ * - nextTurn：followup 排队消息，每条独占一个未来 turn；
+ * - nextStep：steer 插话，下一个 step 边界整批生效。
+ * 随会话 JSON 落盘（普通字段，不引入事件溯源）；刷新/重开后保留但不自动消费。
+ */
+export type InboxState = {
+  nextTurn: QueuedMessage[]
+  nextStep: QueuedMessage[]
+}
+
 export type ChatSessionState = {
   sessionId: string
   projectId: string
   messages: ChatMessage[]
+  /**
+   * 双队列收件箱。可选字段：旧会话 JSON 无此字段，视为空队列，无需迁移。
+   */
+  inbox?: InboxState
   /**
    * 模型视图：发给 LLM 的消息序列唯一来源，持久化的是压缩后的当前视图。
    * 与显示层 messages（全量 transcript）彻底分离。旧会话文件的 agentMessages

@@ -76,7 +76,7 @@ const projectForm = reactive({
   ragContextMaxItems: 8,
   conversationTokenLimit: 12000,
   compressionKeepRecentTurns: 5,
-  agentMaxTurns: 8,
+  agentMaxTurns: 0,
   permissionPreset: 'chapter-material' as 'review' | 'chapter' | 'material' | 'chapter-material' | 'full',
   enableDebugLogging: false,
 })
@@ -134,7 +134,7 @@ onMounted(async () => {
         ragContextMaxItems: settings.ragContextMaxItems ?? 8,
         conversationTokenLimit: settings.conversationTokenLimit ?? 12000,
         compressionKeepRecentTurns: settings.compressionKeepRecentTurns ?? 5,
-        agentMaxTurns: settings.agentMaxTurns ?? 8,
+        agentMaxTurns: settings.agentMaxTurns ?? 0,
         permissionPreset: settings.permissionPreset ?? 'chapter-material',
         enableDebugLogging: settings.enableDebugLogging ?? false,
       })

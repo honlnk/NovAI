@@ -373,4 +373,160 @@ describe('query 轮次上限', () => {
     expect(messages.filter((m) => m.role === 'tool')).toHaveLength(2)
     expect(events.at(-1)).toMatchObject({ type: 'done' })
   })
+
+  it('agentMaxTurns = 0 时不限轮次：循环只靠结局/停止收敛', async () => {
+    // 前 4 轮都返回工具调用（超过旧默认 8 的语义验证用 4 轮即可，关键是阀门不触发）
+    let call = 0
+    mockedStream.mockImplementation(async () => {
+      call += 1
+      if (call <= 4) {
+        return {
+          content: '',
+          toolCalls: [{ id: `call_${call}`, name: 'ReadFile', input: { path: 'chapters/001.txt' } }],
+          finishReason: 'tool_calls',
+        }
+      }
+      return { content: '完成', toolCalls: [], finishReason: 'stop' }
+    })
+
+    const { events, onEvent } = collectEvents()
+    const messages = await query({
+      config: { ...createStubConfig(), settings: { ...createStubConfig().settings, agentMaxTurns: 0 } },
+      project: stubProject,
+      view: createBaseView(),
+      tools: {},
+      onEvent,
+    })
+
+    expect(mockedStream).toHaveBeenCalledTimes(5)
+    expect(events.filter((event) => event.type === 'turn-limit-reached')).toHaveLength(0)
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant', content: '完成' })
+  })
+})
+
+describe('query 插话（steering）', () => {
+  beforeEach(() => {
+    mockedStream.mockReset()
+  })
+
+  function createSteering(queue: Array<{ id: string; text: string; quote?: string; at: string }>) {
+    return {
+      drain: vi.fn(() => queue.splice(0, queue.length)),
+      hasPending: vi.fn(() => queue.length > 0),
+    }
+  }
+
+  it('抽干点：插话包装后进模型视图，发 steering-message 事件', async () => {
+    mockedStream.mockResolvedValue({ content: '收到插话', toolCalls: [], finishReason: 'stop' })
+
+    const queue = [
+      { id: 'q1', text: '顺便把第二章也改了', at: '2026-09-19T10:00:00.000Z' },
+      { id: 'q2', text: '引用这段', quote: '被引用的原文', at: '2026-09-19T10:00:01.000Z' },
+    ]
+    const steering = createSteering(queue)
+
+    const { events, onEvent } = collectEvents()
+    const view = createBaseView()
+    await query({
+      config: createStubConfig(),
+      project: stubProject,
+      view,
+      tools: {},
+      steering,
+      onEvent,
+    })
+
+    // 两条插话都整批抽干
+    expect(steering.drain).toHaveBeenCalled()
+    const steeringEvents = events.filter((event) => event.type === 'steering-message')
+    expect(steeringEvents).toHaveLength(2)
+
+    // 模型视图含包装后的插话（标注执行中插话；quote 附带引用块）
+    const contents = view.messages.map((m) => m.content)
+    expect(contents.some((c) => c.includes('用户插话') && c.includes('顺便把第二章也改了'))).toBe(true)
+    const quoted = contents.find((c) => c.includes('引用这段'))
+    expect(quoted).toContain('用户引用的内容：')
+    expect(quoted).toContain('被引用的原文')
+  })
+
+  it('steer 续命：无工具结局时 nextStep 非空 → turn 不闭合，下一抽干点取到后继续跑', async () => {
+    const queue: Array<{ id: string; text: string; at: string }> = []
+    let call = 0
+    mockedStream.mockImplementation(async () => {
+      call += 1
+      if (call === 1) {
+        // 第一轮流式期间用户发送插话（运行中入队）
+        queue.push({ id: 'q1', text: '改主意了，先写第三章', at: '2026-09-19T10:00:00.000Z' })
+        return { content: '第一轮回答', toolCalls: [], finishReason: 'stop' }
+      }
+      return { content: '响应插话', toolCalls: [], finishReason: 'stop' }
+    })
+
+    // 首轮抽干为空；第一轮结局时队列里已有 1 条插话
+    const steering = {
+      drain: vi.fn(() => queue.splice(0, queue.length)),
+      hasPending: vi.fn(() => queue.length > 0),
+    }
+
+    const { events, onEvent } = collectEvents()
+    const view = createBaseView()
+    const messages = await query({
+      config: createStubConfig(),
+      project: stubProject,
+      view,
+      tools: {},
+      steering,
+      onEvent,
+    })
+
+    // 模型被调两次：结局未闭合，插话续了一个 step
+    expect(mockedStream).toHaveBeenCalledTimes(2)
+    expect(events).toContainEqual({
+      type: 'steering-message',
+      message: expect.objectContaining({ id: 'q1', text: '改主意了，先写第三章' }),
+    })
+    // done 只发一次（最终结局），且之前没有提前 done
+    const doneIndices = events.map((e, i) => (e.type === 'done' ? i : -1)).filter((i) => i >= 0)
+    expect(doneIndices).toEqual([events.length - 1])
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant', content: '响应插话' })
+  })
+
+  it('抽干先于压缩：同帧时先 drain 再发压缩请求（调用顺序固定）', async () => {
+    const summaryResponse = { content: '## Critical Context\n要点', toolCalls: [], finishReason: 'stop' }
+    const realResponse = { content: '继续', toolCalls: [], finishReason: 'stop' }
+    const calls: Array<{ isCompaction: boolean }> = []
+    mockedStream.mockImplementation(async (input) => {
+      const isCompaction = input.messages.at(-1)?.content.includes('检查点') ?? false
+      calls.push({ isCompaction })
+      return isCompaction ? summaryResponse : realResponse
+    })
+
+    const steering = createSteering([
+      { id: 'q1', text: '压缩前插进来', at: '2026-09-19T10:00:00.000Z' },
+    ])
+
+    const view = createModelView([
+      { role: 'system', content: '系统提示' },
+      ...Array.from({ length: 8 }, (_, i) =>
+        i % 2 === 0
+          ? { role: 'user' as const, content: '用户长消息'.repeat(20) }
+          : { role: 'assistant' as const, content: '助手长回复'.repeat(20) }),
+    ])
+
+    await query({
+      config: createStubConfig({ conversationTokenLimit: 300 }),
+      project: stubProject,
+      view,
+      tools: {},
+      steering,
+    })
+
+    // 压缩确实发生了（第一次调用 = 压缩请求）
+    expect(calls[0]).toEqual({ isCompaction: true })
+    // 抽干的调用序号在压缩请求之前 → 先抽干后压缩
+    expect((steering.drain as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
+      .toBeLessThan(mockedStream.mock.invocationCallOrder[0])
+    // 插话已进模型视图（压缩保留近端消息，视图尾部含插话）
+    expect(view.messages.some((m) => m.content.includes('压缩前插进来'))).toBe(true)
+  })
 })

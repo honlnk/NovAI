@@ -103,6 +103,32 @@ describe('chat session-store', () => {
     expect(SESSIONS_DIR).toBe('.novel/sessions')
     expect(buildSessionFilePath('session-abc')).toBe('.novel/sessions/session-abc.json')
   })
+
+  it('inbox 随会话 JSON 落盘往返（刷新后队列还在）；旧会话无 inbox 字段时读出为 undefined（视为空队列）', async () => {
+    const root = createMemoryDirectory('novel')
+    const project = buildProject(root)
+
+    // 带收件箱的会话：落盘 → 读回，队列原样保留
+    const session = createChatSession('proj-1')
+    session.inbox = {
+      nextTurn: [{ id: 'q1', text: '排队任务', quote: '引用', at: '2026-09-19T10:00:00.000Z' }],
+      nextStep: [{ id: 'q2', text: '插话任务', at: '2026-09-19T10:00:01.000Z' }],
+    }
+    await saveSession(project, session)
+
+    const loaded = await loadSession(project, session.sessionId)
+    expect(loaded!.inbox).toEqual(session.inbox)
+
+    // 旧会话 JSON（无 inbox 字段）：读出为 undefined，不报错、不迁移
+    const legacy = createChatSession('proj-1')
+    const legacyText = JSON.stringify(legacy, null, 2)
+    expect(legacyText).not.toContain('inbox')
+    await writeRawText(project, buildSessionFilePath(legacy.sessionId), legacyText)
+
+    const loadedLegacy = await loadSession(project, legacy.sessionId)
+    expect(loadedLegacy).not.toBeNull()
+    expect(loadedLegacy!.inbox).toBeUndefined()
+  })
 })
 
 // ---------- 测试夹具：内存版 FileSystemDirectoryHandle ----------

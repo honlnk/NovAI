@@ -74,7 +74,7 @@ export type ProjectConfig = {
     ragContextMaxItems: number
     conversationTokenLimit: number
     compressionKeepRecentTurns: number
-    /** Agent 单轮最大循环次数（模型调用×工具执行的回合数），超限优雅收尾可续接。 */
+    /** Agent 轮次安全阀（模型调用×工具执行的回合数）：0 = 不限；>0 时超限优雅收尾可续接。 */
     agentMaxTurns: number
     /** 写工具权限档位：哪些修改免确认；结构操作除 full 档外一律弹卡。旧配置缺省回填默认档。 */
     permissionPreset: PermissionPreset
