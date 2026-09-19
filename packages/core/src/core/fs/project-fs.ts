@@ -316,9 +316,23 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       permissionPreset: isPermissionPreset(config.settings?.permissionPreset)
         ? config.settings.permissionPreset
         : DEFAULT_CONFIG.settings.permissionPreset,
-      // agentMaxTurns 的钳制语义与循环升级联动（0=不限的安全阀口径），留待 W6 随设置文案一起处理
+      // agentMaxTurns：0=不限（现行默认）。恰为 8 是旧版出厂默认，视为需要迁移的旧值按 0 处理
+      // （用户显式选过其他值如 5 的尊重保留）；缺字段/非法值回退 0。下次保存设置自然落盘为 0。
+      agentMaxTurns: normalizeAgentMaxTurns(config.settings?.agentMaxTurns),
     },
   }
+}
+
+/** agentMaxTurns 迁移 + 钳制：非有限数 → 0（默认）；8（旧版出厂默认）→ 0；其余钳到 0-50。 */
+function normalizeAgentMaxTurns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0
+  }
+  const rounded = Math.round(value)
+  if (rounded === 8) {
+    return 0
+  }
+  return Math.min(50, Math.max(0, rounded))
 }
 
 /**

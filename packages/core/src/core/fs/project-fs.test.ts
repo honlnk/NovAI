@@ -35,7 +35,7 @@ describe('project fs repair', () => {
 })
 
 describe('project config 数值钳制', () => {
-  it('越界值钳到 UI 边界，非法值回退默认；agentMaxTurns 不钳（W6 安全阀语义预留）', async () => {
+  it('越界值钳到 UI 边界，非法值回退默认；agentMaxTurns 钳 0-50', async () => {
     const rootHandle = createMemoryDirectory('novel')
     const config = createDefaultConfig('novel')
     const saved = await writeProjectConfig(rootHandle, {
@@ -59,7 +59,6 @@ describe('project config 数值钳制', () => {
     expect(saved.completion.debounceMs).toBe(200)
     expect(saved.completion.maxTokens).toBe(256)
     expect(saved.rerank.topN).toBe(1)
-    // W6 前不钳 agentMaxTurns：0 原样保留
     expect(saved.settings.agentMaxTurns).toBe(0)
 
     // 上限方向也钳
@@ -73,6 +72,36 @@ describe('project config 数值钳制', () => {
     })
     expect(savedHigh.settings.conversationTokenLimit).toBe(200000)
     expect(savedHigh.settings.compressionKeepRecentTurns).toBe(20)
+  })
+
+  it('agentMaxTurns 迁移：旧版出厂默认 8 → 0（不限），显式值保留，缺省补 0', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+
+    // 旧项目持久化的 8（旧版出厂默认）→ 按 0 处理，升级后不再每 8 轮被打断
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 8 },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(0)
+
+    // 用户显式选过的其他值尊重保留
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 5 },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(5)
+
+    // 缺字段照旧补默认 0；非法值回退 0
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(0)
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 'abc' },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(0)
+
+    // 越界显式值钳到 0-50
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 999 },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(50)
   })
 
   it('JSON 里的非数值（null/字符串/缺失）回退默认值', async () => {
