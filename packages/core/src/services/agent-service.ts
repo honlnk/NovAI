@@ -650,8 +650,9 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       role: message.role,
       kind: 'text',
       text: message.text,
-      // 仅 user text 消息有 quote；assistant text 无此字段，undefined 自动忽略
+      // 仅 user text 消息有 quote/steered；assistant text 无此字段，undefined 自动忽略
       quote: 'quote' in message ? message.quote : undefined,
+      steered: 'steered' in message ? message.steered : undefined,
       createdAt: message.createdAt,
     }
   }
@@ -675,6 +676,7 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       kind: 'tool-call',
       text: message.inputSummary,
       toolName: message.toolName,
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
       createdAt: message.createdAt,
     }
   }
@@ -687,6 +689,7 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       text: message.resultSummary,
       ok: message.ok,
       toolName: message.toolName,
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
       createdAt: message.createdAt,
     }
   }

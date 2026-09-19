@@ -3,19 +3,23 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 import { useChatStore } from '../../stores/chat'
-import { isImeComposing, shouldSubmitOnEnter } from '../../composables/keyboard'
+import { isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
+import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
+import ToolCallRow from '../chat/ToolCallRow.vue'
+import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import type { SlashCommandId } from '../../constants/slash-commands'
+import type { ChatRenderItem } from '../../stores/chat-render'
 
 /** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
 type SelectionQuote = {
@@ -54,17 +58,46 @@ const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
-// 是否正在运行，直接读 store，避免本地状态与 store 不同步
-const isSending = computed(() => chatStore.isRunning)
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
+
+// 最新一条 change-summary 的 id（该面板默认展开文件列表，历史轮折叠成标题行）
+const lastChangeSummaryId = computed(() => {
+  for (let index = chatStore.messages.length - 1; index >= 0; index -= 1) {
+    const message = chatStore.messages[index]
+    if (message.role === 'system' && message.kind === 'change-summary') {
+      return message.id
+    }
+  }
+  return null
+})
+
+/** QueueDock 空草稿 + Ctrl/Cmd+Enter：把全部排队消息逐条升级为插话（dsh 增强项） */
+async function steerAllQueued() {
+  for (const message of chatStore.queue) {
+    if (message.placement === 'queued') {
+      await chatStore.steerQueuedMessage(message.id)
+    }
+  }
+}
+
+/** v-for key 统一入口（vue-tsc 对 :key 内联三元 narrowing 不稳，收在函数里） */
+function renderItemKey(item: ChatRenderItem): string {
+  if (item.kind === 'process-group') {
+    return `group-${item.id}`
+  }
+  if (item.kind === 'tool-row') {
+    return `tool-${item.id}`
+  }
+  return item.message.id
+}
 
 // ===== 输入框 AI 补全（FIM ghost text） =====
 const completionConfig = computed(() => projectStore.currentProject?.config.completion)
 const { suggestion: completionSuggestion, scheduleCompletion, acceptNextSegment, clearSuggestion } = useInlineCompletion()
-/** 补全是否处于可显示状态（开启 + 有建议 + 非发送中） */
+/** 补全是否处于可显示状态（开启 + 有建议 + 非运行中） */
 const isCompletionVisible = computed(
-  () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !isSending.value,
+  () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !chatStore.isRunning,
 )
 
 // 自动滚动到底部
@@ -83,8 +116,12 @@ watch(
 )
 
 
-async function handleSend() {
-  if (!inputText.value.trim() || isSending.value) return
+/**
+ * 发送（输入框运行中解禁，dsh 风）：mode 'queue' = Enter 语义（空闲直接发送 / 运行中排队），
+ * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
+ */
+async function handleSend(mode: 'queue' | 'steer' = 'queue') {
+  if (!inputText.value.trim()) return
 
   clearSuggestion()
   const message = inputText.value.trim()
@@ -97,7 +134,7 @@ async function handleSend() {
     textareaRef.value.style.height = 'auto'
   }
 
-  const ok = await chatStore.sendMessage(message, quoteText)
+  const ok = await chatStore.sendMessage(message, quoteText, mode)
   if (ok) {
     // 发送成功后清除引用 chip
     emit('clearQuote')
@@ -182,10 +219,16 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // Enter 发送，Shift+Enter 换行
-  if (shouldSubmitOnEnter(event)) {
+  // 发送模式（dsh resolveSubmitMode）：Enter = 发送/排队，Ctrl/Cmd+Enter = 插话，
+  // Shift+Enter 换行；空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
+  const submitMode = resolveSubmitMode(event)
+  if (submitMode) {
     event.preventDefault()
-    handleSend()
+    if (submitMode === 'steer' && !inputText.value.trim()) {
+      void steerAllQueued()
+      return
+    }
+    handleSend(submitMode === 'steer' ? 'steer' : 'queue')
   }
 }
 
@@ -453,15 +496,37 @@ async function handleExtractionConfirm() {
           <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
         </div>
 
-        <!-- 消息列表 -->
+        <!-- 消息列表：渲染序列（配对 + 分组预处理后的渲染树） -->
         <div v-else class="space-y-4">
-          <MessageItem
-            v-for="message in chatStore.messages"
-            :key="message.id"
-            :message="message"
-            :streaming="message.id === chatStore.streamingMessageId"
-          />
+          <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
+            <!-- 任务过程折叠组：组头 + 包裹容器（子项经插槽注入） -->
+            <TurnProcessGroup
+              v-if="item.kind === 'process-group'"
+              :group="item"
+              @toggle="chatStore.toggleProcessGroup"
+            >
+              <template v-for="child in item.items" :key="renderItemKey(child)">
+                <ToolCallRow v-if="child.kind === 'tool-row'" :item="child" />
+                <MessageItem
+                  v-else-if="child.kind === 'message'"
+                  :message="child.message"
+                  :streaming="child.message.id === chatStore.streamingMessageId"
+                  :newest-change-summary="child.message.id === lastChangeSummaryId"
+                />
+              </template>
+            </TurnProcessGroup>
 
+            <!-- 工具行（调用/结果合一） -->
+            <ToolCallRow v-else-if="item.kind === 'tool-row'" :item="item" />
+
+            <!-- 普通消息 -->
+            <MessageItem
+              v-else-if="item.kind === 'message'"
+              :message="item.message"
+              :streaming="item.message.id === chatStore.streamingMessageId"
+              :newest-change-summary="item.message.id === lastChangeSummaryId"
+            />
+          </template>
         </div>
       </div>
     </div>
@@ -495,6 +560,14 @@ async function handleExtractionConfirm() {
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
+        <!-- QueueDock：输入框正上方，渲染排队/插话队列（空队列不渲染） -->
+        <QueueDock
+          :queue="chatStore.queue"
+          :running="chatStore.isRunning"
+          @edit="chatStore.editQueuedMessage"
+          @remove="chatStore.removeQueuedMessage"
+          @steer="chatStore.steerQueuedMessage"
+        />
         <!-- chip 区：引用 chip（场景 chip 已移至底部状态栏） -->
         <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
           <SelectionChip
@@ -543,14 +616,16 @@ async function handleExtractionConfirm() {
                 ref="textareaRef"
                 v-model="inputText"
                 class="chat-input-base resize-none bg-transparent text-gray-800 outline-none placeholder:text-gray-400"
-                placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)"
+                :placeholder="chatStore.isRunning
+                  ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
+                  : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)'"
                 rows="2"
                 @keydown="handleKeydown"
                 @input="onTextareaInput"
               />
             </div>
-            <!-- 工具行：发送/停止按钮右对齐 -->
-            <div class="mt-1 flex items-center justify-end">
+            <!-- 工具行：发送按钮（模式感知文案）+ 停止按钮（独立位置，仅运行中显示） -->
+            <div class="mt-1 flex items-center justify-end gap-2">
               <button
                 v-if="isStopping"
                 class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
@@ -563,7 +638,7 @@ async function handleExtractionConfirm() {
                 </svg>
               </button>
               <button
-                v-else-if="isSending"
+                v-else-if="chatStore.isRunning"
                 class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
                 title="停止运行"
                 @click="handleStop"
@@ -573,12 +648,12 @@ async function handleExtractionConfirm() {
                 </svg>
               </button>
               <button
-                v-else
                 class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
                 :disabled="!inputText.trim()"
-                @click="handleSend"
+                :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
+                @click="handleSend('queue')"
               >
-                {{ '发送' }}
+                {{ chatStore.isRunning ? '排队发送' : '发送' }}
               </button>
             </div>
           </div>

@@ -360,6 +360,8 @@ export type ChatMessageView =
       text: string
       /** 引用的选中内容，渲染为用户气泡内的独立引用块 */
       quote?: string
+      /** 插话产生的用户消息：渲染与普通气泡相同，仅作分组边界判定的数据标记（不是组边界） */
+      steered?: boolean
       createdAt: string
     }
   | {
@@ -384,10 +386,29 @@ export type ChatMessageView =
   | {
       id: string
       role: 'system'
-      kind: 'tool-call' | 'tool-result' | 'context-summary' | 'error'
+      kind: 'tool-call'
       text: string
-      ok?: boolean
-      toolName?: ToolNameView
+      toolName: ToolNameView
+      /** 与 tool-result 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
+      toolCallId?: string
+      createdAt: string
+    }
+  | {
+      id: string
+      role: 'system'
+      kind: 'tool-result'
+      text: string
+      ok: boolean
+      toolName: ToolNameView
+      /** 与 tool-call 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
+      toolCallId?: string
+      createdAt: string
+    }
+  | {
+      id: string
+      role: 'system'
+      kind: 'context-summary' | 'error'
+      text: string
       createdAt: string
     }
 

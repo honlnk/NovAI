@@ -50,6 +50,8 @@ export type ToolCallMessage = {
   kind: 'tool-call'
   toolName: ChatToolName
   inputSummary: string
+  /** 与 tool-result 配对的调用 id（event.call.id）；旧会话消息无此字段，UI 各自独立成行 */
+  toolCallId?: string
   createdAt: string
 }
 
@@ -60,6 +62,8 @@ export type ToolResultMessage = {
   toolName: ChatToolName
   ok: boolean
   resultSummary: string
+  /** 与 tool-call 配对的调用 id（event.call.id）；旧会话消息无此字段，UI 各自独立成行 */
+  toolCallId?: string
   createdAt: string
 }
 

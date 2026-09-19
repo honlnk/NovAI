@@ -26,6 +26,7 @@ import type {
   QueuedMessageView,
 } from '@novai/core/services/types'
 
+import { buildRenderItems, type ChatRenderItem } from './chat-render'
 import { useProjectStore } from './project'
 
 /** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
@@ -57,6 +58,25 @@ export const useChatStore = defineStore('chat', () => {
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
+
+  /**
+   * 任务组折叠态：组 id（= 组首 user 消息 id）→ 显式展开/收起，优先级高于默认
+   * （默认：历史轮收起，运行中的最后一轮展开）。切换会话不清。
+   */
+  const expandedGroups = ref(new Map<string, boolean>())
+
+  /** 渲染序列（文档 3 S4）：tool-call/result 配对成行 + 一轮任务过程消息折叠成组；组件只负责渲染。 */
+  const renderItems = computed<ChatRenderItem[]>(() =>
+    buildRenderItems(messages.value, {
+      running: isRunning.value,
+      expandedOverrides: expandedGroups.value,
+    }),
+  )
+
+  /** 用户点击折叠组头：写显式覆盖值（展开 true / 收起 false）。 */
+  function toggleProcessGroup(id: string, expanded: boolean) {
+    expandedGroups.value.set(id, expanded)
+  }
 
   /**
    * 项目打开时的会话初始化入口：
@@ -411,6 +431,7 @@ export const useChatStore = defineStore('chat', () => {
     isStopping,
     isLoadingSessions,
     messages,
+    renderItems,
     pendingConfirmation,
     sessionView,
     sessions,
@@ -433,5 +454,6 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage,
     setRunStatus,
     steerQueuedMessage,
+    toggleProcessGroup,
   }
 })
