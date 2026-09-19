@@ -13,6 +13,7 @@ export type ChatToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'GetFileChangeHistory'
 
 export type UserTextMessage = {
   id: string

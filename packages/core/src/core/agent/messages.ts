@@ -9,6 +9,7 @@ export type AgentToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'GetFileChangeHistory'
 
 export type AgentToolCall = {
   id: string

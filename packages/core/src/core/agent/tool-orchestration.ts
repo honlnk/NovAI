@@ -4,6 +4,7 @@ import type { ProjectSnapshot } from '../../types/project'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { ReadFileState } from '../tools/types'
+import type { FileChangeRecord } from '../../types/chat'
 
 export async function runAgentTools(input: {
   calls: AgentToolCall[]
@@ -14,6 +15,8 @@ export async function runAgentTools(input: {
   signal?: AbortSignal
   /** 写工具确认回调，透传给 executeAgentTool。 */
   confirm?: ConfirmHandler
+  /** 会话改动账本只读取口（GetFileChangeHistory 用），透传给工具执行层。 */
+  getChangeLedger?: () => readonly FileChangeRecord[]
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage[]> {
   const results: AgentToolResultMessage[] = []
@@ -49,6 +52,7 @@ export async function runAgentTools(input: {
       tools: input.tools,
       readFileStates: input.readFileStates,
       confirm: input.confirm,
+      getChangeLedger: input.getChangeLedger,
       onEvent: input.onEvent,
     }))
   }

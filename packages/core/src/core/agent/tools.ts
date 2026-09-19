@@ -7,6 +7,7 @@ import {
 } from '../tools/file-tools'
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 import { ragSearchTool } from '../tools/rag-search'
+import { getFileChangeHistoryTool } from '../tools/change-history-tool'
 
 import type {
   AgentToolName,
@@ -20,6 +21,7 @@ import type {
   EditFileInput,
   EditFileOutput,
   FindFilesOutput,
+  GetFileChangeHistoryOutput,
   ListDirectoryOutput,
   ReadFileInput,
   ReadFileOutput,
@@ -382,6 +384,42 @@ export function createAgentTools(): AgentRunnableToolMap {
         ].join('\n')
       },
     },
+    GetFileChangeHistory: {
+      name: 'GetFileChangeHistory',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'GetFileChangeHistory',
+          description: '查询本会话此前的文件修改历史（改了哪些文件、什么时间、增删行数）；当你需要回忆或核对之前的改动时使用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              limit: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 100,
+                description: '可选，最多返回多少条；默认 20，最大 100。返回新到旧排列。',
+              },
+              path: {
+                type: 'string',
+                description: '可选，只看某个文件（改名会同时匹配前后路径）。',
+              },
+              runId: {
+                type: 'string',
+                description: '可选，只看某一轮任务的改动。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: getFileChangeHistoryTool,
+      formatResult(output: GetFileChangeHistoryOutput) {
+        return output.content
+      },
+    },
   }
 }
 
@@ -394,6 +432,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'ListDirectory'
     || value === 'FindFiles'
     || value === 'RagSearch'
+    || value === 'GetFileChangeHistory'
 }
 
 function formatScore(value: number | undefined) {

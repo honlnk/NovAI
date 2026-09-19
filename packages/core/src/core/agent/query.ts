@@ -10,7 +10,7 @@ import {
 } from './compaction'
 import { appendAssistantMessage, appendToolResults, appendUserMessage, toRequestMessages, type ModelView } from './model-view'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
-import type { QueuedMessage } from '../../types/chat'
+import type { FileChangeRecord, QueuedMessage } from '../../types/chat'
 import type {
   AgentAssistantMessage,
   AgentMessage,
@@ -60,6 +60,8 @@ export async function query(input: {
   confirm?: ConfirmHandler
   /** 插话收件箱访问口（steer）：每个 step 边界抽干，结局前非空则续命。 */
   steering?: SteeringAccess
+  /** 会话改动账本只读取口（GetFileChangeHistory 用），透传到工具执行层。 */
+  getChangeLedger?: () => readonly FileChangeRecord[]
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   const view = input.view
@@ -246,6 +248,7 @@ export async function query(input: {
       readFileStates,
       signal: input.signal,
       confirm: input.confirm,
+      getChangeLedger: input.getChangeLedger,
       onEvent: input.onEvent,
     })
 

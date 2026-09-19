@@ -318,6 +318,8 @@ async function runDriverTurn(options: {
       tools,
       signal,
       confirm: input.confirm,
+      // 改动账本只读取口（GetFileChangeHistory 用）：getter 形态，账本不可变重建、读时取最新
+      getChangeLedger: () => session.changeLedger ?? [],
       // 插话收件箱访问口：query 在每个 step 边界抽干 next-step（claim 即消费，同步更新会话 inbox）
       steering: {
         drain() {

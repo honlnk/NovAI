@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from '../../types/project'
+import type { FileChangeRecord } from '../../types/chat'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { ChangeDiff, FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
@@ -32,6 +33,8 @@ export async function executeAgentTool(input: {
   readFileStates?: Map<string, ReadFileState>
   /** 写工具确认回调；未传时不做确认（测试/只读场景）。 */
   confirm?: ConfirmHandler
+  /** 会话改动账本只读取口（GetFileChangeHistory 用），组 runtime 时带上。 */
+  getChangeLedger?: () => readonly FileChangeRecord[]
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage> {
   const tool = input.tools[input.call.name]
@@ -129,6 +132,7 @@ export async function executeAgentTool(input: {
     const output = await tool.core.run(validatedInput, {
       project: input.project,
       readFileStates: input.readFileStates,
+      getChangeLedger: input.getChangeLedger,
     })
     const resultSummary = tool.core.summarizeOutput(output)
     // 写工具成功执行后提取结构化文件变更与片段级 diff，供改动账本累积

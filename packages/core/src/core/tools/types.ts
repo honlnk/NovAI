@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from '../../types/project'
+import type { FileChangeRecord } from '../../types/chat'
 
 export type CoreToolName =
   | 'ReadFile'
@@ -9,10 +10,16 @@ export type CoreToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'GetFileChangeHistory'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
   readFileStates?: Map<string, ReadFileState>
+  /**
+   * 会话改动账本的只读取口（GetFileChangeHistory 用）。
+   * getter 形态：账本每次累积都不可变重建数组，引用快照会过期，读时取最新。
+   */
+  getChangeLedger?: () => readonly FileChangeRecord[]
 }
 
 export type ToolCall<TName extends CoreToolName = CoreToolName, TInput = unknown> = {
@@ -242,4 +249,22 @@ export type RagSearchOutput = {
     score?: number
     rerankScore?: number
   }>
+}
+
+export type GetFileChangeHistoryInput = {
+  /** 返回条数上限：默认 20，最大 100 */
+  limit: number
+  /** 只看某个文件（含改名前后路径） */
+  path?: string
+  /** 只看某一轮（runId） */
+  runId?: string
+}
+
+export type GetFileChangeHistoryOutput = {
+  /** 纯文本清单（新→旧逐条），末尾「共 N 条记录」 */
+  content: string
+  /** 过滤后的总记录数 */
+  totalCount: number
+  /** 实际返回条数 */
+  returnedCount: number
 }

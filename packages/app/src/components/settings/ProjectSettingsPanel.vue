@@ -96,11 +96,11 @@ const permissionPresetOptions = [
             <input
               v-model.number="form.agentMaxTurns"
               type="number"
-              min="1"
+              min="0"
               max="50"
               class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
             />
-            <p class="mt-1.5 text-xs text-gray-500">单轮内「模型调用 + 工具执行」的回合上限；达到上限会优雅停下，继续发消息可续接</p>
+            <p class="mt-1.5 text-xs text-gray-500">0 表示不限制（推荐默认）；仅当模型反复打转时用它兜底。达到上限会优雅停下，继续发消息可续接</p>
           </div>
           <div>
             <label class="mb-1 block text-sm font-medium text-gray-700">写工具权限档位</label>

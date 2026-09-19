@@ -296,6 +296,7 @@ export type ToolNameView =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'GetFileChangeHistory'
 
 export type ToolCallView = {
   id: string

@@ -7,6 +7,7 @@ import {
 } from './file-tools'
 import { findFilesTool, listDirectoryTool } from './directory-tools'
 import { ragSearchTool } from './rag-search'
+import { getFileChangeHistoryTool } from './change-history-tool'
 import type {
   CoreToolName,
   CreateFileInput,
@@ -17,6 +18,8 @@ import type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  GetFileChangeHistoryInput,
+  GetFileChangeHistoryOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -43,6 +46,8 @@ export type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  GetFileChangeHistoryInput,
+  GetFileChangeHistoryOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -67,6 +72,7 @@ type ToolOutputMap = {
   ListDirectory: ListDirectoryOutput
   FindFiles: FindFilesOutput
   RagSearch: RagSearchOutput
+  GetFileChangeHistory: GetFileChangeHistoryOutput
 }
 
 const tools = {
@@ -78,6 +84,7 @@ const tools = {
   ListDirectory: listDirectoryTool,
   FindFiles: findFilesTool,
   RagSearch: ragSearchTool,
+  GetFileChangeHistory: getFileChangeHistoryTool,
 } satisfies Record<CoreToolName, ToolDefinition<CoreToolName, unknown, unknown>>
 
 export function getCoreTools() {
