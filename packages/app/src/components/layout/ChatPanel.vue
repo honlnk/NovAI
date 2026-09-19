@@ -664,6 +664,16 @@ async function handleExtractionConfirm() {
                   <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
                 </svg>
               </button>
+              <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示 -->
+              <button
+                v-if="chatStore.isRunning"
+                class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
+                :disabled="!inputText.trim()"
+                title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
+                @click="handleSend('steer')"
+              >
+                插话
+              </button>
               <button
                 class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
                 :disabled="!inputText.trim()"

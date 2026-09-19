@@ -86,6 +86,19 @@ export type ContextSummaryMessage = {
 }
 
 /**
+ * 轮次安全阀提示（agentMaxTurns 达到上限）：永不折叠进任务组——
+ * 它是「本轮为什么停在这」的用户可见结论，不是过程消息。
+ * 历史会话里同文案的旧消息 kind 为 context-summary，仍按过程折叠，不迁移。
+ */
+export type TurnLimitMessage = {
+  id: string
+  role: 'system'
+  kind: 'turn-limit'
+  summary: string
+  createdAt: string
+}
+
+/**
  * 改动汇总消息（取代 action-summary 生态位；任务完成 diff 面板在消息流里的占位）。
  * 只存 runId：面板数据渲染时从会话 changeLedger 按 runId 解析，不重复存 diff。
  * 随消息持久化，重载后每一轮的面板都在原位。
@@ -108,6 +121,7 @@ export type ChatMessage =
   | ToolResultMessage
   | ErrorMessage
   | ContextSummaryMessage
+  | TurnLimitMessage
   | ChangeSummaryMessage
 
 export type ChatTargetContext = {
@@ -126,6 +140,12 @@ export type QueuedMessage = {
   text: string
   /** 排队时快照的引用内容 */
   quote?: string
+  /**
+   * 入队时打开的文件路径快照：每条消息执行时用它解析「当前文件」，
+   * 而不是用执行那一刻（或最后一次入队时）的文件——排队多条时各用各的。
+   * 可选字段：旧会话队列无此字段，执行时回退到唤醒 driver 时的快照。
+   */
+  activeFilePath?: string | null
   /** 入队时间（ISO） */
   at: string
 }

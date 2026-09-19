@@ -23,6 +23,15 @@ const emit = defineEmits<{
 const expanded = ref(false)
 
 const queuedCount = computed(() => props.queue.filter((m) => m.placement === 'queued').length)
+const steeringCount = computed(() => props.queue.filter((m) => m.placement === 'steering').length)
+
+/** 折叠计数头：两类都计——只写「N 条排队」会让展开后的插话行数对不上 */
+const headerLabel = computed(() => {
+  if (steeringCount.value > 0 && queuedCount.value > 0) {
+    return `${queuedCount.value} 条排队 · ${steeringCount.value} 条插话`
+  }
+  return steeringCount.value > 0 ? `${steeringCount.value} 条插话` : `${queuedCount.value} 条排队消息`
+})
 
 /** 折叠态的可视行：1 条直接显示，多条折叠时只显示计数头（行为空） */
 const visibleMessages = computed(() =>
@@ -70,7 +79,7 @@ function cancelEdit() {
       >
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
       </svg>
-      {{ queuedCount }} 条排队消息
+      {{ headerLabel }}
     </button>
 
     <!-- 消息行：多条折叠时只显示计数头，展开显示全部 -->

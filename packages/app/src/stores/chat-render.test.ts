@@ -47,6 +47,10 @@ function contextSummary(id: string): ChatMessageView {
   return { id, role: 'system', kind: 'context-summary', text: '本轮目标', createdAt: '2026-09-19T00:00:00.000Z' }
 }
 
+function turnLimit(id: string): ChatMessageView {
+  return { id, role: 'system', kind: 'turn-limit', text: '本轮 Agent 已达最大循环次数（20），先停在这里。', createdAt: '2026-09-19T00:00:00.000Z' }
+}
+
 function changeSummary(id: string): ChatMessageView {
   return {
     id,
@@ -136,7 +140,7 @@ describe('buildRenderItems 任务组折叠', () => {
     expect(group.id).toBe('u1')
     expect(group.collapsed).toBe(true)
     expect(group.toolCallCount).toBe(1)
-    expect(group.messageCount).toBe(3) // context-summary + 工具行 + 中间 assistant
+    expect(group.messageCount).toBe(2) // context-summary + 中间 assistant（工具行由 toolCallCount 单独计，不叠加）
     // 白名单：最终回答与 change-summary 不进组
     expect(group.items.some((item) => item.kind === 'message' && item.message.id === 'a2')).toBe(false)
     expect(group.items.some((item) => item.kind === 'message' && item.message.id === 'sum1')).toBe(false)
@@ -194,6 +198,24 @@ describe('buildRenderItems 任务组折叠', () => {
     })
     const firstGroup = overridden.find((item) => item.kind === 'process-group')
     expect(firstGroup?.kind === 'process-group' && firstGroup.collapsed).toBe(false)
+  })
+
+  it('turn-limit 安全阀提示永不折叠：在组外原位常显', () => {
+    const items = buildRenderItems([
+      userMessage('u1', '写第一章'),
+      contextSummary('s1'),
+      toolCall('c1', 'call-1'),
+      toolResult('r1', 'call-1'),
+      assistantMessage('a1', '写到一半被安全阀截停'),
+      turnLimit('t1'),
+    ], { running: false })
+
+    // t1 不进组，保持独立 message 项且排在过程组之后
+    const limitItem = items.find((item) => item.kind === 'message' && item.message.id === 't1')
+    expect(limitItem).toBeDefined()
+    const group = items.find((item) => item.kind === 'process-group')
+    if (group?.kind !== 'process-group') throw new Error('unreachable')
+    expect(group.items.some((item) => item.kind === 'message' && item.message.id === 't1')).toBe(false)
   })
 
   it('首条 user 之前的残留消息原样置顶，不进组', () => {

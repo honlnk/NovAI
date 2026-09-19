@@ -43,6 +43,28 @@ describe('inbox 纯函数集', () => {
     expect(message.at).toBeTruthy()
   })
 
+  it('activeFilePath 随消息快照：undefined 不落字段，显式 null/路径原样保留', () => {
+    const empty = createEmptyInbox()
+    const first = enqueueToInbox(empty, 'next-turn', { text: '第一条', activeFilePath: 'chapters/001.txt' })
+    const second = enqueueToInbox(first.state, 'next-turn', { text: '第二条', activeFilePath: null })
+    const third = enqueueToInbox(second.state, 'next-turn', { text: '第三条' })
+
+    expect(first.message.activeFilePath).toBe('chapters/001.txt')
+    expect(second.message.activeFilePath).toBeNull()
+    expect(third.message).not.toHaveProperty('activeFilePath')
+
+    // 快照随消息消费：claim 取到的是各自入队时的文件，不被后来的入队覆盖
+    const claim1 = claimFromInbox(third.state, 'next-turn')
+    expect(claim1.messages[0]).toMatchObject({ text: '第一条', activeFilePath: 'chapters/001.txt' })
+    const claim2 = claimFromInbox(claim1.state, 'next-turn')
+    expect(claim2.messages[0]).toMatchObject({ text: '第二条', activeFilePath: null })
+
+    // 「立即插话」升级保留快照
+    const moved = moveToNextStep(claim2.state, claim2.state.nextTurn[0].id)
+    expect(moved.nextStep[0]).toMatchObject({ text: '第三条' })
+    expect(moved.nextStep[0]).not.toHaveProperty('activeFilePath')
+  })
+
   it('claim next-step 整队抽干；claim next-turn 恰取 1 条（FIFO）', () => {
     const empty = createEmptyInbox()
     const steer = enqueueN(empty, 'next-step', ['插话一', '插话二', '插话三'])

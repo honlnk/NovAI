@@ -191,4 +191,55 @@ describe('driver 全链路（真实 query + 假 SSE）', () => {
     expect(assistantTexts).toEqual(['第一章已写', '第二章已写'])
     expect(result.session.inbox).toEqual({ nextTurn: [], nextStep: [] })
   })
+
+  it('每条 followup 用自己的入队快照解析当前文件，不被唤醒时兜底快照覆盖', async () => {
+    fetchHandler = (_call, index) => textSse(index === 0 ? '按第一章处理' : '按第二章处理')
+
+    let session = createChatSession('proj-test')
+    for (const [text, file] of [
+      ['照这个写第一章', 'chapters/001.txt'],
+      ['照这个写第二章', 'chapters/002.txt'],
+    ] as const) {
+      const enqueued = enqueueToInbox(session.inbox, 'next-turn', { text, activeFilePath: file })
+      session = { ...session, inbox: enqueued.state }
+    }
+
+    const result = await runChatDriver({
+      session,
+      // 唤醒兜底快照指向第三个文件：两条 followup 各带快照，轮不到它
+      input: { ...driverInput, instruction: '', activeFilePath: 'chapters/999.txt' },
+    })
+
+    expect(fetchCalls).toHaveLength(2)
+    expect(JSON.stringify(fetchCalls[0].messages)).toContain('chapters/001.txt')
+    expect(JSON.stringify(fetchCalls[0].messages)).not.toContain('chapters/999.txt')
+    // 第二轮请求延续第一轮上下文（含 001），但「默认目标」是自己的 002，兜底 999 始终不出现
+    expect(JSON.stringify(fetchCalls[1].messages)).toContain('chapters/002.txt')
+    expect(JSON.stringify(fetchCalls[1].messages)).not.toContain('chapters/999.txt')
+    expect(result.session.inbox).toEqual({ nextTurn: [], nextStep: [] })
+  })
+
+  it('轮次安全阀：达 agentMaxTurns 上限时提示为 turn-limit kind，不再伪装 context-summary', async () => {
+    fetchHandler = () => toolCallSse('call_limit', 'ReadFile', { path: 'chapters/001.txt' })
+
+    const result = await runChatDriver({
+      session: createSessionWithQueue(['通读全部章节']),
+      input: {
+        ...driverInput,
+        instruction: '',
+        config: { ...stubConfig, settings: { ...stubConfig.settings, agentMaxTurns: 1 } },
+      },
+    })
+
+    // 1 个 step 即达上限：1 次模型调用后优雅收尾
+    expect(fetchCalls).toHaveLength(1)
+    const limitMessages = result.session.messages.filter((m) => m.kind === 'turn-limit')
+    expect(limitMessages).toHaveLength(1)
+    expect(limitMessages[0]).toMatchObject({ summary: expect.stringContaining('最大循环次数') })
+    // 同文案不再出现在 context-summary 里（那会被 UI 折进任务组藏起来）
+    expect(
+      result.session.messages.some((m) => m.kind === 'context-summary' && m.summary.includes('最大循环次数')),
+    ).toBe(false)
+    expect(result.session.status).toBe('waiting-user')
+  })
 })

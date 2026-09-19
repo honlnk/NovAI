@@ -145,7 +145,8 @@ export function buildRenderItems(
       id: turn.id,
       items: processItems,
       toolCallCount: processItems.filter((item) => item.kind === 'tool-row').length,
-      messageCount: processItems.length,
+      // 过程消息数不含工具行——工具调用已由 toolCallCount 单独计数，口径不叠加
+      messageCount: processItems.filter((item) => item.kind !== 'tool-row').length,
       collapsed: !expanded,
     }
 

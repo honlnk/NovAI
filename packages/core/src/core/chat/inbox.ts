@@ -21,17 +21,18 @@ export function inboxOrEmpty(state: InboxState | undefined): InboxState {
   return state ?? createEmptyInbox()
 }
 
-/** 入队：返回新 state 与带 id/at 的消息本体。 */
+/** 入队：返回新 state 与带 id/at 的消息本体。activeFilePath 随消息快照（undefined 不落字段）。 */
 export function enqueueToInbox(
   state: InboxState | undefined,
   target: InboxTarget,
-  input: { text: string; quote?: string },
+  input: { text: string; quote?: string; activeFilePath?: string | null },
 ): { state: InboxState; message: QueuedMessage } {
   const current = inboxOrEmpty(state)
   const message: QueuedMessage = {
     id: createQueuedMessageId(),
     text: input.text,
     ...(input.quote ? { quote: input.quote } : {}),
+    ...(input.activeFilePath !== undefined ? { activeFilePath: input.activeFilePath } : {}),
     at: new Date().toISOString(),
   }
 

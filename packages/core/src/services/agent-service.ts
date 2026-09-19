@@ -276,7 +276,11 @@ function broadcastQueueUpdated(session: ChatSessionState): void {
   broadcastAgentEvent({ type: 'queue-updated', sessionId: session.sessionId, queue: toQueueView(session) })
 }
 
-/** 每个项目最近一次发送时的激活文件（目标解析用）；enqueueMessage 时快照更新。 */
+/**
+ * 每个项目最近一次入队时的激活文件（唤醒快照的兜底来源）：主路径是消息级快照
+ * （QueuedMessage.activeFilePath，排队多条各用各的）；仅旧队列消息无字段、或
+ * steer-only 轮没有 followup 可携带时，driver 起跑才回退读这里。
+ */
 const lastActiveFilePathByProject = new Map<string, string | null>()
 
 /**
@@ -316,6 +320,8 @@ export async function enqueueMessage(input: {
   enqueueChatMessage(session, input.mode === 'steer' ? 'next-step' : 'next-turn', {
     text: input.text,
     quote: input.quote,
+    // 消息级快照：排队执行时按「发送那一刻」的文件解析目标，不被后来的入队覆盖
+    ...(input.activeFilePath !== undefined ? { activeFilePath: input.activeFilePath } : {}),
   })
   // 耐久入队先于唤醒（刷新后队列还在，不自动消费）
   await saveSession(project, session)
@@ -716,6 +722,16 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       id: message.id,
       role: 'system',
       kind: 'context-summary',
+      text: message.summary,
+      createdAt: message.createdAt,
+    }
+  }
+
+  if (message.kind === 'turn-limit') {
+    return {
+      id: message.id,
+      role: 'system',
+      kind: 'turn-limit',
       text: message.summary,
       createdAt: message.createdAt,
     }

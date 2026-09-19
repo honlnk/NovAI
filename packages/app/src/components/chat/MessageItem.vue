@@ -67,6 +67,21 @@ function formatTime(dateStr: string) {
     :newest="newestChangeSummary"
   />
 
+  <!-- 轮次安全阀提示（turn-limit：达到 agentMaxTurns 上限，永不折叠进过程组） -->
+  <div
+    v-else-if="message.role === 'system' && message.kind === 'turn-limit'"
+    class="flex justify-center"
+  >
+    <div class="max-w-[90%] rounded-lg bg-amber-50 px-4 py-2.5 text-amber-800">
+      <div class="flex items-center gap-2">
+        <svg class="h-4 w-4 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <span class="text-sm">{{ message.text }}</span>
+      </div>
+    </div>
+  </div>
+
   <!-- 错误消息（永不折叠） -->
   <div
     v-else-if="message.role === 'system' && message.kind === 'error'"

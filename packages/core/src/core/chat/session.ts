@@ -101,7 +101,7 @@ export function isChatDriverActive(sessionId: string): boolean {
 export function enqueueChatMessage(
   session: ChatSessionState,
   target: InboxTarget,
-  input: { text: string; quote?: string },
+  input: { text: string; quote?: string; activeFilePath?: string | null },
 ): QueuedMessage {
   const enqueued = enqueueToInbox(session.inbox, target, input)
   session.inbox = enqueued.state
@@ -217,7 +217,10 @@ async function runDriverTurn(options: {
   const { input, batch, signal, onEvent } = options
   const session = options.session
 
-  const target = deriveChatTargetFromPath(input.activeFilePath)
+  // 「当前文件」以本轮 followup 自己的入队快照为准（排队多条时各用各的）；
+  // steer-only 轮或旧队列消息无快照时，回退到唤醒 driver 时的快照。
+  const activeFilePath = batch.followup?.activeFilePath ?? input.activeFilePath
+  const target = deriveChatTargetFromPath(activeFilePath)
   session.currentTarget = target
   const runId = createLogId('run')
 
@@ -231,7 +234,7 @@ async function runDriverTurn(options: {
       instruction: batch.followup?.text,
       quote: batch.followup?.quote,
       steeringCount: batch.steering.length,
-      activeFilePath: input.activeFilePath,
+      activeFilePath,
       target,
     },
   })
@@ -366,7 +369,7 @@ async function runDriverTurn(options: {
             {
               id: createId('message'),
               role: 'system',
-              kind: 'context-summary',
+              kind: 'turn-limit',
               summary: `本轮 Agent 已达最大循环次数（${event.maxTurns}），先停在这里。上下文已保留，继续发送消息即可让它接着完成。`,
               createdAt: new Date().toISOString(),
             },

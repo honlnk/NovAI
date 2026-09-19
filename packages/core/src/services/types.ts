@@ -408,7 +408,7 @@ export type ChatMessageView =
   | {
       id: string
       role: 'system'
-      kind: 'context-summary' | 'error'
+      kind: 'context-summary' | 'turn-limit' | 'error'
       text: string
       createdAt: string
     }
