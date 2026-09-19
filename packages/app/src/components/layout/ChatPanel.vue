@@ -8,6 +8,7 @@ import { useElementExtraction, type ChapterPick } from '../../composables/useEle
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
+import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
@@ -20,6 +21,7 @@ import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import type { SlashCommandId } from '../../constants/slash-commands'
 import type { ChatRenderItem } from '../../stores/chat-render'
+import type { PermissionPreset } from '@novai/core/types/project'
 
 /** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
 type SelectionQuote = {
@@ -60,6 +62,16 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
+
+/** 当前写工具权限档位（输入区入口显示 + 选择器勾选） */
+const currentPermissionPreset = computed(
+  () => projectStore.currentProject?.config.settings.permissionPreset ?? 'chapter-material',
+)
+
+/** 切换权限档位：与设置页同一条 updateConfig 写回链路，下一轮起按新档判定 */
+function handlePermissionPresetSelect(preset: PermissionPreset) {
+  void projectStore.changePermissionPreset(props.projectId, preset)
+}
 
 // 最新一条 change-summary 的 id（该面板默认展开文件列表，历史轮折叠成标题行）
 const lastChangeSummaryId = computed(() => {
@@ -624,8 +636,13 @@ async function handleExtractionConfirm() {
                 @input="onTextareaInput"
               />
             </div>
-            <!-- 工具行：发送按钮（模式感知文案）+ 停止按钮（独立位置，仅运行中显示） -->
-            <div class="mt-1 flex items-center justify-end gap-2">
+            <!-- 工具行：左侧权限档位入口 + 右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示） -->
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <PermissionPresetPicker
+                :preset="currentPermissionPreset"
+                @select="handlePermissionPresetSelect"
+              />
+              <div class="flex items-center gap-2">
               <button
                 v-if="isStopping"
                 class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
@@ -655,6 +672,7 @@ async function handleExtractionConfirm() {
               >
                 {{ chatStore.isRunning ? '排队发送' : '发送' }}
               </button>
+              </div>
             </div>
           </div>
         </div>

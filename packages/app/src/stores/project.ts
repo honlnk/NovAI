@@ -27,6 +27,7 @@ import type {
   ProjectFileNodeView,
   ProjectView,
 } from '@novai/core/services/types'
+import type { PermissionPreset } from '@novai/core/types/project'
 import type { RecentProject } from '@novai/core/types/project'
 
 /**
@@ -314,6 +315,26 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 切换写工具权限档位（对话输入区与设置页共用写回链路）：
+   * 写盘 + 同步 currentProject 快照，下一轮起按新档判定。
+   */
+  async function changePermissionPreset(projectId: string, preset: PermissionPreset) {
+    errorMessage.value = ''
+
+    try {
+      const savedConfig = await updateConfig(projectId, {
+        settings: { permissionPreset: preset },
+      })
+      updateCurrentProjectConfig(savedConfig)
+      statusMessage.value = '已切换写工具权限档位，下一轮起生效'
+      return savedConfig
+    } catch (error) {
+      errorMessage.value = toMessage(error, '切换权限档位失败')
+      return null
+    }
+  }
+
   async function runProjectAction<T>(action: () => Promise<T>) {
     errorMessage.value = ''
     isBusy.value = true
@@ -339,6 +360,7 @@ export const useProjectStore = defineStore('project', () => {
     recentProjects,
     statusMessage,
     changeActiveScenePromptPath,
+    changePermissionPreset,
     closeCurrentProject,
     createNewProject,
     forgetLastOpenedProject,
