@@ -127,6 +127,48 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.runStatus).toBe('本会话共修改 1 个文件')
   })
 
+  it('停止后立刻再发送：新 run 的 run-start 先于旧 run 的 run-finish 到达时 isRunning 保持 true', async () => {
+    const store = useChatStore()
+    const view = createSessionView('session-current')
+    mockedCreateSession.mockResolvedValue(view)
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    // 旧 driver 运行中
+    emit({ type: 'run-start', runId: 'run-old', sessionId: 'session-current' })
+    expect(store.isRunning).toBe(true)
+
+    // 停止后立刻再发送：pendingWake 再唤醒的新 driver 已在注册表里，
+    // 其 run-start 先于旧 driver 的 run-finish 到达（事件乱序）
+    emit({ type: 'run-start', runId: 'run-new', sessionId: 'session-current' })
+
+    // 旧 driver 的 run-finish 此时才抵达：注册表里新 driver 活着 → isRunning 不得被打掉
+    mockedIsAgentRunActive.mockReturnValue(true)
+    emit({
+      type: 'run-finish',
+      sessionId: 'session-current',
+      result: createRunResult(view),
+    })
+    expect(store.isRunning).toBe(true)
+
+    // run-error 同病同治：旧 driver 的 run-error 晚到也不打掉新 run
+    emit({
+      type: 'run-error',
+      sessionId: 'session-current',
+      error: { code: 'UNKNOWN_ERROR', message: '旧 run 的错误', recoverable: true },
+    })
+    expect(store.isRunning).toBe(true)
+
+    // 新 driver 真正收尾（注册表已清）→ 才置 false
+    mockedIsAgentRunActive.mockReturnValue(false)
+    emit({
+      type: 'run-finish',
+      sessionId: 'session-current',
+      result: createRunResult(view),
+    })
+    expect(store.isRunning).toBe(false)
+  })
+
   it('queue-updated 同步队列快照；仅当前激活会话的事件生效', async () => {
     const store = useChatStore()
     const view = createSessionView('session-current')

@@ -103,6 +103,11 @@ export function evictProjectSessions(projectId: string) {
       sessionMap.delete(id)
     }
   }
+  for (const [id, tombstoneProjectId] of deletedSessionIds) {
+    if (tombstoneProjectId === projectId) {
+      deletedSessionIds.delete(id)
+    }
+  }
   activeSessionByProject.delete(projectId)
   lastActiveFilePathByProject.delete(projectId)
 }
@@ -112,6 +117,7 @@ export function _clearSessionCacheForTest() {
   sessionMap.clear()
   activeSessionByProject.clear()
   lastActiveFilePathByProject.clear()
+  deletedSessionIds.clear()
 }
 
 /** 测试专用：读取当前缓存内的 sessionId 列表（按 LRU 顺序，最近使用在末尾）。 */
@@ -197,10 +203,15 @@ export async function renameSession(
   return toChatSessionView(session)
 }
 
-/** 删除会话：删文件 + 移出内存；若删的是激活会话则激活置空（由前端决定后续切到哪条）。 */
+/** 已删除会话的墓碑（id → projectId）：driver 收尾回调据此静默丢弃，避免 saveSession 复活刚删的文件。不用 sessionMap 存在性判断——LRU 淘汰同样会把运行中会话移出缓存，会误伤正常收尾。 */
+const deletedSessionIds = new Map<string, string>()
+
+/** 删除会话：先停 driver（运行中的会话被删后，收尾落盘会把刚删的文件复活），再删文件 + 移出内存；若删的是激活会话则激活置空（由前端决定后续切到哪条）。 */
 export async function deleteSession(projectId: string, sessionId: string): Promise<void> {
   const project = requireRuntimeProject(projectId)
 
+  stopChatDriver(sessionId)
+  deletedSessionIds.set(sessionId, projectId)
   await deleteSessionFile(project, sessionId)
   sessionMap.delete(sessionId)
 
@@ -429,6 +440,12 @@ async function wakeSessionDriver(options: {
         return
       }
       void (async () => {
+        // 会话已删（deleteSession 停止 driver 后的优雅收尾）：静默丢弃——
+        // 此时 saveSession 会把刚删的会话文件复活，广播也会指向不存在的会话。
+        if (deletedSessionIds.has(session.sessionId)) {
+          rejectPendingConfirmations(projectId)
+          return
+        }
         if (event.type === 'driver-error') {
           // 出错时清理未决确认，避免注册表泄漏 / UI 卡在等待态。
           rejectPendingConfirmations(projectId)

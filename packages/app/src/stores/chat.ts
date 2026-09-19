@@ -372,7 +372,9 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'run-error') {
-      isRunning.value = false
+      // 以 driver 注册表真实状态为准：停止后立刻再发送时，pendingWake 再唤醒的新 run 的
+      // run-start 可能先于旧 driver 的 run-error 到达，无条件置 false 会把新 run 的运行态打掉
+      isRunning.value = isAgentRunActive(event.sessionId)
       isStopping.value = false
       streamingMessageId.value = null
       setRunStatus(event.error.message, 'error')
@@ -380,7 +382,8 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'run-finish') {
-      isRunning.value = false
+      // 同上：旧 driver 收尾事件晚到时，新 driver 可能已在注册表中（isRunning 保持 true）
+      isRunning.value = isAgentRunActive(event.sessionId)
       isStopping.value = false
       streamingMessageId.value = null
       sessionView.value = event.result.session
