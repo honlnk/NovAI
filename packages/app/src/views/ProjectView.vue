@@ -11,7 +11,6 @@ import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
-import OrganizeChaptersModal from '../components/organize/OrganizeChaptersModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
@@ -32,7 +31,6 @@ const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
-const isOrganizeOpen = ref(false)
 const isRagOpen = ref(false)
 /** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
@@ -78,11 +76,11 @@ const activeSceneName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
-/** 章节列表（chapters/*.txt|.md），供 ChatPanel 的 /提取要素 指令多选（R6） */
+/** 章节列表（chapters/*.txt），供 ChatPanel 的 /提取要素 指令多选（R6）。.md 不算有效章节，不入列。 */
 const chapterList = computed(() => {
   const files = projectStore.currentProject?.files ?? []
   return pickDirectoryChildren(files, 'chapters').filter(
-    (n) => n.kind === 'file' && /\.(txt|md)$/i.test(n.name),
+    (n) => n.kind === 'file' && /\.txt$/i.test(n.name),
   )
 })
 
@@ -146,10 +144,6 @@ function handleBackToHome() {
  */
 function handleOpenSettings() {
   isSettingsOpen.value = true
-}
-
-function handleOpenOrganize() {
-  isOrganizeOpen.value = true
 }
 
 /**
@@ -248,7 +242,7 @@ async function handleElementsWritten() {
         @open-settings="handleOpenSettings"
         @back-to-home="handleBackToHome"
         @proofread="handleNotImplemented('校对')"
-        @organize="handleOpenOrganize"
+        @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
         @rag="isRagOpen = true"
       />
@@ -326,13 +320,6 @@ async function handleElementsWritten() {
       v-if="isSettingsOpen"
       :project-id="projectId"
       @close="isSettingsOpen = false"
-    />
-
-    <!-- 章节整理模态框（扫描不规范章节，确认后批量改名） -->
-    <OrganizeChaptersModal
-      v-if="isOrganizeOpen"
-      :project-id="projectId"
-      @close="isOrganizeOpen = false"
     />
 
     <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->

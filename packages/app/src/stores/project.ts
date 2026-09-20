@@ -460,7 +460,8 @@ function toRecentProject(project: ProjectView): RecentProject {
 function countChapterFiles(nodes: ProjectFileNodeView[]): number {
   return nodes.reduce((total, node) => {
     if (node.kind === 'file') {
-      return node.path.startsWith('chapters/') && /\.(txt|md)$/i.test(node.name)
+      // 章节口径：chapters/ 下的 .txt 才算（.md 是待处理的外来文件，不计数）
+      return node.path.startsWith('chapters/') && /\.txt$/i.test(node.name)
         ? total + 1
         : total
     }

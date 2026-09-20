@@ -36,7 +36,9 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
  */
 const actionItems: { key: 'proofread' | 'organize' | 'version' | 'rag'; label: string; icon: string; enabled: boolean }[] = [
   { key: 'proofread', label: '校对', icon: 'check', enabled: false },
-  { key: 'organize', label: '章节整理', icon: 'list', enabled: true },
+  // 章节整理的机械改名工具已下线（2026-09-21）：它是未来 AI 整理模块的前置基建，
+  // 待该模块立计划开发时再启用；命名规范的工具层强制不受影响。
+  { key: 'organize', label: '章节整理', icon: 'list', enabled: false },
   { key: 'version', label: '版本管理', icon: 'branch', enabled: false },
   { key: 'rag', label: '向量索引', icon: 'database', enabled: true },
 ]

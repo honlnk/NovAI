@@ -2,11 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   CHAPTER_NAME_PATTERN,
   assertChapterNameFormat,
-  formatChapterName,
-  isChapterNameCompliant,
   isChapterPath,
   parseChapterNumber,
-  suggestChapterTitle,
 } from './chapter-name'
 
 describe('chapter-name', () => {
@@ -23,36 +20,36 @@ describe('chapter-name', () => {
     })
   })
 
-  describe('CHAPTER_NAME_PATTERN / isChapterNameCompliant', () => {
+  describe('CHAPTER_NAME_PATTERN', () => {
     it('accepts compliant names', () => {
-      expect(isChapterNameCompliant('第001章-火中拾婴.txt')).toBe(true)
-      expect(isChapterNameCompliant('第999章-终局.txt')).toBe(true)
-      expect(isChapterNameCompliant('第1000章-超长篇续.txt')).toBe(true) // 超 999 自然 4 位
+      expect(CHAPTER_NAME_PATTERN.test('第001章-火中拾婴.txt')).toBe(true)
+      expect(CHAPTER_NAME_PATTERN.test('第999章-终局.txt')).toBe(true)
+      expect(CHAPTER_NAME_PATTERN.test('第1000章-超长篇续.txt')).toBe(true) // 超 999 自然 4 位
     })
 
     it('rejects names missing the title', () => {
-      expect(isChapterNameCompliant('第001章.txt')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('第001章.txt')).toBe(false)
     })
 
     it('rejects names with insufficient zero-padding', () => {
-      expect(isChapterNameCompliant('第1章-火中拾婴.txt')).toBe(false)
-      expect(isChapterNameCompliant('第01章-火中拾婴.txt')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('第1章-火中拾婴.txt')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('第01章-火中拾婴.txt')).toBe(false)
     })
 
     it('rejects wrong extension', () => {
-      expect(isChapterNameCompliant('第001章-火中拾婴.md')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('第001章-火中拾婴.md')).toBe(false)
     })
 
     it('rejects empty title', () => {
-      expect(isChapterNameCompliant('第001章-.txt')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('第001章-.txt')).toBe(false)
     })
 
     it('rejects non-chapter filenames', () => {
-      expect(isChapterNameCompliant('chapter-001-火中拾婴.txt')).toBe(false)
-      expect(isChapterNameCompliant('legacy.md')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('chapter-001-火中拾婴.txt')).toBe(false)
+      expect(CHAPTER_NAME_PATTERN.test('legacy.md')).toBe(false)
     })
 
-    it('CHAPTER_NAME_PATTERN captures number and title', () => {
+    it('captures number and title', () => {
       const match = CHAPTER_NAME_PATTERN.exec('第001章-火中拾婴.txt')
       expect(match?.[1]).toBe('001')
       expect(match?.[2]).toBe('火中拾婴')
@@ -77,26 +74,6 @@ describe('chapter-name', () => {
     })
   })
 
-  describe('formatChapterName', () => {
-    it('pads number to at least 3 digits', () => {
-      expect(formatChapterName(1, '火中拾婴')).toBe('第001章-火中拾婴.txt')
-      expect(formatChapterName(42, '留他一命')).toBe('第042章-留他一命.txt')
-    })
-
-    it('does not truncate numbers over 999', () => {
-      expect(formatChapterName(1000, '终局')).toBe('第1000章-终局.txt')
-    })
-
-    it('trims the title', () => {
-      expect(formatChapterName(1, '  火中拾婴  ')).toBe('第001章-火中拾婴.txt')
-    })
-
-    it('throws on empty title', () => {
-      expect(() => formatChapterName(1, '')).toThrow('章节标题不能为空')
-      expect(() => formatChapterName(1, '   ')).toThrow('章节标题不能为空')
-    })
-  })
-
   describe('assertChapterNameFormat', () => {
     it('passes for compliant chapter paths', () => {
       expect(() => assertChapterNameFormat('chapters/第001章-火中拾婴.txt')).not.toThrow()
@@ -110,40 +87,6 @@ describe('chapter-name', () => {
 
     it('error message includes the required format sample', () => {
       expect(() => assertChapterNameFormat('chapters/bad.txt')).toThrow('第NNN章-标题.txt')
-    })
-  })
-
-  describe('suggestChapterTitle', () => {
-    it('uses the first non-empty line as the title source', () => {
-      expect(suggestChapterTitle('第一行标题\n正文内容')).toBe('第一行标题')
-      expect(suggestChapterTitle('\n\n  第一行标题  \n正文')).toBe('第一行标题')
-    })
-
-    it('strips leading Markdown heading markers', () => {
-      expect(suggestChapterTitle('# 火中拾婴\n正文')).toBe('火中拾婴')
-      expect(suggestChapterTitle('## 第一章 火中拾婴\n正文')).toBe('火中拾婴')
-    })
-
-    it('strips leading chapter-number prefix from the line', () => {
-      expect(suggestChapterTitle('第001章 火中拾婴\n正文')).toBe('火中拾婴')
-      expect(suggestChapterTitle('第1章-火中拾婴\n正文')).toBe('火中拾婴')
-    })
-
-    it('truncates long titles with an ellipsis', () => {
-      const long = '这是一个非常非常非常长的章节标题文本内容'
-      const result = suggestChapterTitle(long)
-      expect(result.length).toBeLessThanOrEqual(13) // 12 字 + 省略号
-      expect(result.endsWith('…')).toBe(true)
-    })
-
-    it('respects custom maxLen', () => {
-      // slice(0, maxLen) 截取 4 字，再加省略号
-      expect(suggestChapterTitle('火中拾婴记', 4)).toBe('火中拾婴…')
-    })
-
-    it('falls back to a placeholder for empty content', () => {
-      expect(suggestChapterTitle('')).toBe('未命名章节')
-      expect(suggestChapterTitle('\n\n  \n')).toBe('未命名章节')
     })
   })
 })

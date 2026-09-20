@@ -67,7 +67,7 @@ function createProjectView(files: ProjectView['files']): ProjectView {
   }
 }
 
-/** 两章 + 一要素 + 一提示词的目录树（prompts 不计入要素数）。 */
+/** 两章 + 一要素 + 一提示词的目录树（prompts 不计入要素数；旧 .md 章节不计入章节数）。 */
 function createTreeWithTwoChapters(): ProjectView['files'] {
   return [
     {
@@ -77,6 +77,7 @@ function createTreeWithTwoChapters(): ProjectView['files'] {
       children: [
         { name: '第001章-火中拾婴.txt', path: 'chapters/第001章-火中拾婴.txt', kind: 'file' },
         { name: '第002章-留他一命.txt', path: 'chapters/第002章-留他一命.txt', kind: 'file' },
+        { name: '旧笔记.md', path: 'chapters/旧笔记.md', kind: 'file' },
       ],
     },
     {
