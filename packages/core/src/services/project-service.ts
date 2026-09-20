@@ -34,6 +34,9 @@ import { evictProjectSessions } from './agent-service'
 import { toProjectView } from './mappers'
 import type { LastProjectSummaryView, ProjectStatusView, ProjectView } from './types'
 
+// 透出给 app 层：文件树刷新时回写最近项目计数（与 refreshRecentProjectCounts 共用同一条底层写入）。
+export { updateRecentProjectCounts }
+
 export function isProjectAccessSupported(): boolean {
   return isFileSystemAccessSupported()
 }

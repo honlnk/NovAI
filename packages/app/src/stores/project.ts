@@ -13,6 +13,7 @@ import {
   refreshRecentProjectCounts,
   restoreRecentProject,
   restoreLastProject,
+  updateRecentProjectCounts,
 } from '@novai/core/services/project-service'
 import {
   readFile,
@@ -254,9 +255,47 @@ export const useProjectStore = defineStore('project', () => {
         ...currentProject.value,
         files: await refreshFiles(currentProject.value.id),
       }
+      await syncRecentProjectCounts()
       statusMessage.value = '文件树已刷新'
     } catch (error) {
       errorMessage.value = toMessage(error, '刷新文件树失败')
+    }
+  }
+
+  /**
+   * 文件树刷新后，把最新章节数/要素数同步到最近项目记录（内存 + IndexedDB 落盘）。
+   *
+   * 解决主页卡片计数陈旧：此前计数只在「打开项目」或「主页后台重扫（需目录授权存活）」
+   * 时回写，AI 写完章节后若授权失效（如重启浏览器），主页显示的还是打开项目那一刻的旧值。
+   * 现在文件树刷新（AI 写入、要素写入、章节整理的公共汇合点）当场回写，授权是否存活
+   * 不再影响计数正确性。回写失败静默吞掉——计数是锦上添花，不能把文件树刷新报成失败。
+   */
+  async function syncRecentProjectCounts() {
+    const project = currentProject.value
+
+    if (!project) {
+      return
+    }
+
+    const chapterCount = countChapterFiles(project.files)
+    const elementCount = countElementFiles(project.files)
+
+    recentProjects.value = recentProjects.value.map((item) =>
+      item.id === project.id ? { ...item, chapterCount, elementCount } : item,
+    )
+
+    if (lastProjectSummary.value?.projectId === project.id) {
+      lastProjectSummary.value = {
+        ...lastProjectSummary.value,
+        chapterCount,
+        elementCount,
+      }
+    }
+
+    try {
+      await updateRecentProjectCounts(project.id, chapterCount, elementCount)
+    } catch {
+      // IndexedDB 写失败不影响刷新流程；主页后台重扫仍是兜底。
     }
   }
 
