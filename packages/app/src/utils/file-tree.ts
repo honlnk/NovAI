@@ -75,36 +75,40 @@ export function collectFilesByPrefix(
   return result
 }
 
+export type ActiveFileEffect =
+  | { action: 'reload'; path: string }
+  | { action: 'clear' }
+
 /**
- * 判断一条实时到达的文件改动是否命中当前打开的文件，命中则返回应重读的目标路径。
+ * 判断一条实时到达的文件改动是否命中当前打开的文件，返回内容面板应采取的动作。
  *
- * 用于内容面板自动刷新（AI 运行中改了用户正打开的文件时自动重读磁盘新内容）：
+ * 用于内容面板自动刷新（AI 运行中改了用户正打开的文件时）：
  * - created / updated：命中 path → 重读该 path；
  * - renamed：命中 fromPath 或 toPath → 重读 toPath（旧路径已不存在）；
- * - deleted：一律不重读（重读必失败弹错误 toast；树刷新后列表项已消失，
- *   面板保留最后内容，等用户自行切走）。
+ * - deleted：命中 path → 清空面板（保留会显示「幽灵文件」：无删除标记，编辑模式
+ *   保存还会经 writeFile 自动建目录把文件静默复活；清空后由空态提示回收站去向）。
  *
  * @param activeFilePath 当前打开的文件路径（无打开文件时 null/undefined）
  * @param change 实时到达的文件改动（file-changed 事件的 change 字段）
- * @returns 需要重读的路径；无需重读时 null
+ * @returns reload（重读指定路径）/ clear（清空面板）；未命中时 null
  */
-export function resolveActiveFileReloadTarget(
+export function resolveActiveFileEffect(
   activeFilePath: string | null | undefined,
   change: ChangedFileView,
-): string | null {
+): ActiveFileEffect | null {
   if (!activeFilePath) {
     return null
   }
 
   if (change.type === 'renamed') {
     return change.fromPath === activeFilePath || change.toPath === activeFilePath
-      ? change.toPath
+      ? { action: 'reload', path: change.toPath }
       : null
   }
 
   if (change.type === 'deleted') {
-    return null
+    return change.path === activeFilePath ? { action: 'clear' } : null
   }
 
-  return change.path === activeFilePath ? change.path : null
+  return change.path === activeFilePath ? { action: 'reload', path: change.path } : null
 }

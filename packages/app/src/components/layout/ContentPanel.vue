@@ -9,6 +9,8 @@ const props = defineProps<{
   isOpen: boolean
   projectId: string
   file: FileContentView | null
+  /** 空态提示（AI 删除了正打开的文件时由 ProjectView 置入，指向回收站去向） */
+  notice?: { name: string; trashPath?: string } | null
   /** 内容面板宽度（px），由 ProjectView 持有并持久化（R7） */
   width: number
 }>()
@@ -235,8 +237,16 @@ function handleContentMouseup() {
         <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
-        <p class="mb-1 text-sm font-medium text-gray-400">暂无内容</p>
-        <p class="text-xs text-gray-400">点击文件或等待 AI 生成</p>
+        <template v-if="notice">
+          <p class="mb-1 text-sm font-medium text-gray-500">「{{ notice.name }}」已被删除</p>
+          <p class="max-w-full truncate text-xs text-gray-400" :title="notice.trashPath">
+            {{ notice.trashPath ? `原文在回收站：${notice.trashPath}` : '原文已移入项目回收站' }}
+          </p>
+        </template>
+        <template v-else>
+          <p class="mb-1 text-sm font-medium text-gray-400">暂无内容</p>
+          <p class="text-xs text-gray-400">点击文件或等待 AI 生成</p>
+        </template>
       </div>
 
       <!-- 文件内容 -->

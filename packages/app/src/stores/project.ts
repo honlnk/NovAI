@@ -243,6 +243,16 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 清空内容面板当前打开的文件（不关项目）。
+   *
+   * 供「AI 删除了正打开的文件」场景调用：磁盘上文件已不存在，快照再留着就是
+   * 幽灵文件（无删除标记，编辑保存还会复活它），由调用方负责给出空态提示。
+   */
+  function clearActiveFile() {
+    activeFile.value = null
+  }
+
   async function refreshTree() {
     if (!currentProject.value) {
       return
@@ -400,6 +410,7 @@ export const useProjectStore = defineStore('project', () => {
     statusMessage,
     changeActiveScenePromptPath,
     changePermissionPreset,
+    clearActiveFile,
     closeCurrentProject,
     createNewProject,
     forgetLastOpenedProject,
