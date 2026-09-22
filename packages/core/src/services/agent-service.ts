@@ -49,6 +49,7 @@ import type {
   QueuedMessageView,
   RunAgentTurnResult,
   ToolNameView,
+  TurnFileChangeView,
   WriteConfirmationView,
 } from './types'
 
@@ -713,6 +714,76 @@ function countSessionChangedFiles(session: ChatSessionState): number {
   return paths.size
 }
 
+/**
+ * 本轮改动按文件聚合（写回面板数据）：一轮内同一文件的多次操作折叠为一个文件行。
+ * 账本顺序扫描；renamed 把已有组迁到 toPath（改名前后的内容修改归同一文件）。
+ * 净状态按首/末次内容操作判定：末次为 deleted → deleted（新建后又删除也归此列——
+ * 丢弃整组会让面板降级成「改动记录缺失」，误导为数据异常；保留为删除行、
+ * 新建记录留在 records 里，点开可见完整经过）；删除后又重建 → updated（文件本轮前已存在）。
+ */
+function collectTurnFileChanges(records: FileChangeRecord[]): TurnFileChangeView[] {
+  type Group = {
+    path: string
+    fromPath?: string
+    renamed: boolean
+    /** 首/末次内容操作类型（renamed 不参与净状态判定） */
+    firstContentType?: 'created' | 'updated' | 'deleted'
+    lastContentType?: 'created' | 'updated' | 'deleted'
+    records: FileChangeRecord[]
+  }
+  const groups = new Map<string, Group>()
+
+  for (const record of records) {
+    const change = record.change
+    if (change.type === 'renamed') {
+      const existing = groups.get(change.fromPath)
+      if (existing) {
+        groups.delete(change.fromPath)
+        existing.path = change.toPath
+        existing.fromPath = existing.fromPath ?? change.fromPath
+        existing.renamed = true
+        existing.records.push(record)
+        groups.set(change.toPath, existing)
+      } else {
+        groups.set(change.toPath, {
+          path: change.toPath,
+          fromPath: change.fromPath,
+          renamed: true,
+          records: [record],
+        })
+      }
+      continue
+    }
+
+    const group = groups.get(change.path) ?? { path: change.path, renamed: false, records: [] }
+    group.firstContentType = group.firstContentType ?? change.type
+    group.lastContentType = change.type
+    group.records.push(record)
+    groups.set(change.path, group)
+  }
+
+  const files: TurnFileChangeView[] = []
+  for (const group of groups.values()) {
+    const status = group.lastContentType === 'deleted'
+      ? 'deleted'
+      : group.firstContentType === 'created'
+        ? 'created'
+        : group.renamed
+          ? 'renamed'
+          : 'updated'
+    const views = group.records.map(toFileChangeRecordView)
+    files.push({
+      path: group.path,
+      ...(group.fromPath ? { fromPath: group.fromPath } : {}),
+      status,
+      linesAdded: views.reduce((sum, record) => sum + (record.diff?.linesAdded ?? 0), 0),
+      linesRemoved: views.reduce((sum, record) => sum + (record.diff?.linesRemoved ?? 0), 0),
+      records: views,
+    })
+  }
+  return files
+}
+
 function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): ChatMessageView {
   if (message.kind === 'text') {
     return {
@@ -785,18 +856,18 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
   }
 
   if (message.kind === 'change-summary') {
-    // 面板数据按 runId 从账本解析（消息本体只存 runId，不重复存 diff）；
-    // 账本缺该 runId（异常旧数据）时 changes 为空数组，UI 降级为一行文本。
-    const changes = (ledger ?? [])
-      .filter((record) => record.runId === message.runId)
-      .map(toFileChangeRecordView)
+    // 面板数据按 runId 从账本解析并按文件聚合（消息本体只存 runId，不重复存 diff）；
+    // 账本缺该 runId（异常旧数据）时 files 为空数组，UI 降级为一行文本。
+    const files = collectTurnFileChanges(
+      (ledger ?? []).filter((record) => record.runId === message.runId),
+    )
     return {
       id: message.id,
       role: 'system',
       kind: 'change-summary',
       runId: message.runId,
       aborted: message.aborted,
-      changes,
+      files,
       createdAt: message.createdAt,
     }
   }

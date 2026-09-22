@@ -57,7 +57,7 @@ function changeSummary(id: string): ChatMessageView {
     role: 'system',
     kind: 'change-summary',
     runId: 'run-1',
-    changes: [],
+    files: [],
     createdAt: '2026-09-19T00:00:00.000Z',
   }
 }

@@ -353,6 +353,27 @@ export type FileChangeRecordView = {
   }
 }
 
+/**
+ * 写回面板的文件级聚合视图：一轮内同一文件的多次操作折叠为一个文件行
+ * （面板回答「此次任务改了哪些文件、每个文件总共改了什么」，而非平铺操作流水）。
+ */
+export type TurnFileChangeView = {
+  /** 聚合 key = 最终路径（renamed 取 toPath） */
+  path: string
+  /** 含 renamed 记录时携带原路径（面板展示 fromPath → toPath） */
+  fromPath?: string
+  /**
+   * 净状态：末次内容操作为 deleted → deleted；首次为 created（无论中间是否改名）→ created；
+   * 含 renamed → renamed；其余 → updated。
+   */
+  status: 'created' | 'updated' | 'renamed' | 'deleted'
+  /** 该文件本轮各片段 diff 行数之和（无 diff 的记录贡献 0） */
+  linesAdded: number
+  linesRemoved: number
+  /** 该文件本轮的全部原始改动记录（账本顺序）；面板展开渲染片段 diff 用 */
+  records: FileChangeRecordView[]
+}
+
 export type ChatMessageView =
   | {
       id: string
@@ -380,8 +401,8 @@ export type ChatMessageView =
       kind: 'change-summary'
       runId: string
       aborted?: boolean
-      /** 本轮改动记录（面板数据，从会话账本按 runId 解析；账本缺该 runId 时为空数组，UI 降级渲染） */
-      changes: FileChangeRecordView[]
+      /** 本轮改动按文件聚合（面板数据，从会话账本按 runId 解析后聚合；账本缺该 runId 时为空数组，UI 降级渲染） */
+      files: TurnFileChangeView[]
       createdAt: string
     }
   | {

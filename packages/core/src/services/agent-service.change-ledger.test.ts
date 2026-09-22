@@ -15,7 +15,7 @@ import type { AgentUiEvent, ChatMessageView, RunAgentTurnResult } from './types'
 /**
  * 改动账本（changeLedger）service 层测试：
  * - collectChangedFiles 改读账本（Bug 1：压缩后清单不再丢准）
- * - change-summary 消息 view 按 runId 从账本解析出 records（含 diff）
+ * - change-summary 消息 view 按 runId 从账本解析并按文件聚合（files：净状态 + 行数合计 + records 片段 diff）
  * - ChatSessionView.changedFileCount 会话级去重数
  * - 一轮改多个文件全量列出（Bug 2：不再只报一个）
  *
@@ -51,16 +51,21 @@ const stubConfig = {
 
 function emitToolResult(
   emit: (event: AgentQueryEvent) => void,
-  input: { id: string; name: 'EditFile' | 'CreateFile'; path: string; diff?: { oldText: string; newText: string; linesAdded: number; linesRemoved: number } },
+  input: { id: string; name: 'EditFile' | 'CreateFile' | 'RenameFile' | 'DeleteFile'; path: string; toPath?: string; diff?: { oldText: string; newText: string; linesAdded: number; linesRemoved: number } },
 ) {
   const call = { id: input.id, name: input.name, input: {} }
   emit({ type: 'tool-call', call, inputSummary: `调用 ${input.name}` })
+  const fileChange = input.name === 'RenameFile'
+    ? { type: 'renamed' as const, fromPath: input.path, toPath: input.toPath ?? input.path }
+    : input.name === 'DeleteFile'
+      ? { type: 'deleted' as const, path: input.path, trashPath: `.novel/trash/${input.path}` }
+      : { type: input.name === 'CreateFile' ? ('created' as const) : ('updated' as const), path: input.path }
   emit({
     type: 'tool-result',
     call,
     ok: true,
     resultSummary: `已处理 ${input.path}`,
-    fileChange: { type: input.name === 'CreateFile' ? 'created' : 'updated', path: input.path },
+    fileChange,
     diff: input.diff,
   })
 }
@@ -130,30 +135,39 @@ describe('改动账本 service 层', () => {
     expect(changedPaths).toContain('chapters/第001章-初遇.txt')
     expect(changedPaths).toContain('elements/characters/主角.md')
 
-    // change-summary：面板数据按 runId 从账本解析，含片段级 diff
+    // change-summary：面板数据按 runId 从账本解析并按文件聚合，片段 diff 收进 records
     const summaries = findChangeSummaries(result.session.messages)
     expect(summaries.length).toBe(1)
     const summary = summaries[0]
     if (summary.kind !== 'change-summary') throw new Error('unreachable')
     expect(summary.aborted).toBeUndefined()
-    expect(summary.changes).toHaveLength(3)
-    expect(summary.changes[0]).toMatchObject({
+    expect(summary.files).toHaveLength(3)
+    expect(summary.files[0]).toMatchObject({
+      path: 'chapters/第001章-初遇.txt',
+      status: 'created',
+      linesAdded: 1,
+      linesRemoved: 0,
+    })
+    expect(summary.files[0].records[0]).toMatchObject({
       change: { type: 'created', path: 'chapters/第001章-初遇.txt' },
       diff: { oldText: '', newText: '第一章内容', linesAdded: 1, linesRemoved: 0 },
     })
-    expect(summary.changes[2]).toMatchObject({
-      change: { type: 'updated', path: 'elements/characters/主角.md' },
+    expect(summary.files[2]).toMatchObject({
+      path: 'elements/characters/主角.md',
+      status: 'updated',
+      linesAdded: 0,
+      linesRemoved: 0,
     })
-    expect(summary.changes[2].diff).toBeUndefined()
+    expect(summary.files[2].records[0]?.diff).toBeUndefined()
 
-    // 实时事件流里的 change-summary 同样带解析好的 records
+    // 实时事件流里的 change-summary 同样带聚合好的 files
     const liveSummary = events
       .filter((event) => event.type === 'message')
       .map((event) => event.message)
       .find((message) => message.kind === 'change-summary')
     expect(liveSummary).toBeDefined()
     if (liveSummary?.kind === 'change-summary') {
-      expect(liveSummary.changes).toHaveLength(3)
+      expect(liveSummary.files).toHaveLength(3)
     }
 
     // 会话级去重数
@@ -191,24 +205,24 @@ describe('改动账本 service 层', () => {
     const summaries = findChangeSummaries(result.session.messages)
     expect(summaries.length).toBe(1)
     if (summaries[0].kind === 'change-summary') {
-      expect(summaries[0].changes).toHaveLength(2)
+      expect(summaries[0].files).toHaveLength(2)
     }
   })
 
-  it('同一文件改两次：会话级计数按路径去重为 1，操作记录两条各自保留', async () => {
+  it('同一文件改两次：聚合为一个文件行，行数为两笔之和，两笔记录按序保留在 records', async () => {
     mockedQuery.mockImplementation(async (input) => {
       const emit = input.onEvent?.bind(input) ?? (() => {})
       emitToolResult(emit, {
         id: 'c1',
         name: 'EditFile',
         path: 'chapters/第001章-初遇.txt',
-        diff: { oldText: 'a', newText: 'b', linesAdded: 0, linesRemoved: 0 },
+        diff: { oldText: 'a', newText: 'b', linesAdded: 1, linesRemoved: 1 },
       })
       emitToolResult(emit, {
         id: 'c2',
         name: 'EditFile',
         path: 'chapters/第001章-初遇.txt',
-        diff: { oldText: 'b', newText: 'c', linesAdded: 1, linesRemoved: 0 },
+        diff: { oldText: 'b', newText: 'c\nd', linesAdded: 2, linesRemoved: 1 },
       })
       input.onEvent?.({ type: 'done', messages: input.view.messages })
       return input.view.messages
@@ -219,8 +233,79 @@ describe('改动账本 service 层', () => {
     expect(result.session.changedFileCount).toBe(1)
     const summaries = findChangeSummaries(result.session.messages)
     if (summaries[0]?.kind !== 'change-summary') throw new Error('unreachable')
-    // 账本天然顺序，同文件两次操作就是两行，不做按文件聚合
-    expect(summaries[0].changes).toHaveLength(2)
+    // 文件级聚合：同文件两次操作折叠为一行，行数为各片段之和
+    expect(summaries[0].files).toHaveLength(1)
+    expect(summaries[0].files[0]).toMatchObject({
+      path: 'chapters/第001章-初遇.txt',
+      status: 'updated',
+      linesAdded: 3,
+      linesRemoved: 2,
+    })
+    expect(summaries[0].files[0]?.records).toHaveLength(2)
+    expect(summaries[0].files[0]?.records[0]?.diff?.oldText).toBe('a')
+    expect(summaries[0].files[0]?.records[1]?.diff?.oldText).toBe('b')
+  })
+
+  it('改名前后的内容修改归并到同一文件行（净状态 renamed，归到 toPath）', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      emitToolResult(emit, {
+        id: 'c1',
+        name: 'EditFile',
+        path: 'chapters/第1章-初遇.txt',
+        diff: { oldText: 'a', newText: 'b', linesAdded: 1, linesRemoved: 1 },
+      })
+      emitToolResult(emit, { id: 'c2', name: 'RenameFile', path: 'chapters/第1章-初遇.txt', toPath: 'chapters/第001章-初遇.txt' })
+      emitToolResult(emit, {
+        id: 'c3',
+        name: 'EditFile',
+        path: 'chapters/第001章-初遇.txt',
+        diff: { oldText: 'b', newText: 'c', linesAdded: 1, linesRemoved: 1 },
+      })
+      input.onEvent?.({ type: 'done', messages: input.view.messages })
+      return input.view.messages
+    })
+
+    const { result } = await runOneTurn('润色并规范章节名')
+
+    const summaries = findChangeSummaries(result.session.messages)
+    if (summaries[0]?.kind !== 'change-summary') throw new Error('unreachable')
+    expect(summaries[0].files).toHaveLength(1)
+    expect(summaries[0].files[0]).toMatchObject({
+      path: 'chapters/第001章-初遇.txt',
+      fromPath: 'chapters/第1章-初遇.txt',
+      status: 'renamed',
+      linesAdded: 2,
+      linesRemoved: 2,
+    })
+    expect(summaries[0].files[0]?.records).toHaveLength(3)
+  })
+
+  it('新建后又删除：呈现为一个删除行（不丢弃、不误报「改动记录缺失」）', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      emitToolResult(emit, {
+        id: 'c1',
+        name: 'CreateFile',
+        path: 'elements/characters/废案.md',
+        diff: { oldText: '', newText: '废案内容', linesAdded: 1, linesRemoved: 0 },
+      })
+      emitToolResult(emit, { id: 'c2', name: 'DeleteFile', path: 'elements/characters/废案.md' })
+      input.onEvent?.({ type: 'done', messages: input.view.messages })
+      return input.view.messages
+    })
+
+    const { result } = await runOneTurn('建完又反悔')
+
+    const summaries = findChangeSummaries(result.session.messages)
+    if (summaries[0]?.kind !== 'change-summary') throw new Error('unreachable')
+    expect(summaries[0].files).toHaveLength(1)
+    expect(summaries[0].files[0]).toMatchObject({
+      path: 'elements/characters/废案.md',
+      status: 'deleted',
+    })
+    // 完整经过留在 records：先建后删，点开可溯源
+    expect(summaries[0].files[0]?.records.map((record) => record.change.type)).toEqual(['created', 'deleted'])
   })
 
   it('纯问答轮：不 push change-summary，changedFileCount 为 0', async () => {
@@ -237,7 +322,7 @@ describe('改动账本 service 层', () => {
     expect(result.session.changedFileCount).toBe(0)
   })
 
-  it('停止轮：一律 push change-summary（aborted 标记）；无改动时 changes 为空供 UI 降级', async () => {
+  it('停止轮：一律 push change-summary（aborted 标记）；无改动时 files 为空供 UI 降级', async () => {
     mockedQuery.mockImplementation(async (input) => {
       input.onEvent?.({ type: 'aborted', reason: 'user' })
       input.onEvent?.({ type: 'done', messages: input.view.messages, aborted: true })
@@ -252,7 +337,7 @@ describe('改动账本 service 层', () => {
       throw new Error('unreachable')
     }
     expect(summaries[0].aborted).toBe(true)
-    expect(summaries[0].changes).toEqual([])
+    expect(summaries[0].files).toEqual([])
   })
 
   it('file-changed 运行中实时广播：先于 run-finish，且逐条紧跟对应 tool-result 落地', async () => {

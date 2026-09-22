@@ -100,14 +100,14 @@ describe('会话历史分页窗口', () => {
     expect(view!.historyStart).toBeUndefined()
   })
 
-  it('窗口内 change-summary 从完整账本解析 changes（含 diff）', async () => {
+  it('窗口内 change-summary 从完整账本解析并聚合（含片段 diff）', async () => {
     const view = await getSession('proj-history', 's-history', { tailMessages: 100 })
     const summary = view!.messages.find((message) => message.kind === 'change-summary')
     expect(summary).toBeDefined()
     if (summary?.kind !== 'change-summary') throw new Error('unreachable')
-    expect(summary.changes).toHaveLength(1)
-    expect(summary.changes[0].change).toMatchObject({ type: 'created', path: 'chapters/第001章-初遇.txt' })
-    expect(summary.changes[0].diff?.newText).toBe('第一章正文')
+    expect(summary.files).toHaveLength(1)
+    expect(summary.files[0]).toMatchObject({ path: 'chapters/第001章-初遇.txt', status: 'created' })
+    expect(summary.files[0].records[0].diff?.newText).toBe('第一章正文')
   })
 
   it('loadOlderMessages：以 before 为游标向前取一页', async () => {
