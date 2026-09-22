@@ -39,6 +39,7 @@ import type {
   AgentUiEvent,
   ChangedFileView,
   FileChangeRecordView,
+  ChatHistoryPageView,
   ChatMessageView,
   ChatSessionSummaryView,
   ChatSessionView,
@@ -145,10 +146,14 @@ export async function createSession(projectId: string): Promise<ChatSessionView>
 /**
  * 取会话视图。sessionId 缺省时返回该项目当前激活会话。
  * 内存未命中时从文件系统加载并缓存，支持「冷启动后查看历史会话」。
+ *
+ * options.tailMessages：只返回尾部 N 条消息（长会话分页窗口，游标为 append-only
+ * 数组下标）；不传返回全量。截断时 view 带 historyStart（窗口首条的全量下标）。
  */
 export async function getSession(
   projectId: string,
   sessionId?: string,
+  options?: { tailMessages?: number },
 ): Promise<ChatSessionView | null> {
   const targetId = sessionId ?? activeSessionByProject.get(projectId)
   if (!targetId) {
@@ -165,7 +170,31 @@ export async function getSession(
     activeSessionByProject.set(projectId, sessionId)
   }
 
-  return toChatSessionView(session)
+  return toChatSessionView(session, options)
+}
+
+/**
+ * 往前翻一页历史：返回窗口 [start, before) 的消息视图。
+ * before = 当前窗口起点（全量数组下标），钳制到 [0, 总数]；会话不存在返回 null。
+ * 窗口内的 change-summary 照常从完整账本解析 changes。
+ */
+export async function loadOlderMessages(
+  projectId: string,
+  sessionId: string,
+  options: { before: number; count: number },
+): Promise<ChatHistoryPageView | null> {
+  const session = await resolveSession(projectId, sessionId)
+  if (!session) {
+    return null
+  }
+
+  const total = session.messages.length
+  const before = Math.min(Math.max(0, options.before), total)
+  const start = Math.max(0, before - Math.max(0, options.count))
+  return {
+    messages: session.messages.slice(start, before).map((message) => toChatMessageView(message, session.changeLedger)),
+    start,
+  }
 }
 
 /** 列出项目下所有历史会话摘要（按 updatedAt 降序）。 */
@@ -642,12 +671,18 @@ function emitMessageEvent(
   }
 }
 
-function toChatSessionView(session: ChatSessionState): ChatSessionView {
+function toChatSessionView(session: ChatSessionState, options?: { tailMessages?: number }): ChatSessionView {
+  // 窗口切片：tailMessages 只影响 messages 视图；账本/清单/队列始终全量派生，
+  // 窗口内 change-summary 的 changes 也照常从完整账本解析（map 时按 runId 匹配）。
+  const start = options?.tailMessages === undefined
+    ? 0
+    : Math.max(0, session.messages.length - Math.max(0, options.tailMessages))
   return {
     sessionId: session.sessionId,
     projectId: session.projectId,
     status: session.status,
-    messages: session.messages.map((message) => toChatMessageView(message, session.changeLedger)),
+    messages: session.messages.slice(start).map((message) => toChatMessageView(message, session.changeLedger)),
+    ...(start > 0 ? { historyStart: start } : {}),
     currentTargetPath: session.currentTarget?.primaryPath,
     changedFiles: collectSessionChangedFiles(session),
     changedFileCount: countSessionChangedFiles(session),

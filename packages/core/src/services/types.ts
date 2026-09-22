@@ -418,6 +418,12 @@ export type ChatSessionView = {
   projectId: string
   status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   messages: ChatMessageView[]
+  /**
+   * 历史窗口起点：messages[0] 在全量数组中的下标（游标即 append-only 数组下标）。
+   * 仅在 getSession 传 tailMessages 且发生截断时存在；缺省/0 表示已是全部历史。
+   * 前端据此推导 hasMore = historyStart > 0。
+   */
+  historyStart?: number
   currentTargetPath?: string
   /** 会话级改动清单（按目标路径去重，从改动账本派生；重载后不丢） */
   changedFiles: ChangedFileView[]
@@ -429,6 +435,15 @@ export type ChatSessionView = {
   title?: string
   createdAt?: string
   updatedAt?: string
+}
+
+/**
+ * 一页更早历史（loadOlderMessages 的返回体）：窗口 [start, before) 的消息视图与新起点。
+ * messages 为空且 start 为 0 表示没有更早历史。
+ */
+export type ChatHistoryPageView = {
+  messages: ChatMessageView[]
+  start: number
 }
 
 /**
