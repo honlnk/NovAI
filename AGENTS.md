@@ -55,12 +55,17 @@ When documentation and code appear to conflict, prefer the clarified product int
 
 These rules govern how AI agents interact with git in this repository. They are non-negotiable.
 
-### 1. Never commit without explicit user approval
+### 1. Commit only with user approval — except staged commits on long tasks
 
-- Do **not** run `git commit` after finishing code. Write the code, run verification (`pnpm test` / `pnpm typecheck`), and **stop**.
-- Report what was done and let the user review. Commit only when the user explicitly says to commit (e.g. "提交一下", "commit it").
-- If a change spans multiple logical units, propose the commit grouping and let the user confirm before committing.
-- When an approved commit touches the `docs` submodule, commit the submodule first, then advance the parent-repo pointer.
+**Default (small work):** do **not** run `git commit` after finishing code. Write the code, run verification (`pnpm test` / `pnpm typecheck`), and **stop**. Report what was done and let the user review. Commit only when the user explicitly says to commit (e.g. "提交一下", "commit it"). If the change spans multiple logical units, propose the commit grouping and let the user confirm first.
+
+**Long-task exception:** when a task is large-scale and phased (multiple steps/waves, wide blast radius), staged commits are expected rather than one giant commit at the end. The agent should:
+
+- announce the staged-commit plan up front, when starting (or when the task grows into) a long task;
+- commit at each completed phase gate only — gate = tests + typecheck green + docs synced; never commit work-in-progress mid-phase;
+- keep one commit per logical unit, and report every hash as it lands.
+
+When a commit touches the `docs` submodule, commit the submodule first, then advance the parent-repo pointer.
 
 ### 2. Never push — that is the user's job
 
