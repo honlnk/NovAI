@@ -120,14 +120,43 @@ async function scrollToBottom() {
   }
 }
 
+// ===== 跟随语义（借鉴 duet 的严格贴底判定）：仅当用户停留在底部时才自动吸底 =====
+/** 是否跟随：上翻读历史即退出跟随，此后运行期新输出不再拽人 */
+const isFollowing = ref(true)
+/** 未跟随期间是否有新内容到达底部（驱动浮钮「有新内容」文案） */
+const hasNewBelow = ref(false)
+
+/**
+ * 依真实滚动位置刷新跟随状态；回到底部时顺带清掉「有新内容」标记。
+ * 跟随判定必须完全贴底（distance <= 0），上翻任意 1px 即退出——阈值式判定
+ * （距底 N px 内算跟随）会在流式贴底与用户小幅上翻之间制造拉扯带，上翻被
+ * 下一次自动吸底覆盖，表现为抖动（duet 的实践经验）。
+ * distance < 0 的情况：内容不足一页、未出现滚动条，同样视为贴底。
+ */
+function updateFollowState(container: HTMLDivElement) {
+  const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 0
+  isFollowing.value = atBottom
+  if (atBottom) {
+    hasNewBelow.value = false
+  }
+}
+
+/** 用户主动表达「要看最新」时（发送/切会话/点浮钮）恢复跟随并吸底 */
+function followAndScrollToBottom() {
+  isFollowing.value = true
+  hasNewBelow.value = false
+  void scrollToBottom()
+}
+
 // ===== 历史翻页（借鉴 dsh：滚动到顶自动加载 + 位置锚定） =====
 /** 距顶多少 px 内触发向前翻页 */
 const OLDER_LOAD_THRESHOLD_PX = 200
-/** prepend 在途标志：阻止 messages.length watch 把翻页误判为新消息而吸底 */
+/** prepend 在途标志：阻止尾部签名 watch 把翻页误判为新消息而吸底 */
 const isPrepending = ref(false)
 
 /**
- * 滚动监听：距顶 200px 内且还有更早历史时自动向前翻一页。
+ * 滚动监听：先如实刷新跟随状态，再做翻页判定——
+ * 距顶 200px 内且还有更早历史时自动向前翻一页。
  * 锚定用 scrollHeight 差值法：prepend 后内容整体下移，按新增高度回推 scrollTop，
  * 阅读位置不跳动。loadingOlder 与 isPrepending 双重防重入；恢复后仍在阈值内时
  * scroll 事件会自然再触发（逐页连续上翻），不会失控级联——一页 100 条的高度
@@ -136,6 +165,7 @@ const isPrepending = ref(false)
 async function handleMessagesScroll() {
   const container = messagesContainer.value
   if (!container) return
+  updateFollowState(container)
   if (container.scrollTop >= OLDER_LOAD_THRESHOLD_PX) return
   if (!chatStore.hasMoreHistory || chatStore.loadingOlder || isPrepending.value) return
 
@@ -155,21 +185,35 @@ async function handleMessagesScroll() {
   }
 }
 
-watch(
-  () => chatStore.messages.length,
-  () => {
-    // prepend 旧历史不是新消息：位置由 handleMessagesScroll 锚定，不吸底
-    if (isPrepending.value) return
-    scrollToBottom()
-  },
-)
+/**
+ * 尾部签名：条数 + 末条文本长度。流式 delta 只长文本不改条数，
+ * 单靠 length 观察不到「尾部还在长」，签名把两类变化合并成一个标量。
+ */
+const tailSignature = computed(() => {
+  const messages = chatStore.messages
+  const last = messages[messages.length - 1]
+  const lastTextLength = last && last.kind === 'text' ? last.text.length : 0
+  return `${messages.length}:${lastTextLength}`
+})
+
+// 新内容到达（新消息/流式增长）：仅跟随中吸底，用户上翻读历史时不拽人
+watch(tailSignature, () => {
+  // prepend 旧历史不是新消息：位置由 handleMessagesScroll 锚定，不吸底
+  if (isPrepending.value) return
+  if (!isFollowing.value) {
+    hasNewBelow.value = true
+    return
+  }
+  scrollToBottom()
+})
 
 // 切换会话也吸底：窗口化后两个长会话的窗口等长（都恰好 100 条），
-// 只靠 messages.length watch 区分不出切换，会停留在上一个会话的阅读位置
+// 只靠尾部签名区分不出切换，会停留在上一个会话的阅读位置；
+// 同时重置跟随，避免上个会话「上翻读历史」的状态泄漏到新会话
 watch(
   () => chatStore.activeSessionId,
   () => {
-    scrollToBottom()
+    followAndScrollToBottom()
   },
 )
 
@@ -192,6 +236,8 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     textareaRef.value.style.height = 'auto'
   }
 
+  // 自己发消息恒吸底：发送即「要看最新输出」的显式意图
+  followAndScrollToBottom()
   const ok = await chatStore.sendMessage(message, quoteText, mode)
   if (ok) {
     // 发送成功后清除引用 chip
@@ -461,6 +507,7 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   if (id === 'init') {
     // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
     // 不需要二级交互界面，复用普通对话发送链路。
+    followAndScrollToBottom()
     void chatStore.sendMessage(INIT_NOVEL_PROMPT)
   }
 }
@@ -533,72 +580,86 @@ async function handleExtractionConfirm() {
       </div>
     </header>
 
-    <!-- 消息列表 -->
-    <div
-      ref="messagesContainer"
-      class="flex-1 overflow-y-auto"
-      @scroll="handleMessagesScroll"
-    >
-      <div class="mx-auto max-w-3xl px-4 py-6">
-        <!-- 首次使用引导插槽 -->
-        <slot name="guide" />
+    <!-- 消息列表区（relative 包裹：「回到底部」浮钮的定位父级；浮钮放进滚动容器会随内容滚走） -->
+    <div class="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref="messagesContainer"
+        class="flex-1 overflow-y-auto"
+        @scroll="handleMessagesScroll"
+      >
+        <div class="mx-auto max-w-3xl px-4 py-6">
+          <!-- 首次使用引导插槽 -->
+          <slot name="guide" />
 
-        <!-- 空状态 -->
-        <div
-          v-if="chatStore.messages.length === 0"
-          class="flex flex-col items-center justify-center py-16"
-        >
-          <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-          </svg>
-          <p class="mb-1 text-lg font-medium text-gray-400">开始创作</p>
-          <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
-        </div>
-
-        <!-- 消息列表：渲染序列（配对 + 分组预处理后的渲染树） -->
-        <div v-else class="space-y-4">
-          <!-- 向前翻页加载态（滚动到顶自动触发；无更多历史时不显示任何入口） -->
+          <!-- 空状态 -->
           <div
-            v-if="chatStore.loadingOlder"
-            class="flex items-center justify-center gap-2 py-1 text-xs text-gray-400"
+            v-if="chatStore.messages.length === 0"
+            class="flex flex-col items-center justify-center py-16"
           >
-            <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
-            正在加载更早消息…
+            <p class="mb-1 text-lg font-medium text-gray-400">开始创作</p>
+            <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
           </div>
-          <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
-            <!-- 任务过程折叠组：组头 + 包裹容器（子项经插槽注入） -->
-            <TurnProcessGroup
-              v-if="item.kind === 'process-group'"
-              :group="item"
-              @toggle="chatStore.toggleProcessGroup"
+
+          <!-- 消息列表：渲染序列（配对 + 分组预处理后的渲染树） -->
+          <div v-else class="space-y-4">
+            <!-- 向前翻页加载态（滚动到顶自动触发；无更多历史时不显示任何入口） -->
+            <div
+              v-if="chatStore.loadingOlder"
+              class="flex items-center justify-center gap-2 py-1 text-xs text-gray-400"
             >
-              <template v-for="child in item.items" :key="renderItemKey(child)">
-                <ToolCallRow v-if="child.kind === 'tool-row'" :item="child" />
-                <MessageItem
-                  v-else-if="child.kind === 'message'"
-                  :message="child.message"
-                  :streaming="child.message.id === chatStore.streamingMessageId"
-                  :newest-change-summary="child.message.id === lastChangeSummaryId"
-                />
-              </template>
-            </TurnProcessGroup>
+              <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              正在加载更早消息…
+            </div>
+            <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
+              <!-- 任务过程折叠组：组头 + 包裹容器（子项经插槽注入） -->
+              <TurnProcessGroup
+                v-if="item.kind === 'process-group'"
+                :group="item"
+                @toggle="chatStore.toggleProcessGroup"
+              >
+                <template v-for="child in item.items" :key="renderItemKey(child)">
+                  <ToolCallRow v-if="child.kind === 'tool-row'" :item="child" />
+                  <MessageItem
+                    v-else-if="child.kind === 'message'"
+                    :message="child.message"
+                    :streaming="child.message.id === chatStore.streamingMessageId"
+                    :newest-change-summary="child.message.id === lastChangeSummaryId"
+                  />
+                </template>
+              </TurnProcessGroup>
 
-            <!-- 工具行（调用/结果合一） -->
-            <ToolCallRow v-else-if="item.kind === 'tool-row'" :item="item" />
+              <!-- 工具行（调用/结果合一） -->
+              <ToolCallRow v-else-if="item.kind === 'tool-row'" :item="item" />
 
-            <!-- 普通消息 -->
-            <MessageItem
-              v-else-if="item.kind === 'message'"
-              :message="item.message"
-              :streaming="item.message.id === chatStore.streamingMessageId"
-              :newest-change-summary="item.message.id === lastChangeSummaryId"
-            />
-          </template>
+              <!-- 普通消息 -->
+              <MessageItem
+                v-else-if="item.kind === 'message'"
+                :message="item.message"
+                :streaming="item.message.id === chatStore.streamingMessageId"
+                :newest-change-summary="item.message.id === lastChangeSummaryId"
+              />
+            </template>
+          </div>
         </div>
       </div>
+
+      <!-- 回到底部浮钮：退出跟随后出现；未跟随期间来过新内容时换文案提示 -->
+      <button
+        v-if="!isFollowing && chatStore.messages.length > 0"
+        class="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
+        @click="followAndScrollToBottom"
+      >
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        </svg>
+        {{ hasNewBelow ? '有新内容' : '回到底部' }}
+      </button>
     </div>
 
     <!-- 要素提取流程面板（R6） -->
