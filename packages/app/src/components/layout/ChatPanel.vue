@@ -164,6 +164,15 @@ watch(
   },
 )
 
+// 切换会话也吸底：窗口化后两个长会话的窗口等长（都恰好 100 条），
+// 只靠 messages.length watch 区分不出切换，会停留在上一个会话的阅读位置
+watch(
+  () => chatStore.activeSessionId,
+  () => {
+    scrollToBottom()
+  },
+)
+
 
 /**
  * 发送（输入框运行中解禁，dsh 风）：mode 'queue' = Enter 语义（空闲直接发送 / 运行中排队），
