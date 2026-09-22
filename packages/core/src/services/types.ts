@@ -367,7 +367,7 @@ export type TurnFileChangeView = {
    * 含 renamed → renamed；其余 → updated。
    */
   status: 'created' | 'updated' | 'renamed' | 'deleted'
-  /** 该文件本轮各片段 diff 行数之和（无 diff 的记录贡献 0） */
+  /** 该文件本轮各片段 diff 行数之和（按 oldText/newText 实时重算，与展开渲染同源；历史账本旧口径数字自愈） */
   linesAdded: number
   linesRemoved: number
   /** 该文件本轮的全部原始改动记录（账本顺序）；面板展开渲染片段 diff 用 */

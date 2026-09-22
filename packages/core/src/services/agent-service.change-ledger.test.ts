@@ -246,6 +246,27 @@ describe('改动账本 service 层', () => {
     expect(summaries[0].files[0]?.records[1]?.diff?.oldText).toBe('b')
   })
 
+  it('历史账本里的旧净差口径数字：聚合行数按片段实时重算（+0−0 自愈为 +1−1）', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      // 旧口径账本：一行换一行存的是净差 +0 −0
+      emitToolResult(emit, {
+        id: 'c1',
+        name: 'EditFile',
+        path: 'chapters/第001章-初遇.txt',
+        diff: { oldText: 'a', newText: 'b', linesAdded: 0, linesRemoved: 0 },
+      })
+      input.onEvent?.({ type: 'done', messages: input.view.messages })
+      return input.view.messages
+    })
+
+    const { result } = await runOneTurn('改一句')
+
+    const summaries = findChangeSummaries(result.session.messages)
+    if (summaries[0]?.kind !== 'change-summary') throw new Error('unreachable')
+    expect(summaries[0].files[0]).toMatchObject({ linesAdded: 1, linesRemoved: 1 })
+  })
+
   it('改名前后的内容修改归并到同一文件行（净状态 renamed，归到 toPath）', async () => {
     mockedQuery.mockImplementation(async (input) => {
       const emit = input.onEvent?.bind(input) ?? (() => {})

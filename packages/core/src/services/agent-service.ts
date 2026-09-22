@@ -20,6 +20,7 @@ import {
 } from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
+import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
@@ -772,12 +773,24 @@ function collectTurnFileChanges(records: FileChangeRecord[]): TurnFileChangeView
           ? 'renamed'
           : 'updated'
     const views = group.records.map(toFileChangeRecordView)
+    // 行数不按记录里存的值求和，而对 oldText/newText 实时重算：
+    // 与展开的 DiffLines 渲染同源必然一致，且历史账本里旧净差口径的数字随之自愈
+    let linesAdded = 0
+    let linesRemoved = 0
+    for (const record of views) {
+      if (!record.diff) {
+        continue
+      }
+      const stats = countDiffLines(record.diff.oldText, record.diff.newText)
+      linesAdded += stats.linesAdded
+      linesRemoved += stats.linesRemoved
+    }
     files.push({
       path: group.path,
       ...(group.fromPath ? { fromPath: group.fromPath } : {}),
       status,
-      linesAdded: views.reduce((sum, record) => sum + (record.diff?.linesAdded ?? 0), 0),
-      linesRemoved: views.reduce((sum, record) => sum + (record.diff?.linesRemoved ?? 0), 0),
+      linesAdded,
+      linesRemoved,
       records: views,
     })
   }
