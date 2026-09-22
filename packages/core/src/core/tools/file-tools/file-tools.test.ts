@@ -205,11 +205,42 @@ describe('file tools', () => {
       expect(output.oldText).toBe('第二段')
       expect(output.newText).toBe('第二段修改\n第三段新增')
 
+      // 计数为真实 diffLines 增删：一行被替换为两行 = 删 1 增 2
       expect(editFileTool.extractChangeDiff?.(output)).toEqual({
         oldText: '第二段',
         newText: '第二段修改\n第三段新增',
+        linesAdded: 2,
+        linesRemoved: 1,
+      })
+    })
+
+    it('EditFile 计数与 DiffLines 渲染同源：一行换一行记 +1 −1（不再是净差 +0 −0）', async () => {
+      const runtime = createRuntime({ 'chapters/第001章-初遇.txt': '第一段\n第二段' })
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段',
+        newText: '第二段改写',
+      }, runtime)
+
+      expect(editFileTool.extractChangeDiff?.(output)).toMatchObject({
         linesAdded: 1,
-        linesRemoved: 0,
+        linesRemoved: 1,
+      })
+    })
+
+    it('EditFile 删多于增时 linesAdded 不出现负值（真实增删天然非负）', async () => {
+      const runtime = createRuntime({ 'chapters/第001章-初遇.txt': '第一段\n第二段\n第三段\n第四段' })
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段\n第三段\n第四段',
+        newText: '收尾',
+      }, runtime)
+
+      expect(editFileTool.extractChangeDiff?.(output)).toMatchObject({
+        linesAdded: 1,
+        linesRemoved: 3,
       })
     })
 
@@ -221,6 +252,16 @@ describe('file tools', () => {
       expect(createFileTool.extractChangeDiff?.(output)).toEqual({
         oldText: '',
         newText: '第一行\n第二行',
+        linesAdded: 2,
+        linesRemoved: 0,
+      })
+    })
+
+    it('CreateFile 尾部换行不多计一行（与 DiffLines 渲染行数一致）', async () => {
+      const runtime = createRuntime({})
+      const output = await createFileTool.run({ path: 'chapters/第001章-新建.txt', content: '第一行\n第二行\n' }, runtime)
+
+      expect(createFileTool.extractChangeDiff?.(output)).toMatchObject({
         linesAdded: 2,
         linesRemoved: 0,
       })

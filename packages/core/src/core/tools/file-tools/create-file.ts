@@ -2,7 +2,8 @@ import { readProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import { isNotFoundError } from '../path'
 import { assertChapterNumberAvailable, isChapterPath } from '../chapter-name'
 import type { CreateFileInput, CreateFileOutput, ToolDefinition } from '../types'
-import { asRecord, assertWritableDocumentPath, countLines, normalizeTextFilePath, readString } from './common'
+import { asRecord, assertWritableDocumentPath, normalizeTextFilePath, readString } from './common'
+import { countDiffLines } from './diff-line-stats'
 
 export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, CreateFileOutput> = {
   name: 'CreateFile',
@@ -41,7 +42,7 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
     return {
       path: input.path,
       contentLength: input.content.length,
-      linesAdded: countLines(input.content),
+      linesAdded: countDiffLines('', input.content).linesAdded,
       created: true,
       content: input.content,
     }

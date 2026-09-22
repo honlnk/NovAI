@@ -2,7 +2,8 @@ import { getProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import type { EditFileInput, EditFileOutput, ToolDefinition } from '../types'
 import { normalizeProjectPath } from '../path'
 import { assertChapterNameFormat, isChapterPath } from '../chapter-name'
-import { asRecord, assertMutableDocumentPath, countLines, readString } from './common'
+import { asRecord, assertMutableDocumentPath, readString } from './common'
+import { countDiffLines } from './diff-line-stats'
 import {
   assertFreshReadFileState,
   createReadFileState,
@@ -86,8 +87,7 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       path: input.path,
       occurrences: input.replaceAll ? occurrences : 1,
       contentLength: nextContent.length,
-      linesAdded: countLines(actualNewText) - countLines(actualOldText),
-      linesRemoved: Math.max(countLines(actualOldText) - countLines(actualNewText), 0),
+      ...countDiffLines(actualOldText, actualNewText),
       oldText: actualOldText,
       newText: actualNewText,
     }
