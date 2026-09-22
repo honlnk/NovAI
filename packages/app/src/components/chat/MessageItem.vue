@@ -43,7 +43,7 @@ function formatTime(dateStr: string) {
     class="w-full text-left"
   >
     <div class="text-sm leading-relaxed text-gray-800">
-      <MarkdownRenderer :content="message.text" />
+      <MarkdownRenderer :content="message.text" :streaming="streaming" />
       <span
         v-if="streaming"
         class="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-sm bg-gray-400 align-text-bottom"

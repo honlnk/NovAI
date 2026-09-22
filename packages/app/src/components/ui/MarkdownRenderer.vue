@@ -1,24 +1,27 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import MarkdownIt from 'markdown-it'
 
+import { parseMarkdownBlocks } from '../../utils/markdown-blocks'
+
+/**
+ * 块级渲染（借鉴 dsh 冻结前缀）：整篇 parse 后按顶层块分组渲染，key 取块起始行号。
+ * 流式追加时前缀块 key 稳定、Vue 复用其 DOM 不重建，仅尾部块 innerHTML 更新——
+ * 消除「每 token 整篇重渲 + 整棵子树重建」。streaming/settled 统一路径：
+ * settled 一次渲染无回归；解析器为模块级共享单例（不再每实例各建一个）。
+ */
 const props = defineProps<{
   content: string
+  /** 语义透传：该消息正在流式输出中（块级渲染本身已保证仅尾部块随 delta 更新，无需分支） */
+  streaming?: boolean
 }>()
 
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  typographer: true,
-})
-
-const renderedHtml = computed(() => {
-  return md.render(props.content)
-})
+const blocks = computed(() => parseMarkdownBlocks(props.content))
 </script>
 
 <template>
-  <div class="markdown-body" v-html="renderedHtml" />
+  <div class="markdown-body" :data-streaming="streaming || undefined">
+    <div v-for="block in blocks" :key="block.key" class="markdown-block" v-html="block.html" />
+  </div>
 </template>
 
 <style>
