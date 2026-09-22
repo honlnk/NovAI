@@ -9,10 +9,11 @@ import {
   getSession,
   isAgentRunActive,
   listSessions,
+  loadOlderMessages,
   stopAgentRun,
   subscribeAgentEvents,
 } from '@novai/core/services/agent-service'
-import { useChatStore } from './chat'
+import { HISTORY_PAGE_SIZE, useChatStore } from './chat'
 
 vi.mock('@novai/core/services/agent-service', () => ({
   createSession: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('@novai/core/services/agent-service', () => ({
   deleteSession: vi.fn(),
   enqueueMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
+  loadOlderMessages: vi.fn(),
   stopAgentRun: vi.fn(),
   isAgentRunActive: vi.fn(() => false),
   subscribeAgentEvents: vi.fn(() => () => {}),
@@ -32,6 +34,7 @@ const mockedCreateSession = vi.mocked(createSession)
 const mockedGetSession = vi.mocked(getSession)
 const mockedListSessions = vi.mocked(listSessions)
 const mockedEnqueueMessage = vi.mocked(enqueueMessage)
+const mockedLoadOlderMessages = vi.mocked(loadOlderMessages)
 const mockedStopAgentRun = vi.mocked(stopAgentRun)
 const mockedIsAgentRunActive = vi.mocked(isAgentRunActive)
 const mockedSubscribeAgentEvents = vi.mocked(subscribeAgentEvents)
@@ -47,6 +50,30 @@ function createSessionView(sessionId: string): ChatSessionView {
     createdAt: '2026-09-19T00:00:00.000Z',
     updatedAt: '2026-09-19T00:00:00.000Z',
   }
+}
+
+/** 文本消息视图夹具：id 即全量下标（m-<index>），便于断言窗口切片边界 */
+function createTextMessageView(index: number): ChatSessionView['messages'][number] {
+  return {
+    id: `m-${index}`,
+    role: 'user',
+    kind: 'text',
+    text: `第 ${index} 条`,
+    createdAt: new Date(1700000000000 + index * 1000).toISOString(),
+  }
+}
+
+/** 含 250 条消息的全量视图与尾部 100 条窗口视图（historyStart=150） */
+function createWindowedSession(total = 250, tail = HISTORY_PAGE_SIZE) {
+  const allMessages = Array.from({ length: total }, (_, index) => createTextMessageView(index))
+  const start = Math.max(0, total - tail)
+  const fullView: ChatSessionView = { ...createSessionView('session-current'), messages: allMessages }
+  const windowedView: ChatSessionView = {
+    ...createSessionView('session-current'),
+    messages: allMessages.slice(start),
+    ...(start > 0 ? { historyStart: start } : {}),
+  }
+  return { allMessages, fullView, windowedView, start }
 }
 
 function createRunResult(session: ChatSessionView, overrides: Partial<RunAgentTurnResult> = {}): RunAgentTurnResult {
@@ -307,5 +334,145 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.queue).toHaveLength(1)
     expect(store.changedFiles).toEqual([{ type: 'created', path: '正文/第2章.md' }])
     expect(store.isRunning).toBe(true)
+  })
+
+  // ---------- 历史分页窗口（HISTORY_PAGE_SIZE=100） ----------
+
+  it('selectSession 只装尾部窗口：按页大小请求、hasMoreHistory 由 historyStart 推导', async () => {
+    const store = useChatStore()
+    const { windowedView, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+
+    await store.selectSession('project-1', 'session-current')
+    expect(mockedGetSession).toHaveBeenCalledWith('project-1', 'session-current', { tailMessages: HISTORY_PAGE_SIZE })
+    expect(store.messages).toHaveLength(HISTORY_PAGE_SIZE)
+    expect(store.messages[0].id).toBe(`m-${start}`)
+    expect(store.historyStart).toBe(start)
+    expect(store.hasMoreHistory).toBe(true)
+  })
+
+  it('selectSession 短会话无 historyStart：hasMoreHistory 为 false（向后兼容旧 view）', async () => {
+    const store = useChatStore()
+    mockedGetSession.mockResolvedValue(createSessionView('session-short'))
+
+    await store.selectSession('project-1', 'session-short')
+    expect(store.historyStart).toBe(0)
+    expect(store.hasMoreHistory).toBe(false)
+    expect(store.loadingOlder).toBe(false)
+  })
+
+  it('loadOlderHistory prepend：旧页接到头部、窗口起点前移、顺序不乱', async () => {
+    const store = useChatStore()
+    const { windowedView, allMessages, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+
+    mockedLoadOlderMessages.mockResolvedValue({
+      messages: allMessages.slice(start - HISTORY_PAGE_SIZE, start),
+      start: start - HISTORY_PAGE_SIZE,
+    })
+    const loaded = await store.loadOlderHistory()
+    expect(loaded).toBe(true)
+    expect(mockedLoadOlderMessages).toHaveBeenCalledWith('project-1', 'session-current', {
+      before: start,
+      count: HISTORY_PAGE_SIZE,
+    })
+    expect(store.messages).toHaveLength(200)
+    expect(store.messages[0].id).toBe(`m-${start - HISTORY_PAGE_SIZE}`)
+    expect(store.messages[99].id).toBe(`m-${start - 1}`)
+    expect(store.messages[100].id).toBe(`m-${start}`)
+    expect(store.historyStart).toBe(start - HISTORY_PAGE_SIZE)
+    expect(store.loadingOlder).toBe(false)
+  })
+
+  it('loadOlderHistory 防重入：在途请求未落地时第二次调用不再发请求', async () => {
+    const store = useChatStore()
+    const { windowedView, allMessages, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+
+    let resolvePage: ((page: { messages: ChatSessionView['messages']; start: number }) => void) | null = null
+    mockedLoadOlderMessages.mockImplementation(
+      () => new Promise((resolve) => { resolvePage = resolve }),
+    )
+    const first = store.loadOlderHistory()
+    const second = store.loadOlderHistory()
+    expect(mockedLoadOlderMessages).toHaveBeenCalledTimes(1)
+    expect(store.loadingOlder).toBe(true)
+
+    resolvePage!({
+      messages: allMessages.slice(start - HISTORY_PAGE_SIZE, start),
+      start: start - HISTORY_PAGE_SIZE,
+    })
+    await first
+    await second
+    expect(store.messages).toHaveLength(200)
+    expect(store.loadingOlder).toBe(false)
+  })
+
+  it('loadOlderHistory 翻到顶：空页落地后 hasMoreHistory 归 false', async () => {
+    const store = useChatStore()
+    const { windowedView, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+
+    mockedLoadOlderMessages.mockResolvedValue({ messages: [], start: 0 })
+    const loaded = await store.loadOlderHistory()
+    expect(loaded).toBe(false)
+    expect(store.historyStart).toBe(0)
+    expect(store.hasMoreHistory).toBe(false)
+    expect(store.messages).toHaveLength(HISTORY_PAGE_SIZE)
+  })
+
+  it('loadOlderHistory 无更多历史 / 无会话时是 no-op，不发请求', async () => {
+    const store = useChatStore()
+    expect(await store.loadOlderHistory()).toBe(false)
+    expect(mockedLoadOlderMessages).not.toHaveBeenCalled()
+
+    mockedGetSession.mockResolvedValue(createSessionView('session-short'))
+    await store.selectSession('project-1', 'session-short')
+    expect(await store.loadOlderHistory()).toBe(false)
+    expect(mockedLoadOlderMessages).not.toHaveBeenCalled()
+  })
+
+  it('run-finish 全量覆盖时历史窗口保持：按窗口起点切片，翻页成果不被冲掉', async () => {
+    const store = useChatStore()
+    const { windowedView, fullView, allMessages, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+    const emit = captureListener()
+
+    // 翻一页后再收尾：运行中翻页是合法姿态，窗口起点必须保持
+    mockedLoadOlderMessages.mockResolvedValue({
+      messages: allMessages.slice(start - HISTORY_PAGE_SIZE, start),
+      start: start - HISTORY_PAGE_SIZE,
+    })
+    await store.loadOlderHistory()
+    expect(store.messages).toHaveLength(200)
+
+    emit({
+      type: 'run-finish',
+      sessionId: 'session-current',
+      // 全量比 select 时多一条（本轮新产生的 assistant 回答）
+      result: createRunResult({ ...fullView, messages: [...allMessages, createTextMessageView(250)] }),
+    })
+    expect(store.messages).toHaveLength(201)
+    expect(store.messages[0].id).toBe(`m-${start - HISTORY_PAGE_SIZE}`)
+    expect(store.messages[200].id).toBe('m-250')
+    expect(store.historyStart).toBe(start - HISTORY_PAGE_SIZE)
+  })
+
+  it('窗口化后 message-delta 仍在尾部追加（起点不动）', async () => {
+    const store = useChatStore()
+    const { windowedView, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+    const emit = captureListener()
+
+    emit({ type: 'message-delta', sessionId: 'session-current', messageId: 'msg-stream', text: '流式片段' })
+    expect(store.messages).toHaveLength(HISTORY_PAGE_SIZE + 1)
+    expect(store.messages[0].id).toBe(`m-${start}`)
+    expect(store.messages[HISTORY_PAGE_SIZE]).toMatchObject({ id: 'msg-stream', text: '流式片段' })
+    expect(store.historyStart).toBe(start)
   })
 })

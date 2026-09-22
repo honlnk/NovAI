@@ -6,6 +6,7 @@ import {
   respondConfirmation as respondAgentConfirmation,
   enqueueMessage as enqueueAgentMessage,
   updateQueuedMessage as updateAgentQueuedMessage,
+  loadOlderMessages as loadOlderAgentMessages,
   stopAgentRun,
   isAgentRunActive,
   subscribeAgentEvents,
@@ -31,6 +32,12 @@ import { useProjectStore } from './project'
 
 /** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
 export type RunStatusType = 'idle' | 'running' | 'error'
+
+/**
+ * 历史窗口页大小（借鉴 dsh 分页防线）：首屏只装尾部一页，滚动到顶向前翻页。
+ * 取 100 而非 dsh 的 50——一轮 Agent 任务产生多条工具行，50 条可能不足两轮。
+ */
+export const HISTORY_PAGE_SIZE = 100
 
 export const useChatStore = defineStore('chat', () => {
   const sessionView = ref<ChatSessionView | null>(null)
@@ -62,6 +69,16 @@ export const useChatStore = defineStore('chat', () => {
   // 当前激活会话 id（高亮 + 事件路由用）
   const activeSessionId = ref<string | null>(null)
   const isLoadingSessions = ref(false)
+
+  /**
+   * 历史窗口起点：sessionView.messages[0] 在全量历史中的下标（append-only 数组下标游标）。
+   * 0 = 已加载全部；>0 = 之上还有更早历史可翻页。
+   */
+  const historyStart = ref(0)
+  /** 正在向前翻页（loadOlderHistory 在途），UI 显示加载态并防重入 */
+  const loadingOlder = ref(false)
+  /** 之上是否还有更早历史（驱动滚动到顶自动加载） */
+  const hasMoreHistory = computed(() => historyStart.value > 0)
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
@@ -117,9 +134,9 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** 切换到指定历史会话：加载其完整消息体并设为激活。 */
+  /** 切换到指定历史会话：只装尾部一页消息窗口（长会话分页防线）并设为激活。 */
   async function selectSession(projectId: string, sessionId: string): Promise<ChatSessionView | null> {
-    const view = await getAgentSession(projectId, sessionId)
+    const view = await getAgentSession(projectId, sessionId, { tailMessages: HISTORY_PAGE_SIZE })
     if (!view) {
       return null
     }
@@ -132,9 +149,49 @@ export const useChatStore = defineStore('chat', () => {
     lastFileChange.value = null
     queue.value = view.queuedMessages ?? []
     streamingMessageId.value = null
+    historyStart.value = view.historyStart ?? 0
+    loadingOlder.value = false
     isRunning.value = isAgentRunActive(sessionId)
     isStopping.value = false
     return view
+  }
+
+  /**
+   * 向前翻一页历史（滚动到顶触发）：prepend 到 messages 头部，窗口起点前移。
+   * 防重入：无更多历史 / 在途 / 无会话时直接返回。返回是否取到了新页（供 UI 锚定）。
+   */
+  async function loadOlderHistory(): Promise<boolean> {
+    const view = sessionView.value
+    if (!view || !hasMoreHistory.value || loadingOlder.value) {
+      return false
+    }
+
+    loadingOlder.value = true
+    try {
+      const page = await loadOlderAgentMessages(view.projectId, view.sessionId, {
+        before: historyStart.value,
+        count: HISTORY_PAGE_SIZE,
+      })
+      // 会话被删 / 已切走：静默丢弃，不污染当前视图
+      if (!page || sessionView.value?.sessionId !== view.sessionId) {
+        return false
+      }
+      if (page.messages.length === 0) {
+        historyStart.value = page.start
+        return false
+      }
+      sessionView.value = {
+        ...view,
+        messages: [...page.messages, ...view.messages],
+      }
+      historyStart.value = page.start
+      return true
+    } catch (error) {
+      setRunStatus(error instanceof Error ? error.message : '加载更早消息失败', 'error')
+      return false
+    } finally {
+      loadingOlder.value = false
+    }
   }
 
   /**
@@ -152,6 +209,8 @@ export const useChatStore = defineStore('chat', () => {
     changedFiles.value = []
     lastFileChange.value = null
     queue.value = []
+    historyStart.value = 0
+    loadingOlder.value = false
     isRunning.value = false
     isStopping.value = false
 
@@ -397,7 +456,12 @@ export const useChatStore = defineStore('chat', () => {
       isRunning.value = isAgentRunActive(event.sessionId)
       isStopping.value = false
       streamingMessageId.value = null
-      sessionView.value = event.result.session
+      // 历史窗口兼容：run-finish 携带全量视图，按当前窗口起点切片，翻页成果不被冲掉
+      const full = event.result.session
+      const windowStart = historyStart.value
+      sessionView.value = windowStart > 0
+        ? { ...full, messages: full.messages.slice(windowStart) }
+        : full
       changedFiles.value = event.result.session.changedFiles ?? []
       queue.value = event.result.session.queuedMessages ?? []
       // 状态栏常态显示会话级总数；本轮明细由 change-summary 面板承担
@@ -451,6 +515,9 @@ export const useChatStore = defineStore('chat', () => {
     sessionView,
     sessions,
     activeSessionId,
+    historyStart,
+    loadingOlder,
+    hasMoreHistory,
     runStatus,
     runStatusType,
     hasSessionView,
@@ -461,6 +528,7 @@ export const useChatStore = defineStore('chat', () => {
     deleteSession,
     editQueuedMessage,
     initSessions,
+    loadOlderHistory,
     loadSessions,
     rejectWriteTool,
     removeQueuedMessage,
