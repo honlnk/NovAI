@@ -15,7 +15,7 @@ import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
-import { pickDirectoryChildren } from '../utils/file-tree'
+import { pickDirectoryChildren, resolveActiveFileReloadTarget } from '../utils/file-tree'
 
 const route = useRoute()
 const router = useRouter()
@@ -122,6 +122,22 @@ watch(
     if (newLength > oldLength && projectStore.currentProject) {
       await projectStore.refreshTree()
       toast.success('文件列表已更新')
+    }
+  },
+)
+
+// AI 改动命中当前打开的文件时自动重读：预览/原始模式即时看到新内容；编辑模式草稿是
+// ContentPanel 本地副本不受影响，仅 isDirty 基准随新内容变化（编辑冲突提示属占位功能
+// 的后续设计，见 docs/plans/文件树与打开文件实时刷新计划.md）
+watch(
+  () => chatStore.lastFileChange,
+  (record) => {
+    if (!record) {
+      return
+    }
+    const target = resolveActiveFileReloadTarget(projectStore.activeFile?.path, record.change)
+    if (target) {
+      void projectStore.openFile(target)
     }
   },
 )

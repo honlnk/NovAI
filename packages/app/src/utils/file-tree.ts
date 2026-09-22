@@ -1,4 +1,4 @@
-import type { ProjectFileNodeView } from '@novai/core/services/types'
+import type { ChangedFileView, ProjectFileNodeView } from '@novai/core/services/types'
 
 /**
  * 文件树工具函数。
@@ -73,4 +73,38 @@ export function collectFilesByPrefix(
   }
   visit(files)
   return result
+}
+
+/**
+ * 判断一条实时到达的文件改动是否命中当前打开的文件，命中则返回应重读的目标路径。
+ *
+ * 用于内容面板自动刷新（AI 运行中改了用户正打开的文件时自动重读磁盘新内容）：
+ * - created / updated：命中 path → 重读该 path；
+ * - renamed：命中 fromPath 或 toPath → 重读 toPath（旧路径已不存在）；
+ * - deleted：一律不重读（重读必失败弹错误 toast；树刷新后列表项已消失，
+ *   面板保留最后内容，等用户自行切走）。
+ *
+ * @param activeFilePath 当前打开的文件路径（无打开文件时 null/undefined）
+ * @param change 实时到达的文件改动（file-changed 事件的 change 字段）
+ * @returns 需要重读的路径；无需重读时 null
+ */
+export function resolveActiveFileReloadTarget(
+  activeFilePath: string | null | undefined,
+  change: ChangedFileView,
+): string | null {
+  if (!activeFilePath) {
+    return null
+  }
+
+  if (change.type === 'renamed') {
+    return change.fromPath === activeFilePath || change.toPath === activeFilePath
+      ? change.toPath
+      : null
+  }
+
+  if (change.type === 'deleted') {
+    return null
+  }
+
+  return change.path === activeFilePath ? change.path : null
 }

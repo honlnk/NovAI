@@ -36,6 +36,13 @@ export const useChatStore = defineStore('chat', () => {
   const sessionView = ref<ChatSessionView | null>(null)
   /** 会话级改动清单（按目标路径去重；来源：run-finish 全量 / 会话 view / file-changed 实时合并） */
   const changedFiles = ref<ChangedFileView[]>([])
+  /**
+   * 最近一条实时到达的文件改动（file-changed 事件原文，不做去重合并）。
+   * 内容面板据此判断是否重读当前打开的文件；与 changedFiles 的分工：
+   * 那份是去重后的清单（树刷新的 watch 源），这份保留逐条到达顺序（同文件反复改
+   * 也逐条触发，不因去重漏掉重读时机）。
+   */
+  const lastFileChange = ref<FileChangeRecordView | null>(null)
   /** 收件箱队列快照（QueueDock 渲染用），由 queue-updated 事件同步、切换会话时从 view 重建 */
   const queue = ref<QueuedMessageView[]>([])
   const runStatus = ref('还没有开始执行。')
@@ -122,6 +129,7 @@ export const useChatStore = defineStore('chat', () => {
     // 切换会话时清空上一轮的运行态残留，避免跨会话串扰；
     // 队列/改动清单/运行态从目标会话的 view 与 driver 注册表重建
     changedFiles.value = view.changedFiles ?? []
+    lastFileChange.value = null
     queue.value = view.queuedMessages ?? []
     streamingMessageId.value = null
     isRunning.value = isAgentRunActive(sessionId)
@@ -142,6 +150,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionView.value = view
     activeSessionId.value = view.sessionId
     changedFiles.value = []
+    lastFileChange.value = null
     queue.value = []
     isRunning.value = false
     isStopping.value = false
@@ -355,8 +364,10 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'file-changed') {
-      // 实时合并（文件树自动刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖
+      // 实时合并（文件树自动刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖。
+      // lastFileChange 逐条记录原文，供内容面板判断是否重读当前打开的文件。
       applyFileChangeRecord(event.file)
+      lastFileChange.value = event.file
       return
     }
 
@@ -429,6 +440,7 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     changedFiles,
+    lastFileChange,
     queue,
     isRunning,
     isStopping,

@@ -215,6 +215,35 @@ describe('chat store（W4 事件总线版）', () => {
     ])
   })
 
+  it('lastFileChange 逐条记录 file-changed 原文（同文件去重也不丢重读时机）；切会话时重置', async () => {
+    const store = useChatStore()
+    const view = createSessionView('session-current')
+    mockedCreateSession.mockResolvedValue(view)
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const record = (id: string, path: string) => ({
+      id,
+      runId: 'run-1',
+      at: '2026-09-19T00:00:00.000Z',
+      change: { type: 'updated' as const, path },
+    })
+    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-1', 'a.md') })
+    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-2', 'a.md') })
+    // 清单层去重后 a.md 只占一位；lastFileChange 仍逐条前进（内容面板每次都要重读）
+    expect(store.changedFiles).toHaveLength(1)
+    expect(store.lastFileChange).toMatchObject({ id: 'c-2' })
+
+    // 别的会话的事件不串扰
+    emit({ type: 'file-changed', sessionId: 'session-stale', file: record('c-x', 'x.md') })
+    expect(store.lastFileChange).toMatchObject({ id: 'c-2' })
+
+    // 切换会话重置，避免旧会话残留触发误重读
+    mockedGetSession.mockResolvedValue({ ...createSessionView('session-other'), changedFiles: [] })
+    await store.selectSession('project-1', 'session-other')
+    expect(store.lastFileChange).toBeNull()
+  })
+
   it('sendMessage 成功返回 true 并透传 mode/quote；失败返回 false 供草稿恢复', async () => {
     const store = useChatStore()
     const view = createSessionView('session-current')

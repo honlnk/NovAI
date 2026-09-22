@@ -254,6 +254,67 @@ describe('改动账本 service 层', () => {
     expect(summaries[0].aborted).toBe(true)
     expect(summaries[0].changes).toEqual([])
   })
+
+  it('file-changed 运行中实时广播：先于 run-finish，且逐条紧跟对应 tool-result 落地', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      emitToolResult(emit, { id: 'c1', name: 'CreateFile', path: 'chapters/第001章-初遇.txt' })
+      emitToolResult(emit, { id: 'c2', name: 'EditFile', path: 'elements/characters/主角.md' })
+      input.onEvent?.({ type: 'done', messages: input.view.messages })
+      return input.view.messages
+    })
+
+    const { events } = await runOneTurn('建两个文件')
+
+    // 旧实现攒到 run-finish 前批量补发；现在每条都应在收尾之前到达
+    const finishIndex = events.findIndex((event) => event.type === 'run-finish')
+    const changedIndexes = events.flatMap((event, index) => (event.type === 'file-changed' ? [index] : []))
+    expect(finishIndex).toBeGreaterThanOrEqual(0)
+    expect(changedIndexes).toHaveLength(2)
+    for (const index of changedIndexes) {
+      expect(index).toBeLessThan(finishIndex)
+    }
+
+    // 第 1 条 file-changed 在第 2 个 tool-call 之前到达（第 1 次工具结果落地即广播，
+    // 不等整轮收敛）——这是「侧边列表任务中途刷新」的事件序保证
+    const secondToolCallIndex = events.findIndex(
+      (event) => event.type === 'message' && event.message.kind === 'tool-call' && event.message.toolCallId === 'c2',
+    )
+    expect(secondToolCallIndex).toBeGreaterThan(changedIndexes[0])
+
+    // 内容与账本一致
+    const first = events[changedIndexes[0]]
+    if (first?.type !== 'file-changed') throw new Error('unreachable')
+    expect(first.file.change).toMatchObject({ type: 'created', path: 'chapters/第001章-初遇.txt' })
+  })
+
+  it('run-error 中途失败：此前已落账的改动仍有 file-changed 实时广播（树不停留旧状态）', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      emitToolResult(emit, { id: 'c1', name: 'EditFile', path: 'chapters/第001章-初遇.txt' })
+      throw new Error('模型中途崩了')
+    })
+
+    const events: AgentUiEvent[] = []
+    const errored = new Promise<void>((resolve) => {
+      const unsubscribe = subscribeAgentEvents((event) => {
+        events.push(event)
+        if (event.type === 'run-error') {
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+    await enqueueMessage({ projectId: 'proj-ledger', text: '改到一半崩', mode: 'queue' })
+    await errored
+
+    // 旧行为：报错即一条不广播，文件树停留旧状态直到用户手动刷新
+    const changed = events.filter((event) => event.type === 'file-changed')
+    expect(changed).toHaveLength(1)
+    const record = changed[0]
+    if (record?.type !== 'file-changed') throw new Error('unreachable')
+    expect(record.file.change).toMatchObject({ type: 'updated', path: 'chapters/第001章-初遇.txt' })
+  })
 })
 
 // ---------- 测试夹具 ----------

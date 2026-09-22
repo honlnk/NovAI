@@ -406,8 +406,11 @@ async function wakeSessionDriver(options: {
   // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
   const confirm: ConfirmHandler = (request) => requestConfirmation(session.sessionId, projectId, request)
 
-  // 账本基线：本次连续运行产生的记录 = 收尾时 slice(ledgerBaseline)（喂 turnChanges / file-changed）
+  // 账本基线：本次连续运行产生的记录 = 收尾时 slice(ledgerBaseline)（喂 turnChanges）
   const ledgerBaseline = session.changeLedger?.length ?? 0
+  // file-changed 实时广播的高水位：message 事件到达时把账本新增段立即广播出去，
+  // 前端据此在运行中刷新文件树 / 重读打开的文件（旧实现攒到 driver-finish 批量补发）。
+  let emittedLedgerCount = ledgerBaseline
 
   wakeChatDriver({
     session,
@@ -437,6 +440,16 @@ async function wakeSessionDriver(options: {
       if (event.type === 'inbox-updated') {
         broadcastQueueUpdated(event.session)
         return
+      }
+      // 账本追加紧排在 tool-result 的 pushMessage 之前（session.ts），故 message 事件
+      // 到达时新记录必已在账本里：按高水位把新增段立即广播，不等整轮收敛。
+      const ledger = event.session.changeLedger ?? []
+      for (; emittedLedgerCount < ledger.length; emittedLedgerCount += 1) {
+        broadcastAgentEvent({
+          type: 'file-changed',
+          sessionId: session.sessionId,
+          file: toFileChangeRecordView(ledger[emittedLedgerCount]),
+        })
       }
       emitMessageEvent(event.message, event.session.sessionId, event.session.changeLedger)
     },
@@ -476,9 +489,8 @@ async function wakeSessionDriver(options: {
           session: toChatSessionView(session),
         }
 
-        for (const record of turnChanges) {
-          broadcastAgentEvent({ type: 'file-changed', sessionId: session.sessionId, file: record })
-        }
+        // file-changed 已在运行中按高水位实时广播过，收尾不再补发；run-finish 的
+        // session.changedFiles 仍是权威清单，前端收到后整体覆盖。
         broadcastAgentEvent({ type: 'run-finish', sessionId: session.sessionId, result })
       })()
     },
