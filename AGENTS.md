@@ -50,3 +50,28 @@ When documentation and code appear to conflict, prefer the clarified product int
 
 - NovAI is not just a workspace with a chat box.
 - NovAI should become a conversation-driven AI agent for writing stories through tools and files.
+
+## Workflow Discipline
+
+These rules govern how AI agents interact with git in this repository. They are non-negotiable.
+
+### 1. Never commit without explicit user approval
+
+- Do **not** run `git commit` after finishing code. Write the code, run verification (`pnpm test` / `pnpm typecheck`), and **stop**.
+- Report what was done and let the user review. Commit only when the user explicitly says to commit (e.g. "提交一下", "commit it").
+- If a change spans multiple logical units, propose the commit grouping and let the user confirm before committing.
+- When an approved commit touches the `docs` submodule, commit the submodule first, then advance the parent-repo pointer.
+
+### 2. Never push — that is the user's job
+
+- Do **not** run `git push` on your own initiative, and do not prompt the user about pushing (no "需要我 push 吗?" reminders). Just state the local commit status and stop.
+
+### 3. Do not modify shared/global project files without permission
+
+High-blast-radius files require a stop-and-ask before editing. This applies to:
+
+- Workspace-level configs: `tsconfig.json`, `vitest.config.ts`, `commitlint.config.mjs`, `pnpm-workspace.yaml`, root `package.json` scripts
+- App skeleton: router, `stores/index.ts`, `components/ui/**`, global CSS / Tailwind entry, `App.vue` / `main.ts`
+- The instruction files themselves: `AGENTS.md`, `CLAUDE.md`
+
+The rule: when in doubt about whether a file is "shared/global", treat it as shared and ask first.
