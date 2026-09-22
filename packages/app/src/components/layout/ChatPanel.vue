@@ -120,9 +120,46 @@ async function scrollToBottom() {
   }
 }
 
+// ===== 历史翻页（借鉴 dsh：滚动到顶自动加载 + 位置锚定） =====
+/** 距顶多少 px 内触发向前翻页 */
+const OLDER_LOAD_THRESHOLD_PX = 200
+/** prepend 在途标志：阻止 messages.length watch 把翻页误判为新消息而吸底 */
+const isPrepending = ref(false)
+
+/**
+ * 滚动监听：距顶 200px 内且还有更早历史时自动向前翻一页。
+ * 锚定用 scrollHeight 差值法：prepend 后内容整体下移，按新增高度回推 scrollTop，
+ * 阅读位置不跳动。loadingOlder 与 isPrepending 双重防重入；恢复后仍在阈值内时
+ * scroll 事件会自然再触发（逐页连续上翻），不会失控级联——一页 100 条的高度
+ * 通常远超阈值，恢复后的位置已在阈值之外。
+ */
+async function handleMessagesScroll() {
+  const container = messagesContainer.value
+  if (!container) return
+  if (container.scrollTop >= OLDER_LOAD_THRESHOLD_PX) return
+  if (!chatStore.hasMoreHistory || chatStore.loadingOlder || isPrepending.value) return
+
+  const previousHeight = container.scrollHeight
+  const previousTop = container.scrollTop
+  isPrepending.value = true
+  try {
+    const loaded = await chatStore.loadOlderHistory()
+    if (!loaded) return
+    await nextTick()
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop =
+        messagesContainer.value.scrollHeight - previousHeight + previousTop
+    }
+  } finally {
+    isPrepending.value = false
+  }
+}
+
 watch(
   () => chatStore.messages.length,
   () => {
+    // prepend 旧历史不是新消息：位置由 handleMessagesScroll 锚定，不吸底
+    if (isPrepending.value) return
     scrollToBottom()
   },
 )
@@ -491,6 +528,7 @@ async function handleExtractionConfirm() {
     <div
       ref="messagesContainer"
       class="flex-1 overflow-y-auto"
+      @scroll="handleMessagesScroll"
     >
       <div class="mx-auto max-w-3xl px-4 py-6">
         <!-- 首次使用引导插槽 -->
@@ -510,6 +548,17 @@ async function handleExtractionConfirm() {
 
         <!-- 消息列表：渲染序列（配对 + 分组预处理后的渲染树） -->
         <div v-else class="space-y-4">
+          <!-- 向前翻页加载态（滚动到顶自动触发；无更多历史时不显示任何入口） -->
+          <div
+            v-if="chatStore.loadingOlder"
+            class="flex items-center justify-center gap-2 py-1 text-xs text-gray-400"
+          >
+            <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            正在加载更早消息…
+          </div>
           <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
             <!-- 任务过程折叠组：组头 + 包裹容器（子项经插槽注入） -->
             <TurnProcessGroup
