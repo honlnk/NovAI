@@ -1,5 +1,6 @@
 import type { ModelProtocol } from '../../../types/ai'
 
+import { anthropicAdapter } from './anthropic'
 import { openAiChatAdapter } from './openai-chat'
 import type { ProtocolAdapter } from './types'
 
@@ -9,6 +10,7 @@ import type { ProtocolAdapter } from './types'
  */
 const ADAPTERS: Partial<Record<ModelProtocol, ProtocolAdapter>> = {
   openai: openAiChatAdapter,
+  anthropic: anthropicAdapter,
 }
 
 export function resolveProtocolAdapter(protocol: ModelProtocol): ProtocolAdapter {

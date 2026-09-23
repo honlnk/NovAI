@@ -156,6 +156,10 @@ export function isContextOverflowError(error: unknown): boolean {
     // 百炼（DashScope）："Range of input length should be [1, xxx]"（400 InvalidParameter），不含 context 字样
     || text.includes('range of input length')
     || (text.includes('input length') && (text.includes('exceed') || text.includes('should be') || text.includes('too long')))
+    // anthropic Messages："prompt is too long: 21589 tokens > 200000 maximum"（400 invalid_request_error）
+    || text.includes('prompt is too long')
+    // gemini generateContent："The input token count (…) exceeds the maximum number of tokens allowed"
+    || (text.includes('token count') && text.includes('exceeds the maximum'))
   )
 }
 
