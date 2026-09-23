@@ -32,6 +32,11 @@ export type AgentUserMessage = {
 export type AgentAssistantMessage = {
   role: 'assistant'
   content: string
+  /**
+   * 模型思考流（DeepSeek reasoning_content / anthropic thinking / gemini thought）。
+   * 只持久化供 UI 展示，构造请求时各适配器一律丢弃——「只收不发」。
+   */
+  reasoning?: string
   toolCalls?: AgentToolCall[]
 }
 
@@ -70,6 +75,8 @@ export type AgentToolSchema = {
 
 export type AgentAssistantResponse = {
   content: string
+  /** 思考流全文（存在时随 assistant 消息持久化，见 AgentAssistantMessage.reasoning）。 */
+  reasoning?: string
   toolCalls: AgentToolCall[]
   finishReason?: string
   diagnostics?: AgentLlmDiagnostics

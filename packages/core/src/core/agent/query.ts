@@ -147,6 +147,7 @@ export async function query(input: {
             baseUrl: input.config.llm.baseUrl,
             apiKey: input.config.llm.apiKey,
             model: input.config.llm.model,
+            protocol: input.config.llm.protocol,
             messages,
             tools: availableTools.map((tool) => tool.schema),
             signal: input.signal,
@@ -222,6 +223,7 @@ export async function query(input: {
     const assistantMessage: AgentAssistantMessage = {
       role: 'assistant',
       content: assistantResponse.content,
+      ...(assistantResponse.reasoning ? { reasoning: assistantResponse.reasoning } : {}),
       toolCalls: assistantResponse.toolCalls,
     }
 

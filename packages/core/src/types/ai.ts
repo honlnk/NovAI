@@ -34,6 +34,8 @@ export type LlmStreamInput = {
   baseUrl: string
   apiKey: string
   model: string
+  /** API 协议，缺省 openai；随生成链路分发到对应适配器。 */
+  protocol?: ModelProtocol
   systemPrompt?: string
   instruction: string
 }

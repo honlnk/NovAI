@@ -1,5 +1,7 @@
-import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse, resolveApiUrl } from '../ai/shared'
+import { normalizeBaseUrl } from '../ai/shared'
 import { testConnectionViaModelList } from '../ai/models-client'
+import { streamAgentCompletion } from '../agent/llm'
+import type { AgentMessage } from '../agent/messages'
 
 import type {
   LlmStreamEvent,
@@ -26,8 +28,9 @@ export async function testLlmConnection(
 }
 
 /**
- * 发起一次最小化的流式对话生成，并把底层 SSE 数据适配成统一事件流。
- * 调用方只需要监听 `start / delta / finish / error`，无需关心原始 chunk 格式。
+ * 发起一次最小化的流式对话生成（单轮 system + user，无工具）。
+ * 薄入口：随 protocol 分发到 core/llm/protocol 下的适配器，
+ * 要素提取等一次性结构化输出场景复用整条生成链路。
  */
 export async function streamChatCompletion(
   input: LlmStreamInput,
@@ -41,7 +44,7 @@ export async function streamChatCompletion(
     throw new Error(message)
   }
 
-  const messages = []
+  const messages: AgentMessage[] = []
 
   if (input.systemPrompt?.trim()) {
     messages.push({
@@ -55,157 +58,27 @@ export async function streamChatCompletion(
     content: input.instruction.trim(),
   })
 
-  const response = await fetch(resolveApiUrl(baseUrl, '/chat/completions'), {
-    method: 'POST',
-    headers: createJsonHeaders(input.apiKey, baseUrl),
-    body: JSON.stringify({
-      model: input.model.trim(),
-      stream: true,
+  const response = await streamAgentCompletion(
+    {
+      baseUrl,
+      apiKey: input.apiKey,
+      model: input.model,
+      protocol: input.protocol,
       messages,
-    }),
-  })
-
-  if (!response.ok) {
-    const payload = await readJsonResponse(response)
-    const message = extractErrorMessage(payload, '章节生成失败')
-    onEvent({ type: 'error', message })
-    throw new Error(message)
-  }
-
-  if (!response.body) {
-    const payload = await readJsonResponse(response)
-    const text = extractCompletionText(payload)
-    onEvent({ type: 'start' })
-    onEvent({ type: 'finish', text })
-    return text
-  }
-
-  onEvent({ type: 'start' })
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-  let fullText = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-
-    if (done) {
-      break
-    }
-
-    buffer += decoder.decode(value, { stream: true })
-    // OpenAI 兼容流通常以空行分隔事件，这里先按事件块切开，再逐行解析 data。
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() ?? ''
-
-    for (const chunk of chunks) {
-      const lines = chunk
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-
-      for (const line of lines) {
-        if (!line.startsWith('data:')) {
-          continue
-        }
-
-        const data = line.slice(5).trim()
-
-        if (!data || data === '[DONE]') {
-          continue
-        }
-
-        try {
-          const payload = JSON.parse(data)
-          const deltaText = extractDeltaText(payload)
-
-          if (deltaText) {
-            fullText += deltaText
-            onEvent({ type: 'delta', text: deltaText })
-          }
-        } catch {
-          continue
-        }
+      tools: [],
+    },
+    (event) => {
+      // 思考流增量对本场景无消费方；start/delta/error 保持原时序透传
+      if (event.type === 'delta') {
+        onEvent({ type: 'delta', text: event.text })
+      } else if (event.type === 'start') {
+        onEvent({ type: 'start' })
+      } else if (event.type === 'error') {
+        onEvent({ type: 'error', message: event.message })
       }
-    }
-  }
+    },
+  )
 
-  onEvent({ type: 'finish', text: fullText })
-  return fullText
-}
-
-function extractDeltaText(payload: unknown) {
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'choices' in payload &&
-    Array.isArray(payload.choices) &&
-    payload.choices.length > 0
-  ) {
-    const firstChoice = payload.choices[0]
-
-    if (
-      firstChoice &&
-      typeof firstChoice === 'object' &&
-      'delta' in firstChoice &&
-      firstChoice.delta &&
-      typeof firstChoice.delta === 'object' &&
-      'content' in firstChoice.delta
-    ) {
-      const content = firstChoice.delta.content
-
-      if (typeof content === 'string') {
-        return content
-      }
-
-      if (Array.isArray(content)) {
-        // 一些兼容实现会把内容拆成富文本片段数组，这里只抽取 text 片段并拼回纯文本。
-        return content
-          .map((item) => {
-            if (
-              item &&
-              typeof item === 'object' &&
-              'type' in item &&
-              item.type === 'text' &&
-              'text' in item &&
-              typeof item.text === 'string'
-            ) {
-              return item.text
-            }
-
-            return ''
-          })
-          .join('')
-      }
-    }
-  }
-
-  return ''
-}
-
-function extractCompletionText(payload: unknown) {
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'choices' in payload &&
-    Array.isArray(payload.choices) &&
-    payload.choices.length > 0
-  ) {
-    const firstChoice = payload.choices[0]
-
-    if (
-      firstChoice &&
-      typeof firstChoice === 'object' &&
-      'message' in firstChoice &&
-      firstChoice.message &&
-      typeof firstChoice.message === 'object' &&
-      'content' in firstChoice.message &&
-      typeof firstChoice.message.content === 'string'
-    ) {
-      return firstChoice.message.content
-    }
-  }
-
-  return ''
+  onEvent({ type: 'finish', text: response.content })
+  return response.content
 }

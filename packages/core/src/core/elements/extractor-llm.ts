@@ -41,6 +41,7 @@ export async function extractElementsWithLlm(input: {
       baseUrl: llm.baseUrl,
       apiKey: llm.apiKey,
       model: llm.model,
+      protocol: llm.protocol,
       systemPrompt,
       instruction: userPrompt,
     },

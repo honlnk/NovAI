@@ -197,6 +197,7 @@ export async function runCompaction(input: {
         baseUrl: input.config.llm.baseUrl,
         apiKey: input.config.llm.apiKey,
         model: input.config.llm.model,
+        protocol: input.config.llm.protocol,
         messages: buildCompactionRequest(input.view, range),
         tools: [],
         maxTokens: SUMMARY_MAX_TOKENS,
