@@ -17,6 +17,12 @@ export type AgentToolCall = {
   id: string
   name: AgentToolName
   input: Record<string, unknown>
+  /**
+   * gemini 函数调用的思考签名（thoughtSignature）：Gemini 2.5 思考模型在
+   * functionCall part 上携带，后续请求必须原样回传，否则 API 校验拒绝。
+   * 协议内部字段，随 assistant 消息持久化，不进 UI、不进工具 schema。
+   */
+  thoughtSignature?: string
 }
 
 export type AgentSystemMessage = {
