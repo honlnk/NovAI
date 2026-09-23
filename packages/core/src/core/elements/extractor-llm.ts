@@ -1,5 +1,7 @@
 import { streamChatCompletion } from '../llm/client'
 
+import { getElementBodyTemplate } from './templates'
+
 import type { ElementExtractionItem, ElementExtractionResult } from '../../types/elements'
 import type { ElementType } from '../../types/rag'
 import type { ProjectConfig } from '../../types/project'
@@ -50,7 +52,7 @@ export async function extractElementsWithLlm(input: {
   return parseExtractionResponse(rawText, chapterRef)
 }
 
-function buildExtractionSystemPrompt(): string {
+export function buildExtractionSystemPrompt(): string {
   return [
     '你是小说创作要素抽取助手。你的任务是从单章正文中识别并结构化抽取六类要素。',
     '',
@@ -59,20 +61,52 @@ function buildExtractionSystemPrompt(): string {
     '- locations：出现的地点、场景、场所。',
     '- entities：具体实体，包括武功、武器、坐骑、丹药、信物、法器等。',
     '- timeline：本章关键事件的时间顺序节点。',
-    '- plots：本章核心情节事件。',
+    '- plots：本章核心情节事件，必须按独立事件拆分——一个事件一个条目，禁止输出「本章剧情」「剧情总纲」这类笼统条目。',
     '- worldbuilding：涉及的设定、规则、体系、组织、境界等抽象世界观线索。',
+    '',
+    buildTemplateInstructions(),
     '',
     '【输出要求】',
     '- 只输出一个 JSON 对象，不要输出任何解释、前言、注释或代码块标记。',
     '- JSON 顶层包含六个数组字段：characters、locations、entities、timeline、plots、worldbuilding。',
-    '- 每个元素是一个对象，字段：name（字符串，必填）、summary（简短描述）、body（较详细说明，可包含原文线索）。',
+    '- 每个元素是一个对象，字段：name（字符串，必填）、summary（简短描述）、body（按上述模板分节的详细说明）、tags（可选）。',
+    '- timeline 条目必须在 body 的「所属阶段」中给出阶段名（如 缘起 / 幼年 / 收徒），并在「故事内时间」中给出故事内时间。',
+    '- tags 为字符串数组，2~5 个概括性标签（如 主角、反派、信物），不要包含类型名本身；不确定可省略。',
     '- 没有对应要素的类别返回空数组。',
     '- 不要编造正文中没有的要素；只抽取本章实际出现的内容。',
     '- 全部使用中文。',
     '',
     '【输出 JSON 结构示例】',
-    '{"characters":[{"name":"示例人物","summary":"本章做了什么","body":"详细线索"}],"locations":[],"entities":[],"timeline":[],"plots":[],"worldbuilding":[]}',
+    '{"characters":[{"name":"示例人物","summary":"本章做了什么","body":"## 基本信息\\n- **首次登场**：第001章\\n...","tags":["主角","少年"]}],"locations":[],"entities":[],"timeline":[],"plots":[],"worldbuilding":[]}',
   ].join('\n')
+}
+
+function buildTemplateInstructions(): string {
+  const templatedBuckets: Array<{ bucket: ExtractionBucket; type: ElementType }> = [
+    { bucket: 'characters', type: 'character' },
+    { bucket: 'locations', type: 'location' },
+    { bucket: 'entities', type: 'entity' },
+    { bucket: 'timeline', type: 'timeline' },
+    { bucket: 'plots', type: 'plot' },
+  ]
+
+  const lines: string[] = [
+    '【body 分节模板】',
+    '除 worldbuilding 外，每个条目的 body 必须严格按对应模板的分节输出；正文没有涉及的小节填「待补充」，不要省略节标题。',
+    '',
+  ]
+
+  for (const { bucket, type } of templatedBuckets) {
+    const template = getElementBodyTemplate(type)
+
+    if (template) {
+      lines.push(`${bucket} 模板：`, template.trimEnd(), '')
+    }
+  }
+
+  lines.push('worldbuilding 不设模板，body 不限结构，写清规则内容即可。')
+
+  return lines.join('\n')
 }
 
 function buildExtractionUserPrompt(chapterContent: string, chapterRef: string): string {
@@ -191,11 +225,39 @@ function toExtractionItem(
     type,
     name,
     summary: summary || `${name} 在「${chapterRef}」中出现。`,
-    tags: ['AI 提取', typeToTag(type)],
+    tags: mergeTags(type, record.tags),
     lastUpdatedChapter: chapterRef,
     relatedChapters: [chapterRef],
     body: body || `${name} 需要后续整理。`,
   }
+}
+
+/**
+ * 合并兜底标记与模型产出的 tags。模型 tags 只接受 string 数组，逐项 trim、
+ * 去空、去重；字段缺失或非法时回退为仅兜底两枚。
+ */
+function mergeTags(type: ElementType, raw: unknown): string[] {
+  const baseTags = ['AI 提取', typeToTag(type)]
+
+  if (!Array.isArray(raw)) {
+    return baseTags
+  }
+
+  const modelTags: string[] = []
+
+  for (const item of raw) {
+    if (typeof item !== 'string') {
+      continue
+    }
+
+    const tag = item.trim()
+
+    if (tag && !modelTags.includes(tag)) {
+      modelTags.push(tag)
+    }
+  }
+
+  return [...new Set([...baseTags, ...modelTags])]
 }
 
 function typeToTag(type: ElementType): string {
