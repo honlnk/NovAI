@@ -101,6 +101,7 @@ describe('chat store（W4 事件总线版）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
     mockedListSessions.mockResolvedValue([])
     mockedIsAgentRunActive.mockReturnValue(false)
     mockedSubscribeAgentEvents.mockReturnValue(() => {})
@@ -291,6 +292,38 @@ describe('chat store（W4 事件总线版）', () => {
     const failed = await store.sendMessage('再写一段')
     expect(failed).toBe(false)
     expect(store.runStatusType).toBe('error')
+  })
+
+  it('sendMessage 注入匿名联网配额身份 webClientId（localStorage 不可用时省略）', async () => {
+    const store = useChatStore()
+    const view = createSessionView('session-current')
+    mockedCreateSession.mockResolvedValue(view)
+    await store.createNewSession('project-1', { skipReload: true })
+    vi.stubGlobal('window', {
+      localStorage: (() => {
+        const saved: Record<string, string> = {}
+        return {
+          getItem: (key: string) => saved[key] ?? null,
+          setItem: (key: string, value: string) => {
+            saved[key] = value
+          },
+        }
+      })(),
+    })
+    vi.stubGlobal('crypto', { randomUUID: () => 'client-uuid-0001' })
+
+    await store.sendMessage('查一点现实资料')
+    expect(mockedEnqueueMessage).toHaveBeenCalledWith(expect.objectContaining({
+      webClientId: 'client-uuid-0001',
+    }))
+
+    // 隐私模式等 localStorage 不可用：不注入，服务端退化为按 IP 计数
+    mockedEnqueueMessage.mockClear()
+    vi.stubGlobal('window', {})
+
+    await store.sendMessage('再查一点')
+    const call = mockedEnqueueMessage.mock.calls[0][0] as Record<string, unknown>
+    expect(call.webClientId).toBeUndefined()
   })
 
   it('abortRun 调 stopAgentRun 并进入停止中态；run-error 收敛运行态', async () => {

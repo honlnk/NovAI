@@ -8,9 +8,11 @@ import EmbeddingSettingsPanel from './EmbeddingSettingsPanel.vue'
 import LlmSettingsPanel from './LlmSettingsPanel.vue'
 import ProjectSettingsPanel from './ProjectSettingsPanel.vue'
 import RerankSettingsPanel from './RerankSettingsPanel.vue'
+import SearchSettingsPanel from './SearchSettingsPanel.vue'
 import { useProjectStore } from '../../stores/project'
 import { useSettingsStore } from '../../stores/settings'
 import { useToast } from '../../composables/useToast'
+import type { SearchSettingsForm } from '../../utils/search-settings'
 
 const props = defineProps<{
   projectId: string
@@ -24,13 +26,14 @@ const settingsStore = useSettingsStore()
 const projectStore = useProjectStore()
 const toast = useToast()
 
-type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'project'
+type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'project'
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'llm', label: 'LLM 配置' },
   { key: 'embedding', label: 'Embedding 配置' },
   { key: 'rerank', label: 'Rerank 配置' },
   { key: 'completion', label: '输入补全' },
+  { key: 'search', label: '联网搜索' },
   { key: 'project', label: '项目设置' },
 ]
 
@@ -69,6 +72,12 @@ const completionForm = reactive({
   model: 'deepseek-chat',
   debounceMs: 600,
   maxTokens: 64,
+})
+
+const searchForm = reactive<SearchSettingsForm>({
+  provider: 'linkseek-hosted',
+  baseUrl: '',
+  apiKey: '',
 })
 
 const projectForm = reactive({
@@ -127,6 +136,11 @@ onMounted(async () => {
       debounceMs: config.completion?.debounceMs ?? 600,
       maxTokens: config.completion?.maxTokens ?? 64,
     })
+    Object.assign(searchForm, {
+      provider: config.search?.provider ?? 'linkseek-hosted',
+      baseUrl: config.search?.baseUrl ?? '',
+      apiKey: config.search?.apiKey ?? '',
+    })
     const settings = config.settings
     if (settings) {
       Object.assign(projectForm, {
@@ -149,6 +163,7 @@ watch(llmForm, () => scheduleSave({ llm: { ...llmForm } }))
 watch(embeddingForm, () => scheduleSave({ embedding: { ...embeddingForm } }))
 watch(rerankForm, () => scheduleSave({ rerank: { ...rerankForm } }))
 watch(completionForm, () => scheduleSave({ completion: { ...completionForm } }))
+watch(searchForm, () => scheduleSave({ search: { ...searchForm } }))
 watch(projectForm, () => scheduleSave({ settings: { ...projectForm } }))
 
 watch(activeTab, (tab) => {
@@ -338,6 +353,7 @@ function restoreTab(): SettingsTab {
           :form="completionForm"
           @save-immediately="handleSaveImmediately"
         />
+        <SearchSettingsPanel v-else-if="activeTab === 'search'" :form="searchForm" />
         <ProjectSettingsPanel v-else :form="projectForm" />
       </div>
     </div>

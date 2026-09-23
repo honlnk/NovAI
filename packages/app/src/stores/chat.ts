@@ -29,6 +29,7 @@ import type {
 
 import { buildRenderItems, type ChatRenderItem } from './chat-render'
 import { useProjectStore } from './project'
+import { getOrCreateClientId } from '../utils/client-id'
 
 /** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
 export type RunStatusType = 'idle' | 'running' | 'error'
@@ -293,6 +294,8 @@ export const useChatStore = defineStore('chat', () => {
         quote,
         mode,
         activeFilePath: projectStore.activeFile?.path ?? null,
+        // 匿名联网配额身份：随消息注入，沿 ChatTurnInput → ToolRuntime 到达 WebSearch/WebFetch
+        webClientId: getOrCreateClientId(),
       })
       return true
     } catch (error) {

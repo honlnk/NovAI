@@ -7,6 +7,7 @@ import {
   testEmbedding,
   testLlm,
   testRerank,
+  testSearch,
   updateConfig,
 } from '@novai/core/services/settings-service'
 import type {
@@ -17,6 +18,7 @@ import type {
   ProjectConfigPatch,
   ProjectConfigView,
   RerankConfigView,
+  SearchConfigView,
 } from '@novai/core/services/types'
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -68,6 +70,10 @@ export const useSettingsStore = defineStore('settings', () => {
     return runConnectionTest(() => testCompletion(input))
   }
 
+  async function testSearchConfig(input: SearchConfigView & { webClientId?: string }) {
+    return runConnectionTest(() => testSearch(input))
+  }
+
   function resetSettings() {
     config.value = null
     lastConnectionTest.value = null
@@ -113,6 +119,7 @@ export const useSettingsStore = defineStore('settings', () => {
     testEmbeddingConfig,
     testLlmConfig,
     testRerankConfig,
+    testSearchConfig,
   }
 })
 

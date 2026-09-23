@@ -328,6 +328,8 @@ export async function enqueueMessage(input: {
   mode: 'queue' | 'steer'
   /** 发送时打开的文件路径（隐式上下文，目标解析用快照） */
   activeFilePath?: string | null
+  /** 匿名联网配额身份（托管 linkseek 绿灯），由 app 层生成后随消息注入 */
+  webClientId?: string
 }): Promise<{ sessionId: string }> {
   const project = requireRuntimeProject(input.projectId)
 
@@ -361,6 +363,7 @@ export async function enqueueMessage(input: {
   void wakeSessionDriver({
     project,
     session,
+    webClientId: input.webClientId,
     titleContext: {
       hadNoUserMessage,
       titleBeforeRun,
@@ -423,6 +426,7 @@ async function wakeSessionDriver(options: {
   project: ProjectSnapshot
   session: ChatSessionState
   titleContext: DriverTitleContext
+  webClientId?: string
 }): Promise<void> {
   const { project, session, titleContext } = options
   const projectId = project.id
@@ -454,6 +458,8 @@ async function wakeSessionDriver(options: {
       scenePrompt,
       novaiOverview,
       activeFilePath: lastActiveFilePathByProject.get(projectId) ?? null,
+      // 匿名联网配额身份：沿 ChatTurnInput → ToolRuntime 链注入 WebSearch/WebFetch
+      ...(options.webClientId ? { webClientId: options.webClientId } : {}),
       confirm,
     },
     onEvent(event) {
