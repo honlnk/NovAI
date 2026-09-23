@@ -778,6 +778,11 @@ function collectTurnFileChanges(records: FileChangeRecord[]): TurnFileChangeView
     let linesAdded = 0
     let linesRemoved = 0
     for (const record of views) {
+      // 删除记录无片段 diff，行数取删除时落账的 linesRemoved（旧账本无此字段，贡献 0）
+      if (record.change.type === 'deleted') {
+        linesRemoved += record.change.linesRemoved ?? 0
+        continue
+      }
       if (!record.diff) {
         continue
       }
@@ -912,7 +917,7 @@ function toChangedFileView(change: FileChange): ChangedFileView {
   }
 
   if (change.type === 'deleted') {
-    return { type: 'deleted', path: change.path, trashPath: change.trashPath }
+    return { type: 'deleted', path: change.path, trashPath: change.trashPath, ...(change.linesRemoved !== undefined ? { linesRemoved: change.linesRemoved } : {}) }
   }
 
   return { type: change.type, path: change.path }

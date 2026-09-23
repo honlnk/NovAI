@@ -128,7 +128,7 @@ const changeLabels: Record<string, string> = {
             </template>
           </span>
           <span
-            v-if="diffRecords(file).length > 0"
+            v-if="diffRecords(file).length > 0 || file.linesRemoved > 0"
             class="shrink-0 font-mono"
           >
             <span class="text-green-600">+{{ file.linesAdded }}</span>

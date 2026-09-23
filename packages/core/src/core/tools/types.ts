@@ -52,7 +52,8 @@ export type FileChange =
   | { type: 'created'; path: string }
   | { type: 'updated'; path: string }
   | { type: 'renamed'; fromPath: string; toPath: string }
-  | { type: 'deleted'; path: string; trashPath?: string }
+  /** deleted 带被删行数（只带数字不带内容：原文去回收站 trashPath 看，账本会话落盘不重复存） */
+  | { type: 'deleted'; path: string; trashPath?: string; linesRemoved?: number }
 
 /**
  * 片段级 diff（改动账本 FileChangeRecord 的唯一 diff 载体，抄 dsh 写时 before/after 机制）：

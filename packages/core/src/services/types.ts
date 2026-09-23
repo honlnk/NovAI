@@ -334,6 +334,8 @@ export type ChangedFileView =
       type: 'deleted'
       path: string
       trashPath?: string
+      /** 被删行数（只带数字不带内容；旧账本记录无此字段，视为 0） */
+      linesRemoved?: number
     }
 
 /**

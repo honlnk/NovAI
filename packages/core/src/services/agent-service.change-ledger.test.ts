@@ -51,14 +51,14 @@ const stubConfig = {
 
 function emitToolResult(
   emit: (event: AgentQueryEvent) => void,
-  input: { id: string; name: 'EditFile' | 'CreateFile' | 'RenameFile' | 'DeleteFile'; path: string; toPath?: string; diff?: { oldText: string; newText: string; linesAdded: number; linesRemoved: number } },
+  input: { id: string; name: 'EditFile' | 'CreateFile' | 'RenameFile' | 'DeleteFile'; path: string; toPath?: string; linesRemoved?: number; diff?: { oldText: string; newText: string; linesAdded: number; linesRemoved: number } },
 ) {
   const call = { id: input.id, name: input.name, input: {} }
   emit({ type: 'tool-call', call, inputSummary: `调用 ${input.name}` })
   const fileChange = input.name === 'RenameFile'
     ? { type: 'renamed' as const, fromPath: input.path, toPath: input.toPath ?? input.path }
     : input.name === 'DeleteFile'
-      ? { type: 'deleted' as const, path: input.path, trashPath: `.novel/trash/${input.path}` }
+      ? { type: 'deleted' as const, path: input.path, trashPath: `.novel/trash/${input.path}`, ...(input.linesRemoved !== undefined ? { linesRemoved: input.linesRemoved } : {}) }
       : { type: input.name === 'CreateFile' ? ('created' as const) : ('updated' as const), path: input.path }
   emit({
     type: 'tool-result',
@@ -302,7 +302,7 @@ describe('改动账本 service 层', () => {
     expect(summaries[0].files[0]?.records).toHaveLength(3)
   })
 
-  it('新建后又删除：呈现为一个删除行（不丢弃、不误报「改动记录缺失」）', async () => {
+  it('新建后又删除：呈现为一个删除行（不丢弃、不误报「改动记录缺失」），删除行数计入聚合', async () => {
     mockedQuery.mockImplementation(async (input) => {
       const emit = input.onEvent?.bind(input) ?? (() => {})
       emitToolResult(emit, {
@@ -311,7 +311,7 @@ describe('改动账本 service 层', () => {
         path: 'elements/characters/废案.md',
         diff: { oldText: '', newText: '废案内容', linesAdded: 1, linesRemoved: 0 },
       })
-      emitToolResult(emit, { id: 'c2', name: 'DeleteFile', path: 'elements/characters/废案.md' })
+      emitToolResult(emit, { id: 'c2', name: 'DeleteFile', path: 'elements/characters/废案.md', linesRemoved: 1 })
       input.onEvent?.({ type: 'done', messages: input.view.messages })
       return input.view.messages
     })
@@ -324,9 +324,29 @@ describe('改动账本 service 层', () => {
     expect(summaries[0].files[0]).toMatchObject({
       path: 'elements/characters/废案.md',
       status: 'deleted',
+      linesAdded: 1,
+      linesRemoved: 1,
     })
     // 完整经过留在 records：先建后删，点开可溯源
     expect(summaries[0].files[0]?.records.map((record) => record.change.type)).toEqual(['created', 'deleted'])
+  })
+
+  it('纯删除：删除行数落账并计入聚合（旧账本记录无此字段则为 0）', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      emitToolResult(emit, { id: 'c1', name: 'DeleteFile', path: 'chapters/第099章-废稿.txt', linesRemoved: 42 })
+      emitToolResult(emit, { id: 'c2', name: 'DeleteFile', path: 'chapters/第098章-旧账.txt' })
+      input.onEvent?.({ type: 'done', messages: input.view.messages })
+      return input.view.messages
+    })
+
+    const { result } = await runOneTurn('删两章')
+
+    const summaries = findChangeSummaries(result.session.messages)
+    if (summaries[0]?.kind !== 'change-summary') throw new Error('unreachable')
+    expect(summaries[0].files).toHaveLength(2)
+    expect(summaries[0].files[0]).toMatchObject({ status: 'deleted', linesAdded: 0, linesRemoved: 42 })
+    expect(summaries[0].files[1]).toMatchObject({ status: 'deleted', linesAdded: 0, linesRemoved: 0 })
   })
 
   it('纯问答轮：不 push change-summary，changedFileCount 为 0', async () => {

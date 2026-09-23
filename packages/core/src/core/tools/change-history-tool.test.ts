@@ -127,6 +127,26 @@ describe('GetFileChangeHistory 工具', () => {
     expect(output.content).toContain('修改 elements/characters/鸿影.md (+1 −1)')
   })
 
+  it('删除记录带被删行数（+0 −N）；旧账本无此字段的记录不显示计数', async () => {
+    const withDelete = [
+      ...fixtures,
+      // 账本是追加序（旧→新），输出倒序——最新记录放数组末尾才会出现在第一行
+      record({
+        id: 'd1',
+        at: '2026-09-19T10:00:00.000Z',
+        change: { type: 'deleted', path: 'chapters/第099章-废稿.txt', trashPath: '.novel/trash/x/第099章-废稿.txt', linesRemoved: 42 },
+      }),
+    ]
+    const input = getFileChangeHistoryTool.validateInput({})
+    const output = await getFileChangeHistoryTool.run(input, runtimeWith(withDelete))
+
+    const lines = output.content.split('\n')
+    expect(lines[0]).toContain('删除 chapters/第099章-废稿.txt (+0 −42)')
+    // fixtures 里的 c4 是旧口径删除记录（无 linesRemoved）：只有路径，没有计数
+    expect(lines[1]).toContain('删除 草稿/废弃.txt')
+    expect(lines[1]).not.toContain('(+0')
+  })
+
   it('空账本：明说暂无记录', async () => {
     const input = getFileChangeHistoryTool.validateInput({})
     const output = await getFileChangeHistoryTool.run(input, runtimeWith([]))

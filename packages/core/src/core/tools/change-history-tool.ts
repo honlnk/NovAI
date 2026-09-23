@@ -104,7 +104,11 @@ function formatRecord(record: FileChangeRecord): string {
     return `[${time}] 改名 ${record.change.fromPath} → ${record.change.toPath}${diffSuffix}`
   }
   if (record.change.type === 'deleted') {
-    return `[${time}] 删除 ${record.change.path}`
+    // 删除无片段 diff，行数取删除时落账的 linesRemoved（旧账本记录无此字段，不显示计数）
+    const deletedSuffix = record.change.linesRemoved !== undefined
+      ? ` (+0 −${record.change.linesRemoved})`
+      : ''
+    return `[${time}] 删除 ${record.change.path}${deletedSuffix}`
   }
   const label = record.change.type === 'created' ? '新建' : '修改'
   return `[${time}] ${label} ${record.change.path}${diffSuffix}`

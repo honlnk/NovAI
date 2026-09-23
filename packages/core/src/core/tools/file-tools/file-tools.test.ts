@@ -175,7 +175,7 @@ describe('file tools', () => {
       })
     })
 
-    it('DeleteFile declares a deleted change with trashPath', async () => {
+    it('DeleteFile declares a deleted change with trashPath and linesRemoved', async () => {
       const runtime = createRuntime({ 'chapters/第001章-废稿.txt': '废稿' })
       const output = await deleteFileTool.run({ path: 'chapters/第001章-废稿.txt' }, runtime)
 
@@ -183,7 +183,15 @@ describe('file tools', () => {
         type: 'deleted',
         path: 'chapters/第001章-废稿.txt',
         trashPath: output.trashPath,
+        linesRemoved: 1,
       })
+    })
+
+    it('DeleteFile 行数与 DiffLines 同源：尾部换行不多计一行', async () => {
+      const runtime = createRuntime({ 'chapters/第001章-废稿.txt': '第一行\n第二行\n' })
+      const output = await deleteFileTool.run({ path: 'chapters/第001章-废稿.txt' }, runtime)
+
+      expect(output.linesRemoved).toBe(2)
     })
 
     it('read-only tools do not declare file changes', () => {
