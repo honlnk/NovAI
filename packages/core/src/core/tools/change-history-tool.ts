@@ -1,4 +1,5 @@
 import type { FileChangeRecord } from '../../types/chat'
+import { countDiffLines } from './file-tools/diff-line-stats'
 import type {
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
@@ -90,8 +91,13 @@ function recordTouchesPath(record: FileChangeRecord, path: string): boolean {
 
 function formatRecord(record: FileChangeRecord): string {
   const time = formatTime(record.at)
+  // 行数不读记录里存的值，对 oldText/newText 实时重算：
+  // 与写回面板同一口径（countDiffLines），历史账本里旧净差口径的数字随之自愈
   const diffSuffix = record.diff
-    ? ` (+${record.diff.linesAdded} −${record.diff.linesRemoved})`
+    ? (() => {
+        const stats = countDiffLines(record.diff.oldText, record.diff.newText)
+        return ` (+${stats.linesAdded} −${stats.linesRemoved})`
+      })()
     : ''
 
   if (record.change.type === 'renamed') {

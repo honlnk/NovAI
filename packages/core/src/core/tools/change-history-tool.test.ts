@@ -112,6 +112,21 @@ describe('GetFileChangeHistory 工具', () => {
     expect(output.content).toContain('仅显示最近 2 条')
   })
 
+  it('历史账本里的旧净差口径数字：输出按片段实时重算（存的 +0−0 显示为 +1−1）', async () => {
+    const stale = [
+      record({
+        id: 'old1',
+        change: { type: 'updated', path: 'elements/characters/鸿影.md' },
+        // 旧口径账本：一行换一行存的是净差 +0 −0
+        diff: { oldText: '旧句', newText: '新句', linesAdded: 0, linesRemoved: 0 },
+      }),
+    ]
+    const input = getFileChangeHistoryTool.validateInput({})
+    const output = await getFileChangeHistoryTool.run(input, runtimeWith(stale))
+
+    expect(output.content).toContain('修改 elements/characters/鸿影.md (+1 −1)')
+  })
+
   it('空账本：明说暂无记录', async () => {
     const input = getFileChangeHistoryTool.validateInput({})
     const output = await getFileChangeHistoryTool.run(input, runtimeWith([]))
