@@ -35,6 +35,8 @@ export async function executeAgentTool(input: {
   confirm?: ConfirmHandler
   /** 会话改动账本只读取口（GetFileChangeHistory 用），组 runtime 时带上。 */
   getChangeLedger?: () => readonly FileChangeRecord[]
+  /** 联网搜索匿名身份（app 层注入），组 runtime 时带上。 */
+  webClientId?: string
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage> {
   const tool = input.tools[input.call.name]
@@ -133,6 +135,7 @@ export async function executeAgentTool(input: {
       project: input.project,
       readFileStates: input.readFileStates,
       getChangeLedger: input.getChangeLedger,
+      webClientId: input.webClientId,
     })
     const resultSummary = tool.core.summarizeOutput(output)
     // 写工具成功执行后提取结构化文件变更与片段级 diff，供改动账本累积

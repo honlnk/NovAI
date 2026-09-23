@@ -14,6 +14,8 @@ export type ChatToolName =
   | 'FindFiles'
   | 'RagSearch'
   | 'GetFileChangeHistory'
+  | 'WebSearch'
+  | 'WebFetch'
 
 export type UserTextMessage = {
   id: string
@@ -238,6 +240,8 @@ export type ChatTurnInput = {
   signal?: AbortSignal
   /** 写工具确认回调，透传到 Agent Loop。 */
   confirm?: ConfirmHandler
+  /** 联网搜索匿名身份（app 层 localStorage UUID），透传到工具运行时（托管档绿灯配额键）。 */
+  webClientId?: string
 }
 
 export type ChatTurnResult = {

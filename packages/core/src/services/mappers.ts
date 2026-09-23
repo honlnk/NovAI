@@ -30,6 +30,7 @@ export function toProjectConfigView(config: ProjectConfig): ProjectConfigView {
     embedding: { ...config.embedding },
     rerank: { ...config.rerank },
     completion: { ...config.completion },
+    search: { ...config.search },
     settings: { ...config.settings },
   }
 }

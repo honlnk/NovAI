@@ -52,6 +52,7 @@ function createProjectView(files: ProjectView['files']): ProjectView {
       embedding: { baseUrl: '', apiKey: '', model: '' },
       rerank: { enabled: false, baseUrl: '', apiKey: '', model: '', mode: 'text', topN: 8 },
       completion: { enabled: false, baseUrl: '', apiKey: '', model: '', debounceMs: 300, maxTokens: 128 },
+      search: { provider: 'linkseek-hosted', baseUrl: '', apiKey: '' },
       settings: {
         ragCandidateLimit: 20,
         ragContextMaxItems: 8,

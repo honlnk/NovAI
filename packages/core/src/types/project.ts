@@ -25,6 +25,26 @@ export type TreeNode = {
   children?: TreeNode[]
 }
 
+/**
+ * 联网搜索来源档位（决策 0006）。
+ *
+ * 工具契约恒定（WebSearch/WebFetch schema 不随后端变化），档位只决定
+ * provider 实现与抓取能力：linkseek 系两档带抓取（含质量门控自动渲染升级），
+ * Exa / Perplexity 为纯搜索 API，无抓取（浏览器直连被目标站 CORS 挡死）。
+ */
+export type SearchProviderKind = 'linkseek-hosted' | 'linkseek-selfhost' | 'exa' | 'perplexity'
+
+export type SearchConfig = {
+  provider: SearchProviderKind
+  /**
+   * 自定义服务地址：linkseek-selfhost 必填（用户实例根地址）；
+   * exa / perplexity 可覆盖默认官方地址；linkseek-hosted 缺省用内置常量（部署前为占位）。
+   */
+  baseUrl: string
+  /** selfhost / exa / perplexity 的 API Key；hosted 匿名绿灯不需要。 */
+  apiKey: string
+}
+
 export type ProjectConfig = {
   version: number
   project: {
@@ -69,6 +89,8 @@ export type ProjectConfig = {
     debounceMs: number
     maxTokens: number
   }
+  /** 联网搜索（WebSearch/WebFetch 工具的后端配置）；默认托管档零配置可用。 */
+  search: SearchConfig
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number

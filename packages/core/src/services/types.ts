@@ -1,4 +1,4 @@
-import type { PermissionPreset } from '../types/project'
+import type { PermissionPreset, SearchConfig } from '../types/project'
 
 export type ProjectFileNodeView = {
   name: string
@@ -42,6 +42,7 @@ export type ProjectConfigView = {
     debounceMs: number
     maxTokens: number
   }
+  search: SearchConfig
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number
@@ -66,6 +67,8 @@ export type RerankConfigView = ProjectConfigView['rerank']
 
 export type CompletionConfigView = ProjectConfigView['completion']
 
+export type SearchConfigView = ProjectConfigView['search']
+
 export type ProjectSettingsView = ProjectConfigView['settings']
 
 export type ProjectConfigPatch = Partial<{
@@ -74,6 +77,7 @@ export type ProjectConfigPatch = Partial<{
   embedding: Partial<EmbeddingConfigView>
   rerank: Partial<RerankConfigView>
   completion: Partial<CompletionConfigView>
+  search: Partial<SearchConfigView>
   settings: Partial<ProjectSettingsView>
 }>
 
@@ -297,6 +301,8 @@ export type ToolNameView =
   | 'FindFiles'
   | 'RagSearch'
   | 'GetFileChangeHistory'
+  | 'WebSearch'
+  | 'WebFetch'
 
 export type ToolCallView = {
   id: string

@@ -92,6 +92,11 @@ export const DEFAULT_CONFIG = {
     debounceMs: 600,
     maxTokens: 64,
   },
+  search: {
+    provider: 'linkseek-hosted',
+    baseUrl: '',
+    apiKey: '',
+  },
   settings: {
     ragCandidateLimit: 20,
     ragContextMaxItems: 8,
@@ -112,6 +117,18 @@ export const DEFAULT_PERMISSION_PRESET = DEFAULT_CONFIG.settings.permissionPrese
 
 export function isPermissionPreset(value: unknown): value is (typeof PERMISSION_PRESETS)[number] {
   return typeof value === 'string' && (PERMISSION_PRESETS as readonly string[]).includes(value)
+}
+
+/** 联网搜索来源档位的合法值表与默认值（档位语义见 types/project.ts 的 SearchProviderKind）。 */
+export const SEARCH_PROVIDERS = [
+  'linkseek-hosted',
+  'linkseek-selfhost',
+  'exa',
+  'perplexity',
+] as const
+
+export function isSearchProvider(value: unknown): value is (typeof SEARCH_PROVIDERS)[number] {
+  return typeof value === 'string' && (SEARCH_PROVIDERS as readonly string[]).includes(value)
 }
 
 export function createDefaultConfig(projectName: string) {

@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -304,6 +304,14 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       ...config.completion,
       debounceMs: clampInt(config.completion?.debounceMs, 200, 3000, DEFAULT_CONFIG.completion.debounceMs),
       maxTokens: clampInt(config.completion?.maxTokens, 16, 256, DEFAULT_CONFIG.completion.maxTokens),
+    },
+    search: {
+      ...DEFAULT_CONFIG.search,
+      ...config.search,
+      // 非法档位值回退默认托管档（旧配置无此段时同样落到默认）
+      provider: isSearchProvider(config.search?.provider)
+        ? config.search.provider
+        : DEFAULT_CONFIG.search.provider,
     },
     settings: {
       ...DEFAULT_CONFIG.settings,

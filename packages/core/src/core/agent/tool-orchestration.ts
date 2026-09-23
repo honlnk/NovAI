@@ -17,6 +17,8 @@ export async function runAgentTools(input: {
   confirm?: ConfirmHandler
   /** 会话改动账本只读取口（GetFileChangeHistory 用），透传给工具执行层。 */
   getChangeLedger?: () => readonly FileChangeRecord[]
+  /** 联网搜索匿名身份（app 层注入），透传给工具执行层组 runtime。 */
+  webClientId?: string
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage[]> {
   const results: AgentToolResultMessage[] = []
@@ -53,6 +55,7 @@ export async function runAgentTools(input: {
       readFileStates: input.readFileStates,
       confirm: input.confirm,
       getChangeLedger: input.getChangeLedger,
+      webClientId: input.webClientId,
       onEvent: input.onEvent,
     }))
   }

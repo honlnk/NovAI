@@ -62,6 +62,8 @@ export async function query(input: {
   steering?: SteeringAccess
   /** 会话改动账本只读取口（GetFileChangeHistory 用），透传到工具执行层。 */
   getChangeLedger?: () => readonly FileChangeRecord[]
+  /** 联网搜索匿名身份（localStorage UUID，app 层注入），透传到工具运行时。 */
+  webClientId?: string
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   const view = input.view
@@ -249,6 +251,7 @@ export async function query(input: {
       signal: input.signal,
       confirm: input.confirm,
       getChangeLedger: input.getChangeLedger,
+      webClientId: input.webClientId,
       onEvent: input.onEvent,
     })
 

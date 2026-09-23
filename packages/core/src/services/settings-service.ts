@@ -9,6 +9,7 @@ export {
 } from '../core/ai/dashscope-models'
 import { testRerankConnection } from '../core/ai/rerank-client'
 import { testEmbeddingConnection } from '../core/embedding/client'
+import { resolveSearchProvider } from '../core/web/search-provider'
 import {
   readProjectConfig,
   writeProjectConfig,
@@ -31,6 +32,7 @@ import type {
   ProjectConfigPatch,
   ProjectConfigView,
   RerankConfigView,
+  SearchConfigView,
 } from './types'
 
 export async function getConfig(projectId: string): Promise<ProjectConfigView> {
@@ -65,6 +67,10 @@ export async function updateConfig(
     completion: {
       ...currentConfig.completion,
       ...patch.completion,
+    },
+    search: {
+      ...currentConfig.search,
+      ...patch.search,
     },
     settings: {
       ...currentConfig.settings,
@@ -120,6 +126,31 @@ export async function testCompletion(
     apiKey: config.apiKey,
     model: config.model,
   })
+}
+
+/**
+ * 联网搜索「测试连接」：按当前表单配置解析 provider 并发一次真实搜索。
+ * 四档通用（托管档测绿灯连通性；第三方档验证 Key 与地址）。
+ */
+export async function testSearch(
+  config: SearchConfigView & { webClientId?: string },
+): Promise<ConnectionTestResultView> {
+  try {
+    const provider = resolveSearchProvider(config)
+    const outcome = await provider.search('连接测试')
+    const sourceCount = outcome.sources.length
+    return {
+      ok: true,
+      message: sourceCount > 0
+        ? `连接成功，返回 ${sourceCount} 条结果。`
+        : '连接成功（该查询无结果，属正常现象）。',
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : '连接失败',
+    }
+  }
 }
 
 /**

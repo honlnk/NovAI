@@ -11,6 +11,8 @@ export type CoreToolName =
   | 'FindFiles'
   | 'RagSearch'
   | 'GetFileChangeHistory'
+  | 'WebSearch'
+  | 'WebFetch'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
@@ -20,6 +22,11 @@ export type ToolRuntime = {
    * getter 形态：账本每次累积都不可变重建数组，引用快照会过期，读时取最新。
    */
   getChangeLedger?: () => readonly FileChangeRecord[]
+  /**
+   * 联网搜索的匿名身份（localStorage UUID，app 层注入）：
+   * linkseek 托管档绿灯用它认配额（X-NovAI-Client-Id）；缺失时服务端按 IP 计。
+   */
+  webClientId?: string
 }
 
 export type ToolCall<TName extends CoreToolName = CoreToolName, TInput = unknown> = {
@@ -268,4 +275,43 @@ export type GetFileChangeHistoryOutput = {
   totalCount: number
   /** 实际返回条数 */
   returnedCount: number
+}
+
+export type WebSearchInput = {
+  /** 1-4 条搜索 query（多 query 并发 + 去重合并） */
+  queries: string[]
+}
+
+export type WebSearchOutput = {
+  queries: string[]
+  /** provider 生成的答案摘要（仅生成式后端有） */
+  content?: string
+  sources: Array<{
+    title: string
+    url: string
+    snippet: string
+    publishedAt?: string
+  }>
+  /** 合并后超出上限被截断 */
+  truncated: boolean
+}
+
+export type WebFetchInput = {
+  url: string
+}
+
+export type WebFetchOutput = {
+  /** 模型给的原始 URL */
+  url: string
+  /** 重定向链终点 */
+  finalUrl?: string
+  /** 终点 HTTP 状态码（后端不提供时缺省） */
+  statusCode?: number
+  /** 正文（markdown；超 50,000 字符截断并附提示） */
+  content: string
+  truncated: boolean
+  /** 'browser' = 服务端浏览器渲染；缺省视为 http */
+  renderedBy?: 'http' | 'browser'
+  /** 服务端附带提示（如渲染升级失败的降级说明） */
+  notice?: string
 }

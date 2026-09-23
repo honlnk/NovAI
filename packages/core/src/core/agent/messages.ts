@@ -10,6 +10,8 @@ export type AgentToolName =
   | 'FindFiles'
   | 'RagSearch'
   | 'GetFileChangeHistory'
+  | 'WebSearch'
+  | 'WebFetch'
 
 export type AgentToolCall = {
   id: string
