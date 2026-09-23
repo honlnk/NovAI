@@ -127,6 +127,53 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.streamingMessageId).toBe('msg-1')
   })
 
+  it('message-reasoning-delta：思考先占位（text 空），正文 delta 原位追加，message 事件原位落盘', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    // 思考流先到：占位 assistant 消息（text 空，仅 reasoning）
+    emit({ type: 'message-reasoning-delta', sessionId: 'session-current', messageId: 'msg-1', text: '先想' })
+    emit({ type: 'message-reasoning-delta', sessionId: 'session-current', messageId: 'msg-1', text: '一步' })
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]).toMatchObject({ id: 'msg-1', role: 'assistant', kind: 'text', text: '', reasoning: '先想一步' })
+    expect(store.streamingMessageId).toBe('msg-1')
+
+    // 正文 delta 到达：同 id 原位追加，思考文本保留
+    emit({ type: 'message-delta', sessionId: 'session-current', messageId: 'msg-1', text: '正文' })
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]).toMatchObject({ id: 'msg-1', text: '正文', reasoning: '先想一步' })
+
+    // 完成事件原位替换（同 id），清空流式态
+    emit({
+      type: 'message',
+      sessionId: 'session-current',
+      message: {
+        id: 'msg-1',
+        role: 'assistant',
+        kind: 'text',
+        text: '最终正文',
+        reasoning: '先想一步',
+        createdAt: '2026-09-24T00:00:00.000Z',
+      },
+    })
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]).toMatchObject({ id: 'msg-1', text: '最终正文', reasoning: '先想一步' })
+    expect(store.streamingMessageId).toBeNull()
+  })
+
+  it('跨会话的思考流 delta 同样丢弃（与正文 delta 同一防串扰路由）', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    emit({ type: 'message-reasoning-delta', sessionId: 'session-stale', messageId: 'msg-stale', text: '旧会话的思考' })
+    expect(store.messages).toHaveLength(0)
+    expect(store.streamingMessageId).toBeNull()
+  })
+
   it('isRunning 由事件驱动：run-start 置真，run-finish 置假并写入会话级文案', async () => {
     const store = useChatStore()
     const view = createSessionView('session-current')

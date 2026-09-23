@@ -34,6 +34,11 @@ export type AssistantTextMessage = {
   role: 'assistant'
   kind: 'text'
   text: string
+  /**
+   * 思考流文本（reasoning 模型的思考过程）：只随会话落盘供 UI 展示，
+   * 构建模型请求时剥除（只收不发）。思考后直接调工具的轮次 text 为空、仅带 reasoning。
+   */
+  reasoning?: string
   createdAt: string
 }
 

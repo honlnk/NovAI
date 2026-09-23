@@ -34,6 +34,8 @@ type SessionEvent =
   | { type: 'message'; message: ChatMessage; session: ChatSessionState }
   /** 模型流式输出的文本增量（瞬态渲染态，不落盘）；同一条 assistant 消息共享稳定 messageId。 */
   | { type: 'message-delta'; messageId: string; text: string }
+  /** 思考流增量（瞬态渲染态，不落盘）；与正文 delta 同一条 assistant 消息共享 messageId，思考先于正文。 */
+  | { type: 'message-reasoning-delta'; messageId: string; text: string }
   /** 收件箱在 driver 运行中被抽干/变化（首批 claim、steer 抽干点）；service 层据此广播 queue-updated。 */
   | { type: 'inbox-updated'; session: ChatSessionState }
 
@@ -394,6 +396,13 @@ async function runDriverTurn(options: {
           return
         }
 
+        if (event.type === 'assistant-reasoning-delta') {
+          // 思考流先于正文到达：占位 id 在此分配，随后的正文 delta 与最终 assistant-message 复用同一 id
+          streamingMessageId ??= createId('message')
+          onEvent?.({ type: 'message-reasoning-delta', messageId: streamingMessageId, text: event.text })
+          return
+        }
+
         if (event.type === 'assistant-delta') {
           streamingMessageId ??= createId('message')
           onEvent?.({ type: 'message-delta', messageId: streamingMessageId, text: event.text })
@@ -401,10 +410,12 @@ async function runDriverTurn(options: {
         }
 
         if (event.type === 'assistant-message') {
-          if (event.message.content.trim()) {
+          const reasoning = event.message.reasoning?.trim()
+          // 思考后直接调工具的轮次：content 为空但思考本身是用户可见结论，仅带 reasoning 也落一条气泡
+          if (event.message.content.trim() || reasoning) {
             pushMessage(
               session,
-              createAssistantText(event.message.content.trim(), streamingMessageId ?? undefined),
+              createAssistantText(event.message.content.trim(), streamingMessageId ?? undefined, reasoning || undefined),
               onEvent,
             )
           }
@@ -790,12 +801,13 @@ function createSteeringMessage(message: QueuedMessage): ChatMessage {
   }
 }
 
-function createAssistantText(text: string, id?: string): ChatMessage {
+function createAssistantText(text: string, id?: string, reasoning?: string): ChatMessage {
   return {
     id: id ?? createId('message'),
     role: 'assistant',
     kind: 'text',
     text,
+    ...(reasoning ? { reasoning } : {}),
     createdAt: new Date().toISOString(),
   }
 }

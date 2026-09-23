@@ -72,6 +72,27 @@ function textSse(text: string): Response {
   ])
 }
 
+/** reasoning_content 增量 + 正文增量（deepseek-reasoner 风格）：思考先于正文。 */
+function reasoningTextSse(reasoning: string, text: string): Response {
+  return sseResponse([
+    JSON.stringify({ choices: [{ delta: { reasoning_content: reasoning } }] }),
+    JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] }),
+  ])
+}
+
+/** 思考后直接调工具（无正文）：reasoning-only assistant 轮。 */
+function reasoningToolCallSse(reasoning: string, id: string, name: string, args: Record<string, unknown>): Response {
+  return sseResponse([
+    JSON.stringify({ choices: [{ delta: { reasoning_content: reasoning } }] }),
+    JSON.stringify({
+      choices: [{
+        delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] },
+        finish_reason: 'tool_calls',
+      }],
+    }),
+  ])
+}
+
 beforeEach(() => {
   fetchCalls = []
   fetchHandler = () => textSse('默认回答')
@@ -100,6 +121,13 @@ const driverInput = {
   config: stubConfig,
   systemPrompt: '系统提示',
 } as const
+
+/** session 层事件类型（runChatDriver onEvent 参数，从签名推导避免导出测试专用类型）。 */
+type SessionEvent = Parameters<NonNullable<Parameters<typeof runChatDriver>[0]['onEvent']>>[0]
+
+function isOf<T extends SessionEvent['type']>(type: T) {
+  return (event: SessionEvent): event is Extract<SessionEvent, { type: T }> => event.type === type
+}
 
 describe('driver 全链路（真实 query + 假 SSE）', () => {
   it('长任务不被 8 轮打断：agentMaxTurns 缺省 0 = 不限，12 个工具回合后正常收尾', async () => {
@@ -217,6 +245,53 @@ describe('driver 全链路（真实 query + 假 SSE）', () => {
     expect(JSON.stringify(fetchCalls[1].messages)).toContain('chapters/002.txt')
     expect(JSON.stringify(fetchCalls[1].messages)).not.toContain('chapters/999.txt')
     expect(result.session.inbox).toEqual({ nextTurn: [], nextStep: [] })
+  })
+
+  it('思考流全链路：reasoning delta 与正文共享 messageId，最终消息带 reasoning 落盘', async () => {
+    fetchHandler = () => reasoningTextSse('我先想一想', '想好了')
+    const events: SessionEvent[] = []
+    const result = await runChatDriver({
+      session: createSessionWithQueue(['写一句']),
+      input: { ...driverInput, instruction: '' },
+      onEvent: (event) => events.push(event),
+    })
+
+    const reasoningDeltas = events.filter(isOf('message-reasoning-delta'))
+    const textDeltas = events.filter(isOf('message-delta'))
+    expect(reasoningDeltas).toHaveLength(1)
+    expect(reasoningDeltas[0].text).toBe('我先想一想')
+    expect(textDeltas).toHaveLength(1)
+    expect(textDeltas[0].text).toBe('想好了')
+    // 思考与正文属于同一条 assistant 消息（UI 原位追加的前提）
+    expect(reasoningDeltas[0].messageId).toBe(textDeltas[0].messageId)
+
+    const assistantTexts = result.session.messages.filter((m) => m.kind === 'text' && m.role === 'assistant')
+    expect(assistantTexts).toHaveLength(1)
+    expect(assistantTexts[0]).toMatchObject({ text: '想好了', reasoning: '我先想一想' })
+    // 落盘消息复用流式占位 id（UI 原位替换的前提）
+    expect(assistantTexts[0].id).toBe(reasoningDeltas[0].messageId)
+  })
+
+  it('思考后直接调工具：content 空但 reasoning 落一条气泡，且思考不回传（只收不发）', async () => {
+    fetchHandler = (_call, index) =>
+      index === 0
+        ? reasoningToolCallSse('盘算一下', 'call_r', 'ReadFile', { path: 'chapters/001.txt' })
+        : textSse('收尾')
+
+    const result = await runChatDriver({
+      session: createSessionWithQueue(['通读章节']),
+      input: { ...driverInput, instruction: '' },
+    })
+
+    const assistantTexts = result.session.messages.filter((m) => m.kind === 'text' && m.role === 'assistant')
+    expect(assistantTexts).toHaveLength(2)
+    // 第一轮：思考后直接调工具，assistant 气瓶仅带 reasoning（text 空）
+    expect(assistantTexts[0]).toMatchObject({ text: '', reasoning: '盘算一下' })
+    // 第二轮收尾无思考：不带 reasoning 字段
+    expect(assistantTexts[1]).toMatchObject({ text: '收尾' })
+    expect('reasoning' in assistantTexts[1]).toBe(false)
+    // 只收不发：后续请求不携带此前思考文本
+    expect(JSON.stringify(fetchCalls[1].messages)).not.toContain('盘算一下')
   })
 
   it('轮次安全阀：达 agentMaxTurns 上限时提示为 turn-limit kind，不再伪装 context-summary', async () => {

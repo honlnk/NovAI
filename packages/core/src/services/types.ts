@@ -399,6 +399,8 @@ export type ChatMessageView =
       role: 'assistant'
       kind: 'text' | 'action-summary'
       text: string
+      /** 思考流文本（reasoning 模型输出；只展示不回传）。思考后直接调工具的轮次 text 为空、仅带 reasoning。 */
+      reasoning?: string
       targetPath?: string
       relatedPaths?: string[]
       createdAt: string
@@ -551,6 +553,8 @@ export type AgentUiEvent =
   | { type: 'message'; sessionId: string; message: ChatMessageView }
   /** 模型流式输出的文本增量（瞬态渲染态）；同一条 assistant 消息共享稳定 messageId，最终由 message 事件原位落盘。 */
   | { type: 'message-delta'; sessionId: string; messageId: string; text: string }
+  /** 思考流增量（瞬态渲染态）；与正文 delta 共享 messageId，思考先于正文，正文开始即收起思考块。 */
+  | { type: 'message-reasoning-delta'; sessionId: string; messageId: string; text: string }
   | { type: 'model-start'; sessionId: string; step: number }
   | { type: 'model-finish'; sessionId: string; step: number; toolCallCount: number; finishReason?: string }
   | { type: 'tool-call'; sessionId: string; toolCall: ToolCallView }

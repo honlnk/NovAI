@@ -2,6 +2,7 @@
 import type { ChatMessageView } from '@novai/core/services/types'
 
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
+import ReasoningCollapse from './ReasoningCollapse.vue'
 import TurnChangesPanel from './TurnChangesPanel.vue'
 
 defineProps<{
@@ -42,7 +43,17 @@ function formatTime(dateStr: string) {
     v-else-if="message.role === 'assistant' && message.kind === 'text'"
     class="w-full text-left"
   >
-    <div class="text-sm leading-relaxed text-gray-800">
+    <!-- 思考流（reasoning 存在才渲染）：思考中自动展开呼吸态，正文开始自动收起为「已深度思考（N 字）」 -->
+    <ReasoningCollapse
+      v-if="message.reasoning"
+      :reasoning="message.reasoning"
+      :thinking="streaming && !message.text"
+    />
+    <!-- 思考中正文尚未开始（text 空且带 reasoning）时只渲染思考块，不出现空正文与光标 -->
+    <div
+      v-if="message.text || !message.reasoning"
+      class="text-sm leading-relaxed text-gray-800"
+    >
       <MarkdownRenderer :content="message.text" :streaming="streaming" />
       <span
         v-if="streaming"

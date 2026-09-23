@@ -425,6 +425,36 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    if (event.type === 'message-reasoning-delta' && sessionView.value) {
+      const target = sessionView.value.messages.find((m) => m.id === event.messageId)
+      if (target && target.kind === 'text' && target.role === 'assistant') {
+        // 已有占位/累积中的消息：追加思考文本
+        sessionView.value = {
+          ...sessionView.value,
+          messages: sessionView.value.messages.map((m) =>
+            m.id === event.messageId && m.kind === 'text' && m.role === 'assistant'
+              ? { ...m, reasoning: (m.reasoning ?? '') + event.text }
+              : m,
+          ),
+        }
+      } else {
+        // 首个 reasoning delta（思考先于正文）：创建 text 为空的占位 assistant 消息，正文 delta 到达后原位追加
+        sessionView.value = {
+          ...sessionView.value,
+          messages: [...sessionView.value.messages, {
+            id: event.messageId,
+            role: 'assistant',
+            kind: 'text',
+            text: '',
+            reasoning: event.text,
+            createdAt: new Date().toISOString(),
+          }],
+        }
+      }
+      streamingMessageId.value = event.messageId
+      return
+    }
+
     if (event.type === 'file-changed') {
       // 实时合并（文件树自动刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖。
       // lastFileChange 逐条记录原文，供内容面板判断是否重读当前打开的文件。

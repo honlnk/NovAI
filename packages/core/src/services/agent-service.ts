@@ -473,6 +473,15 @@ async function wakeSessionDriver(options: {
         })
         return
       }
+      if (event.type === 'message-reasoning-delta') {
+        broadcastAgentEvent({
+          type: 'message-reasoning-delta',
+          sessionId: session.sessionId,
+          messageId: event.messageId,
+          text: event.text,
+        })
+        return
+      }
       // 收件箱被抽干（首批 claim / steer 抽干点）→ 全量快照广播
       if (event.type === 'inbox-updated') {
         broadcastQueueUpdated(event.session)
@@ -818,6 +827,8 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       // 仅 user text 消息有 quote/steered；assistant text 无此字段，undefined 自动忽略
       quote: 'quote' in message ? message.quote : undefined,
       steered: 'steered' in message ? message.steered : undefined,
+      // 思考流仅 assistant text 消息携带（只收不发，随会话落盘供 UI 展示）
+      ...('reasoning' in message && message.reasoning ? { reasoning: message.reasoning } : {}),
       createdAt: message.createdAt,
     }
   }
