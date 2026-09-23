@@ -57,8 +57,9 @@ export type ProjectConfig = {
     apiKey: string
     model: string
     /**
-     * LLM 服务的 API 协议。当前生成链路仅实现 OpenAI 兼容协议，
-     * anthropic / gemini 仅在配置层（拉取模型列表、测试连接）支持。
+     * LLM 服务的 API 协议。四种协议的生成链路均已接入
+     * （core/llm/protocol/ 适配器），openai / anthropic 已经真机验证，
+     * gemini / openai-responses 真机待 key。
      */
     protocol: ModelProtocol
   }

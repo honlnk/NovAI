@@ -6,8 +6,8 @@ export type ModelKind = 'llm' | 'embedding'
  * OpenAI 有两套协议：`openai`（Chat Completions，`/chat/completions`）与
  * `openai-responses`（Responses API，`/responses`，o 系列 / gpt-5 系列主推）。
  *
- * 当前生成链路（Agent Loop / 流式 tool_calls）只实现 openai 兼容协议；
- * 其余协议仅在配置层（协议选择、拉取模型列表、测试连接）支持。
+ * 四种协议的生成链路（Agent Loop / 流式 tool_calls / 思考流）均已接入
+ * （core/llm/protocol/ 适配器按协议分发）；anthropic / gemini 真机待 key 复核。
  */
 export type ModelProtocol = 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
 
