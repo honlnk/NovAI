@@ -12,10 +12,10 @@ import type { SearchConfig } from '../../types/project'
  */
 
 /**
- * linkseek 托管实例地址。部署上线前为占位值——上线时替换为真实域名
- * （见 docs/decisions/0006 与 docs/plans/内置联网搜索计划.md W2）。
+ * linkseek 托管实例地址（官方生产域名，2026-09-24 上线时由占位值替换，
+ * 见 docs/decisions/0006 与 docs/plans/内置联网搜索计划.md W2）。
  */
-export const LINKSEEK_HOSTED_BASE_URL = 'https://linkseek.example.com'
+export const LINKSEEK_HOSTED_BASE_URL = 'https://linkseek.honlnk.com'
 
 /** 托管档之外的默认服务地址（可被 config.search.baseUrl 覆盖） */
 const EXA_DEFAULT_BASE_URL = 'https://api.exa.ai'
