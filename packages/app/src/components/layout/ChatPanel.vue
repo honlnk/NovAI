@@ -22,6 +22,10 @@ import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import type { SlashCommandId } from '../../constants/slash-commands'
 import type { ChatRenderItem } from '../../stores/chat-render'
 import type { PermissionPreset } from '@novai/core/types/project'
+import type { ReasoningEffort } from '@novai/core/types/ai'
+
+import ReasoningEffortPicker from '../chat/ReasoningEffortPicker.vue'
+import { reasoningEffortLabel, reasoningEffortOptions } from '../../constants/reasoning-efforts'
 
 /** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
 type SelectionQuote = {
@@ -71,6 +75,21 @@ const currentPermissionPreset = computed(
 /** 切换权限档位：与设置页同一条 updateConfig 写回链路，下一轮起按新档判定 */
 function handlePermissionPresetSelect(preset: PermissionPreset) {
   void projectStore.changePermissionPreset(props.projectId, preset)
+}
+
+/** 当前思考强度档位与可选档位（按协议 × 方言过滤，思考强度计划 D3） */
+const currentReasoningEffort = computed(
+  () => projectStore.currentProject?.config.llm.reasoningEffort ?? 'default',
+)
+const reasoningEffortOptionList = computed(() => {
+  const llm = projectStore.currentProject?.config.llm
+  return reasoningEffortOptions(llm?.protocol ?? 'openai', llm?.baseUrl ?? '')
+})
+const currentReasoningEffortLabel = computed(() => reasoningEffortLabel(currentReasoningEffort.value))
+
+/** 切换思考档位：updateConfig 写回，下一轮请求起生效 */
+function handleReasoningEffortSelect(effort: ReasoningEffort) {
+  void projectStore.changeReasoningEffort(props.projectId, effort)
 }
 
 // 最新一条 change-summary 的 id（该面板默认展开文件列表，历史轮折叠成标题行）
@@ -755,12 +774,20 @@ async function handleExtractionConfirm() {
                 @input="onTextareaInput"
               />
             </div>
-            <!-- 工具行：左侧权限档位入口 + 右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示） -->
+            <!-- 工具行：左侧权限档位 + 思考强度入口，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示） -->
             <div class="mt-1 flex items-center justify-between gap-2">
-              <PermissionPresetPicker
-                :preset="currentPermissionPreset"
-                @select="handlePermissionPresetSelect"
-              />
+              <div class="flex items-center gap-2">
+                <PermissionPresetPicker
+                  :preset="currentPermissionPreset"
+                  @select="handlePermissionPresetSelect"
+                />
+                <ReasoningEffortPicker
+                  :effort="currentReasoningEffort"
+                  :options="reasoningEffortOptionList"
+                  :label="currentReasoningEffortLabel"
+                  @select="handleReasoningEffortSelect"
+                />
+              </div>
               <div class="flex items-center gap-2">
               <button
                 v-if="isStopping"

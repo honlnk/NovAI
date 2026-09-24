@@ -1,4 +1,8 @@
 import type { PermissionPreset, SearchConfig } from '../types/project'
+import type { ReasoningEffort } from '../types/ai'
+
+// app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
+export { isDeepSeekDialect } from '../core/ai/shared'
 
 export type ProjectFileNodeView = {
   name: string
@@ -20,6 +24,8 @@ export type ProjectConfigView = {
     model: string
     /** LLM 服务的 API 协议；生成链路当前仅实现 openai（Chat Completions 兼容）。 */
     protocol: 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
+    /** 思考强度档位（输入框选择器写回）；缺省 default = 不传思考参数。 */
+    reasoningEffort?: ReasoningEffort
   }
   embedding: {
     baseUrl: string

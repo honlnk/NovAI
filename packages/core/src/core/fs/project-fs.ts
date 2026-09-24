@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -289,6 +289,10 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     llm: {
       ...DEFAULT_CONFIG.llm,
       ...config.llm,
+      // 思考档位：非法值回退 default（视为未配置，零迁移语义）；default 本身不落盘
+      reasoningEffort: isReasoningEffort(config.llm?.reasoningEffort) && config.llm.reasoningEffort !== 'default'
+        ? config.llm.reasoningEffort
+        : undefined,
     },
     embedding: {
       ...DEFAULT_CONFIG.embedding,

@@ -28,6 +28,7 @@ import type {
   ProjectFileNodeView,
   ProjectView,
 } from '@novai/core/services/types'
+import type { ReasoningEffort } from '@novai/core/types/ai'
 import type { PermissionPreset } from '@novai/core/types/project'
 import type { RecentProject } from '@novai/core/types/project'
 
@@ -384,6 +385,26 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 切换思考强度档位（对话输入区选择器写回链路，思考强度计划 D3）：
+   * default 档写 undefined（配置字段消失 = 未配置，零迁移语义）。
+   */
+  async function changeReasoningEffort(projectId: string, effort: ReasoningEffort) {
+    errorMessage.value = ''
+
+    try {
+      const savedConfig = await updateConfig(projectId, {
+        llm: { reasoningEffort: effort === 'default' ? undefined : effort },
+      })
+      updateCurrentProjectConfig(savedConfig)
+      statusMessage.value = '已切换思考强度档位，下一轮起生效'
+      return savedConfig
+    } catch (error) {
+      errorMessage.value = toMessage(error, '切换思考档位失败')
+      return null
+    }
+  }
+
   async function runProjectAction<T>(action: () => Promise<T>) {
     errorMessage.value = ''
     isBusy.value = true
@@ -410,6 +431,7 @@ export const useProjectStore = defineStore('project', () => {
     statusMessage,
     changeActiveScenePromptPath,
     changePermissionPreset,
+    changeReasoningEffort,
     clearActiveFile,
     closeCurrentProject,
     createNewProject,
