@@ -272,7 +272,7 @@ describe('driver 全链路（真实 query + 假 SSE）', () => {
     expect(assistantTexts[0].id).toBe(reasoningDeltas[0].messageId)
   })
 
-  it('思考后直接调工具：content 空但 reasoning 落一条气泡，且思考不回传（只收不发）', async () => {
+  it('思考后直接调工具：content 空但 reasoning 落一条气泡，思考随工具轮回传（DeepSeek 400 修复）', async () => {
     fetchHandler = (_call, index) =>
       index === 0
         ? reasoningToolCallSse('盘算一下', 'call_r', 'ReadFile', { path: 'chapters/001.txt' })
@@ -290,8 +290,12 @@ describe('driver 全链路（真实 query + 假 SSE）', () => {
     // 第二轮收尾无思考：不带 reasoning 字段
     expect(assistantTexts[1]).toMatchObject({ text: '收尾' })
     expect('reasoning' in assistantTexts[1]).toBe(false)
-    // 只收不发：后续请求不携带此前思考文本
-    expect(JSON.stringify(fetchCalls[1].messages)).not.toContain('盘算一下')
+    // 思考随历史回传：工具轮后的请求在 assistant 消息上带 reasoning_content（DeepSeek 思考模式硬要求）
+    const secondRequestMessages = fetchCalls[1].messages as Array<Record<string, unknown>>
+    const toolTurnAssistant = secondRequestMessages.find(
+      (m) => m.role === 'assistant' && Array.isArray(m.tool_calls),
+    )
+    expect(toolTurnAssistant).toMatchObject({ reasoning_content: '盘算一下' })
   })
 
   it('轮次安全阀：达 agentMaxTurns 上限时提示为 turn-limit kind，不再伪装 context-summary', async () => {

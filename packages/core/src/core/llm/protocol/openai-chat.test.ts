@@ -369,6 +369,51 @@ describe('openai-chat adapter (via streamAgentCompletion)', () => {
     expect(result.reasoning).toBe('思考过程。')
     expect(result.diagnostics?.responseMode).toBe('non_streaming_fallback')
   })
+
+  it('replays reasoning_content on assistant history messages (DeepSeek thinking-mode tool turns)', async () => {
+    // mockImplementation 而非 mockResolvedValue：Response body 只能读一次，每次 fetch 都要新流
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createStreamingResponse([
+        { choices: [{ delta: { content: '读取完成。' }, finish_reason: 'stop' }] },
+      ])))
+    globalThis.fetch = fetchMock
+
+    await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-flash',
+      messages: [
+        { role: 'user', content: '读一下章节' },
+        {
+          role: 'assistant',
+          content: '',
+          reasoning: '用户要读章节，调用 ReadFile。',
+          toolCalls: [{ id: 'call_r', name: 'ReadFile', input: { path: 'chapters/001.txt' } }],
+        },
+        { role: 'tool', toolCallId: 'call_r', name: 'ReadFile', content: '第一章正文' },
+      ],
+      tools: [listDirectoryToolSchema],
+    }, () => {})
+
+    const wireMessages = JSON.parse(fetchMock.mock.calls[0][1].body).messages
+    const toolTurnAssistant = wireMessages.find(
+      (m: { role: string; tool_calls?: unknown[] }) => m.role === 'assistant' && Array.isArray(m.tool_calls),
+    )
+    expect(toolTurnAssistant).toMatchObject({ reasoning_content: '用户要读章节，调用 ReadFile。' })
+    // 无思考的 assistant 轮不携带该字段（不产思考的模型天然缺省）
+    const plainAssistant = { role: 'assistant', content: '旧回复' }
+    await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-flash',
+      messages: [{ role: 'user', content: '你好' }, plainAssistant as never],
+      tools: [],
+    }, () => {})
+    const secondBodyMessages = JSON.parse(fetchMock.mock.calls[1][1].body).messages
+    expect(secondBodyMessages.find((m: { role: string }) => m.role === 'assistant')).not.toHaveProperty('reasoning_content')
+  })
 })
 
 function createStreamingResponse(payloads: unknown[]) {

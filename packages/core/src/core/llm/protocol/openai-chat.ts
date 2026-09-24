@@ -441,6 +441,9 @@ function toOpenAiMessage(message: AgentMessage) {
     return {
       role: 'assistant',
       content: message.content || null,
+      // 思考内容随历史回传：DeepSeek 思考模式下工具轮 assistant 消息不带 reasoning_content 会 400
+      // （不产思考的模型没有 reasoning，字段天然缺省，其他兼容后端最多忽略）。
+      ...(message.reasoning ? { reasoning_content: message.reasoning } : {}),
       ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
     }
   }
