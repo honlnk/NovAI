@@ -13,6 +13,8 @@ const props = defineProps<{
   toolName: string
   title: string
   summary: string
+  /** 归属标签（如「园丁」）：园丁子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
+  agentLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -48,6 +50,10 @@ function truncate(text: string, max: number) {
           />
         </svg>
         <p class="text-sm font-medium text-gray-700">{{ title }}</p>
+        <span
+          v-if="agentLabel"
+          class="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+        >{{ agentLabel }}</span>
       </div>
 
       <!-- 摘要 -->

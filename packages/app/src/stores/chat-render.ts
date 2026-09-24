@@ -35,10 +35,31 @@ export type ProcessGroupItem = {
   collapsed: boolean
 }
 
+/**
+ * 子代理嵌套任务组：园丁（agent === 'gardener'）连续的工具行在轮过程组内部
+ * 再折叠一层，组头带标签（如「🌿 园丁整理」）。默认展开/收起与外层任务组同规则。
+ */
+export type SubagentGroupItem = {
+  kind: 'subagent-group'
+  id: string
+  /** 组头标签（展示哪个子代理在干活） */
+  label: string
+  items: ChatRenderItem[]
+  toolCallCount: number
+  messageCount: number
+  collapsed: boolean
+}
+
 export type ChatRenderItem =
   | { kind: 'message'; message: ChatMessageView }
   | ToolRowItem
   | ProcessGroupItem
+  | SubagentGroupItem
+
+/** 子代理归属 → 嵌套组头标签。 */
+export const SUBAGENT_GROUP_LABELS: Record<'gardener', string> = {
+  gardener: '🌿 园丁整理',
+}
 
 function isTurnBoundary(item: ChatRenderItem): item is { kind: 'message'; message: UserTextMessageView } {
   return (
@@ -69,6 +90,9 @@ function isProcessItem(item: ChatRenderItem, turnItems: ChatRenderItem[]): boole
   if (item.kind === 'tool-row') {
     return true
   }
+  if (item.kind === 'subagent-group') {
+    return true
+  }
   if (item.kind !== 'message') {
     return false
   }
@@ -80,6 +104,51 @@ function isProcessItem(item: ChatRenderItem, turnItems: ChatRenderItem[]): boole
     return !isFinalAnswer(item, turnItems)
   }
   return false
+}
+
+/** 园丁子代理的工具行（call 或 result 带 agent === 'gardener'）。 */
+function isSubagentRow(item: ChatRenderItem, agent: 'gardener'): boolean {
+  if (item.kind !== 'tool-row') {
+    return false
+  }
+  return item.call?.agent === agent || item.result?.agent === agent
+}
+
+/**
+ * 把轮内连续的子代理工具行折叠为嵌套组。组 id 取首行 id 前缀 subagent-
+ * （同一轮内出现多段园丁工作段时天然分组建组；不同轮不共用 id）。
+ */
+function foldSubagentRuns(items: ChatRenderItem[], indexSeed: number): ChatRenderItem[] {
+  const output: ChatRenderItem[] = []
+  let run: ChatRenderItem[] = []
+
+  const flush = () => {
+    if (run.length === 0) {
+      return
+    }
+    const first = run[0]!
+    output.push({
+      kind: 'subagent-group',
+      id: `subagent-${first.kind === 'tool-row' ? first.id : indexSeed}-${output.length}`,
+      label: SUBAGENT_GROUP_LABELS.gardener,
+      items: run,
+      toolCallCount: run.filter((item) => item.kind === 'tool-row').length,
+      messageCount: 0,
+      collapsed: true,
+    })
+    run = []
+  }
+
+  for (const item of items) {
+    if (isSubagentRow(item, 'gardener')) {
+      run.push(item)
+      continue
+    }
+    flush()
+    output.push(item)
+  }
+  flush()
+  return output
 }
 
 /**
@@ -130,29 +199,37 @@ export function buildRenderItems(
   const output: ChatRenderItem[] = [...leading]
   turns.forEach((turn, turnIndex) => {
     const isLastTurn = turnIndex === turns.length - 1
-    const processItems = turn.items.filter((item) => isProcessItem(item, turn.items))
+    // 连续的园丁工具行先折叠为嵌套组（整体是一个过程项），再做过程消息判定
+    const folded = foldSubagentRuns(turn.items, turnIndex)
+    const processItems = folded.filter((item) => isProcessItem(item, folded))
 
     // 纯问答轮（无过程消息）不出折叠行
     if (processItems.length === 0) {
-      output.push(...turn.items)
+      output.push(...folded)
       return
     }
 
     const override = options.expandedOverrides?.get(turn.id)
     const expanded = override ?? (isLastTurn && options.running)
+    // 嵌套园丁组默认展开/收起与外层任务组同规则；用户显式切换优先
+    for (const item of processItems) {
+      if (item.kind === 'subagent-group') {
+        item.collapsed = !(options.expandedOverrides?.get(item.id) ?? expanded)
+      }
+    }
     const group: ProcessGroupItem = {
       kind: 'process-group',
       id: turn.id,
       items: processItems,
       toolCallCount: processItems.filter((item) => item.kind === 'tool-row').length,
-      // 过程消息数不含工具行——工具调用已由 toolCallCount 单独计数，口径不叠加
-      messageCount: processItems.filter((item) => item.kind !== 'tool-row').length,
+      // 过程消息数不含工具行与嵌套组——工具调用已由 toolCallCount 单独计数，口径不叠加
+      messageCount: processItems.filter((item) => item.kind === 'message').length,
       collapsed: !expanded,
     }
 
     // 组放在首个过程消息的位置；白名单成员保持原始相对位置
     let groupPlaced = false
-    for (const item of turn.items) {
+    for (const item of folded) {
       if (processItems.includes(item)) {
         if (!groupPlaced) {
           output.push(group)

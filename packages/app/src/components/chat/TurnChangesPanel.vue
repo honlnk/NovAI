@@ -34,6 +34,11 @@ function diffRecords(file: TurnFileChangeView): FileChangeRecordView[] {
   return file.records.filter((record) => record.diff)
 }
 
+/** 该文件的改动是否全部/部分来自园丁子代理（写回面板归属标记） */
+function isGardenerChange(file: TurnFileChangeView): boolean {
+  return file.records.some((record) => record.agent === 'gardener')
+}
+
 function toggleFiles() {
   filesExpanded.value = !filesExpanded.value
 }
@@ -116,6 +121,11 @@ const changeLabels: Record<string, string> = {
           <span class="shrink-0 rounded bg-gray-100 px-1 py-0.5 text-[10px] text-gray-500">
             {{ changeLabels[file.status] }}
           </span>
+          <span
+            v-if="isGardenerChange(file)"
+            class="shrink-0 rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700"
+            title="园丁子代理的改动"
+          >园丁</span>
           <span class="min-w-0 flex-1 truncate">
             <template v-if="file.status === 'renamed' && file.fromPath">
               {{ file.fromPath }} <span class="text-gray-400">→</span> {{ file.path }}

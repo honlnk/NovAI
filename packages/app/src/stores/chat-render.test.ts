@@ -18,7 +18,7 @@ function assistantMessage(id: string, text: string): ChatMessageView {
   return { id, role: 'assistant', kind: 'text', text, createdAt: '2026-09-19T00:00:00.000Z' }
 }
 
-function toolCall(id: string, callId: string | undefined, name: ToolNameView = 'EditFile'): ChatMessageView {
+function toolCall(id: string, callId: string | undefined, name: ToolNameView = 'EditFile', agent?: 'gardener'): ChatMessageView {
   return {
     id,
     role: 'system',
@@ -26,11 +26,12 @@ function toolCall(id: string, callId: string | undefined, name: ToolNameView = '
     text: '参数摘要',
     toolName: name,
     ...(callId ? { toolCallId: callId } : {}),
+    ...(agent ? { agent } : {}),
     createdAt: '2026-09-19T00:00:00.000Z',
   }
 }
 
-function toolResult(id: string, callId: string | undefined, ok = true): ChatMessageView {
+function toolResult(id: string, callId: string | undefined, ok = true, agent?: 'gardener'): ChatMessageView {
   return {
     id,
     role: 'system',
@@ -39,6 +40,7 @@ function toolResult(id: string, callId: string | undefined, ok = true): ChatMess
     ok,
     toolName: 'EditFile',
     ...(callId ? { toolCallId: callId } : {}),
+    ...(agent ? { agent } : {}),
     createdAt: '2026-09-19T00:00:00.000Z',
   }
 }
@@ -230,5 +232,114 @@ describe('buildRenderItems 任务组折叠', () => {
     const group = items[2]
     if (group.kind !== 'process-group') throw new Error('unreachable')
     expect(group.items.every((item) => item.kind === 'tool-row')).toBe(true)
+  })
+})
+
+describe('buildRenderItems 园丁嵌套任务组', () => {
+  it('连续园丁工具行折叠为 subagent-group 嵌在轮过程组内部；主 Agent 工具行不受影响', () => {
+    const items = buildRenderItems([
+      userMessage('u1', '整理一下要素'),
+      toolCall('c0', 'call-0', 'DelegateToGardener'),
+      toolResult('r0', 'call-0'),
+      toolCall('c1', 'call-1', 'ReadFile', 'gardener'),
+      toolResult('r1', 'call-1', true, 'gardener'),
+      toolCall('c2', 'call-2', 'EditFile', 'gardener'),
+      toolResult('r2', 'call-2', true, 'gardener'),
+      toolCall('c3', 'call-3', 'ListDirectory'),
+      toolResult('r3', 'call-3'),
+      assistantMessage('a1', '整理完成'),
+    ], { running: false })
+
+    // 顶层：user 气泡 + 过程组 + 最终回答
+    expect(items.map((item) => item.kind)).toEqual(['message', 'process-group', 'message'])
+    const group = items[1]
+    if (group.kind !== 'process-group') throw new Error('unreachable')
+
+    // 过程组内：委派工具行 + 嵌套园丁组 + 主 Agent 工具行（顺序保持）
+    expect(group.items.map((item) => item.kind)).toEqual(['tool-row', 'subagent-group', 'tool-row'])
+
+    const nested = group.items[1]
+    if (nested.kind !== 'subagent-group') throw new Error('unreachable')
+    expect(nested.label).toBe('🌿 园丁整理')
+    expect(nested.toolCallCount).toBe(2)
+    expect(nested.items).toHaveLength(2)
+    expect(nested.items.every((row) => row.kind === 'tool-row')).toBe(true)
+
+    // 外层组只计直接工具行（委派 1 + 主 Agent 1），不与嵌套组口径叠加
+    expect(group.toolCallCount).toBe(2)
+  })
+
+  it('运行中最后一轮嵌套组随外层默认展开；结束后收起；用户显式切换优先且互不干扰', () => {
+    const messages = [
+      userMessage('u1', '整理一下要素'),
+      toolCall('c0', 'call-0', 'DelegateToGardener'),
+      toolResult('r0', 'call-0'),
+      toolCall('c1', 'call-1', 'ReadFile', 'gardener'),
+      toolResult('r1', 'call-1', true, 'gardener'),
+      assistantMessage('a1', '整理完成'),
+    ]
+
+    const runningGroup = buildRenderItems(messages, { running: true })[1]
+    if (runningGroup?.kind !== 'process-group') throw new Error('unreachable')
+    expect(runningGroup.collapsed).toBe(false)
+    const runningNested = runningGroup.items.find((item) => item.kind === 'subagent-group')
+    if (runningNested?.kind !== 'subagent-group') throw new Error('unreachable')
+    expect(runningNested.collapsed).toBe(false)
+
+    const doneGroup = buildRenderItems(messages, { running: false })[1]
+    if (doneGroup?.kind !== 'process-group') throw new Error('unreachable')
+    expect(doneGroup.collapsed).toBe(true)
+    const doneNested = doneGroup.items.find((item) => item.kind === 'subagent-group')
+    if (doneNested?.kind !== 'subagent-group') throw new Error('unreachable')
+    expect(doneNested.collapsed).toBe(true)
+
+    // 显式展开外层、单独收起嵌套组：两个覆盖互不干扰
+    const mixedGroup = buildRenderItems(messages, {
+      running: false,
+      expandedOverrides: new Map([['u1', true], [doneNested.id, false]]),
+    })[1]
+    if (mixedGroup?.kind !== 'process-group') throw new Error('unreachable')
+    expect(mixedGroup.collapsed).toBe(false)
+    const mixedNested = mixedGroup.items.find((item) => item.kind === 'subagent-group')
+    if (mixedNested?.kind !== 'subagent-group') throw new Error('unreachable')
+    expect(mixedNested.collapsed).toBe(true)
+  })
+
+  it('旧消息（无 agent 字段）不出嵌套组——行为与改造前一致', () => {
+    const items = buildRenderItems([
+      userMessage('u1', '写第一章'),
+      toolCall('c1', 'call-1'),
+      toolResult('r1', 'call-1'),
+      toolCall('c2', 'call-2'),
+      toolResult('r2', 'call-2'),
+      assistantMessage('a1', '写好了'),
+    ], { running: false })
+
+    const group = items[1]
+    if (group?.kind !== 'process-group') throw new Error('unreachable')
+    expect(group.items.some((item) => item.kind === 'subagent-group')).toBe(false)
+    expect(group.items.map((item) => item.kind)).toEqual(['tool-row', 'tool-row'])
+  })
+
+  it('同一轮内两段不相邻的园丁工作段各自成组，中间主 Agent 工具行保持原位', () => {
+    const items = buildRenderItems([
+      userMessage('u1', '整理一下要素'),
+      toolCall('c0', 'call-0', 'DelegateToGardener'),
+      toolResult('r0', 'call-0'),
+      toolCall('c1', 'call-1', 'ReadFile', 'gardener'),
+      toolResult('r1', 'call-1', true, 'gardener'),
+      toolCall('c2', 'call-2', 'ListDirectory'),
+      toolResult('r2', 'call-2'),
+      toolCall('c3', 'call-3', 'EditFile', 'gardener'),
+      toolResult('r3', 'call-3', true, 'gardener'),
+      assistantMessage('a1', '两段整理完成'),
+    ], { running: false })
+
+    const group = items[1]
+    if (group?.kind !== 'process-group') throw new Error('unreachable')
+    expect(group.items.filter((item) => item.kind === 'subagent-group')).toHaveLength(2)
+    expect(group.items.map((item) => item.kind)).toEqual(
+      ['tool-row', 'subagent-group', 'tool-row', 'subagent-group'],
+    )
   })
 })

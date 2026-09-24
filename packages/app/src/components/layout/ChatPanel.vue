@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 import { useChatStore } from '../../stores/chat'
 import { isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
@@ -116,6 +116,9 @@ async function steerAllQueued() {
 function renderItemKey(item: ChatRenderItem): string {
   if (item.kind === 'process-group') {
     return `group-${item.id}`
+  }
+  if (item.kind === 'subagent-group') {
+    return `subagent-${item.id}`
   }
   if (item.kind === 'tool-row') {
     return `tool-${item.id}`
@@ -523,6 +526,14 @@ function handleSlashCommandSelect(id: SlashCommandId) {
     return
   }
 
+  if (id === 'gardener') {
+    // 选中「整理要素」后，把驱动 prompt 直接作为用户意图发送：主 Agent 调用 DelegateToGardener
+    // 委派园丁子代理整理要素库，园丁的工具行在聊天区折叠为嵌套任务组。无二级交互界面。
+    followAndScrollToBottom()
+    void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+    return
+  }
+
   if (id === 'init') {
     // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
     // 不需要二级交互界面，复用普通对话发送链路。
@@ -643,7 +654,18 @@ async function handleExtractionConfirm() {
                 @toggle="chatStore.toggleProcessGroup"
               >
                 <template v-for="child in item.items" :key="renderItemKey(child)">
-                  <ToolCallRow v-if="child.kind === 'tool-row'" :item="child" />
+                  <!-- 园丁子代理嵌套任务组：组头带标签、嵌套缩进，子项为其工具行 -->
+                  <TurnProcessGroup
+                    v-if="child.kind === 'subagent-group'"
+                    :group="child"
+                    nested
+                    @toggle="chatStore.toggleProcessGroup"
+                  >
+                    <template v-for="grandchild in child.items" :key="renderItemKey(grandchild)">
+                      <ToolCallRow v-if="grandchild.kind === 'tool-row'" :item="grandchild" />
+                    </template>
+                  </TurnProcessGroup>
+                  <ToolCallRow v-else-if="child.kind === 'tool-row'" :item="child" />
                   <MessageItem
                     v-else-if="child.kind === 'message'"
                     :message="child.message"
@@ -703,6 +725,7 @@ async function handleExtractionConfirm() {
       :tool-name="chatStore.pendingConfirmation.toolName"
       :title="chatStore.pendingConfirmation.title"
       :summary="chatStore.pendingConfirmation.summary"
+      :agent-label="chatStore.pendingConfirmation.agentLabel"
       @confirm="chatStore.confirmWriteTool()"
       @reject="chatStore.rejectWriteTool()"
     />
