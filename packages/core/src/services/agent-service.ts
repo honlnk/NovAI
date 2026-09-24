@@ -827,8 +827,11 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       // 仅 user text 消息有 quote/steered；assistant text 无此字段，undefined 自动忽略
       quote: 'quote' in message ? message.quote : undefined,
       steered: 'steered' in message ? message.steered : undefined,
-      // 思考流仅 assistant text 消息携带（只收不发，随会话落盘供 UI 展示）
+      // 思考流仅 assistant text 消息携带（随会话落盘展示，并按协议要求随历史回传）
       ...('reasoning' in message && message.reasoning ? { reasoning: message.reasoning } : {}),
+      ...('thinkingSignature' in message && message.thinkingSignature
+        ? { thinkingSignature: message.thinkingSignature }
+        : {}),
       createdAt: message.createdAt,
     }
   }

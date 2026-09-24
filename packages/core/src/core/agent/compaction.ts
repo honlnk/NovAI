@@ -205,6 +205,8 @@ export async function runCompaction(input: {
         messages: buildCompactionRequest(input.view, range),
         tools: [],
         maxTokens: SUMMARY_MAX_TOKENS,
+        // 辅助请求固定关思考：结构化摘要不需要思考流（DeepSeek 缺省思考开，显式关闭省 token）
+        reasoningEffort: 'off',
         signal: input.signal,
       },
       () => {},

@@ -16,9 +16,14 @@ vi.mock('./llm', async (importOriginal) => {
 
 const mockedStream = vi.mocked(streamAgentCompletion)
 
-function createStubConfig(overrides: { conversationTokenLimit?: number } = {}): ProjectConfig {
+function createStubConfig(overrides: { conversationTokenLimit?: number; reasoningEffort?: string } = {}): ProjectConfig {
   return {
-    llm: { baseUrl: 'https://example.com', apiKey: 'key', model: 'model' },
+    llm: {
+      baseUrl: 'https://example.com',
+      apiKey: 'key',
+      model: 'model',
+      ...(overrides.reasoningEffort ? { reasoningEffort: overrides.reasoningEffort as never } : {}),
+    },
     settings: {
       enableDebugLogging: false,
       conversationTokenLimit: overrides.conversationTokenLimit ?? 12000,
@@ -133,6 +138,26 @@ describe('query 上下文压缩接入', () => {
     mockedStream.mockReset()
   })
 
+  it('思考档位下发：config 四档透传到 AgentLlmInput，default 档不传字段', async () => {
+    const efforts: Array<string | undefined> = []
+    mockedStream.mockImplementation(async (input) => {
+      efforts.push(input.reasoningEffort)
+      return { content: '好的', toolCalls: [], finishReason: 'stop' }
+    })
+
+    for (const effort of ['off', 'low', 'high', 'max', 'default']) {
+      await query({
+        config: createStubConfig({ reasoningEffort: effort }),
+        project: stubProject,
+        view: createBaseView(),
+        tools: {},
+        onEvent: () => {},
+      })
+    }
+
+    expect(efforts).toEqual(['off', 'low', 'high', 'max', undefined])
+  })
+
   function createHeavyView(): ModelView {
     // 足够长：总 token 明显超过 300 的阈值，且有可压区间
     const messages: AgentMessage[] = [
@@ -148,11 +173,12 @@ describe('query 上下文压缩接入', () => {
   it('压力触发：请求前超过阈值先压缩，再发真实请求', async () => {
     const summaryResponse = { content: '## Primary Request and Intent\n写小说', toolCalls: [], finishReason: 'stop' }
     const realResponse = { content: '好的，继续', toolCalls: [], finishReason: 'stop' }
-    const calls: Array<{ toolCount: number; lastMessageIsInstruction: boolean }> = []
+    const calls: Array<{ toolCount: number; lastMessageIsInstruction: boolean; effort?: string }> = []
     mockedStream.mockImplementation(async (input) => {
       calls.push({
         toolCount: input.tools.length,
         lastMessageIsInstruction: input.messages.at(-1)?.content.includes('检查点') ?? false,
+        effort: input.reasoningEffort,
       })
       // 第一次调用是压缩（末条为压缩指令、无 tools），第二次是真实请求
       return calls.length === 1 ? summaryResponse : realResponse
@@ -169,8 +195,10 @@ describe('query 上下文压缩接入', () => {
       onEvent,
     })
 
-    // 第一次调用是压缩请求（无 tools、末条为压缩指令）
-    expect(calls[0]).toEqual({ toolCount: 0, lastMessageIsInstruction: true })
+    // 第一次调用是压缩请求（无 tools、末条为压缩指令、思考固定关闭省 token）
+    expect(calls[0]).toEqual({ toolCount: 0, lastMessageIsInstruction: true, effort: 'off' })
+    // 真实请求档位跟随 config（此处未配置 → default 不传）
+    expect(calls[1]).toMatchObject({ effort: undefined })
     // 压缩事件已发（显示层据此提示用户）
     expect(events).toContainEqual({
       type: 'context-compacted',

@@ -399,8 +399,10 @@ export type ChatMessageView =
       role: 'assistant'
       kind: 'text' | 'action-summary'
       text: string
-      /** 思考流文本（reasoning 模型输出；只展示不回传）。思考后直接调工具的轮次 text 为空、仅带 reasoning。 */
+      /** 思考流文本（reasoning 模型输出；展示 + 按协议要求随历史回传）。思考后直接调工具的轮次 text 为空、仅带 reasoning。 */
       reasoning?: string
+      /** anthropic 思考块签名（回传 thinking block 时携带；仅 UI 会话重建用，渲染层不消费）。 */
+      thinkingSignature?: string
       targetPath?: string
       relatedPaths?: string[]
       createdAt: string

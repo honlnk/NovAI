@@ -1,4 +1,4 @@
-import type { ModelProtocol } from './ai'
+import type { ModelProtocol, ReasoningEffort } from './ai'
 
 /**
  * 写工具权限档位：review=仅审阅 / chapter=章节内容 / material=素材内容 /
@@ -62,6 +62,11 @@ export type ProjectConfig = {
      * gemini / openai-responses 真机待 key。
      */
     protocol: ModelProtocol
+    /**
+     * 思考强度档位（输入框选择器写回）。缺省 'default' = 不传思考参数（provider 自决），
+     * 零迁移：旧项目配置无此字段即维持旧行为。压缩摘要/要素提取等辅助请求不读它（固定关思考）。
+     */
+    reasoningEffort?: ReasoningEffort
   }
   embedding: {
     baseUrl: string

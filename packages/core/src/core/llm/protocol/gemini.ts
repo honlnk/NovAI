@@ -200,12 +200,42 @@ function buildGeminiRequestBody(input: ProtocolLlmInput) {
     ],
   }))
 
+  const generationConfig: Record<string, unknown> = {}
+
+  if (input.maxTokens !== undefined) {
+    generationConfig.maxOutputTokens = input.maxTokens
+  }
+
+  const thinkingBudget = resolveThinkingBudget(input)
+
+  if (thinkingBudget !== undefined) {
+    generationConfig.thinkingConfig = { thinkingBudget }
+  }
+
   return {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: toGeminiContents(input.messages),
     ...(tools.length ? { tools } : {}),
-    ...(input.maxTokens !== undefined ? { generationConfig: { maxOutputTokens: input.maxTokens } } : {}),
+    ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
   }
+}
+
+/**
+ * 思考档位 → thinkingConfig.thinkingBudget（思考强度计划 D2 映射表 gemini 列，拍定值）。
+ * gemini 以预算数值表达强度：0 = 显式关闭；1-32768 思考预算上限。缺省档不传（动态默认）。
+ */
+function resolveThinkingBudget(input: ProtocolLlmInput): number | undefined {
+  const effort = input.reasoningEffort
+
+  if (!effort) {
+    return undefined
+  }
+
+  if (effort === 'off') {
+    return 0
+  }
+
+  return effort === 'low' ? 2048 : effort === 'high' ? 8192 : 32768
 }
 
 type GeminiPart =

@@ -19,6 +19,17 @@ import type { ProtocolAdapter, ProtocolLlmEvent, ProtocolLlmInput } from './type
 /** anthropic Messages API 要求 max_tokens 必填；未显式指定时的缺省上限。 */
 const ANTHROPIC_MAX_TOKENS_DEFAULT = 8192
 
+/**
+ * 思考档位 → thinking.budget_tokens（思考强度计划 D2 映射表 anthropic 列，拍定值）：
+ * anthropic 原生无档位概念，以预算数值表达强度；真 Anthropic 要求 max_tokens 严格大于
+ * budget_tokens，超限时抬高 max_tokens（预算值不含正文空间）。
+ */
+const ANTHROPIC_THINKING_BUDGET: Record<'low' | 'high' | 'max', number> = {
+  low: 2048,
+  high: 8192,
+  max: 16384,
+}
+
 /** 与 models-client 一致的稳定 API 版本。 */
 const ANTHROPIC_VERSION = '2023-06-01'
 
@@ -61,6 +72,7 @@ async function streamAnthropic(
   const pendingToolUses = new Map<number, PendingToolUse>()
   let content = ''
   let reasoning = ''
+  let thinkingSignature = ''
   let finishReason: string | undefined
 
   try {
@@ -131,6 +143,9 @@ async function streamAnthropic(
             } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking) {
               reasoning += delta.thinking
               onEvent({ type: 'reasoning-delta', text: delta.thinking })
+            } else if (delta.type === 'signature_delta' && typeof delta.signature === 'string' && delta.signature) {
+              // 思考块签名：真 Anthropic 思考模式回传 thinking block 时必须带原签名
+              thinkingSignature += delta.signature
             } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
               const pending = pendingToolUses.get(readIndex(payload.index))
 
@@ -179,6 +194,7 @@ async function streamAnthropic(
     toolCalls,
     finishReason: finishReason ?? 'stop',
     ...(reasoning ? { reasoning } : {}),
+    ...(reasoning && thinkingSignature ? { thinkingSignature } : {}),
   }
 
   onEvent({ type: 'finish', response: result })
@@ -197,18 +213,45 @@ function buildAnthropicRequestBody(input: ProtocolLlmInput) {
     input_schema: tool.function.parameters,
   }))
 
+  let maxTokens = input.maxTokens ?? ANTHROPIC_MAX_TOKENS_DEFAULT
+  const thinking = resolveThinkingWire(input)
+
+  if (thinking?.type === 'enabled' && maxTokens <= thinking.budget_tokens) {
+    maxTokens = thinking.budget_tokens + 4096
+  }
+
   return {
     model: input.model.trim(),
-    max_tokens: input.maxTokens ?? ANTHROPIC_MAX_TOKENS_DEFAULT,
+    max_tokens: maxTokens,
     stream: true,
     ...(system ? { system } : {}),
     messages: toAnthropicMessages(input.messages),
     ...(tools.length ? { tools } : {}),
+    ...(thinking ? { thinking } : {}),
   }
+}
+
+/**
+ * 思考档位 → thinking 参数（思考强度计划 D2 映射表 anthropic 列）。
+ * 缺省档不传（provider 自决）；off 显式关闭；low/high/max → enabled + 预算数值。
+ */
+function resolveThinkingWire(input: ProtocolLlmInput): { type: 'enabled'; budget_tokens: number } | { type: 'disabled' } | undefined {
+  const effort = input.reasoningEffort
+
+  if (!effort) {
+    return undefined
+  }
+
+  if (effort === 'off') {
+    return { type: 'disabled' }
+  }
+
+  return { type: 'enabled', budget_tokens: ANTHROPIC_THINKING_BUDGET[effort] }
 }
 
 type AnthropicContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string; signature?: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string }
 
@@ -237,6 +280,16 @@ function toAnthropicMessages(messages: AgentMessage[]): AnthropicMessage[] {
 
     if (message.role === 'assistant') {
       const blocks: AnthropicContentBlock[] = []
+
+      // 思考块回传：真 Anthropic 思考模式工具轮强制要求（signature 验签），
+      // 必须位于 content 首位；DeepSeek anthropic 端点不校验，回传同样安全。缺签名则不带该字段。
+      if (message.reasoning) {
+        blocks.push({
+          type: 'thinking',
+          thinking: message.reasoning,
+          ...(message.thinkingSignature ? { signature: message.thinkingSignature } : {}),
+        })
+      }
 
       if (message.content) {
         blocks.push({ type: 'text', text: message.content })

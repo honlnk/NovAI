@@ -415,7 +415,12 @@ async function runDriverTurn(options: {
           if (event.message.content.trim() || reasoning) {
             pushMessage(
               session,
-              createAssistantText(event.message.content.trim(), streamingMessageId ?? undefined, reasoning || undefined),
+              createAssistantText(
+                event.message.content.trim(),
+                streamingMessageId ?? undefined,
+                reasoning || undefined,
+                event.message.thinkingSignature || undefined,
+              ),
               onEvent,
             )
           }
@@ -801,13 +806,14 @@ function createSteeringMessage(message: QueuedMessage): ChatMessage {
   }
 }
 
-function createAssistantText(text: string, id?: string, reasoning?: string): ChatMessage {
+function createAssistantText(text: string, id?: string, reasoning?: string, thinkingSignature?: string): ChatMessage {
   return {
     id: id ?? createId('message'),
     role: 'assistant',
     kind: 'text',
     text,
     ...(reasoning ? { reasoning } : {}),
+    ...(thinkingSignature ? { thinkingSignature } : {}),
     createdAt: new Date().toISOString(),
   }
 }

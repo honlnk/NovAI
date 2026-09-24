@@ -208,7 +208,23 @@ function buildResponsesRequestBody(input: ProtocolLlmInput) {
     input: toResponsesInput(input.messages),
     ...(tools.length ? { tools } : {}),
     ...(input.maxTokens !== undefined ? { max_output_tokens: input.maxTokens } : {}),
+    ...resolveThinkingWire(input),
   }
+}
+
+/**
+ * 思考档位 → reasoning.effort（思考强度计划 D2 映射表 responses 列）。
+ * Responses API 无关闭思考参数（gpt-5 系列默认思考、关不掉），off 不传（UI 侧也不显示该档）；
+ * effort 档位集合无 max，降级 high。
+ */
+function resolveThinkingWire(input: ProtocolLlmInput) {
+  const effort = input.reasoningEffort
+
+  if (!effort || effort === 'off') {
+    return {}
+  }
+
+  return { reasoning: { effort: effort === 'max' ? 'high' : effort } }
 }
 
 type ResponsesInputItem =

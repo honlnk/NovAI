@@ -40,9 +40,15 @@ export type AgentAssistantMessage = {
   content: string
   /**
    * 模型思考流（DeepSeek reasoning_content / anthropic thinking / gemini thought）。
-   * 只持久化供 UI 展示，构造请求时各适配器一律丢弃——「只收不发」。
+   * 持久化供 UI 展示，并按协议要求随历史回传（DeepSeek 思考模式工具轮硬要求
+   * reasoning_content；anthropic 回传 thinking block）——不产思考的模型天然缺省。
    */
   reasoning?: string
+  /**
+   * anthropic 思考块签名（thinking block 的 signature）：真 Anthropic 思考模式
+   * 工具轮强制验签回传；DeepSeek anthropic 端点不校验但回传亦安全。
+   */
+  thinkingSignature?: string
   toolCalls?: AgentToolCall[]
 }
 
@@ -83,6 +89,8 @@ export type AgentAssistantResponse = {
   content: string
   /** 思考流全文（存在时随 assistant 消息持久化，见 AgentAssistantMessage.reasoning）。 */
   reasoning?: string
+  /** anthropic 思考块签名，随 assistant 消息持久化用于回传（见 AgentAssistantMessage.thinkingSignature）。 */
+  thinkingSignature?: string
   toolCalls: AgentToolCall[]
   finishReason?: string
   diagnostics?: AgentLlmDiagnostics

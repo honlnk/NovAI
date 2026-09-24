@@ -226,6 +226,139 @@ describe('anthropic adapter (via streamAgentCompletion)', () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toBe('Overloaded')
   })
+
+  it('maps reasoning effort to thinking wire params (D2 table): default omits, off disables, low/high/max budget', async () => {
+    // 每次调用新流（Response body 单次消费）
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createAnthropicStream([
+        { type: 'message_start', message: { role: 'assistant' } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '好。' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+        { type: 'message_stop' },
+      ])))
+    globalThis.fetch = fetchMock
+
+    const efforts = ['low', 'high', 'max'] as const
+    for (const effort of efforts) {
+      await streamAgentCompletion({
+        protocol: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        apiKey: 'test-key',
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    await streamAgentCompletion({
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'test-key',
+      model: 'claude-sonnet-4-5',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+      reasoningEffort: 'off',
+    }, () => {})
+    await streamAgentCompletion({
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'test-key',
+      model: 'claude-sonnet-4-5',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+    }, () => {})
+
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))
+    // low → budget 2048（默认 max_tokens 8192 已大于预算，不抬高）
+    expect(bodies[0].thinking).toEqual({ type: 'enabled', budget_tokens: 2048 })
+    expect(bodies[0].max_tokens).toBe(8192)
+    // high → budget 8192 与默认上限相等：抬高 max_tokens 为预算 + 4096（真 Anthropic 要求严格大于）
+    expect(bodies[1].thinking).toEqual({ type: 'enabled', budget_tokens: 8192 })
+    expect(bodies[1].max_tokens).toBe(8192 + 4096)
+    // max → budget 16384
+    expect(bodies[2].thinking).toEqual({ type: 'enabled', budget_tokens: 16384 })
+    expect(bodies[2].max_tokens).toBe(16384 + 4096)
+    // off → 显式关闭
+    expect(bodies[3].thinking).toEqual({ type: 'disabled' })
+    expect(bodies[3].max_tokens).toBe(8192)
+    // 缺省（default 档）→ 不传
+    expect(bodies[4]).not.toHaveProperty('thinking')
+  })
+
+  it('replays reasoning as a leading thinking block with signature when present', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(createAnthropicStream([
+      { type: 'message_start', message: { role: 'assistant' } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '完成。' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+      { type: 'message_stop' },
+    ]))
+    globalThis.fetch = fetchMock
+
+    await streamAgentCompletion({
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'test-key',
+      model: 'claude-sonnet-4-5',
+      messages: [
+        { role: 'user', content: '读章节' },
+        {
+          role: 'assistant',
+          content: '',
+          reasoning: '要调用 ReadFile。',
+          thinkingSignature: 'sig-abc',
+          toolCalls: [{ id: 'toolu_01', name: 'ListDirectory', input: { path: '' } }],
+        },
+        {
+          role: 'assistant',
+          content: '旧思考轮',
+          reasoning: '没有签名的旧消息',
+        },
+      ],
+      tools: [listDirectoryToolSchema],
+    }, () => {})
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const first = body.messages.find((m: { role: string }) => m.role === 'assistant')
+    // thinking block 居 content 首位（真 Anthropic 要求），带落盘签名
+    expect(first.content[0]).toEqual({ type: 'thinking', thinking: '要调用 ReadFile。', signature: 'sig-abc' })
+    // 无签名的思考轮：回传 thinking block 但不带 signature 字段
+    const second = body.messages.filter((m: { role: string }) => m.role === 'assistant')[1]
+    expect(second.content[0]).toEqual({ type: 'thinking', thinking: '没有签名的旧消息' })
+  })
+
+  it('collects thinkingSignature from signature_delta stream events', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(createAnthropicStream([
+      { type: 'message_start', message: { role: 'assistant' } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '先想想。' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-part-1' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-part-2' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '答案。' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+      { type: 'message_stop' },
+    ]))
+    globalThis.fetch = fetchMock
+
+    const result = await streamAgentCompletion({
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'test-key',
+      model: 'claude-sonnet-4-5',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+    }, () => {})
+
+    expect(result.reasoning).toBe('先想想。')
+    // 签名分段累积，与 reasoning 同为回传 thinking block 的原料
+    expect(result.thinkingSignature).toBe('sig-part-1sig-part-2')
+  })
 })
 
 /** anthropic SSE 帧：`event:` 行 + `data:` 行（适配器只消费 data 行）。 */

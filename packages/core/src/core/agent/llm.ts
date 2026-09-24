@@ -2,7 +2,7 @@ import { normalizeBaseUrl } from '../ai/shared'
 import { resolveProtocolAdapter } from '../llm/protocol/resolve'
 import { AgentAbortedError } from '../llm/protocol/types'
 import type { ProtocolLlmEvent } from '../llm/protocol/types'
-import type { ModelProtocol } from '../../types/ai'
+import type { ModelProtocol, AgentReasoningEffort } from '../../types/ai'
 
 import type {
   AgentAssistantResponse,
@@ -20,6 +20,11 @@ export type AgentLlmInput = {
   tools: AgentToolSchema[]
   /** 输出 token 上限（映射 OpenAI max_tokens）。缺省不传，由 provider 默认。压缩摘要调用必须传。 */
   maxTokens?: number
+  /**
+   * 思考强度档位（缺省不传 = default，provider 自决）。各适配器映射到协议 wire 参数；
+   * 压缩摘要 / 要素提取等辅助请求固定传 'off'（省 token，对齐 dsh 对辅助调用的处理）。
+   */
+  reasoningEffort?: AgentReasoningEffort
   /** 外部停止信号（用户点击停止）。一旦 abort，立即中断流式，且不触发非流式 fallback。 */
   signal?: AbortSignal
 }

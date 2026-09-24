@@ -1,4 +1,4 @@
-import type { ModelProtocol } from '../../../types/ai'
+import type { AgentReasoningEffort, ModelProtocol } from '../../../types/ai'
 import type { AgentAssistantResponse, AgentMessage, AgentToolSchema } from '../../agent/messages'
 
 /**
@@ -6,7 +6,8 @@ import type { AgentAssistantResponse, AgentMessage, AgentToolSchema } from '../.
  *
  * 各适配器负责把 AgentMessage 翻译成自家线格式（含 system/tool 消息的协议特有形态），
  * 并把线上的流式事件翻译回 ProtocolLlmEvent。历史消息里的 reasoning（思考流）
- * 只持久化展示用，适配器构造请求时一律丢弃——「只收不发」。
+ * 除持久化展示外，还按协议要求随历史回传（DeepSeek 工具轮硬要求 reasoning_content、
+ * anthropic 回传 thinking block）——不产思考的模型天然缺省。
  */
 export type ProtocolLlmInput = {
   baseUrl: string
@@ -16,6 +17,8 @@ export type ProtocolLlmInput = {
   tools: AgentToolSchema[]
   /** 输出 token 上限；各协议映射自家字段（max_tokens / max_output_tokens / maxOutputTokens）。 */
   maxTokens?: number
+  /** 思考强度档位；各适配器映射自家 wire 参数（含 DeepSeek 方言分支与档位降级）。 */
+  reasoningEffort?: AgentReasoningEffort
   /** 外部停止信号（用户点击停止）。 */
   signal?: AbortSignal
 }

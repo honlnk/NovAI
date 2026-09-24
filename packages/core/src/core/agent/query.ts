@@ -151,6 +151,10 @@ export async function query(input: {
             protocol: input.config.llm.protocol,
             messages,
             tools: availableTools.map((tool) => tool.schema),
+            // 思考档位：default 档不传（provider 自决），其余四档下发到适配器映射
+            ...(input.config.llm.reasoningEffort && input.config.llm.reasoningEffort !== 'default'
+              ? { reasoningEffort: input.config.llm.reasoningEffort }
+              : {}),
             signal: input.signal,
           },
           (event) => {
@@ -229,6 +233,7 @@ export async function query(input: {
       role: 'assistant',
       content: assistantResponse.content,
       ...(assistantResponse.reasoning ? { reasoning: assistantResponse.reasoning } : {}),
+      ...(assistantResponse.thinkingSignature ? { thinkingSignature: assistantResponse.thinkingSignature } : {}),
       toolCalls: assistantResponse.toolCalls,
     }
 

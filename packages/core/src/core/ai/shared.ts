@@ -6,6 +6,15 @@ export function normalizeBaseUrl(baseUrl: string) {
 }
 
 /**
+ * 判定 baseUrl 是否指向 DeepSeek（含兼容网关镜像）。
+ * DeepSeek 的 openai 兼容端点支持 `thinking` 开关与 `reasoning_effort` 三档（low/high/max），
+ * OpenAI 官方只认 `reasoning_effort` 且无法显式关思考——思考档位的 wire 映射按方言分流。
+ */
+export function isDeepSeekDialect(baseUrl: string) {
+  return baseUrl.toLowerCase().includes('deepseek')
+}
+
+/**
  * 开发环境通过 Vite 代理转发第三方模型请求，避免浏览器直连时的 CORS 限制。
  */
 export function resolveApiUrl(baseUrl: string, path: string) {

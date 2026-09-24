@@ -223,6 +223,47 @@ describe('gemini adapter (via streamAgentCompletion)', () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toContain('API key not valid')
   })
+
+  it('maps reasoning effort to thinkingConfig.thinkingBudget (D2 table): off=0, low/high/max budgets, default omits', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createGeminiStream([
+        { candidates: [{ content: { role: 'model', parts: [{ text: '好的。' }] }, finishReason: 'STOP' }] },
+      ])))
+    globalThis.fetch = fetchMock
+
+    const cases = [
+      { effort: 'off' as const, budget: 0 },
+      { effort: 'low' as const, budget: 2048 },
+      { effort: 'high' as const, budget: 8192 },
+      { effort: 'max' as const, budget: 32768 },
+    ]
+    for (const { effort } of cases) {
+      await streamAgentCompletion({
+        protocol: 'gemini',
+        baseUrl: 'https://generativelanguage.googleapis.com',
+        apiKey: 'test-key',
+        model: 'gemini-2.5-pro',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    await streamAgentCompletion({
+      protocol: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      apiKey: 'test-key',
+      model: 'gemini-2.5-pro',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+    }, () => {})
+
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))
+    for (const [index, { budget }] of cases.entries()) {
+      expect(bodies[index].generationConfig.thinkingConfig).toEqual({ thinkingBudget: budget })
+    }
+    // default 档：无 maxTokens 也无思考档 → 整个 generationConfig 都不出现（gemini 动态默认）
+    expect(bodies[4]).not.toHaveProperty('generationConfig')
+  })
 })
 
 /** gemini SSE 流：每个 data 行是一个 GenerateContentResponse 块。 */

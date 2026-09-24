@@ -193,6 +193,44 @@ describe('openai-responses adapter (via streamAgentCompletion)', () => {
     expect(resolveProtocolAdapter('gemini').protocol).toBe('gemini')
     expect(resolveProtocolAdapter('openai-responses').protocol).toBe('openai-responses')
   })
+
+  it('maps reasoning effort to reasoning.effort (D2 table): low/high direct, max degrades to high, off/default omit', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createResponsesStream([
+        { type: 'response.output_item.done', item: { type: 'message', content: [{ type: 'output_text', text: '好的。' }] } },
+        { type: 'response.completed', response: {} },
+      ])))
+    globalThis.fetch = fetchMock
+
+    for (const effort of ['low', 'high', 'max', 'off'] as const) {
+      await streamAgentCompletion({
+        protocol: 'openai-responses',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'test-key',
+        model: 'gpt-5.2',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    await streamAgentCompletion({
+      protocol: 'openai-responses',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'test-key',
+      model: 'gpt-5.2',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+    }, () => {})
+
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))
+    expect(bodies[0].reasoning).toEqual({ effort: 'low' })
+    expect(bodies[1].reasoning).toEqual({ effort: 'high' })
+    // Responses 档位集合无 max：降级 high
+    expect(bodies[2].reasoning).toEqual({ effort: 'high' })
+    // Responses 无关闭思考参数（off/default 均不传）
+    expect(bodies[3]).not.toHaveProperty('reasoning')
+    expect(bodies[4]).not.toHaveProperty('reasoning')
+  })
 })
 
 /** Responses API SSE 流：每个 data 行一个事件对象，以 [DONE] 收尾。 */

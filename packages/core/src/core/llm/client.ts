@@ -66,6 +66,8 @@ export async function streamChatCompletion(
       protocol: input.protocol,
       messages,
       tools: [],
+      // 辅助请求固定关思考：一次性结构化输出（要素提取等）不需要思考流
+      reasoningEffort: 'off',
     },
     (event) => {
       // 思考流增量对本场景无消费方；start/delta/error 保持原时序透传

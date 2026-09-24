@@ -35,10 +35,16 @@ export type AssistantTextMessage = {
   kind: 'text'
   text: string
   /**
-   * 思考流文本（reasoning 模型的思考过程）：只随会话落盘供 UI 展示，
-   * 构建模型请求时剥除（只收不发）。思考后直接调工具的轮次 text 为空、仅带 reasoning。
+   * 思考流文本（reasoning 模型的思考过程）：随会话落盘供 UI 展示，
+   * 并按协议要求随历史回传（DeepSeek 工具轮硬要求 reasoning_content、anthropic 回传
+   * thinking block）。思考后直接调工具的轮次 text 为空、仅带 reasoning。
    */
   reasoning?: string
+  /**
+   * anthropic 思考块签名：随会话落盘，回传 thinking block 时携带
+   * （真 Anthropic 思考模式验签；DeepSeek anthropic 端点不校验但回传安全）。
+   */
+  thinkingSignature?: string
   createdAt: string
 }
 

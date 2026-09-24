@@ -414,6 +414,65 @@ describe('openai-chat adapter (via streamAgentCompletion)', () => {
     const secondBodyMessages = JSON.parse(fetchMock.mock.calls[1][1].body).messages
     expect(secondBodyMessages.find((m: { role: string }) => m.role === 'assistant')).not.toHaveProperty('reasoning_content')
   })
+
+  it('maps reasoning effort per dialect (D2 table): DeepSeek thinking+effort, other backends effort-only with off/max degraded', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createStreamingResponse([
+        { choices: [{ delta: { content: '好的。' }, finish_reason: 'stop' }] },
+      ])))
+    globalThis.fetch = fetchMock
+
+    // DeepSeek 方言（baseUrl 含 deepseek）
+    for (const effort of ['off', 'low', 'high', 'max'] as const) {
+      await streamAgentCompletion({
+        protocol: 'openai',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'test-key',
+        model: 'deepseek-flash',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    // 非 DeepSeek 后端（SiliconFlow 等 openai 兼容网关）
+    for (const effort of ['off', 'low', 'max'] as const) {
+      await streamAgentCompletion({
+        protocol: 'openai',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        apiKey: 'test-key',
+        model: 'some-model',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    // 缺省（default 档）
+    await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-flash',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+    }, () => {})
+
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))
+    // DeepSeek 方言四档
+    expect(bodies[0].thinking).toEqual({ type: 'disabled' })
+    expect(bodies[0]).not.toHaveProperty('reasoning_effort')
+    expect(bodies[1].thinking).toEqual({ type: 'enabled' })
+    expect(bodies[1].reasoning_effort).toBe('low')
+    expect(bodies[2].reasoning_effort).toBe('high')
+    expect(bodies[3].reasoning_effort).toBe('max')
+    // 非方言：thinking 是 DeepSeek 方言字段不可发；off 无法实现不传；max 降级 high
+    expect(bodies[4]).not.toHaveProperty('thinking')
+    expect(bodies[4]).not.toHaveProperty('reasoning_effort')
+    expect(bodies[5].reasoning_effort).toBe('low')
+    expect(bodies[6].reasoning_effort).toBe('high')
+    // default 档：两个参数都不传
+    expect(bodies[7]).not.toHaveProperty('thinking')
+    expect(bodies[7]).not.toHaveProperty('reasoning_effort')
+  })
 })
 
 function createStreamingResponse(payloads: unknown[]) {
