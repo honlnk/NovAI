@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { createDefaultConfig } from '../project/defaults'
-import { readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
+import { createDefaultConfig, DEFAULT_ELEMENT_SCHEMA } from '../project/defaults'
+import { readElementSchema, readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
 
 describe('project fs repair', () => {
   it('does not recreate the default scene prompt after it has been deleted or renamed', async () => {
@@ -31,6 +31,32 @@ describe('project fs repair', () => {
     }))
     await expect(readProjectText(rootHandle, 'prompts/scenes/scene-001.md')).rejects.toThrow('Not found')
     await expect(readProjectText(rootHandle, 'prompts/scenes/renamed-scene.md')).resolves.toBe('# Renamed Scene Prompt')
+  })
+
+  it('要素规范 ELEMENT.md：缺失时补默认内容，已有版本（含用户修改）不覆盖', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      project: { name: 'novel', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+    }))
+    writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
+      projectId: 'p1', version: 1, createdAt: '2026-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    writeProjectTextSync(rootHandle, 'prompts/system.md', '# System Prompt')
+
+    // 缺失 → 修复补齐默认规范
+    await repairProject(rootHandle)
+    await expect(readProjectText(rootHandle, 'prompts/ELEMENT.md')).resolves.toBe(DEFAULT_ELEMENT_SCHEMA)
+    await expect(readElementSchema(rootHandle)).resolves.toBe(DEFAULT_ELEMENT_SCHEMA)
+
+    // 已有（用户改过）→ 不覆盖
+    writeProjectTextSync(rootHandle, 'prompts/ELEMENT.md', '# 我自己定的规范')
+    await repairProject(rootHandle)
+    await expect(readElementSchema(rootHandle)).resolves.toBe('# 我自己定的规范')
+  })
+
+  it('readElementSchema：文件不存在返回空串不抛错', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    await expect(readElementSchema(rootHandle)).resolves.toBe('')
   })
 })
 

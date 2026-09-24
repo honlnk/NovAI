@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -53,6 +53,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
   await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
 
   return loadProjectFromHandle(rootHandle)
 }
@@ -169,6 +170,12 @@ export async function repairProject(
   // 因此不纳入 inspectProject 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
   if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
     await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  }
+
+  // 要素库规范 ELEMENT.md 缺失时补默认内容（园丁子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
+  // 与 NovAI.md 同策略：温和补齐、不覆盖用户已修改的版本、不纳入强制检测项。
+  if (!(await pathExists(rootHandle, 'prompts/ELEMENT.md', 'file'))) {
+    await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
   }
 
   return loadProjectFromHandle(rootHandle)
@@ -449,6 +456,20 @@ export async function readScenePrompt(
 export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): Promise<string> {
   try {
     return await readText(rootHandle, 'prompts/NovAI.md')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 读取要素库规范 `prompts/ELEMENT.md`（园丁子代理的唯一注入文件）。
+ *
+ * 只注入园丁、不注入主 Agent（《要素园丁子代理设计》§7.4）；
+ * 文件缺失时返回空字符串，不抛错——园丁 prompt 组装层会附「规范缺失」兜底提示。
+ */
+export async function readElementSchema(rootHandle: FileSystemDirectoryHandle): Promise<string> {
+  try {
+    return await readText(rootHandle, 'prompts/ELEMENT.md')
   } catch {
     return ''
   }

@@ -36,6 +36,13 @@ const novaiOverview = computed<ProjectFileNodeView | null>(() => {
   ) ?? null
 })
 
+/** 要素库规范：prompts/ELEMENT.md。只注入园丁子代理（/整理要素），不进主 Agent 提示词栈 */
+const elementSchema = computed<ProjectFileNodeView | null>(() => {
+  return promptRootChildren.value.find(
+    n => n.kind === 'file' && n.path === 'prompts/ELEMENT.md',
+  ) ?? null
+})
+
 /** 场景提示词：prompts/scenes/ 目录下的所有 .md 文件（拉平） */
 const scenePrompts = computed<ProjectFileNodeView[]>(() => {
   const sceneChildren = pickDirectoryChildren(props.files, 'prompts/scenes')
@@ -95,6 +102,28 @@ function isSceneActive(path: string): boolean {
         </button>
         <p v-else class="px-2 py-2 text-xs text-gray-600">
           未找到项目总览（prompts/NovAI.md）
+        </p>
+      </div>
+
+      <!-- 要素库规范 -->
+      <div class="mb-2">
+        <p class="px-2 py-1 text-xs font-medium uppercase tracking-wide text-gray-500">要素规范</p>
+        <button
+          v-if="elementSchema"
+          :class="[
+            'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+            elementSchema.path === activeFilePath
+              ? 'bg-white/15 text-white'
+              : 'text-gray-400 hover:bg-white/10 hover:text-gray-200',
+          ]"
+          @click="emit('selectFile', elementSchema.path)"
+        >
+          <span class="shrink-0">🌿</span>
+          <span class="truncate">{{ elementSchema.name }}</span>
+          <span class="ml-auto shrink-0 text-xs text-gray-500">园丁专用</span>
+        </button>
+        <p v-else class="px-2 py-2 text-xs text-gray-600">
+          未找到要素规范（prompts/ELEMENT.md），修复项目后会自动补齐
         </p>
       </div>
 
