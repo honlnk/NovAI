@@ -65,11 +65,6 @@ const isProtocolOpen = ref(false)
 const isTesting = ref(false)
 const testResult = ref<ConnectionTestResultView | null>(null)
 
-/** 生成链路仅实现 openai（Chat Completions 兼容），其余协议需提示。 */
-const isNonChatCompletionsProtocol = computed(
-  () => props.showProtocol && props.form.protocol && props.form.protocol !== 'openai',
-)
-
 const activeProtocolLabel = computed(
   () => PROTOCOL_OPTIONS.find((option) => option.value === props.form.protocol)?.label ?? '',
 )
@@ -280,12 +275,6 @@ async function runTest() {
         </div>
       </div>
       <p class="mt-1.5 text-xs text-gray-500">决定拉取模型列表与测试连接的接口形态</p>
-    </div>
-
-    <!-- 非 Chat Completions 协议提示：生成链路尚未适配 -->
-    <div v-if="isNonChatCompletionsProtocol" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-      对话生成链路暂仅支持 OpenAI 兼容协议；选择 {{ activeProtocolLabel }}
-      协议后可正常拉取模型列表与测试连接，但 Agent 生成仍需使用 OpenAI 兼容的服务。
     </div>
 
     <!-- API 地址 -->
