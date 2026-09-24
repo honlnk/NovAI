@@ -1,6 +1,8 @@
 import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
 import { buildSteeringContent, query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
+import { createDelegateToGardenerTool } from '../agent/gardener'
+import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
   appendUserMessage,
   createModelView,
@@ -294,7 +296,75 @@ async function runDriverTurn(options: {
     }))
   }
   const requestMessages = toRequestMessages(modelView)
-  const tools = createAgentTools()
+  /**
+   * 工具事件 → 显示层消息（含改动账本累积）。主 Agent 事件无 agent 字段；
+   * 园丁子代理的事件带 gardener（委派工具透传），渲染层据此折叠为嵌套园丁任务组。
+   */
+  const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
+    if (event.type === 'tool-call') {
+      pushMessage(
+        session,
+        {
+          id: createId('message'),
+          role: 'system',
+          kind: 'tool-call',
+          toolName: event.call.name,
+          inputSummary: event.inputSummary,
+          toolCallId: event.call.id,
+          ...(event.agent ? { agent: event.agent } : {}),
+          createdAt: new Date().toISOString(),
+        },
+        onEvent,
+      )
+      return
+    }
+
+    if (event.type === 'tool-result') {
+      // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
+      // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
+      // 园丁的写入同 runId 归本轮面板，记录带 agent 归属标记。
+      if (event.ok && event.fileChange) {
+        session.changeLedger = [
+          ...(session.changeLedger ?? []),
+          {
+            id: createId('change'),
+            runId,
+            at: new Date().toISOString(),
+            change: event.fileChange,
+            ...(event.diff ? { diff: event.diff } : {}),
+            ...(event.agent ? { agent: event.agent } : {}),
+          },
+        ]
+      }
+
+      pushMessage(
+        session,
+        {
+          id: createId('message'),
+          role: 'system',
+          kind: 'tool-result',
+          toolName: event.call.name,
+          ok: event.ok,
+          resultSummary: event.resultSummary,
+          toolCallId: event.call.id,
+          ...(event.agent ? { agent: event.agent } : {}),
+          createdAt: new Date().toISOString(),
+        },
+        onEvent,
+      )
+    }
+  }
+
+  // 主 Agent 工具面：全量文件工具 + 园丁委派工具（运行态 confirm/signal/事件转发闭包注入——
+  // 这些是会话层所有，不进 ToolRuntime）。园丁自己的工具面在 gardener.ts 内独立组装（无委派工具）。
+  const tools = {
+    ...createAgentTools(),
+    DelegateToGardener: createDelegateToGardenerTool({
+      confirm: input.confirm,
+      signal,
+      onSubagentEvent: appendToolEventMessage,
+    }),
+  }
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false
   // 当前正在流式输出的 assistant 消息 id：delta 事件携带它，最终的 assistant 落盘消息复用它，
@@ -429,53 +499,8 @@ async function runDriverTurn(options: {
           return
         }
 
-        if (event.type === 'tool-call') {
-          pushMessage(
-            session,
-            {
-              id: createId('message'),
-              role: 'system',
-              kind: 'tool-call',
-              toolName: event.call.name,
-              inputSummary: event.inputSummary,
-              toolCallId: event.call.id,
-              createdAt: new Date().toISOString(),
-            },
-            onEvent,
-          )
-          return
-        }
-
-        if (event.type === 'tool-result') {
-          // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
-          // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
-          if (event.ok && event.fileChange) {
-            session.changeLedger = [
-              ...(session.changeLedger ?? []),
-              {
-                id: createId('change'),
-                runId,
-                at: new Date().toISOString(),
-                change: event.fileChange,
-                ...(event.diff ? { diff: event.diff } : {}),
-              },
-            ]
-          }
-
-          pushMessage(
-            session,
-            {
-              id: createId('message'),
-              role: 'system',
-              kind: 'tool-result',
-              toolName: event.call.name,
-              ok: event.ok,
-              resultSummary: event.resultSummary,
-              toolCallId: event.call.id,
-              createdAt: new Date().toISOString(),
-            },
-            onEvent,
-          )
+        if (event.type === 'tool-call' || event.type === 'tool-result') {
+          appendToolEventMessage(event)
         }
       },
     })

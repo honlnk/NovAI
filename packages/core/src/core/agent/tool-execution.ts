@@ -11,10 +11,24 @@ export type ToolExecutionEvent =
   /** fileChange/diff 仅在写工具成功执行后存在；diff 是片段级 before/after（改动账本用，不进模型视图）。 */
   | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff }
 
+/**
+ * 事件归属标记：园丁子代理的内层工具事件由委派工具透传时带上，
+ * session/展示层据此把园丁的工具行折叠成嵌套任务组（主 Agent 事件无此字段）。
+ */
+export type SubagentEventAgent = 'gardener'
+
+/** 带归属标记的工具执行事件（园丁透传链的形状；主 Agent 链不带 agent 字段）。 */
+export type TaggedToolExecutionEvent = ToolExecutionEvent & { agent?: SubagentEventAgent }
+
 /** 写工具执行前的确认请求，交由上层（service）转交 UI 等待用户决定。 */
 export type WriteConfirmationRequest = {
   call: AgentToolCall
   confirmation: WriteConfirmation
+  /**
+   * 确认卡归属标签（如「园丁」）：园丁子代理的写确认与主 Agent 共用同一张卡，
+   * 标签让用户知道这次是谁在请求写入。
+   */
+  agentLabel?: string
 }
 
 export type ConfirmDecision = { accepted: boolean }

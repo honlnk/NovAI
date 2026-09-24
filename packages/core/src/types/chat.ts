@@ -16,6 +16,7 @@ export type ChatToolName =
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'DelegateToGardener'
 
 export type UserTextMessage = {
   id: string
@@ -66,6 +67,8 @@ export type ToolCallMessage = {
   inputSummary: string
   /** 与 tool-result 配对的调用 id（event.call.id）；旧会话消息无此字段，UI 各自独立成行 */
   toolCallId?: string
+  /** 事件归属：园丁子代理的工具行带 gardener，渲染层据此折叠为嵌套园丁任务组 */
+  agent?: 'gardener'
   createdAt: string
 }
 
@@ -78,6 +81,8 @@ export type ToolResultMessage = {
   resultSummary: string
   /** 与 tool-call 配对的调用 id（event.call.id）；旧会话消息无此字段，UI 各自独立成行 */
   toolCallId?: string
+  /** 事件归属：园丁子代理的工具行带 gardener，渲染层据此折叠为嵌套园丁任务组 */
+  agent?: 'gardener'
   createdAt: string
 }
 
@@ -186,6 +191,8 @@ export type FileChangeRecord = {
   at: string
   change: FileChange
   diff?: ChangeDiff
+  /** 改动归属：园丁子代理的写入带 gardener（轮次归属标记，写回面板展示用）；主 Agent 记录无此字段 */
+  agent?: 'gardener'
 }
 
 export type ChatSessionState = {

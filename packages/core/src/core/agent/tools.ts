@@ -44,7 +44,11 @@ export type AgentRunnableTool<TInput = unknown, TOutput = unknown> = {
   formatResult(output: TOutput): string
 }
 
-export type AgentRunnableToolMap = Record<AgentToolName, AgentRunnableTool>
+/**
+ * 运行层工具表。Partial：主 Agent 面由 session 层组装（全量文件工具 + DelegateToGardener），
+ * 园丁子代理面是白名单子集（无委派工具，深度写死 1）；模型误调未注册工具由执行层兜底回灌。
+ */
+export type AgentRunnableToolMap = Partial<Record<AgentToolName, AgentRunnableTool>>
 
 export function createAgentTools(): AgentRunnableToolMap {
   return {
@@ -528,6 +532,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'
+    || value === 'DelegateToGardener'
 }
 
 function formatScore(value: number | undefined) {

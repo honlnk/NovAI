@@ -1,6 +1,11 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { FileChangeRecord } from '../../types/chat'
 
+/**
+ * core 工具注册表（tools/index.ts 的 `Record<CoreToolName, …>` 全键约束）的键集合。
+ * DelegateToGardener 不在此列：它是会话层组装的委派工具（需要 confirm/signal/事件转发闭包），
+ * 不是纯 ToolRuntime 可驱动的 core 工具——其名字进 AgentToolName / ChatToolName / ToolNameView。
+ */
 export type CoreToolName =
   | 'ReadFile'
   | 'EditFile'
@@ -86,7 +91,12 @@ export type WriteConfirmation =
   | { kind: 'rename'; fromPath: string; toPath: string }
   | { kind: 'delete'; path: string }
 
-export type ToolDefinition<TName extends CoreToolName, TInput, TOutput> = {
+/**
+ * 工具定义。TName 放宽为 string（不锁 CoreToolName）：会话层组装的工具（如 DelegateToGardener）
+ * 名字在 AgentToolName 联合里而不进 core 注册表，同样以本形状定义；core 注册表的键约束在
+ * tools/index.ts 显式保持。
+ */
+export type ToolDefinition<TName extends string, TInput, TOutput> = {
   name: TName
   description: string
   validateInput(input: unknown): TInput

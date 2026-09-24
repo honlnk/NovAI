@@ -309,6 +309,7 @@ export type ToolNameView =
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'DelegateToGardener'
 
 export type ToolCallView = {
   id: string
@@ -365,6 +366,8 @@ export type FileChangeRecordView = {
     linesAdded: number
     linesRemoved: number
   }
+  /** 改动归属：园丁子代理的记录带 gardener（写回面板归属标记）；主 Agent 记录无此字段 */
+  agent?: 'gardener'
 }
 
 /**
@@ -431,6 +434,8 @@ export type ChatMessageView =
       toolName: ToolNameView
       /** 与 tool-result 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
       toolCallId?: string
+      /** 事件归属：园丁子代理的工具行带 gardener，渲染层折叠为嵌套园丁任务组 */
+      agent?: 'gardener'
       createdAt: string
     }
   | {
@@ -442,6 +447,8 @@ export type ChatMessageView =
       toolName: ToolNameView
       /** 与 tool-call 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
       toolCallId?: string
+      /** 事件归属：园丁子代理的工具行带 gardener，渲染层折叠为嵌套园丁任务组 */
+      agent?: 'gardener'
       createdAt: string
     }
   | {
@@ -554,6 +561,8 @@ export type FileChangeConfirmationView = {
   summary: string
   /** 写工具执行前的预览数据，用于 UI 展示 diff。 */
   confirmation: WriteConfirmationView
+  /** 归属标签（如「园丁」）：园丁子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
+  agentLabel?: string
 }
 
 export type AgentUiEvent =

@@ -23,6 +23,7 @@ import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
+import { GARDENER_TASK_PROMPT } from '../core/agent/gardener'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext, FileChangeRecord } from '../types/chat'
 import type { ProjectSnapshot } from '../types/project'
@@ -32,6 +33,12 @@ import type { ProjectSnapshot } from '../types/project'
  * app 层通过 services 入口导入，选中命令后作为用户意图发送给 Agent，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
  */
 export { INIT_NOVEL_PROMPT }
+
+/**
+ * /整理要素 斜杠命令的驱动 prompt。
+ * 指示主 Agent 立即委派 DelegateToGardener（园丁子代理）整理要素库，并转述其结构化汇报。
+ */
+export { GARDENER_TASK_PROMPT }
 
 import {
   requireRuntimeProject,
@@ -570,7 +577,7 @@ async function resolveActiveOrCreate(projectId: string): Promise<ChatSessionStat
 function requestConfirmation(
   sessionId: string,
   projectId: string,
-  request: { call: { id: string; name: ToolNameView }; confirmation: WriteConfirmation },
+  request: { call: { id: string; name: ToolNameView }; confirmation: WriteConfirmation; agentLabel?: string },
 ): Promise<{ accepted: boolean }> {
   const confirmationId = createRunId()
   const view: FileChangeConfirmationView = {
@@ -579,6 +586,7 @@ function requestConfirmation(
     title: buildConfirmationTitle(request.confirmation),
     summary: buildConfirmationSummary(request.confirmation),
     confirmation: toWriteConfirmationView(request.confirmation),
+    ...(request.agentLabel ? { agentLabel: request.agentLabel } : {}),
   }
 
   broadcastAgentEvent({ type: 'confirmation-required', sessionId, request: view })
@@ -856,6 +864,7 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       text: message.inputSummary,
       toolName: message.toolName,
       ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+      ...(message.agent ? { agent: message.agent } : {}),
       createdAt: message.createdAt,
     }
   }
@@ -869,6 +878,7 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       ok: message.ok,
       toolName: message.toolName,
       ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+      ...(message.agent ? { agent: message.agent } : {}),
       createdAt: message.createdAt,
     }
   }
@@ -926,6 +936,7 @@ function toFileChangeRecordView(record: FileChangeRecord): FileChangeRecordView 
     at: record.at,
     change: toChangedFileView(record.change),
     ...(record.diff ? { diff: { ...record.diff } } : {}),
+    ...(record.agent ? { agent: record.agent } : {}),
   }
 }
 
