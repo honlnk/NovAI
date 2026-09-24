@@ -83,10 +83,10 @@ onBeforeUnmount(() => {
       </svg>
     </button>
 
-    <!-- 档位菜单：按钮上方弹出（档位列表按协议过滤后传入） -->
+    <!-- 档位菜单：按钮上方弹出、右锚向左展开（入口在发送按钮左侧、贴近输入区右缘） -->
     <div
       v-if="isOpen"
-      class="absolute bottom-full left-0 z-20 mb-1.5 w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg"
+      class="absolute bottom-full right-0 z-20 mb-1.5 w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg"
       role="menu"
       aria-label="思考强度档位"
     >

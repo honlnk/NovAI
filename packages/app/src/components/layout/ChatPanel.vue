@@ -774,60 +774,61 @@ async function handleExtractionConfirm() {
                 @input="onTextareaInput"
               />
             </div>
-            <!-- 工具行：左侧权限档位 + 思考强度入口，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示） -->
+            <!-- 工具行：左侧权限档位，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示）。
+                 思考强度入口紧贴发送按钮左侧（各家 agent 产品的习惯位），弹层右锚向上弹出 -->
             <div class="mt-1 flex items-center justify-between gap-2">
               <div class="flex items-center gap-2">
                 <PermissionPresetPicker
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  v-if="isStopping"
+                  class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
+                  title="正在停止…"
+                  disabled
+                >
+                  <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                </button>
+                <button
+                  v-else-if="chatStore.isRunning"
+                  class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  title="停止运行"
+                  @click="handleStop"
+                >
+                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示 -->
+                <button
+                  v-if="chatStore.isRunning"
+                  class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
+                  :disabled="!inputText.trim()"
+                  title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
+                  @click="handleSend('steer')"
+                >
+                  插话
+                </button>
                 <ReasoningEffortPicker
                   :effort="currentReasoningEffort"
                   :options="reasoningEffortOptionList"
                   :label="currentReasoningEffortLabel"
                   @select="handleReasoningEffortSelect"
                 />
-              </div>
-              <div class="flex items-center gap-2">
-              <button
-                v-if="isStopping"
-                class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
-                title="正在停止…"
-                disabled
-              >
-                <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-              </button>
-              <button
-                v-else-if="chatStore.isRunning"
-                class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                title="停止运行"
-                @click="handleStop"
-              >
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
-                </svg>
-              </button>
-              <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示 -->
-              <button
-                v-if="chatStore.isRunning"
-                class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
-                :disabled="!inputText.trim()"
-                title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
-                @click="handleSend('steer')"
-              >
-                插话
-              </button>
-              <button
-                class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
-                :disabled="!inputText.trim()"
-                :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
-                @click="handleSend('queue')"
-              >
-                {{ chatStore.isRunning ? '排队发送' : '发送' }}
-              </button>
+                <button
+                  class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
+                  :disabled="!inputText.trim()"
+                  :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
+                  @click="handleSend('queue')"
+                >
+                  {{ chatStore.isRunning ? '排队发送' : '发送' }}
+                </button>
               </div>
             </div>
           </div>
