@@ -59,6 +59,9 @@ const modelsError = ref('')
 const isDropdownOpen = ref(false)
 const showAllModels = ref(false)
 
+const protocolFieldRef = ref<HTMLElement | null>(null)
+const isProtocolOpen = ref(false)
+
 const isTesting = ref(false)
 const testResult = ref<ConnectionTestResultView | null>(null)
 
@@ -95,15 +98,27 @@ const hasFilteredDifference = computed(
 
 onMounted(() => {
   document.addEventListener('mousedown', handleDocumentMouseDown)
+  document.addEventListener('keydown', handleDocumentKeydown)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', handleDocumentMouseDown)
+  document.removeEventListener('keydown', handleDocumentKeydown)
 })
 
 function handleDocumentMouseDown(event: MouseEvent) {
   if (modelFieldRef.value && !modelFieldRef.value.contains(event.target as Node)) {
     isDropdownOpen.value = false
+  }
+  if (protocolFieldRef.value && !protocolFieldRef.value.contains(event.target as Node)) {
+    isProtocolOpen.value = false
+  }
+}
+
+function handleDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    isDropdownOpen.value = false
+    isProtocolOpen.value = false
   }
 }
 
@@ -124,6 +139,16 @@ function onProtocolChange() {
   if (next) {
     props.form.baseUrl = next.baseUrl
   }
+}
+
+/** 自研协议下拉选中：写回 form.protocol 后走原联动逻辑替换默认地址。 */
+function selectProtocol(option: (typeof PROTOCOL_OPTIONS)[number]) {
+  isProtocolOpen.value = false
+  if (option.value === props.form.protocol) {
+    return
+  }
+  props.form.protocol = option.value
+  onProtocolChange()
 }
 
 async function loadModels() {
@@ -204,15 +229,56 @@ async function runTest() {
     <!-- API 协议（仅 LLM） -->
     <div v-if="showProtocol">
       <label class="mb-1 block text-sm font-medium text-gray-700">API 协议</label>
-      <select
-        v-model="form.protocol"
-        class="w-full cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
-        @change="onProtocolChange"
-      >
-        <option v-for="option in PROTOCOL_OPTIONS" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
+      <div ref="protocolFieldRef" class="relative">
+        <button
+          type="button"
+          class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors hover:border-gray-400 focus:border-gray-500"
+          @click="isProtocolOpen = !isProtocolOpen"
+        >
+          <span>{{ activeProtocolLabel }}</span>
+          <svg
+            class="h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            :class="isProtocolOpen ? 'rotate-180' : ''"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        <!-- 协议下拉浮层：选项附默认地址，让「切换协议联动替换地址」可被预期 -->
+        <div
+          v-if="isProtocolOpen"
+          class="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg"
+          role="menu"
+          aria-label="API 协议"
+        >
+          <button
+            v-for="option in PROTOCOL_OPTIONS"
+            :key="option.value"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="option.value === form.protocol"
+            class="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-gray-50"
+            @click="selectProtocol(option)"
+          >
+            <svg
+              class="mt-0.5 h-4 w-4 shrink-0"
+              :class="option.value === form.protocol ? 'text-blue-600' : 'text-transparent'"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="flex-1">
+              <span class="block text-sm text-gray-700">{{ option.label }}</span>
+              <span class="block text-xs text-gray-400">{{ option.baseUrl }}</span>
+            </span>
+          </button>
+        </div>
+      </div>
       <p class="mt-1.5 text-xs text-gray-500">决定拉取模型列表与测试连接的接口形态</p>
     </div>
 
