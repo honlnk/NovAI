@@ -216,7 +216,7 @@ function buildAnthropicRequestBody(input: ProtocolLlmInput) {
   let maxTokens = input.maxTokens ?? ANTHROPIC_MAX_TOKENS_DEFAULT
   const thinking = resolveThinkingWire(input)
 
-  if (thinking?.type === 'enabled' && maxTokens <= thinking.budget_tokens) {
+  if (thinking.type === 'enabled' && maxTokens <= thinking.budget_tokens) {
     maxTokens = thinking.budget_tokens + 4096
   }
 
@@ -227,20 +227,16 @@ function buildAnthropicRequestBody(input: ProtocolLlmInput) {
     ...(system ? { system } : {}),
     messages: toAnthropicMessages(input.messages),
     ...(tools.length ? { tools } : {}),
-    ...(thinking ? { thinking } : {}),
+    thinking,
   }
 }
 
 /**
- * 思考档位 → thinking 参数（思考强度计划 D2 映射表 anthropic 列）。
- * 缺省档不传（provider 自决）；off 显式关闭；low/high/max → enabled + 预算数值。
+ * 思考档位 → thinking 参数（思考强度计划 D2 映射表 anthropic 列；缺省档按 off 解析——默认关闭）。
+ * off 显式关闭；low/high/max → enabled + 预算数值。
  */
-function resolveThinkingWire(input: ProtocolLlmInput): { type: 'enabled'; budget_tokens: number } | { type: 'disabled' } | undefined {
-  const effort = input.reasoningEffort
-
-  if (!effort) {
-    return undefined
-  }
+function resolveThinkingWire(input: ProtocolLlmInput): { type: 'enabled'; budget_tokens: number } | { type: 'disabled' } {
+  const effort = input.reasoningEffort ?? 'off'
 
   if (effort === 'off') {
     return { type: 'disabled' }

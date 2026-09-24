@@ -1,4 +1,4 @@
-import type { AgentReasoningEffort, ModelProtocol } from '../../../types/ai'
+import type { ModelProtocol, ReasoningEffort } from '../../../types/ai'
 import type { AgentAssistantResponse, AgentMessage, AgentToolSchema } from '../../agent/messages'
 
 /**
@@ -17,8 +17,11 @@ export type ProtocolLlmInput = {
   tools: AgentToolSchema[]
   /** 输出 token 上限；各协议映射自家字段（max_tokens / max_output_tokens / maxOutputTokens）。 */
   maxTokens?: number
-  /** 思考强度档位；各适配器映射自家 wire 参数（含 DeepSeek 方言分支与档位降级）。 */
-  reasoningEffort?: AgentReasoningEffort
+  /**
+   * 思考强度档位（四档）；各适配器映射自家 wire 参数（含 DeepSeek 方言分支与档位降级）。
+   * 字段缺省按 'off' 解析（默认关闭）；辅助请求显式传 'off'。
+   */
+  reasoningEffort?: ReasoningEffort
   /** 外部停止信号（用户点击停止）。 */
   signal?: AbortSignal
 }

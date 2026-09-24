@@ -77,9 +77,9 @@ function handlePermissionPresetSelect(preset: PermissionPreset) {
   void projectStore.changePermissionPreset(props.projectId, preset)
 }
 
-/** 当前思考强度档位与可选档位（按协议 × 方言过滤，思考强度计划 D3） */
+/** 当前思考强度档位与可选档位（按协议 × 方言过滤，思考强度计划 D3；未配置按 off 显示） */
 const currentReasoningEffort = computed(
-  () => projectStore.currentProject?.config.llm.reasoningEffort ?? 'default',
+  () => projectStore.currentProject?.config.llm.reasoningEffort ?? 'off',
 )
 const reasoningEffortOptionList = computed(() => {
   const llm = projectStore.currentProject?.config.llm

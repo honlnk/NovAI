@@ -12,16 +12,15 @@ export type ModelKind = 'llm' | 'embedding'
 export type ModelProtocol = 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
 
 /**
- * 思考强度档位（配置层五档，输入框选择器与 config.llm.reasoningEffort 共用）。
+ * 思考强度档位（配置层四档，输入框选择器与 config.llm.reasoningEffort 共用）。
  *
- * - `default`：不传任何思考参数（provider 自决；DeepSeek 即默认思考开）——即请求层字段缺省；
- * - `off`：显式关闭思考；
+ * - `off`：关闭思考（配置缺省也按它解析——默认关闭，2026-09-24 拍板，对齐 dsh 无「默认」档的形态）；
  * - `low` / `high` / `max`：三档强度（DeepSeek 全集；其他协议的 wire 映射与降级见各适配器）。
+ *
+ * 曾有的 `default` 档（不传参数、provider 自决）已移除：dsh 的 DeepSeek 单适配兜底 high、
+ * 多供应商 pi-ai 适配兜底省略，两者都依赖模型能力表；NovAI 无能力表，跨协议兜底 off 最稳。
  */
-export type ReasoningEffort = 'default' | 'off' | 'low' | 'high' | 'max'
-
-/** 请求层思考档位：default 不上请求（字段缺省即 default），其余四档随 AgentLlmInput 下发。 */
-export type AgentReasoningEffort = Exclude<ReasoningEffort, 'default'>
+export type ReasoningEffort = 'off' | 'low' | 'high' | 'max'
 
 export type ModelConnectionInput = {
   baseUrl: string

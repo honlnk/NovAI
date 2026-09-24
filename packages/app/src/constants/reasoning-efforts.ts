@@ -3,23 +3,23 @@ import type { ReasoningEffort } from '@novai/core/types/ai'
 import { isDeepSeekDialect } from '@novai/core/services/types'
 
 /**
- * 思考强度五档（与 core types/ai.ts 的 ReasoningEffort 一一对应）。
+ * 思考强度四档（与 core types/ai.ts 的 ReasoningEffort 一一对应）。
  * 输入区思考档位选择器使用这一份定义；wire 映射在各协议适配器（思考强度计划 D2 映射表）。
+ * 未配置 = 关闭（'default' 档已移除，2026-09-24 拍板，对齐 dsh 无「默认」档的形态）。
  */
 export const REASONING_EFFORT_OPTIONS = [
-  { value: 'default', label: '默认', hint: '不传思考参数，由服务方决定（DeepSeek 默认开思考）' },
-  { value: 'off', label: '关闭', hint: '显式关闭思考，更快更省 token' },
+  { value: 'off', label: '关闭', hint: '显式关闭思考，更快更省 token（未配置时的默认档）' },
   { value: 'low', label: '低', hint: '轻度思考，速度与深度的平衡' },
   { value: 'high', label: '高', hint: '深度思考，适合复杂情节推演与长线伏笔' },
   { value: 'max', label: '最高', hint: '最大思考预算，难题攻坚' },
 ] as const satisfies ReadonlyArray<{ value: ReasoningEffort; label: string; hint: string }>
 
-export const DEFAULT_REASONING_EFFORT_LABEL = '默认'
+export const FALLBACK_REASONING_EFFORT_LABEL = '关闭'
 
-/** 档位显示名；未知/缺省值回退「默认」（default 即未配置）。 */
+/** 档位显示名；未知/缺省值回退「关闭」（未配置 = 默认关闭）。 */
 export function reasoningEffortLabel(effort: ReasoningEffort | undefined): string {
   return REASONING_EFFORT_OPTIONS.find((option) => option.value === effort)?.label
-    ?? DEFAULT_REASONING_EFFORT_LABEL
+    ?? FALLBACK_REASONING_EFFORT_LABEL
 }
 
 /**

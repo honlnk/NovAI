@@ -138,14 +138,14 @@ describe('query 上下文压缩接入', () => {
     mockedStream.mockReset()
   })
 
-  it('思考档位下发：config 四档透传到 AgentLlmInput，default 档不传字段', async () => {
+  it('思考档位下发：config 四档透传到 AgentLlmInput，未配置不传字段（适配器按 off 解析）', async () => {
     const efforts: Array<string | undefined> = []
     mockedStream.mockImplementation(async (input) => {
       efforts.push(input.reasoningEffort)
       return { content: '好的', toolCalls: [], finishReason: 'stop' }
     })
 
-    for (const effort of ['off', 'low', 'high', 'max', 'default']) {
+    for (const effort of ['off', 'low', 'high', 'max']) {
       await query({
         config: createStubConfig({ reasoningEffort: effort }),
         project: stubProject,
@@ -154,6 +154,14 @@ describe('query 上下文压缩接入', () => {
         onEvent: () => {},
       })
     }
+    // 未配置（字段缺省）：query 不传字段，'off' 解析留给各协议适配器
+    await query({
+      config: createStubConfig(),
+      project: stubProject,
+      view: createBaseView(),
+      tools: {},
+      onEvent: () => {},
+    })
 
     expect(efforts).toEqual(['off', 'low', 'high', 'max', undefined])
   })

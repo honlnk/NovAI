@@ -131,8 +131,8 @@ export function isSearchProvider(value: unknown): value is (typeof SEARCH_PROVID
   return typeof value === 'string' && (SEARCH_PROVIDERS as readonly string[]).includes(value)
 }
 
-/** 思考强度档位的合法值表（档位语义见 types/ai.ts 的 ReasoningEffort；default 即字段缺省）。 */
-export const REASONING_EFFORTS = ['default', 'off', 'low', 'high', 'max'] as const
+/** 思考强度档位的合法值表（档位语义见 types/ai.ts 的 ReasoningEffort；未配置 = 请求层按 off 解析）。 */
+export const REASONING_EFFORTS = ['off', 'low', 'high', 'max'] as const
 
 export function isReasoningEffort(value: unknown): value is (typeof REASONING_EFFORTS)[number] {
   return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)

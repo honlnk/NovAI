@@ -206,11 +206,8 @@ function buildGeminiRequestBody(input: ProtocolLlmInput) {
     generationConfig.maxOutputTokens = input.maxTokens
   }
 
-  const thinkingBudget = resolveThinkingBudget(input)
-
-  if (thinkingBudget !== undefined) {
-    generationConfig.thinkingConfig = { thinkingBudget }
-  }
+  // 思考档位缺省按 off 解析，预算 0 也是合法值 → thinkingConfig 恒定下发
+  generationConfig.thinkingConfig = { thinkingBudget: resolveThinkingBudget(input) }
 
   return {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
@@ -221,15 +218,11 @@ function buildGeminiRequestBody(input: ProtocolLlmInput) {
 }
 
 /**
- * 思考档位 → thinkingConfig.thinkingBudget（思考强度计划 D2 映射表 gemini 列，拍定值）。
- * gemini 以预算数值表达强度：0 = 显式关闭；1-32768 思考预算上限。缺省档不传（动态默认）。
+ * 思考档位 → thinkingConfig.thinkingBudget（思考强度计划 D2 映射表 gemini 列，拍定值；缺省档按 off 解析）。
+ * gemini 以预算数值表达强度：0 = 显式关闭；1-32768 思考预算上限。
  */
-function resolveThinkingBudget(input: ProtocolLlmInput): number | undefined {
-  const effort = input.reasoningEffort
-
-  if (!effort) {
-    return undefined
-  }
+function resolveThinkingBudget(input: ProtocolLlmInput): number {
+  const effort = input.reasoningEffort ?? 'off'
 
   if (effort === 'off') {
     return 0

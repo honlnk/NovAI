@@ -220,17 +220,13 @@ async function requestChatCompletion(
 }
 
 /**
- * 思考档位 → wire 参数（思考强度计划 D2 映射表 openai 列）。
+ * 思考档位 → wire 参数（思考强度计划 D2 映射表 openai 列；缺省档按 off 解析——默认关闭）。
  * - DeepSeek 方言：off → thinking:disabled；low/high/max → thinking:enabled + reasoning_effort；
  * - 其他兼容后端：reasoning_effort 两边都认识直接发（max 降级 high）；
  *   off 无法实现（OpenAI 官方无关闭参数）且 thinking 是方言字段不可发 → 不传。
  */
 function resolveThinkingWire(input: ProtocolLlmInput) {
-  const effort = input.reasoningEffort
-
-  if (!effort) {
-    return {}
-  }
+  const effort = input.reasoningEffort ?? 'off'
 
   if (isDeepSeekDialect(input.baseUrl)) {
     if (effort === 'off') {

@@ -283,8 +283,9 @@ describe('anthropic adapter (via streamAgentCompletion)', () => {
     // off → 显式关闭
     expect(bodies[3].thinking).toEqual({ type: 'disabled' })
     expect(bodies[3].max_tokens).toBe(8192)
-    // 缺省（default 档）→ 不传
-    expect(bodies[4]).not.toHaveProperty('thinking')
+    // 缺省（未配置）→ 按 off 解析：显式 disabled（默认关闭）
+    expect(bodies[4].thinking).toEqual({ type: 'disabled' })
+    expect(bodies[4].max_tokens).toBe(8192)
   })
 
   it('replays reasoning as a leading thinking block with signature when present', async () => {

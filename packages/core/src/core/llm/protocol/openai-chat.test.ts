@@ -446,7 +446,7 @@ describe('openai-chat adapter (via streamAgentCompletion)', () => {
         reasoningEffort: effort,
       }, () => {})
     }
-    // 缺省（default 档）
+    // 缺省（未配置 → 适配器按 off 解析，默认关闭）
     await streamAgentCompletion({
       protocol: 'openai',
       baseUrl: 'https://api.deepseek.com/v1',
@@ -469,8 +469,8 @@ describe('openai-chat adapter (via streamAgentCompletion)', () => {
     expect(bodies[4]).not.toHaveProperty('reasoning_effort')
     expect(bodies[5].reasoning_effort).toBe('low')
     expect(bodies[6].reasoning_effort).toBe('high')
-    // default 档：两个参数都不传
-    expect(bodies[7]).not.toHaveProperty('thinking')
+    // 缺省（方言）→ 按 off 解析：显式 disabled，两个 effort 参数都不传
+    expect(bodies[7].thinking).toEqual({ type: 'disabled' })
     expect(bodies[7]).not.toHaveProperty('reasoning_effort')
   })
 })

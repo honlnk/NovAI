@@ -52,7 +52,7 @@ describe('gemini adapter (via streamAgentCompletion)', () => {
 
     const body = JSON.parse(init.body)
     expect(body.systemInstruction).toEqual({ parts: [{ text: '你是小说创作 Agent。' }] })
-    expect(body.generationConfig).toEqual({ maxOutputTokens: 1024 })
+    expect(body.generationConfig).toEqual({ maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } })
     expect(body.contents).toEqual([
       { role: 'user', parts: [{ text: '列出目录' }] },
       {
@@ -98,7 +98,8 @@ describe('gemini adapter (via streamAgentCompletion)', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse')
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(body).not.toHaveProperty('tools')
-    expect(body).not.toHaveProperty('generationConfig')
+    // 缺省档按 off 解析 → generationConfig 恒出现（仅含关闭思考的预算 0）
+    expect(body.generationConfig).toEqual({ thinkingConfig: { thinkingBudget: 0 } })
     expect(body).not.toHaveProperty('systemInstruction')
   })
 
@@ -261,8 +262,8 @@ describe('gemini adapter (via streamAgentCompletion)', () => {
     for (const [index, { budget }] of cases.entries()) {
       expect(bodies[index].generationConfig.thinkingConfig).toEqual({ thinkingBudget: budget })
     }
-    // default 档：无 maxTokens 也无思考档 → 整个 generationConfig 都不出现（gemini 动态默认）
-    expect(bodies[4]).not.toHaveProperty('generationConfig')
+    // 缺省（未配置）→ 按 off 解析：预算 0 显式关闭；无 maxTokens 时 generationConfig 只含思考配置
+    expect(bodies[4].generationConfig).toEqual({ thinkingConfig: { thinkingBudget: 0 } })
   })
 })
 

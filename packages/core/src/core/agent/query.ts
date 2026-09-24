@@ -151,8 +151,8 @@ export async function query(input: {
             protocol: input.config.llm.protocol,
             messages,
             tools: availableTools.map((tool) => tool.schema),
-            // 思考档位：default 档不传（provider 自决），其余四档下发到适配器映射
-            ...(input.config.llm.reasoningEffort && input.config.llm.reasoningEffort !== 'default'
+            // 思考档位：已配置的档位直接下发；未配置不传字段（适配器按 off 解析——默认关闭）
+            ...(input.config.llm.reasoningEffort
               ? { reasoningEffort: input.config.llm.reasoningEffort }
               : {}),
             signal: input.signal,

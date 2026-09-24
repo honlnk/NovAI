@@ -386,15 +386,15 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
-   * 切换思考强度档位（对话输入区选择器写回链路，思考强度计划 D3）：
-   * default 档写 undefined（配置字段消失 = 未配置，零迁移语义）。
+   * 切换思考强度档位（对话输入区选择器写回链路，思考强度计划 D3，四档）：
+   * 直接写回所选档位；未配置（字段缺省）由请求层按 off 解析，无需 'default' 占位。
    */
   async function changeReasoningEffort(projectId: string, effort: ReasoningEffort) {
     errorMessage.value = ''
 
     try {
       const savedConfig = await updateConfig(projectId, {
-        llm: { reasoningEffort: effort === 'default' ? undefined : effort },
+        llm: { reasoningEffort: effort },
       })
       updateCurrentProjectConfig(savedConfig)
       statusMessage.value = '已切换思考强度档位，下一轮起生效'

@@ -227,7 +227,7 @@ describe('openai-responses adapter (via streamAgentCompletion)', () => {
     expect(bodies[1].reasoning).toEqual({ effort: 'high' })
     // Responses 档位集合无 max：降级 high
     expect(bodies[2].reasoning).toEqual({ effort: 'high' })
-    // Responses 无关闭思考参数（off/default 均不传）
+    // Responses 无关闭思考参数（off 与缺省档——按 off 解析——均不传）
     expect(bodies[3]).not.toHaveProperty('reasoning')
     expect(bodies[4]).not.toHaveProperty('reasoning')
   })

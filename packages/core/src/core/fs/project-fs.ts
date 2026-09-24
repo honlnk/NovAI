@@ -289,8 +289,8 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     llm: {
       ...DEFAULT_CONFIG.llm,
       ...config.llm,
-      // 思考档位：非法值回退 default（视为未配置，零迁移语义）；default 本身不落盘
-      reasoningEffort: isReasoningEffort(config.llm?.reasoningEffort) && config.llm.reasoningEffort !== 'default'
+      // 思考档位：非法值（含已废弃的 'default'）回退缺省（请求层按 off 解析，零迁移语义）
+      reasoningEffort: isReasoningEffort(config.llm?.reasoningEffort)
         ? config.llm.reasoningEffort
         : undefined,
     },

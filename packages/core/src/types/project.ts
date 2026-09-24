@@ -63,8 +63,9 @@ export type ProjectConfig = {
      */
     protocol: ModelProtocol
     /**
-     * 思考强度档位（输入框选择器写回）。缺省 'default' = 不传思考参数（provider 自决），
-     * 零迁移：旧项目配置无此字段即维持旧行为。压缩摘要/要素提取等辅助请求不读它（固定关思考）。
+     * 思考强度档位（输入框选择器写回，四档）。未配置 = 请求层按 'off' 解析（默认关闭，
+     * 2026-09-24 拍板移除 'default' 档）；零迁移：旧项目无此字段自动落到关闭。
+     * 压缩摘要/要素提取等辅助请求不读它（固定关思考）。
      */
     reasoningEffort?: ReasoningEffort
   }
