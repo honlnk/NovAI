@@ -44,6 +44,14 @@ When useful, study that repository for patterns such as:
 - streaming interaction flow,
 - file-oriented execution behavior.
 
+## Local Development Environment
+
+Standing facts about this machine's dev setup. Check these before starting any server or doing browser/UI verification:
+
+- The user keeps a dev server running at **http://localhost:5173** (their own `pnpm dev`). For browser/UI verification, open this URL directly. **Never start another dev server or invent a different port** — a browser tab pointed at a dead port (e.g. a stale 5199 from an old session) shows a blank page and is not evidence the app is broken.
+- If a page looks blank or broken, first check whether anything is listening on the expected port (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/`) before touching anything else.
+- The standing test project lives at **`~/note/test-novel`**, with models already configured in its `novel.config.json`. Use it for real-machine / UI verification (open it via 「打开项目」or「恢复项目」). Its API keys are read at runtime only and must never be copied into any file in this repository.
+
 ## Working Rule
 
 When documentation and code appear to conflict, prefer the clarified product intent above:
