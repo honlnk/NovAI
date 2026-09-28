@@ -82,7 +82,7 @@ describe('linkseek provider（hosted / selfhost）', () => {
   })
 
   it('429 时透传服务端额度文案', async () => {
-    const quotaMessage = '免费搜索额度已用完（每日 50 次），明天自动恢复。如需不限量搜索，请在设置中配置自部署 linkseek 或第三方搜索 API Key。'
+    const quotaMessage = '免费搜索额度已用完（每日 50 次），明天自动恢复。如需不限量搜索，请在设置的联网搜索中选择「linkseek 直连」并填写 API Key，或改用第三方搜索。'
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       error: { code: 'QUOTA_EXCEEDED', message: quotaMessage },
     }, 429))

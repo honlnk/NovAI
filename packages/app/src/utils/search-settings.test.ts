@@ -34,6 +34,8 @@ describe('SEARCH_PROVIDER_OPTIONS / findSearchProviderOption', () => {
       .toBe('https://api.exa.ai')
     expect(SEARCH_PROVIDER_OPTIONS.find((option) => option.value === 'perplexity')?.baseUrlPrefill)
       .toBe('https://api.perplexity.ai')
+    expect(SEARCH_PROVIDER_OPTIONS.find((option) => option.value === 'linkseek-selfhost')?.baseUrlPrefill)
+      .toBe('https://linkseek.honlnk.com')
   })
 
   it('未知档位兜底到托管档（与 config 归一化行为一致）', () => {
@@ -43,7 +45,7 @@ describe('SEARCH_PROVIDER_OPTIONS / findSearchProviderOption', () => {
 })
 
 describe('applyProviderSwitch（切换档位的地址预填）', () => {
-  it('地址为空时切到 Exa/Perplexity 预填官方地址，切到托管/自部署清空', () => {
+  it('地址为空时切到 Exa/Perplexity/直连预填官方地址，切到托管清空', () => {
     const form = createForm()
     applyProviderSwitch(form, 'exa')
     expect(form.provider).toBe('exa')
@@ -54,6 +56,10 @@ describe('applyProviderSwitch（切换档位的地址预填）', () => {
 
     applyProviderSwitch(form, 'linkseek-hosted')
     expect(form.baseUrl).toBe('')
+
+    // 直连档预填官方托管地址（BYOK 主场景：填自己的 Key 即用）
+    applyProviderSwitch(form, 'linkseek-selfhost')
+    expect(form.baseUrl).toBe('https://linkseek.honlnk.com')
   })
 
   it('当前地址等于任一档预填默认值时视为默认值，可被替换', () => {
@@ -62,7 +68,7 @@ describe('applyProviderSwitch（切换档位的地址预填）', () => {
     expect(form.baseUrl).toBe('https://api.perplexity.ai')
   })
 
-  it('用户自定义地址（自部署实例）不被档位切换覆盖', () => {
+  it('用户自定义地址（自己的 linkseek 实例）不被档位切换覆盖', () => {
     const form = createForm({ provider: 'linkseek-selfhost', baseUrl: 'https://seek.mysite.com' })
     applyProviderSwitch(form, 'exa')
     expect(form.baseUrl).toBe('https://seek.mysite.com')

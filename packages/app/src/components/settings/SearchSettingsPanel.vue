@@ -79,7 +79,7 @@ async function runTest() {
       </label>
     </fieldset>
 
-    <!-- 端点字段：仅自部署 / 第三方档显示 -->
+    <!-- 端点字段：仅直连 / 第三方档显示 -->
     <div v-if="activeOption.needsEndpoint" class="mt-4 space-y-4">
       <div>
         <label class="mb-1 block text-sm font-medium text-gray-700">服务地址</label>

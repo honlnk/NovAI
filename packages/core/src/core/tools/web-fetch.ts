@@ -10,7 +10,7 @@ const MAX_OUTPUT_CHARS = 50_000
 
 /** 第三方（无抓取）后端使用 WebFetch 时的引导文案（决策 11） */
 const NO_FETCH_PROVIDER_MESSAGE =
-  '当前搜索来源不支持网页抓取。可在设置中配置自部署 linkseek 实例后使用该能力。'
+  '当前搜索来源不支持网页抓取。可在设置的联网搜索中选择「linkseek 直连」并填写 API Key 后使用该能力。'
 
 export const webFetchTool: ToolDefinition<'WebFetch', WebFetchInput, WebFetchOutput> = {
   name: 'WebFetch',

@@ -28,10 +28,11 @@ export const SEARCH_PROVIDER_OPTIONS: Array<SearchProviderOption> = [
   },
   {
     value: 'linkseek-selfhost',
-    label: '自部署 linkseek',
-    description: '使用你自己部署的 linkseek 服务，不限额度。',
+    label: 'linkseek 直连（API Key）',
+    description: '使用 API Key 直连任意 linkseek 实例（可直接填官方托管地址），不限额度。',
     needsEndpoint: true,
     baseUrlPlaceholder: 'https://your-linkseek.example.com',
+    baseUrlPrefill: 'https://linkseek.honlnk.com',
   },
   {
     value: 'exa',
@@ -59,7 +60,7 @@ export function findSearchProviderOption(
 
 /**
  * 切换搜索来源档位：地址为空或等于任一档的预填默认值时替换为新档预填
- * （托管/自部署无预填则清空），用户自定义地址不覆盖。
+ * （托管无预填则清空；直连档预填官方托管地址），用户自定义地址不覆盖。
  */
 export function applyProviderSwitch(form: SearchSettingsForm, next: SearchConfigView['provider']): void {
   const currentBaseUrl = form.baseUrl.trim()

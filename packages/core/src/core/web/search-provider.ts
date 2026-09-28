@@ -6,7 +6,7 @@ import type { SearchConfig } from '../../types/project'
  *
  * 四档实现（决策 0006）：
  * - linkseek-hosted：官方托管实例，匿名绿灯（X-NovAI-Client-Id 头）+ 抓取带质量门控自动渲染
- * - linkseek-selfhost：用户自部署实例，Bearer Key 鉴权，同 REST 契约
+ * - linkseek-selfhost：API Key 直连任意 linkseek 实例（含官方托管地址），Bearer Key 鉴权，同 REST 契约
  * - exa：Exa 搜索 API（POST /search，highlights 作 snippet），无抓取
  * - perplexity：Perplexity sonar（OpenAI 兼容 chat/completions），无抓取
  */
@@ -102,7 +102,7 @@ function createLinkseekProvider(options: {
   webClientId?: string
 }): WebSearchProvider {
   if (!options.baseUrl) {
-    throw new Error('linkseek 服务地址未配置：请在设置中填写自部署实例地址，或改用 NovAI 托管服务。')
+    throw new Error('linkseek 服务地址未配置：请在设置中填写 linkseek 实例地址，或改用 NovAI 托管服务。')
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
