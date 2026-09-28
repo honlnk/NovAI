@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { streamAgentCompletion, AgentAbortedError } from './llm'
-import type { AgentToolSchema } from './messages'
+import { streamAgentCompletion, AgentAbortedError } from '../../agent/llm'
+import type { AgentToolSchema } from '../../agent/messages'
 
 const originalFetch = globalThis.fetch
 
@@ -11,7 +11,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('streamAgentCompletion', () => {
+describe('openai-chat adapter (via streamAgentCompletion)', () => {
   it('falls back to non-streaming when streaming tool calls miss function names', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(createStreamingResponse([
@@ -269,6 +269,209 @@ describe('streamAgentCompletion', () => {
     // 请求开始前已停止：根本不会发起任何 fetch
     expect(fetchMock).not.toHaveBeenCalled()
     expect(error).toBeInstanceOf(AgentAbortedError)
+  })
+
+  it('emits reasoning-delta events and returns reasoning from reasoning_content stream deltas', async () => {
+    const events: Array<{ type: string; text?: string }> = []
+    const fetchMock = vi.fn().mockResolvedValueOnce(createStreamingResponse([
+      { choices: [{ delta: { reasoning_content: '先想想' } }] },
+      { choices: [{ delta: { reasoning_content: '怎么写' } }] },
+      { choices: [{ delta: { content: '好的，' } }] },
+      { choices: [{ delta: { content: '这是正文。' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]))
+
+    globalThis.fetch = fetchMock
+
+    const result = await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-reasoner',
+      messages: [{ role: 'user', content: '写一句话' }],
+      tools: [],
+    }, (event) => {
+      if (event.type === 'delta' || event.type === 'reasoning-delta') {
+        events.push({ type: event.type, text: event.text })
+      }
+    })
+
+    expect(events).toEqual([
+      { type: 'reasoning-delta', text: '先想想' },
+      { type: 'reasoning-delta', text: '怎么写' },
+      { type: 'delta', text: '好的，' },
+      { type: 'delta', text: '这是正文。' },
+    ])
+    expect(result.content).toBe('好的，这是正文。')
+    expect(result.reasoning).toBe('先想想怎么写')
+    expect(result.finishReason).toBe('stop')
+  })
+
+  it('extracts reasoning from non-streaming fallback responses', async () => {
+    // 流式 tool_calls 丢函数名 → 触发非流式 fallback；fallback 响应带 reasoning_content
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(createStreamingResponse([
+        {
+          choices: [
+            {
+              delta: {
+                content: '你好',
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_missing_name',
+                    type: 'function',
+                    function: { arguments: '{}' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            {
+              delta: {},
+              finish_reason: 'tool_calls',
+            },
+          ],
+        },
+      ]))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '正文内容。',
+              reasoning_content: '思考过程。',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    globalThis.fetch = fetchMock
+
+    const result = await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-reasoner',
+      messages: [{ role: 'user', content: '写一句话' }],
+      tools: [listDirectoryToolSchema],
+    }, () => {})
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).stream).toBe(false)
+    expect(result.content).toBe('正文内容。')
+    expect(result.reasoning).toBe('思考过程。')
+    expect(result.diagnostics?.responseMode).toBe('non_streaming_fallback')
+  })
+
+  it('replays reasoning_content on assistant history messages (DeepSeek thinking-mode tool turns)', async () => {
+    // mockImplementation 而非 mockResolvedValue：Response body 只能读一次，每次 fetch 都要新流
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createStreamingResponse([
+        { choices: [{ delta: { content: '读取完成。' }, finish_reason: 'stop' }] },
+      ])))
+    globalThis.fetch = fetchMock
+
+    await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-flash',
+      messages: [
+        { role: 'user', content: '读一下章节' },
+        {
+          role: 'assistant',
+          content: '',
+          reasoning: '用户要读章节，调用 ReadFile。',
+          toolCalls: [{ id: 'call_r', name: 'ReadFile', input: { path: 'chapters/001.txt' } }],
+        },
+        { role: 'tool', toolCallId: 'call_r', name: 'ReadFile', content: '第一章正文' },
+      ],
+      tools: [listDirectoryToolSchema],
+    }, () => {})
+
+    const wireMessages = JSON.parse(fetchMock.mock.calls[0][1].body).messages
+    const toolTurnAssistant = wireMessages.find(
+      (m: { role: string; tool_calls?: unknown[] }) => m.role === 'assistant' && Array.isArray(m.tool_calls),
+    )
+    expect(toolTurnAssistant).toMatchObject({ reasoning_content: '用户要读章节，调用 ReadFile。' })
+    // 无思考的 assistant 轮不携带该字段（不产思考的模型天然缺省）
+    const plainAssistant = { role: 'assistant', content: '旧回复' }
+    await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-flash',
+      messages: [{ role: 'user', content: '你好' }, plainAssistant as never],
+      tools: [],
+    }, () => {})
+    const secondBodyMessages = JSON.parse(fetchMock.mock.calls[1][1].body).messages
+    expect(secondBodyMessages.find((m: { role: string }) => m.role === 'assistant')).not.toHaveProperty('reasoning_content')
+  })
+
+  it('maps reasoning effort per dialect (D2 table): DeepSeek thinking+effort, other backends effort-only with off/max degraded', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(createStreamingResponse([
+        { choices: [{ delta: { content: '好的。' }, finish_reason: 'stop' }] },
+      ])))
+    globalThis.fetch = fetchMock
+
+    // DeepSeek 方言（baseUrl 含 deepseek）
+    for (const effort of ['off', 'low', 'high', 'max'] as const) {
+      await streamAgentCompletion({
+        protocol: 'openai',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'test-key',
+        model: 'deepseek-flash',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    // 非 DeepSeek 后端（SiliconFlow 等 openai 兼容网关）
+    for (const effort of ['off', 'low', 'max'] as const) {
+      await streamAgentCompletion({
+        protocol: 'openai',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        apiKey: 'test-key',
+        model: 'some-model',
+        messages: [{ role: 'user', content: '你好' }],
+        tools: [],
+        reasoningEffort: effort,
+      }, () => {})
+    }
+    // 缺省（未配置 → 适配器按 off 解析，默认关闭）
+    await streamAgentCompletion({
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'test-key',
+      model: 'deepseek-flash',
+      messages: [{ role: 'user', content: '你好' }],
+      tools: [],
+    }, () => {})
+
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))
+    // DeepSeek 方言四档
+    expect(bodies[0].thinking).toEqual({ type: 'disabled' })
+    expect(bodies[0]).not.toHaveProperty('reasoning_effort')
+    expect(bodies[1].thinking).toEqual({ type: 'enabled' })
+    expect(bodies[1].reasoning_effort).toBe('low')
+    expect(bodies[2].reasoning_effort).toBe('high')
+    expect(bodies[3].reasoning_effort).toBe('max')
+    // 非方言：thinking 是 DeepSeek 方言字段不可发；off 无法实现不传；max 降级 high
+    expect(bodies[4]).not.toHaveProperty('thinking')
+    expect(bodies[4]).not.toHaveProperty('reasoning_effort')
+    expect(bodies[5].reasoning_effort).toBe('low')
+    expect(bodies[6].reasoning_effort).toBe('high')
+    // 缺省（方言）→ 按 off 解析：显式 disabled，两个 effort 参数都不传
+    expect(bodies[7].thinking).toEqual({ type: 'disabled' })
+    expect(bodies[7]).not.toHaveProperty('reasoning_effort')
   })
 })
 

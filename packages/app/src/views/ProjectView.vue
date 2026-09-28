@@ -11,10 +11,11 @@ import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
+import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
-import { pickDirectoryChildren } from '../utils/file-tree'
+import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,8 +31,11 @@ const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
+const isRagOpen = ref(false)
 /** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
+/** 内容面板空态提示（AI 删除了正打开的文件时置入，指向回收站去向；打开新文件时清空） */
+const panelNotice = ref<{ name: string; trashPath?: string } | null>(null)
 
 /**
  * 内容面板宽度（R7）：从 localStorage 读取，clamp 到 240~720，无记录时默认 320。
@@ -74,11 +78,11 @@ const activeSceneName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
-/** 章节列表（chapters/*.txt|.md），供 ChatPanel 的 /提取要素 指令多选（R6） */
+/** 章节列表（chapters/*.txt），供 ChatPanel 的 /提取要素 指令多选（R6）。.md 不算有效章节，不入列。 */
 const chapterList = computed(() => {
   const files = projectStore.currentProject?.files ?? []
   return pickDirectoryChildren(files, 'chapters').filter(
-    (n) => n.kind === 'file' && /\.(txt|md)$/i.test(n.name),
+    (n) => n.kind === 'file' && /\.txt$/i.test(n.name),
   )
 })
 
@@ -124,11 +128,40 @@ watch(
   },
 )
 
-// 切换文件时清空选中引用（引用绑定当前文件，避免跨文件残留）
+// AI 改动命中当前打开的文件时：重读新内容（预览/原始模式即时更新，编辑模式草稿是
+// ContentPanel 本地副本不受影响）；删除命中则清空面板——快照再留着就是幽灵文件
+// （无删除标记，编辑保存还会复活它），清空后由空态提示回收站去向
+watch(
+  () => chatStore.lastFileChange,
+  (record) => {
+    if (!record) {
+      return
+    }
+    const effect = resolveActiveFileEffect(projectStore.activeFile?.path, record.change)
+    if (effect?.action === 'reload') {
+      void projectStore.openFile(effect.path)
+      return
+    }
+    if (effect?.action === 'clear') {
+      const deleted = record.change.type === 'deleted' ? record.change : null
+      panelNotice.value = {
+        name: projectStore.activeFile?.name ?? '当前文件',
+        trashPath: deleted?.trashPath,
+      }
+      projectStore.clearActiveFile()
+    }
+  },
+)
+
+// 切换文件时清空选中引用（引用绑定当前文件，避免跨文件残留）；
+// 打开了新文件时空态提示随之失效（删除提示只对「已被清空」这一刻有意义）
 watch(
   () => projectStore.activeFile?.path,
-  () => {
+  (path) => {
     selectionQuote.value = null
+    if (path) {
+      panelNotice.value = null
+    }
   },
 )
 
@@ -242,6 +275,7 @@ async function handleElementsWritten() {
         @proofread="handleNotImplemented('校对')"
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
+        @rag="isRagOpen = true"
       />
 
       <!-- 分类面板（随 Activity Bar 切换） -->
@@ -294,6 +328,7 @@ async function handleElementsWritten() {
         :is-open="isContentPanelOpen"
         :project-id="projectId"
         :file="projectStore.activeFile"
+        :notice="panelNotice"
         :width="contentPanelWidth"
         @close="isContentPanelOpen = false"
         @save="handleSaveFile"
@@ -317,6 +352,13 @@ async function handleElementsWritten() {
       v-if="isSettingsOpen"
       :project-id="projectId"
       @close="isSettingsOpen = false"
+    />
+
+    <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->
+    <RagIndexModal
+      v-if="isRagOpen"
+      :project-id="projectId"
+      @close="isRagOpen = false"
     />
 
     <!-- Toast 提示 -->

@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -53,6 +53,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
   await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
 
   return loadProjectFromHandle(rootHandle)
 }
@@ -169,6 +170,12 @@ export async function repairProject(
   // 因此不纳入 inspectProject 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
   if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
     await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  }
+
+  // 要素库规范 ELEMENT.md 缺失时补默认内容（园丁子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
+  // 与 NovAI.md 同策略：温和补齐、不覆盖用户已修改的版本、不纳入强制检测项。
+  if (!(await pathExists(rootHandle, 'prompts/ELEMENT.md', 'file'))) {
+    await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
   }
 
   return loadProjectFromHandle(rootHandle)
@@ -289,6 +296,10 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     llm: {
       ...DEFAULT_CONFIG.llm,
       ...config.llm,
+      // 思考档位：非法值（含已废弃的 'default'）回退缺省（请求层按 off 解析，零迁移语义）
+      reasoningEffort: isReasoningEffort(config.llm?.reasoningEffort)
+        ? config.llm.reasoningEffort
+        : undefined,
     },
     embedding: {
       ...DEFAULT_CONFIG.embedding,
@@ -297,12 +308,61 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     rerank: {
       ...DEFAULT_CONFIG.rerank,
       ...config.rerank,
+      topN: clampInt(config.rerank?.topN, 1, 50, DEFAULT_CONFIG.rerank.topN),
+    },
+    completion: {
+      ...DEFAULT_CONFIG.completion,
+      ...config.completion,
+      debounceMs: clampInt(config.completion?.debounceMs, 200, 3000, DEFAULT_CONFIG.completion.debounceMs),
+      maxTokens: clampInt(config.completion?.maxTokens, 16, 256, DEFAULT_CONFIG.completion.maxTokens),
+    },
+    search: {
+      ...DEFAULT_CONFIG.search,
+      ...config.search,
+      // 非法档位值回退默认托管档（旧配置无此段时同样落到默认）
+      provider: isSearchProvider(config.search?.provider)
+        ? config.search.provider
+        : DEFAULT_CONFIG.search.provider,
     },
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...config.settings,
+      ragCandidateLimit: clampInt(config.settings?.ragCandidateLimit, 1, 100, DEFAULT_CONFIG.settings.ragCandidateLimit),
+      ragContextMaxItems: clampInt(config.settings?.ragContextMaxItems, 1, 50, DEFAULT_CONFIG.settings.ragContextMaxItems),
+      conversationTokenLimit: clampInt(config.settings?.conversationTokenLimit, 1000, 200000, DEFAULT_CONFIG.settings.conversationTokenLimit),
+      compressionKeepRecentTurns: clampInt(config.settings?.compressionKeepRecentTurns, 1, 20, DEFAULT_CONFIG.settings.compressionKeepRecentTurns),
+      // 权限档位：旧配置无此字段回填默认档；非法值同回退
+      permissionPreset: isPermissionPreset(config.settings?.permissionPreset)
+        ? config.settings.permissionPreset
+        : DEFAULT_CONFIG.settings.permissionPreset,
+      // agentMaxTurns：0=不限（现行默认）。恰为 8 是旧版出厂默认，视为需要迁移的旧值按 0 处理
+      // （用户显式选过其他值如 5 的尊重保留）；缺字段/非法值回退 0。下次保存设置自然落盘为 0。
+      agentMaxTurns: normalizeAgentMaxTurns(config.settings?.agentMaxTurns),
     },
   }
+}
+
+/** agentMaxTurns 迁移 + 钳制：非有限数 → 0（默认）；8（旧版出厂默认）→ 0；其余钳到 0-50。 */
+function normalizeAgentMaxTurns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0
+  }
+  const rounded = Math.round(value)
+  if (rounded === 8) {
+    return 0
+  }
+  return Math.min(50, Math.max(0, rounded))
+}
+
+/**
+ * 数值配置钳制：UI 的 min/max 属性只影响步进按钮，手输/手改 JSON 可越界，且 v-model.number
+ * 空值会产生 NaN。读写配置的收口处统一钳到合法区间；非有限数回退默认值。边界与设置面板一致。
+ */
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(max, Math.max(min, Math.round(value)))
 }
 
 async function hasRequiredElementDirectories(rootHandle: FileSystemDirectoryHandle) {
@@ -402,25 +462,17 @@ export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): 
 }
 
 /**
- * 写回项目中的 `prompts/system.md`。
+ * 读取要素库规范 `prompts/ELEMENT.md`（园丁子代理的唯一注入文件）。
+ *
+ * 只注入园丁、不注入主 Agent（《要素园丁子代理设计》§7.4）；
+ * 文件缺失时返回空字符串，不抛错——园丁 prompt 组装层会附「规范缺失」兜底提示。
  */
-export async function writeSystemPrompt(rootHandle: FileSystemDirectoryHandle, content: string) {
-  await writeText(rootHandle, 'prompts/system.md', content)
-}
-
-/**
- * 将生成结果保存为章节文件，并返回最终采用的文件名。
- * 如果调用方没有提供合法名称，这里会自动生成一个可落盘的默认值。
- */
-export async function writeChapterFile(
-  rootHandle: FileSystemDirectoryHandle,
-  fileName: string,
-  content: string,
-) {
-  // 测试页允许直接输入文件名，这里统一兜底成稳定的 .txt 文件名。
-  const normalizedName = normalizeChapterFileName(fileName)
-  await writeText(rootHandle, `chapters/${normalizedName}`, content)
-  return normalizedName
+export async function readElementSchema(rootHandle: FileSystemDirectoryHandle): Promise<string> {
+  try {
+    return await readText(rootHandle, 'prompts/ELEMENT.md')
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -459,25 +511,6 @@ function inferFormat(name: string): ProjectFileContent['format'] {
   }
 
   return 'text'
-}
-
-function normalizeChapterFileName(fileName: string) {
-  const trimmed = fileName.trim()
-
-  if (!trimmed) {
-    const now = new Date()
-    const stamp = [
-      now.getFullYear(),
-      `${now.getMonth() + 1}`.padStart(2, '0'),
-      `${now.getDate()}`.padStart(2, '0'),
-      `${now.getHours()}`.padStart(2, '0'),
-      `${now.getMinutes()}`.padStart(2, '0'),
-      `${now.getSeconds()}`.padStart(2, '0'),
-    ].join('')
-    return `chapter-${stamp}.txt`
-  }
-
-  return trimmed.endsWith('.txt') ? trimmed : `${trimmed.replace(/\.md$/i, '')}.txt`
 }
 
 async function scanDirectory(

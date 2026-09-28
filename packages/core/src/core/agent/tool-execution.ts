@@ -1,17 +1,34 @@
 import type { ProjectSnapshot } from '../../types/project'
+import type { FileChangeRecord } from '../../types/chat'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
-import type { FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
-import { type ToolPolicy, isToolDisabledByPolicy, describePolicyDenial, isWriteBlockedByPathPolicy } from './tool-policy'
+import type { ChangeDiff, FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
+import { decideWriteToolPermission, toApprovalOutcome } from './permission'
+import { maybeSpill, SPILLABLE_TOOLS } from './spill'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
-  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange }
+  /** fileChange/diff 仅在写工具成功执行后存在；diff 是片段级 before/after（改动账本用，不进模型视图）。 */
+  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff }
+
+/**
+ * 事件归属标记：园丁子代理的内层工具事件由委派工具透传时带上，
+ * session/展示层据此把园丁的工具行折叠成嵌套任务组（主 Agent 事件无此字段）。
+ */
+export type SubagentEventAgent = 'gardener'
+
+/** 带归属标记的工具执行事件（园丁透传链的形状；主 Agent 链不带 agent 字段）。 */
+export type TaggedToolExecutionEvent = ToolExecutionEvent & { agent?: SubagentEventAgent }
 
 /** 写工具执行前的确认请求，交由上层（service）转交 UI 等待用户决定。 */
 export type WriteConfirmationRequest = {
   call: AgentToolCall
   confirmation: WriteConfirmation
+  /**
+   * 确认卡归属标签（如「园丁」）：园丁子代理的写确认与主 Agent 共用同一张卡，
+   * 标签让用户知道这次是谁在请求写入。
+   */
+  agentLabel?: string
 }
 
 export type ConfirmDecision = { accepted: boolean }
@@ -30,8 +47,10 @@ export async function executeAgentTool(input: {
   readFileStates?: Map<string, ReadFileState>
   /** 写工具确认回调；未传时不做确认（测试/只读场景）。 */
   confirm?: ConfirmHandler
-  /** 用户即时工具约束；命中则直接拒绝，不走确认流程。 */
-  toolPolicy?: ToolPolicy
+  /** 会话改动账本只读取口（GetFileChangeHistory 用），组 runtime 时带上。 */
+  getChangeLedger?: () => readonly FileChangeRecord[]
+  /** 联网搜索匿名身份（app 层注入），组 runtime 时带上。 */
+  webClientId?: string
   onEvent?: (event: ToolExecutionEvent) => void
 }): Promise<AgentToolResultMessage> {
   const tool = input.tools[input.call.name]
@@ -90,71 +109,37 @@ export async function executeAgentTool(input: {
     inputSummary: tool.core.summarizeInput(validatedInput),
   })
 
-  // 用户即时工具约束：命中则直接拒绝，不走确认流程。
-  // 这是硬约束，保证模型即使无视 system prompt 也拦得住。
-  if (input.toolPolicy && isToolDisabledByPolicy(tool, input.toolPolicy)) {
-    const reason = describePolicyDenial(tool, input.toolPolicy)
-    input.onEvent?.({
-      type: 'tool-result',
-      call: input.call,
-      ok: false,
-      resultSummary: `工具被禁用：${reason}`,
-    })
-
-    return {
-      role: 'tool',
-      toolCallId: input.call.id,
-      name: input.call.name,
-      content: `该工具本轮被禁用：${reason}。请遵守该约束，改用纯对话回答，或向用户确认是否解除限制后再试。`,
-    }
-  }
-
-  // 路径级约束：写工具的路径必须落在允许的文件上（RenameFile 直接禁用）。
-  // 与上面的读/写布尔约束同属硬约束，同样在确认流程之前拦截。
-  const pathBlock = isWriteBlockedByPathPolicy(input.call.name, validatedInput, input.toolPolicy)
-  if (pathBlock.blocked) {
-    const reason = pathBlock.reason ?? '该工具本轮被用户约束禁用'
-    input.onEvent?.({
-      type: 'tool-result',
-      call: input.call,
-      ok: false,
-      resultSummary: `工具被禁用：${reason}`,
-    })
-
-    return {
-      role: 'tool',
-      toolCallId: input.call.id,
-      name: input.call.name,
-      content: `该工具本轮被禁用：${reason}。请遵守该约束，改用纯对话回答，或向用户确认是否解除限制后再试。`,
-    }
-  }
-
-  // 写工具执行前确认：构造预览并等待用户决定。
-  // 拒绝时不执行 run，返回「用户已拒绝」tool result 回灌模型，让其自然调整。
+  // 写工具执行前的范围权限：项目工作区内静默放行（不确认），越界才走确认流程。
+  // 授权永远一次性（没有 always-allow）；硬安全（.novel/ 写保护、命名规范等）仍在工具校验层。
   if (!tool.isReadOnly && tool.core.buildConfirmation && input.confirm) {
-    const confirmation = tool.core.buildConfirmation(validatedInput)
-    let decision: ConfirmDecision
-    try {
-      decision = await input.confirm({ call: input.call, confirmation })
-    } catch {
-      // 确认等待被中断（如用户停止），按拒绝处理，交由 query Loop 的 abort 检查接管。
-      decision = { accepted: false }
-    }
+    const permission = decideWriteToolPermission(input.call.name, validatedInput, input.project)
 
-    if (!decision.accepted) {
-      const rejectedSummary = `用户已拒绝${summarizeConfirmation(confirmation)}，未修改文件`
-      input.onEvent?.({
-        type: 'tool-result',
-        call: input.call,
-        ok: false,
-        resultSummary: rejectedSummary,
-      })
+    if (permission.kind === 'ask') {
+      const confirmation = tool.core.buildConfirmation(validatedInput)
+      let decision: ConfirmDecision
+      try {
+        decision = await input.confirm({ call: input.call, confirmation })
+      } catch {
+        // 确认等待被中断（如用户停止），按拒绝处理，交由 query Loop 的 abort 检查接管。
+        decision = { accepted: false }
+      }
 
-      return {
-        role: 'tool',
-        toolCallId: input.call.id,
-        name: input.call.name,
-        content: `用户拒绝执行该操作，文件未修改。请改用其他方式完成任务，或向用户确认后再试。`,
+      const outcome = toApprovalOutcome(decision)
+      if (outcome !== 'allowed-once') {
+        const rejectedSummary = `用户未授权${summarizeConfirmation(confirmation)}，未修改文件`
+        input.onEvent?.({
+          type: 'tool-result',
+          call: input.call,
+          ok: false,
+          resultSummary: rejectedSummary,
+        })
+
+        return {
+          role: 'tool',
+          toolCallId: input.call.id,
+          name: input.call.name,
+          content: `用户未授权执行该操作（${permission.reason}），文件未修改。请改用其他方式完成任务，或向用户确认后再试。`,
+        }
       }
     }
   }
@@ -163,10 +148,21 @@ export async function executeAgentTool(input: {
     const output = await tool.core.run(validatedInput, {
       project: input.project,
       readFileStates: input.readFileStates,
+      getChangeLedger: input.getChangeLedger,
+      webClientId: input.webClientId,
     })
     const resultSummary = tool.core.summarizeOutput(output)
-    // 写工具成功执行后提取结构化文件变更，供 service 层推导 changedFiles
+    // 写工具成功执行后提取结构化文件变更与片段级 diff，供改动账本累积
     const fileChange = tool.core.extractFileChange?.(output)
+    const diff = tool.core.extractChangeDiff?.(output)
+
+    // 超长工具结果 spill：只对 RagSearch（无分页能力的内容型工具）。
+    // ReadFile 已被三道闸豁免（单次 ≤50KB 字节）；spill 路径自身豁免二次 spill。
+    let content = tool.formatResult(output)
+    if ((SPILLABLE_TOOLS as readonly string[]).includes(input.call.name)) {
+      const sourcePath = readSourcePath(validatedInput)
+      content = await maybeSpill(content, input.project, sourcePath)
+    }
 
     input.onEvent?.({
       type: 'tool-result',
@@ -174,13 +170,14 @@ export async function executeAgentTool(input: {
       ok: true,
       resultSummary,
       fileChange,
+      diff,
     })
 
     return {
       role: 'tool',
       toolCallId: input.call.id,
       name: input.call.name,
-      content: tool.formatResult(output),
+      content,
       fileChange,
     }
   } catch (error) {
@@ -212,4 +209,13 @@ function summarizeConfirmation(confirmation: WriteConfirmation): string {
     case 'delete':
       return `删除 ${confirmation.path}`
   }
+}
+
+/** 从已校验 input 取来源路径（如有），供 spill 的「spill 路径豁免二次 spill」判定。 */
+function readSourcePath(validatedInput: unknown): string | undefined {
+  if (!validatedInput || typeof validatedInput !== 'object') {
+    return undefined
+  }
+  const path = (validatedInput as Record<string, unknown>).path
+  return typeof path === 'string' ? path : undefined
 }

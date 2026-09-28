@@ -1,7 +1,9 @@
 import { getProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import type { EditFileInput, EditFileOutput, ToolDefinition } from '../types'
-import { assertTextFilePath, normalizeProjectPath } from '../path'
-import { asRecord, countLines, readString } from './common'
+import { normalizeProjectPath } from '../path'
+import { assertChapterNameFormat, isChapterPath } from '../chapter-name'
+import { asRecord, assertMutableDocumentPath, readString } from './common'
+import { countDiffLines } from './diff-line-stats'
 import {
   assertFreshReadFileState,
   createReadFileState,
@@ -25,7 +27,13 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       ? undefined
       : readReadFileState(value.readFileState, 'EditFile.readFileState')
 
-    assertTextFilePath(path)
+    // .novel/ 与 novel.config.json 永远禁改（大小写变体同拦），连确认卡都不弹
+    assertMutableDocumentPath(path, 'EditFile.path')
+
+    // chapters/ 下对称强制命名规范：不规范章节不可编辑内容，必须先整理改名
+    if (isChapterPath(path)) {
+      assertChapterNameFormat(path)
+    }
 
     if (oldText === newText) {
       throw new Error('EditFile.oldText 和 EditFile.newText 完全相同，没有可修改内容')
@@ -79,8 +87,9 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       path: input.path,
       occurrences: input.replaceAll ? occurrences : 1,
       contentLength: nextContent.length,
-      linesAdded: countLines(actualNewText) - countLines(actualOldText),
-      linesRemoved: Math.max(countLines(actualOldText) - countLines(actualNewText), 0),
+      ...countDiffLines(actualOldText, actualNewText),
+      oldText: actualOldText,
+      newText: actualNewText,
     }
   },
   summarizeInput(input) {
@@ -93,6 +102,14 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
   },
   extractFileChange(output) {
     return { type: 'updated', path: output.path }
+  },
+  extractChangeDiff(output) {
+    return {
+      oldText: output.oldText,
+      newText: output.newText,
+      linesAdded: output.linesAdded,
+      linesRemoved: output.linesRemoved,
+    }
   },
   buildConfirmation(input) {
     return { kind: 'edit', path: input.path, oldText: input.oldText, newText: input.newText }

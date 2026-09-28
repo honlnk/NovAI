@@ -14,6 +14,8 @@ const emit = defineEmits<{
   proofread: []
   organize: []
   version: []
+  /** 打开向量索引独立管理页（RagIndexModal） */
+  rag: []
 }>()
 
 /**
@@ -28,25 +30,29 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
 ]
 
 /**
- * 底部功能占位项（暂未实现）。
- * 仅保留入口，点击触发对应 emit，由 ProjectView 决定如何反馈。
- * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理。
+ * 底部功能项。
+ * enabled 标记是否已实现：已实现的正常态可点击，未实现的灰一档提示「即将推出」。
+ * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理，向量索引为后补。
  */
-const actionItems: { key: 'proofread' | 'organize' | 'version'; label: string; icon: string }[] = [
-  { key: 'proofread', label: '校对', icon: 'check' },
-  { key: 'organize', label: '章节整理', icon: 'list' },
-  { key: 'version', label: '版本管理', icon: 'branch' },
+const actionItems: { key: 'proofread' | 'organize' | 'version' | 'rag'; label: string; icon: string; enabled: boolean }[] = [
+  { key: 'proofread', label: '校对', icon: 'check', enabled: false },
+  // 章节整理的机械改名工具已下线（2026-09-21）：它是未来 AI 整理模块的前置基建，
+  // 待该模块立计划开发时再启用；命名规范的工具层强制不受影响。
+  { key: 'organize', label: '章节整理', icon: 'list', enabled: false },
+  { key: 'version', label: '版本管理', icon: 'branch', enabled: false },
+  { key: 'rag', label: '向量索引', icon: 'database', enabled: true },
 ]
 
 /**
  * 模板里不能直接动态调 emit（联合类型无法匹配 emit 重载），
  * 在 script 里集中分发。
  */
-function emitAction(key: 'proofread' | 'organize' | 'version') {
+function emitAction(key: 'proofread' | 'organize' | 'version' | 'rag') {
   switch (key) {
     case 'proofread': emit('proofread'); break
     case 'organize': emit('organize'); break
     case 'version': emit('version'); break
+    case 'rag': emit('rag'); break
   }
 }
 </script>
@@ -92,16 +98,21 @@ function emitAction(key: 'proofread' | 'organize' | 'version') {
 
     <!-- 底部动作项：功能占位 + 设置 + 返回首页 -->
     <div class="flex flex-col items-center gap-1">
-      <!-- 功能占位项（暂未实现，灰一档提示） -->
+      <!-- 功能项：已实现的正常态，未实现的灰一档提示「即将推出」 -->
       <Tooltip
         v-for="item in actionItems"
         :key="item.key"
-        :text="`${item.label}（即将推出）`"
+        :text="item.enabled ? item.label : `${item.label}（即将推出）`"
         :delay="300"
         preferred-placement="right"
       >
         <button
-          class="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-white/10 hover:text-gray-400"
+          :class="[
+            'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+            item.enabled
+              ? 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
+              : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
+          ]"
           @click="emitAction(item.key)"
         >
           <!-- 校对 -->
@@ -113,8 +124,12 @@ function emitAction(key: 'proofread' | 'organize' | 'version') {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
           </svg>
           <!-- 版本管理 -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg v-else-if="item.icon === 'branch'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+          </svg>
+          <!-- 向量索引（circle-stack） -->
+          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 5.625c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
           </svg>
         </button>
       </Tooltip>

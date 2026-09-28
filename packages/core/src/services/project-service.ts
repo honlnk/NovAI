@@ -9,6 +9,7 @@ import {
   rescanProject,
 } from '../core/fs/project-fs'
 import { writeAgentLog } from '../core/logging/agent-log'
+import { sweepExpiredSpillFiles } from '../core/agent/spill'
 import {
   forgetLastProject as forgetStoredLastProject,
   forgetRecentProject as forgetStoredRecentProject,
@@ -32,6 +33,9 @@ import {
 import { evictProjectSessions } from './agent-service'
 import { toProjectView } from './mappers'
 import type { LastProjectSummaryView, ProjectStatusView, ProjectView } from './types'
+
+// 透出给 app 层：文件树刷新时回写最近项目计数（与 refreshRecentProjectCounts 共用同一条底层写入）。
+export { updateRecentProjectCounts }
 
 export function isProjectAccessSupported(): boolean {
   return isFileSystemAccessSupported()
@@ -265,6 +269,9 @@ async function activateProject(
   data?: unknown,
 ) {
   setRuntimeProject(project)
+
+  // spill 启动清理（保留期 7 天）：best-effort，fire-and-forget，不阻塞项目打开
+  void sweepExpiredSpillFiles(project)
 
   await saveLastProject({
     projectId: project.id,

@@ -13,6 +13,7 @@ import {
   refreshRecentProjectCounts,
   restoreRecentProject,
   restoreLastProject,
+  updateRecentProjectCounts,
 } from '@novai/core/services/project-service'
 import {
   readFile,
@@ -27,6 +28,8 @@ import type {
   ProjectFileNodeView,
   ProjectView,
 } from '@novai/core/services/types'
+import type { ReasoningEffort } from '@novai/core/types/ai'
+import type { PermissionPreset } from '@novai/core/types/project'
 import type { RecentProject } from '@novai/core/types/project'
 
 /**
@@ -241,6 +244,16 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 清空内容面板当前打开的文件（不关项目）。
+   *
+   * 供「AI 删除了正打开的文件」场景调用：磁盘上文件已不存在，快照再留着就是
+   * 幽灵文件（无删除标记，编辑保存还会复活它），由调用方负责给出空态提示。
+   */
+  function clearActiveFile() {
+    activeFile.value = null
+  }
+
   async function refreshTree() {
     if (!currentProject.value) {
       return
@@ -253,9 +266,47 @@ export const useProjectStore = defineStore('project', () => {
         ...currentProject.value,
         files: await refreshFiles(currentProject.value.id),
       }
+      await syncRecentProjectCounts()
       statusMessage.value = '文件树已刷新'
     } catch (error) {
       errorMessage.value = toMessage(error, '刷新文件树失败')
+    }
+  }
+
+  /**
+   * 文件树刷新后，把最新章节数/要素数同步到最近项目记录（内存 + IndexedDB 落盘）。
+   *
+   * 解决主页卡片计数陈旧：此前计数只在「打开项目」或「主页后台重扫（需目录授权存活）」
+   * 时回写，AI 写完章节后若授权失效（如重启浏览器），主页显示的还是打开项目那一刻的旧值。
+   * 现在文件树刷新（AI 写入、要素写入、章节整理的公共汇合点）当场回写，授权是否存活
+   * 不再影响计数正确性。回写失败静默吞掉——计数是锦上添花，不能把文件树刷新报成失败。
+   */
+  async function syncRecentProjectCounts() {
+    const project = currentProject.value
+
+    if (!project) {
+      return
+    }
+
+    const chapterCount = countChapterFiles(project.files)
+    const elementCount = countElementFiles(project.files)
+
+    recentProjects.value = recentProjects.value.map((item) =>
+      item.id === project.id ? { ...item, chapterCount, elementCount } : item,
+    )
+
+    if (lastProjectSummary.value?.projectId === project.id) {
+      lastProjectSummary.value = {
+        ...lastProjectSummary.value,
+        chapterCount,
+        elementCount,
+      }
+    }
+
+    try {
+      await updateRecentProjectCounts(project.id, chapterCount, elementCount)
+    } catch {
+      // IndexedDB 写失败不影响刷新流程；主页后台重扫仍是兜底。
     }
   }
 
@@ -314,6 +365,46 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 切换写工具权限档位（对话输入区与设置页共用写回链路）：
+   * 写盘 + 同步 currentProject 快照，下一轮起按新档判定。
+   */
+  async function changePermissionPreset(projectId: string, preset: PermissionPreset) {
+    errorMessage.value = ''
+
+    try {
+      const savedConfig = await updateConfig(projectId, {
+        settings: { permissionPreset: preset },
+      })
+      updateCurrentProjectConfig(savedConfig)
+      statusMessage.value = '已切换写工具权限档位，下一轮起生效'
+      return savedConfig
+    } catch (error) {
+      errorMessage.value = toMessage(error, '切换权限档位失败')
+      return null
+    }
+  }
+
+  /**
+   * 切换思考强度档位（对话输入区选择器写回链路，思考强度计划 D3，四档）：
+   * 直接写回所选档位；未配置（字段缺省）由请求层按 off 解析，无需 'default' 占位。
+   */
+  async function changeReasoningEffort(projectId: string, effort: ReasoningEffort) {
+    errorMessage.value = ''
+
+    try {
+      const savedConfig = await updateConfig(projectId, {
+        llm: { reasoningEffort: effort },
+      })
+      updateCurrentProjectConfig(savedConfig)
+      statusMessage.value = '已切换思考强度档位，下一轮起生效'
+      return savedConfig
+    } catch (error) {
+      errorMessage.value = toMessage(error, '切换思考档位失败')
+      return null
+    }
+  }
+
   async function runProjectAction<T>(action: () => Promise<T>) {
     errorMessage.value = ''
     isBusy.value = true
@@ -339,6 +430,9 @@ export const useProjectStore = defineStore('project', () => {
     recentProjects,
     statusMessage,
     changeActiveScenePromptPath,
+    changePermissionPreset,
+    changeReasoningEffort,
+    clearActiveFile,
     closeCurrentProject,
     createNewProject,
     forgetLastOpenedProject,
@@ -399,7 +493,8 @@ function toRecentProject(project: ProjectView): RecentProject {
 function countChapterFiles(nodes: ProjectFileNodeView[]): number {
   return nodes.reduce((total, node) => {
     if (node.kind === 'file') {
-      return node.path.startsWith('chapters/') && /\.(txt|md)$/i.test(node.name)
+      // 章节口径：chapters/ 下的 .txt 才算（.md 是待处理的外来文件，不计数）
+      return node.path.startsWith('chapters/') && /\.txt$/i.test(node.name)
         ? total + 1
         : total
     }

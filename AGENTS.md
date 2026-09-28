@@ -44,9 +44,47 @@ When useful, study that repository for patterns such as:
 - streaming interaction flow,
 - file-oriented execution behavior.
 
+## Local Development Environment
+
+Standing facts about this machine's dev setup. Check these before starting any server or doing browser/UI verification:
+
+- The user keeps a dev server running at **http://localhost:5173** (their own `pnpm dev`). For browser/UI verification, open this URL directly. **Never start another dev server or invent a different port** — a browser tab pointed at a dead port (e.g. a stale 5199 from an old session) shows a blank page and is not evidence the app is broken.
+- If a page looks blank or broken, first check whether anything is listening on the expected port (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/`) before touching anything else.
+- The standing test project lives at **`~/note/test-novel`**, with models already configured in its `novel.config.json`. Use it for real-machine / UI verification (open it via 「打开项目」or「恢复项目」). Its API keys are read at runtime only and must never be copied into any file in this repository.
+
 ## Working Rule
 
 When documentation and code appear to conflict, prefer the clarified product intent above:
 
 - NovAI is not just a workspace with a chat box.
 - NovAI should become a conversation-driven AI agent for writing stories through tools and files.
+
+## Workflow Discipline
+
+These rules govern how AI agents interact with git in this repository. They are non-negotiable.
+
+### 1. Commit only with user approval — except staged commits on long tasks
+
+**Default (small work):** do **not** run `git commit` after finishing code. Write the code, run verification (`pnpm test` / `pnpm typecheck`), and **stop**. Report what was done and let the user review. Commit only when the user explicitly says to commit (e.g. "提交一下", "commit it"). If the change spans multiple logical units, propose the commit grouping and let the user confirm first.
+
+**Long-task exception:** when a task is large-scale and phased (multiple steps/waves, wide blast radius), staged commits are expected rather than one giant commit at the end. The agent should:
+
+- announce the staged-commit plan up front, when starting (or when the task grows into) a long task;
+- commit at each completed phase gate only — gate = tests + typecheck green + docs synced; never commit work-in-progress mid-phase;
+- keep one commit per logical unit, and report every hash as it lands.
+
+When a commit touches the `docs` submodule, commit the submodule first, then advance the parent-repo pointer.
+
+### 2. Never push — that is the user's job
+
+- Do **not** run `git push` on your own initiative, and do not prompt the user about pushing (no "需要我 push 吗?" reminders). Just state the local commit status and stop.
+
+### 3. Do not modify shared/global project files without permission
+
+High-blast-radius files require a stop-and-ask before editing. This applies to:
+
+- Workspace-level configs: `tsconfig.json`, `vitest.config.ts`, `commitlint.config.mjs`, `pnpm-workspace.yaml`, root `package.json` scripts
+- App skeleton: router, `stores/index.ts`, `components/ui/**`, global CSS / Tailwind entry, `App.vue` / `main.ts`
+- The instruction files themselves: `AGENTS.md`, `CLAUDE.md`
+
+The rule: when in doubt about whether a file is "shared/global", treat it as shared and ask first.

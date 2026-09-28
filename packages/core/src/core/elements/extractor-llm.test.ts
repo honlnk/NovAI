@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseExtractionResponse } from './extractor-llm'
+import { buildExtractionSystemPrompt, parseExtractionResponse } from './extractor-llm'
 
 describe('extractor-llm parseExtractionResponse', () => {
   it('parses a clean JSON object into six buckets', () => {
@@ -90,5 +90,74 @@ describe('extractor-llm parseExtractionResponse', () => {
     const result = parseExtractionResponse(raw, 'chapters/第001章.txt')
 
     expect(result.characters[0].body).toContain('林远')
+  })
+})
+
+describe('extractor-llm tags merging', () => {
+  function parseTags(tags: unknown): string[] {
+    const raw = JSON.stringify({
+      characters: [{ name: '云溪', summary: '女修', body: '出手相助', tags }],
+      locations: [],
+      entities: [],
+      timeline: [],
+      plots: [],
+      worldbuilding: [],
+    })
+
+    return parseExtractionResponse(raw, 'chapters/第001章.txt').characters[0].tags
+  }
+
+  it('merges model-provided tags after the fallback markers', () => {
+    expect(parseTags(['主角', '剑修'])).toEqual(['AI 提取', '人物', '主角', '剑修'])
+  })
+
+  it('falls back to the two markers when tags are missing or not an array', () => {
+    expect(parseTags(undefined)).toEqual(['AI 提取', '人物'])
+    expect(parseTags('主角')).toEqual(['AI 提取', '人物'])
+  })
+
+  it('drops non-string members, blanks and duplicates', () => {
+    expect(parseTags(['主角', 42, '  ', '主角', ' 剑修 ', null])).toEqual(['AI 提取', '人物', '主角', '剑修'])
+  })
+
+  it('does not duplicate tags that restate the type name or fallback markers', () => {
+    expect(parseTags(['人物', 'AI 提取', '主角'])).toEqual(['AI 提取', '人物', '主角'])
+  })
+})
+
+describe('extractor-llm buildExtractionSystemPrompt', () => {
+  it('injects the five body templates with their section names', () => {
+    const prompt = buildExtractionSystemPrompt()
+
+    for (const bucket of ['characters', 'locations', 'entities', 'timeline', 'plots']) {
+      expect(prompt).toContain(`${bucket} 模板：`)
+    }
+
+    for (const section of ['## 称呼规则', '## 可见性与可达性', '## 当前归属', '## 暗线铺垫', '## 后续影响']) {
+      expect(prompt).toContain(section)
+    }
+
+    expect(prompt).not.toContain('worldbuilding 模板：')
+  })
+
+  it('requires plots to be split per event and forbids umbrella entries', () => {
+    const prompt = buildExtractionSystemPrompt()
+
+    expect(prompt).toContain('按独立事件拆分')
+    expect(prompt).toContain('禁止输出「本章剧情」「剧情总纲」这类笼统条目')
+  })
+
+  it('requires timeline items to carry 所属阶段 and 故事内时间', () => {
+    const prompt = buildExtractionSystemPrompt()
+
+    expect(prompt).toContain('「所属阶段」')
+    expect(prompt).toContain('「故事内时间」')
+  })
+
+  it('documents the optional tags field', () => {
+    const prompt = buildExtractionSystemPrompt()
+
+    expect(prompt).toContain('tags（可选）')
+    expect(prompt).toContain('"tags":["主角","少年"]')
   })
 })

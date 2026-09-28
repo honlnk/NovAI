@@ -7,6 +7,9 @@ import {
 } from './file-tools'
 import { findFilesTool, listDirectoryTool } from './directory-tools'
 import { ragSearchTool } from './rag-search'
+import { getFileChangeHistoryTool } from './change-history-tool'
+import { webSearchTool } from './web-search'
+import { webFetchTool } from './web-fetch'
 import type {
   CoreToolName,
   CreateFileInput,
@@ -17,6 +20,8 @@ import type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  GetFileChangeHistoryInput,
+  GetFileChangeHistoryOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -31,6 +36,10 @@ import type {
   ToolExecution,
   ToolResult,
   ToolRuntime,
+  WebFetchInput,
+  WebFetchOutput,
+  WebSearchInput,
+  WebSearchOutput,
 } from './types'
 
 export type {
@@ -43,6 +52,8 @@ export type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  GetFileChangeHistoryInput,
+  GetFileChangeHistoryOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -56,6 +67,10 @@ export type {
   ToolExecution,
   ToolResult,
   ToolRuntime,
+  WebFetchInput,
+  WebFetchOutput,
+  WebSearchInput,
+  WebSearchOutput,
 }
 
 type ToolOutputMap = {
@@ -67,6 +82,9 @@ type ToolOutputMap = {
   ListDirectory: ListDirectoryOutput
   FindFiles: FindFilesOutput
   RagSearch: RagSearchOutput
+  GetFileChangeHistory: GetFileChangeHistoryOutput
+  WebSearch: WebSearchOutput
+  WebFetch: WebFetchOutput
 }
 
 const tools = {
@@ -78,6 +96,9 @@ const tools = {
   ListDirectory: listDirectoryTool,
   FindFiles: findFilesTool,
   RagSearch: ragSearchTool,
+  GetFileChangeHistory: getFileChangeHistoryTool,
+  WebSearch: webSearchTool,
+  WebFetch: webFetchTool,
 } satisfies Record<CoreToolName, ToolDefinition<CoreToolName, unknown, unknown>>
 
 export function getCoreTools() {

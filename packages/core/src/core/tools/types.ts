@@ -1,5 +1,11 @@
 import type { ProjectSnapshot } from '../../types/project'
+import type { FileChangeRecord } from '../../types/chat'
 
+/**
+ * core 工具注册表（tools/index.ts 的 `Record<CoreToolName, …>` 全键约束）的键集合。
+ * DelegateToGardener 不在此列：它是会话层组装的委派工具（需要 confirm/signal/事件转发闭包），
+ * 不是纯 ToolRuntime 可驱动的 core 工具——其名字进 AgentToolName / ChatToolName / ToolNameView。
+ */
 export type CoreToolName =
   | 'ReadFile'
   | 'EditFile'
@@ -9,10 +15,23 @@ export type CoreToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'GetFileChangeHistory'
+  | 'WebSearch'
+  | 'WebFetch'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
   readFileStates?: Map<string, ReadFileState>
+  /**
+   * 会话改动账本的只读取口（GetFileChangeHistory 用）。
+   * getter 形态：账本每次累积都不可变重建数组，引用快照会过期，读时取最新。
+   */
+  getChangeLedger?: () => readonly FileChangeRecord[]
+  /**
+   * 联网搜索的匿名身份（localStorage UUID，app 层注入）：
+   * linkseek 托管档绿灯用它认配额（X-NovAI-Client-Id）；缺失时服务端按 IP 计。
+   */
+  webClientId?: string
 }
 
 export type ToolCall<TName extends CoreToolName = CoreToolName, TInput = unknown> = {
@@ -45,7 +64,22 @@ export type FileChange =
   | { type: 'created'; path: string }
   | { type: 'updated'; path: string }
   | { type: 'renamed'; fromPath: string; toPath: string }
-  | { type: 'deleted'; path: string; trashPath?: string }
+  /** deleted 带被删行数（只带数字不带内容：原文去回收站 trashPath 看，账本会话落盘不重复存） */
+  | { type: 'deleted'; path: string; trashPath?: string; linesRemoved?: number }
+
+/**
+ * 片段级 diff（改动账本 FileChangeRecord 的唯一 diff 载体，抄 dsh 写时 before/after 机制）：
+ * 只存被替换的片段，不存整文件。created 时 oldText 为 ''（全新内容），deleted/renamed 不产生 diff。
+ * modelView 里的 tool 消息不挂 diff（模型不需要逐行 diff，省 token）。
+ */
+export type ChangeDiff = {
+  /** 被替换掉的原文片段；CreateFile 时为 '' */
+  oldText: string
+  /** 替换后的新片段；DeleteFile 时为 '' */
+  newText: string
+  linesAdded: number
+  linesRemoved: number
+}
 
 /**
  * 写工具执行前构造的确认预览，用于「写入前确认」流程。
@@ -57,7 +91,12 @@ export type WriteConfirmation =
   | { kind: 'rename'; fromPath: string; toPath: string }
   | { kind: 'delete'; path: string }
 
-export type ToolDefinition<TName extends CoreToolName, TInput, TOutput> = {
+/**
+ * 工具定义。TName 放宽为 string（不锁 CoreToolName）：会话层组装的工具（如 DelegateToGardener）
+ * 名字在 AgentToolName 联合里而不进 core 注册表，同样以本形状定义；core 注册表的键约束在
+ * tools/index.ts 显式保持。
+ */
+export type ToolDefinition<TName extends string, TInput, TOutput> = {
   name: TName
   description: string
   validateInput(input: unknown): TInput
@@ -69,6 +108,11 @@ export type ToolDefinition<TName extends CoreToolName, TInput, TOutput> = {
    * 返回 undefined 表示该 output 不产生文件变更。
    */
   extractFileChange?(output: TOutput): FileChange | undefined
+  /**
+   * 写工具用它产出片段级 diff（改动账本用）；EditFile/CreateFile 实现，RenameFile/DeleteFile 不实现。
+   * 返回 undefined 表示该 output 无 diff 可存。
+   */
+  extractChangeDiff?(output: TOutput): ChangeDiff | undefined
   /**
    * 写工具用它构造写入前确认预览；只读工具不实现。
    * 入参是经过 validateInput 校验的强类型 input，执行前调用。
@@ -91,6 +135,8 @@ export type ReadFileOutput = {
   endLine: number
   totalLines: number
   truncated: boolean
+  /** 第三道闸命中：返回内容达单次字节上限被截断（用 offset=endLine+1 继续读）。 */
+  truncatedByBytes?: boolean
   empty: boolean
   offsetBeyondEnd: boolean
   fileSizeBytes: number
@@ -118,6 +164,10 @@ export type EditFileOutput = {
   contentLength: number
   linesAdded: number
   linesRemoved: number
+  /** 实际应用的原文片段（经 findActualText/preserveQuoteStyle 校正，非模型入参原样）；改动账本 diff 用 */
+  oldText: string
+  /** 实际写入的新片段 */
+  newText: string
 }
 
 export type CreateFileInput = {
@@ -130,6 +180,8 @@ export type CreateFileOutput = {
   contentLength: number
   linesAdded: number
   created: true
+  /** 新建的完整内容；改动账本 diff 用（oldText 为 ''，全绿） */
+  content: string
 }
 
 export type RenameFileInput = {
@@ -215,4 +267,61 @@ export type RagSearchOutput = {
     score?: number
     rerankScore?: number
   }>
+}
+
+export type GetFileChangeHistoryInput = {
+  /** 返回条数上限：默认 20，最大 100 */
+  limit: number
+  /** 只看某个文件（含改名前后路径） */
+  path?: string
+  /** 只看某一轮（runId） */
+  runId?: string
+}
+
+export type GetFileChangeHistoryOutput = {
+  /** 纯文本清单（新→旧逐条），末尾「共 N 条记录」 */
+  content: string
+  /** 过滤后的总记录数 */
+  totalCount: number
+  /** 实际返回条数 */
+  returnedCount: number
+}
+
+export type WebSearchInput = {
+  /** 1-4 条搜索 query（多 query 并发 + 去重合并） */
+  queries: string[]
+}
+
+export type WebSearchOutput = {
+  queries: string[]
+  /** provider 生成的答案摘要（仅生成式后端有） */
+  content?: string
+  sources: Array<{
+    title: string
+    url: string
+    snippet: string
+    publishedAt?: string
+  }>
+  /** 合并后超出上限被截断 */
+  truncated: boolean
+}
+
+export type WebFetchInput = {
+  url: string
+}
+
+export type WebFetchOutput = {
+  /** 模型给的原始 URL */
+  url: string
+  /** 重定向链终点 */
+  finalUrl?: string
+  /** 终点 HTTP 状态码（后端不提供时缺省） */
+  statusCode?: number
+  /** 正文（markdown；超 50,000 字符截断并附提示） */
+  content: string
+  truncated: boolean
+  /** 'browser' = 服务端浏览器渲染；缺省视为 http */
+  renderedBy?: 'http' | 'browser'
+  /** 服务端附带提示（如渲染升级失败的降级说明） */
+  notice?: string
 }

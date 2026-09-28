@@ -34,15 +34,24 @@ export default defineConfig({
             res.statusCode = response.status
 
             response.headers.forEach((value, key) => {
-              if (key.toLowerCase() === 'content-encoding') {
+              if (key.toLowerCase() === 'content-encoding' || key.toLowerCase() === 'content-length') {
                 return
               }
 
               res.setHeader(key, value)
             })
 
-            const buffer = Buffer.from(await response.arrayBuffer())
-            res.end(buffer)
+            // 逐块转发响应体：SSE 流式（Agent delta / FIM 补全）依赖增量到达，
+            // arrayBuffer() 会等整个流结束才返回，会把打字机效果整体缓冲掉。
+            if (response.body) {
+              res.flushHeaders?.()
+              for await (const chunk of response.body) {
+                res.write(Buffer.from(chunk))
+              }
+              res.end()
+            } else {
+              res.end(Buffer.from(await response.arrayBuffer()))
+            }
           } catch (error) {
             res.statusCode = 502
             res.end(error instanceof Error ? error.message : 'Proxy request failed')

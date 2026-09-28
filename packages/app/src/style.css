@@ -49,3 +49,39 @@
 .overflow-x-auto {
   overflow-x: overlay;
 }
+
+/**
+ * 对话输入框共享样式（仿 gpt-image-studio 的卡片式输入框）。
+ *
+ * textarea 与 ghost text 覆盖层共用同一组字体/行高/内边距，
+ * 才能保证灰色建议文字与 textarea 光标精确对齐。
+ *
+ * 视觉由外层卡片容器（.chat-input-card）提供：白底、大圆角、描边、阴影、focus 反馈。
+ * textarea 本体透明、无描边，负责渲染已输入文字（正常深色，不做透明处理）；
+ * 覆盖层只渲染灰色建议，其中已输入部分用 invisible 撑布局以定位建议位置。
+ */
+.chat-input-base {
+  width: 100%;
+  font-size: 0.9375rem; /* 15px，与 gpt-image-studio 一致，比 14px 更舒展 */
+  line-height: 1.625; /* leading-relaxed，长文本更易读 */
+  letter-spacing: normal;
+  padding: 0.25rem 0; /* py-1，左右无内边距，由外层卡片提供 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/**
+ * 输入框卡片容器：白底大圆角描边卡片，聚焦时边框加深 + 阴影加重（克制的中性灰风格）。
+ */
+.chat-input-card {
+  background-color: #ffffff;
+  border: 1px solid #d1d5db; /* border-gray-300 */
+  border-radius: 1rem; /* rounded-2xl */
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); /* shadow-sm */
+  padding: 0.5rem 0.75rem; /* px-3 py-2 */
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.chat-input-card:focus-within {
+  border-color: #9ca3af; /* border-gray-400 */
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); /* shadow-md */
+}

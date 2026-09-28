@@ -3,25 +3,26 @@ import { defineStore } from 'pinia'
 
 import {
   getConfig,
-  readSystemPrompt,
+  testCompletion,
   testEmbedding,
   testLlm,
   testRerank,
+  testSearch,
   updateConfig,
-  writeSystemPrompt,
 } from '@novai/core/services/settings-service'
 import type {
+  CompletionConfigView,
   ConnectionTestResultView,
   EmbeddingConfigView,
   LlmConfigView,
   ProjectConfigPatch,
   ProjectConfigView,
   RerankConfigView,
+  SearchConfigView,
 } from '@novai/core/services/types'
 
 export const useSettingsStore = defineStore('settings', () => {
   const config = ref<ProjectConfigView | null>(null)
-  const systemPrompt = ref('')
   const isBusy = ref(false)
   const errorMessage = ref('')
   const statusMessage = ref('等待打开项目')
@@ -29,18 +30,13 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function loadSettings(projectId: string) {
     return runSettingsAction(async () => {
-      const [nextConfig, nextSystemPrompt] = await Promise.all([
-        getConfig(projectId),
-        readSystemPrompt(projectId),
-      ])
+      const nextConfig = await getConfig(projectId)
 
       config.value = nextConfig
-      systemPrompt.value = nextSystemPrompt
       statusMessage.value = '项目配置已载入'
 
       return {
         config: nextConfig,
-        systemPrompt: nextSystemPrompt,
       }
     })
   }
@@ -56,14 +52,6 @@ export const useSettingsStore = defineStore('settings', () => {
     })
   }
 
-  async function saveSystemPrompt(projectId: string, content: string) {
-    return runSettingsAction(async () => {
-      await writeSystemPrompt(projectId, content)
-      systemPrompt.value = content
-      statusMessage.value = '系统提示词已保存'
-    })
-  }
-
   async function testLlmConfig(input: LlmConfigView) {
     return runConnectionTest(() => testLlm(input))
   }
@@ -72,13 +60,22 @@ export const useSettingsStore = defineStore('settings', () => {
     return runConnectionTest(() => testEmbedding(input))
   }
 
-  async function testRerankConfig(input: RerankConfigView) {
+  async function testRerankConfig(input: Pick<RerankConfigView, 'baseUrl' | 'apiKey' | 'model'>) {
     return runConnectionTest(() => testRerank(input))
+  }
+
+  async function testCompletionConfig(
+    input: Pick<CompletionConfigView, 'baseUrl' | 'apiKey' | 'model'>,
+  ) {
+    return runConnectionTest(() => testCompletion(input))
+  }
+
+  async function testSearchConfig(input: SearchConfigView & { webClientId?: string }) {
+    return runConnectionTest(() => testSearch(input))
   }
 
   function resetSettings() {
     config.value = null
-    systemPrompt.value = ''
     lastConnectionTest.value = null
     errorMessage.value = ''
     statusMessage.value = '等待打开项目'
@@ -115,14 +112,14 @@ export const useSettingsStore = defineStore('settings', () => {
     isBusy,
     lastConnectionTest,
     statusMessage,
-    systemPrompt,
     loadSettings,
     resetSettings,
     saveConfig,
-    saveSystemPrompt,
+    testCompletionConfig,
     testEmbeddingConfig,
     testLlmConfig,
     testRerankConfig,
+    testSearchConfig,
   }
 })
 

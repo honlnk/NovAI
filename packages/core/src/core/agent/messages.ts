@@ -9,11 +9,21 @@ export type AgentToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'GetFileChangeHistory'
+  | 'WebSearch'
+  | 'WebFetch'
+  | 'DelegateToGardener'
 
 export type AgentToolCall = {
   id: string
   name: AgentToolName
   input: Record<string, unknown>
+  /**
+   * gemini 函数调用的思考签名（thoughtSignature）：Gemini 2.5 思考模型在
+   * functionCall part 上携带，后续请求必须原样回传，否则 API 校验拒绝。
+   * 协议内部字段，随 assistant 消息持久化，不进 UI、不进工具 schema。
+   */
+  thoughtSignature?: string
 }
 
 export type AgentSystemMessage = {
@@ -29,6 +39,17 @@ export type AgentUserMessage = {
 export type AgentAssistantMessage = {
   role: 'assistant'
   content: string
+  /**
+   * 模型思考流（DeepSeek reasoning_content / anthropic thinking / gemini thought）。
+   * 持久化供 UI 展示，并按协议要求随历史回传（DeepSeek 思考模式工具轮硬要求
+   * reasoning_content；anthropic 回传 thinking block）——不产思考的模型天然缺省。
+   */
+  reasoning?: string
+  /**
+   * anthropic 思考块签名（thinking block 的 signature）：真 Anthropic 思考模式
+   * 工具轮强制验签回传；DeepSeek anthropic 端点不校验但回传亦安全。
+   */
+  thinkingSignature?: string
   toolCalls?: AgentToolCall[]
 }
 
@@ -67,6 +88,10 @@ export type AgentToolSchema = {
 
 export type AgentAssistantResponse = {
   content: string
+  /** 思考流全文（存在时随 assistant 消息持久化，见 AgentAssistantMessage.reasoning）。 */
+  reasoning?: string
+  /** anthropic 思考块签名，随 assistant 消息持久化用于回传（见 AgentAssistantMessage.thinkingSignature）。 */
+  thinkingSignature?: string
   toolCalls: AgentToolCall[]
   finishReason?: string
   diagnostics?: AgentLlmDiagnostics

@@ -8,9 +8,9 @@ import type { DeleteFileInput, DeleteFileOutput, ToolDefinition } from '../types
 import {
   asRecord,
   assertMutableDocumentPath,
-  countLines,
   readString,
 } from './common'
+import { countDiffLines } from './diff-line-stats'
 
 export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, DeleteFileOutput> = {
   name: 'DeleteFile',
@@ -36,7 +36,7 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
       path: input.path,
       trashPath,
       contentLength: content.length,
-      linesRemoved: countLines(content),
+      linesRemoved: countDiffLines(content, '').linesRemoved,
     }
   },
   summarizeInput(input) {
@@ -46,7 +46,7 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
     return `已将 ${output.path} 移入回收站 ${output.trashPath}，原文件共 ${output.linesRemoved} 行，${output.contentLength} 个字符`
   },
   extractFileChange(output) {
-    return { type: 'deleted', path: output.path, trashPath: output.trashPath }
+    return { type: 'deleted', path: output.path, trashPath: output.trashPath, linesRemoved: output.linesRemoved }
   },
   buildConfirmation(input) {
     return { kind: 'delete', path: input.path }

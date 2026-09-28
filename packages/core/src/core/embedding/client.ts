@@ -1,48 +1,23 @@
 import { createJsonHeaders, extractErrorMessage, normalizeBaseUrl, readJsonResponse, resolveApiUrl } from '../ai/shared'
+import { testConnectionViaModelList } from '../ai/models-client'
 
 import type { ModelConnectionInput, ModelConnectionResult } from '../../types/ai'
 
 /**
- * 使用 OpenAI 兼容的 `/models` 接口测试 Embedding 配置是否可用。
- * 第一版先只验证“服务可达 + 鉴权通过”，不引入真实向量请求。
+ * 测试 Embedding 配置是否可用：拉取模型列表验证可达与鉴权，
+ * 已填写模型名时顺带检查模型是否在列表中。
  */
 export async function testEmbeddingConnection(
   input: Omit<ModelConnectionInput, 'kind'>,
 ): Promise<ModelConnectionResult> {
-  const baseUrl = normalizeBaseUrl(input.baseUrl)
-
-  if (!baseUrl || !input.apiKey.trim()) {
-    return {
-      ok: false,
-      message: '请先填写 API 地址和 API Key',
-    }
-  }
-
-  try {
-    // 测试连接先走最轻量的 models 接口，避免第一版就被具体 embedding 输入格式卡住。
-    const response = await fetch(`${baseUrl}/models`, {
-      method: 'GET',
-      headers: createJsonHeaders(input.apiKey, baseUrl),
-    })
-
-    if (!response.ok) {
-      const payload = await readJsonResponse(response)
-      return {
-        ok: false,
-        message: extractErrorMessage(payload, 'Embedding 测试连接失败'),
-      }
-    }
-
-    return {
-      ok: true,
-      message: 'Embedding 连接成功',
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : 'Embedding 测试连接失败',
-    }
-  }
+  return testConnectionViaModelList({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    model: input.model,
+    purpose: 'embedding',
+    label: 'Embedding',
+    requiredMessage: '请先填写 API 地址和 API Key',
+  })
 }
 
 export async function createEmbedding(input: {

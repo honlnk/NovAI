@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { repairProject } from './project-fs'
+import { createDefaultConfig, DEFAULT_ELEMENT_SCHEMA } from '../project/defaults'
+import { readElementSchema, readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
 
 describe('project fs repair', () => {
   it('does not recreate the default scene prompt after it has been deleted or renamed', async () => {
@@ -30,6 +31,141 @@ describe('project fs repair', () => {
     }))
     await expect(readProjectText(rootHandle, 'prompts/scenes/scene-001.md')).rejects.toThrow('Not found')
     await expect(readProjectText(rootHandle, 'prompts/scenes/renamed-scene.md')).resolves.toBe('# Renamed Scene Prompt')
+  })
+
+  it('要素规范 ELEMENT.md：缺失时补默认内容，已有版本（含用户修改）不覆盖', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      project: { name: 'novel', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+    }))
+    writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
+      projectId: 'p1', version: 1, createdAt: '2026-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    writeProjectTextSync(rootHandle, 'prompts/system.md', '# System Prompt')
+
+    // 缺失 → 修复补齐默认规范
+    await repairProject(rootHandle)
+    await expect(readProjectText(rootHandle, 'prompts/ELEMENT.md')).resolves.toBe(DEFAULT_ELEMENT_SCHEMA)
+    await expect(readElementSchema(rootHandle)).resolves.toBe(DEFAULT_ELEMENT_SCHEMA)
+
+    // 已有（用户改过）→ 不覆盖
+    writeProjectTextSync(rootHandle, 'prompts/ELEMENT.md', '# 我自己定的规范')
+    await repairProject(rootHandle)
+    await expect(readElementSchema(rootHandle)).resolves.toBe('# 我自己定的规范')
+  })
+
+  it('readElementSchema：文件不存在返回空串不抛错', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    await expect(readElementSchema(rootHandle)).resolves.toBe('')
+  })
+})
+
+describe('project config 数值钳制', () => {
+  it('越界值钳到 UI 边界，非法值回退默认；agentMaxTurns 钳 0-50', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    const config = createDefaultConfig('novel')
+    const saved = await writeProjectConfig(rootHandle, {
+      ...config,
+      rerank: { ...config.rerank, topN: 0 },
+      completion: { ...config.completion, debounceMs: 10, maxTokens: 9999 },
+      settings: {
+        ...config.settings,
+        ragCandidateLimit: -3,
+        ragContextMaxItems: 500,
+        conversationTokenLimit: 5,
+        compressionKeepRecentTurns: 0,
+        agentMaxTurns: 0,
+      },
+    })
+
+    expect(saved.settings.conversationTokenLimit).toBe(1000)
+    expect(saved.settings.compressionKeepRecentTurns).toBe(1)
+    expect(saved.settings.ragCandidateLimit).toBe(1)
+    expect(saved.settings.ragContextMaxItems).toBe(50)
+    expect(saved.completion.debounceMs).toBe(200)
+    expect(saved.completion.maxTokens).toBe(256)
+    expect(saved.rerank.topN).toBe(1)
+    expect(saved.settings.agentMaxTurns).toBe(0)
+
+    // 上限方向也钳
+    const savedHigh = await writeProjectConfig(rootHandle, {
+      ...config,
+      settings: {
+        ...config.settings,
+        conversationTokenLimit: 999999,
+        compressionKeepRecentTurns: 100,
+      },
+    })
+    expect(savedHigh.settings.conversationTokenLimit).toBe(200000)
+    expect(savedHigh.settings.compressionKeepRecentTurns).toBe(20)
+  })
+
+  it('agentMaxTurns 迁移：旧版出厂默认 8 → 0（不限），显式值保留，缺省补 0', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+
+    // 旧项目持久化的 8（旧版出厂默认）→ 按 0 处理，升级后不再每 8 轮被打断
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 8 },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(0)
+
+    // 用户显式选过的其他值尊重保留
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 5 },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(5)
+
+    // 缺字段照旧补默认 0；非法值回退 0
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(0)
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 'abc' },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(0)
+
+    // 越界显式值钳到 0-50
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { agentMaxTurns: 999 },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.agentMaxTurns).toBe(50)
+  })
+
+  it('JSON 里的非数值（null/字符串/缺失）回退默认值', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: {
+        conversationTokenLimit: null,
+        compressionKeepRecentTurns: 'abc',
+        ragCandidateLimit: 30,
+      },
+    }))
+
+    const config = await readProjectConfig(rootHandle)
+
+    expect(config.settings.conversationTokenLimit).toBe(12000)
+    expect(config.settings.compressionKeepRecentTurns).toBe(5)
+    expect(config.settings.ragCandidateLimit).toBe(30)
+  })
+
+  it('权限档位：旧配置缺字段回填默认档，非法值回退默认档', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
+
+    const config = await readProjectConfig(rootHandle)
+    expect(config.settings.permissionPreset).toBe('chapter-material')
+
+    await writeProjectConfig(rootHandle, {
+      ...config,
+      settings: { ...config.settings, permissionPreset: 'nonsense' as never },
+    })
+    expect((await readProjectConfig(rootHandle)).settings.permissionPreset).toBe('chapter-material')
+
+    // 合法档位原样保留
+    await writeProjectConfig(rootHandle, {
+      ...config,
+      settings: { ...config.settings, permissionPreset: 'review' },
+    })
+    expect((await readProjectConfig(rootHandle)).settings.permissionPreset).toBe('review')
   })
 })
 

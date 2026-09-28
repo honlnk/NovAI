@@ -27,7 +27,7 @@ function onInput(event: Event) {
       :type="isVisible ? 'text' : 'password'"
       :value="modelValue"
       :placeholder="placeholder"
-      class="w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      class="w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 text-sm outline-none focus:border-gray-500"
       @input="onInput"
     />
     <button

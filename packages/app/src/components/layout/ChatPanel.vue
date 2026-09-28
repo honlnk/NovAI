@@ -1,18 +1,31 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 import { useChatStore } from '../../stores/chat'
-import { shouldSubmitOnEnter } from '../../composables/keyboard'
+import { isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
+import { useInlineCompletion } from '../../composables/useInlineCompletion'
+import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
+import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
+import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
+import ToolCallRow from '../chat/ToolCallRow.vue'
+import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import type { SlashCommandId } from '../../constants/slash-commands'
+import type { ChatRenderItem } from '../../stores/chat-render'
+import type { PermissionPreset } from '@novai/core/types/project'
+import type { ReasoningEffort } from '@novai/core/types/ai'
+
+import ReasoningEffortPicker from '../chat/ReasoningEffortPicker.vue'
+import { reasoningEffortLabel, reasoningEffortOptions } from '../../constants/reasoning-efforts'
 
 /** 选中引用的数据结构，与 ContentPanel emit 的 selectQuote payload 一致 */
 type SelectionQuote = {
@@ -46,14 +59,80 @@ const emit = defineEmits<{
 }>()
 
 const chatStore = useChatStore()
+const projectStore = useProjectStore()
 const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
-// 是否正在运行，直接读 store，避免本地状态与 store 不同步
-const isSending = computed(() => chatStore.isRunning)
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
+
+/** 当前写工具权限档位（输入区入口显示 + 选择器勾选） */
+const currentPermissionPreset = computed(
+  () => projectStore.currentProject?.config.settings.permissionPreset ?? 'chapter-material',
+)
+
+/** 切换权限档位：与设置页同一条 updateConfig 写回链路，下一轮起按新档判定 */
+function handlePermissionPresetSelect(preset: PermissionPreset) {
+  void projectStore.changePermissionPreset(props.projectId, preset)
+}
+
+/** 当前思考强度档位与可选档位（按协议 × 方言过滤，思考强度计划 D3；未配置按 off 显示） */
+const currentReasoningEffort = computed(
+  () => projectStore.currentProject?.config.llm.reasoningEffort ?? 'off',
+)
+const reasoningEffortOptionList = computed(() => {
+  const llm = projectStore.currentProject?.config.llm
+  return reasoningEffortOptions(llm?.protocol ?? 'openai', llm?.baseUrl ?? '')
+})
+const currentReasoningEffortLabel = computed(() => reasoningEffortLabel(currentReasoningEffort.value))
+
+/** 切换思考档位：updateConfig 写回，下一轮请求起生效 */
+function handleReasoningEffortSelect(effort: ReasoningEffort) {
+  void projectStore.changeReasoningEffort(props.projectId, effort)
+}
+
+// 最新一条 change-summary 的 id（该面板默认展开文件列表，历史轮折叠成标题行）
+const lastChangeSummaryId = computed(() => {
+  for (let index = chatStore.messages.length - 1; index >= 0; index -= 1) {
+    const message = chatStore.messages[index]
+    if (message.role === 'system' && message.kind === 'change-summary') {
+      return message.id
+    }
+  }
+  return null
+})
+
+/** QueueDock 空草稿 + Ctrl/Cmd+Enter：把全部排队消息逐条升级为插话（dsh 增强项） */
+async function steerAllQueued() {
+  for (const message of chatStore.queue) {
+    if (message.placement === 'queued') {
+      await chatStore.steerQueuedMessage(message.id)
+    }
+  }
+}
+
+/** v-for key 统一入口（vue-tsc 对 :key 内联三元 narrowing 不稳，收在函数里） */
+function renderItemKey(item: ChatRenderItem): string {
+  if (item.kind === 'process-group') {
+    return `group-${item.id}`
+  }
+  if (item.kind === 'subagent-group') {
+    return `subagent-${item.id}`
+  }
+  if (item.kind === 'tool-row') {
+    return `tool-${item.id}`
+  }
+  return item.message.id
+}
+
+// ===== 输入框 AI 补全（FIM ghost text） =====
+const completionConfig = computed(() => projectStore.currentProject?.config.completion)
+const { suggestion: completionSuggestion, scheduleCompletion, acceptNextSegment, clearSuggestion } = useInlineCompletion()
+/** 补全是否处于可显示状态（开启 + 有建议 + 非运行中） */
+const isCompletionVisible = computed(
+  () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !chatStore.isRunning,
+)
 
 // 自动滚动到底部
 async function scrollToBottom() {
@@ -63,17 +142,112 @@ async function scrollToBottom() {
   }
 }
 
+// ===== 跟随语义（借鉴 duet 的严格贴底判定）：仅当用户停留在底部时才自动吸底 =====
+/** 是否跟随：上翻读历史即退出跟随，此后运行期新输出不再拽人 */
+const isFollowing = ref(true)
+/** 未跟随期间是否有新内容到达底部（驱动浮钮「有新内容」文案） */
+const hasNewBelow = ref(false)
+
+/**
+ * 依真实滚动位置刷新跟随状态；回到底部时顺带清掉「有新内容」标记。
+ * 跟随判定必须完全贴底（distance <= 0），上翻任意 1px 即退出——阈值式判定
+ * （距底 N px 内算跟随）会在流式贴底与用户小幅上翻之间制造拉扯带，上翻被
+ * 下一次自动吸底覆盖，表现为抖动（duet 的实践经验）。
+ * distance < 0 的情况：内容不足一页、未出现滚动条，同样视为贴底。
+ */
+function updateFollowState(container: HTMLDivElement) {
+  const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 0
+  isFollowing.value = atBottom
+  if (atBottom) {
+    hasNewBelow.value = false
+  }
+}
+
+/** 用户主动表达「要看最新」时（发送/切会话/点浮钮）恢复跟随并吸底 */
+function followAndScrollToBottom() {
+  isFollowing.value = true
+  hasNewBelow.value = false
+  void scrollToBottom()
+}
+
+// ===== 历史翻页（借鉴 dsh：滚动到顶自动加载 + 位置锚定） =====
+/** 距顶多少 px 内触发向前翻页 */
+const OLDER_LOAD_THRESHOLD_PX = 200
+/** prepend 在途标志：阻止尾部签名 watch 把翻页误判为新消息而吸底 */
+const isPrepending = ref(false)
+
+/**
+ * 滚动监听：先如实刷新跟随状态，再做翻页判定——
+ * 距顶 200px 内且还有更早历史时自动向前翻一页。
+ * 锚定用 scrollHeight 差值法：prepend 后内容整体下移，按新增高度回推 scrollTop，
+ * 阅读位置不跳动。loadingOlder 与 isPrepending 双重防重入；恢复后仍在阈值内时
+ * scroll 事件会自然再触发（逐页连续上翻），不会失控级联——一页 100 条的高度
+ * 通常远超阈值，恢复后的位置已在阈值之外。
+ */
+async function handleMessagesScroll() {
+  const container = messagesContainer.value
+  if (!container) return
+  updateFollowState(container)
+  if (container.scrollTop >= OLDER_LOAD_THRESHOLD_PX) return
+  if (!chatStore.hasMoreHistory || chatStore.loadingOlder || isPrepending.value) return
+
+  const previousHeight = container.scrollHeight
+  const previousTop = container.scrollTop
+  isPrepending.value = true
+  try {
+    const loaded = await chatStore.loadOlderHistory()
+    if (!loaded) return
+    await nextTick()
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop =
+        messagesContainer.value.scrollHeight - previousHeight + previousTop
+    }
+  } finally {
+    isPrepending.value = false
+  }
+}
+
+/**
+ * 尾部签名：条数 + 末条文本长度。流式 delta 只长文本不改条数，
+ * 单靠 length 观察不到「尾部还在长」，签名把两类变化合并成一个标量。
+ */
+const tailSignature = computed(() => {
+  const messages = chatStore.messages
+  const last = messages[messages.length - 1]
+  const lastTextLength = last && last.kind === 'text' ? last.text.length : 0
+  return `${messages.length}:${lastTextLength}`
+})
+
+// 新内容到达（新消息/流式增长）：仅跟随中吸底，用户上翻读历史时不拽人
+watch(tailSignature, () => {
+  // prepend 旧历史不是新消息：位置由 handleMessagesScroll 锚定，不吸底
+  if (isPrepending.value) return
+  if (!isFollowing.value) {
+    hasNewBelow.value = true
+    return
+  }
+  scrollToBottom()
+})
+
+// 切换会话也吸底：窗口化后两个长会话的窗口等长（都恰好 100 条），
+// 只靠尾部签名区分不出切换，会停留在上一个会话的阅读位置；
+// 同时重置跟随，避免上个会话「上翻读历史」的状态泄漏到新会话
 watch(
-  () => chatStore.messages.length,
+  () => chatStore.activeSessionId,
   () => {
-    scrollToBottom()
+    followAndScrollToBottom()
   },
 )
 
 
-async function handleSend() {
-  if (!inputText.value.trim() || isSending.value) return
+/**
+ * 发送（输入框运行中解禁，dsh 风）：mode 'queue' = Enter 语义（空闲直接发送 / 运行中排队），
+ * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
+ */
+async function handleSend(mode: 'queue' | 'steer' = 'queue') {
+  if (!inputText.value.trim()) return
 
+  clearSuggestion()
   const message = inputText.value.trim()
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
@@ -84,12 +258,15 @@ async function handleSend() {
     textareaRef.value.style.height = 'auto'
   }
 
-  try {
-    await chatStore.sendMessage(message, quoteText)
+  // 自己发消息恒吸底：发送即「要看最新输出」的显式意图
+  followAndScrollToBottom()
+  const ok = await chatStore.sendMessage(message, quoteText, mode)
+  if (ok) {
     // 发送成功后清除引用 chip
     emit('clearQuote')
-  } catch {
-    // 错误已在 store 中写入 runStatus，这里静默处理
+  } else {
+    // 发送失败草稿恢复：把文本填回输入框（dsh restoreFailedDrafts 简单版）
+    inputText.value = message
   }
 }
 
@@ -98,6 +275,22 @@ function handleStop() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // 输入框 AI 补全交互（最高优先级，贴近光标）：
+  // - IME 组合态放行，避免在中文选词时误触 Tab/Esc
+  // - Tab 接受建议的首个分词单位；Esc 丢弃剩余建议
+  // - 仅当 ghost text 可见时拦截，避免吞掉其他场景的 Tab/Esc
+  if (!isImeComposing(event) && isCompletionVisible.value) {
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      acceptCompletionSegment()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      clearSuggestion()
+      return
+    }
+  }
   // /提取要素 章节选择打开时：仅拦截 Esc（选择走鼠标点击）
   if (isChapterPickerOpen.value) {
     if (event.key === 'Escape') {
@@ -152,10 +345,16 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // Enter 发送，Shift+Enter 换行
-  if (shouldSubmitOnEnter(event)) {
+  // 发送模式（dsh resolveSubmitMode）：Enter = 发送/排队，Ctrl/Cmd+Enter = 插话，
+  // Shift+Enter 换行；空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
+  const submitMode = resolveSubmitMode(event)
+  if (submitMode) {
     event.preventDefault()
-    handleSend()
+    if (submitMode === 'steer' && !inputText.value.trim()) {
+      void steerAllQueued()
+      return
+    }
+    handleSend(submitMode === 'steer' ? 'steer' : 'queue')
   }
 }
 
@@ -165,10 +364,47 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 
-/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素） */
+/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素）+ 输入补全调度 */
 function onTextareaInput(event: Event) {
   autoResize(event)
   detectCommands()
+  scheduleInlineCompletion()
+}
+
+/**
+ * 调度输入补全。命令菜单 / @场景 / 章节选择打开时不调度，避免与这些交互冲突。
+ */
+function scheduleInlineCompletion() {
+  if (isSlashMenuOpen.value || isSceneCommandOpen.value || isChapterPickerOpen.value) {
+    clearSuggestion()
+    return
+  }
+  const cursor = textareaRef.value?.selectionStart ?? 0
+  scheduleCompletion(inputText.value, cursor, completionConfig.value)
+}
+
+/**
+ * 接受建议的首个分词单位：拼到 inputText 末尾，吃光后清空状态并重置高度。
+ */
+function acceptCompletionSegment() {
+  const { accepted, hasMore } = acceptNextSegment()
+  if (accepted) {
+    inputText.value += accepted
+    // 同步光标到末尾，让后续补全基于新光标位置
+    nextTick(() => {
+      if (textareaRef.value) {
+        const end = inputText.value.length
+        textareaRef.value.selectionStart = end
+        textareaRef.value.selectionEnd = end
+        textareaRef.value.style.height = 'auto'
+        textareaRef.value.style.height = `${Math.min(textareaRef.value.scrollHeight, 200)}px`
+      }
+    })
+  }
+  if (!hasMore) {
+    // 建议已吃完，基于新内容重新调度一次（可能续出下一段）
+    scheduleInlineCompletion()
+  }
 }
 
 // ===== R4：@场景 指令检测 =====
@@ -290,9 +526,18 @@ function handleSlashCommandSelect(id: SlashCommandId) {
     return
   }
 
+  if (id === 'gardener') {
+    // 选中「整理要素」后，把驱动 prompt 直接作为用户意图发送：主 Agent 调用 DelegateToGardener
+    // 委派园丁子代理整理要素库，园丁的工具行在聊天区折叠为嵌套任务组。无二级交互界面。
+    followAndScrollToBottom()
+    void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+    return
+  }
+
   if (id === 'init') {
     // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
     // 不需要二级交互界面，复用普通对话发送链路。
+    followAndScrollToBottom()
     void chatStore.sendMessage(INIT_NOVEL_PROMPT)
   }
 }
@@ -365,37 +610,97 @@ async function handleExtractionConfirm() {
       </div>
     </header>
 
-    <!-- 消息列表 -->
-    <div
-      ref="messagesContainer"
-      class="flex-1 overflow-y-auto"
-    >
-      <div class="mx-auto max-w-3xl px-4 py-6">
-        <!-- 首次使用引导插槽 -->
-        <slot name="guide" />
+    <!-- 消息列表区（relative 包裹：「回到底部」浮钮的定位父级；浮钮放进滚动容器会随内容滚走） -->
+    <div class="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref="messagesContainer"
+        class="flex-1 overflow-y-auto"
+        @scroll="handleMessagesScroll"
+      >
+        <div class="mx-auto max-w-3xl px-4 py-6">
+          <!-- 首次使用引导插槽 -->
+          <slot name="guide" />
 
-        <!-- 空状态 -->
-        <div
-          v-if="chatStore.messages.length === 0"
-          class="flex flex-col items-center justify-center py-16"
-        >
-          <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-          </svg>
-          <p class="mb-1 text-lg font-medium text-gray-400">开始创作</p>
-          <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
-        </div>
+          <!-- 空状态 -->
+          <div
+            v-if="chatStore.messages.length === 0"
+            class="flex flex-col items-center justify-center py-16"
+          >
+            <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+            <p class="mb-1 text-lg font-medium text-gray-400">开始创作</p>
+            <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
+          </div>
 
-        <!-- 消息列表 -->
-        <div v-else class="space-y-4">
-          <MessageItem
-            v-for="message in chatStore.messages"
-            :key="message.id"
-            :message="message"
-          />
+          <!-- 消息列表：渲染序列（配对 + 分组预处理后的渲染树） -->
+          <div v-else class="space-y-4">
+            <!-- 向前翻页加载态（滚动到顶自动触发；无更多历史时不显示任何入口） -->
+            <div
+              v-if="chatStore.loadingOlder"
+              class="flex items-center justify-center gap-2 py-1 text-xs text-gray-400"
+            >
+              <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              正在加载更早消息…
+            </div>
+            <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
+              <!-- 任务过程折叠组：组头 + 包裹容器（子项经插槽注入） -->
+              <TurnProcessGroup
+                v-if="item.kind === 'process-group'"
+                :group="item"
+                @toggle="chatStore.toggleProcessGroup"
+              >
+                <template v-for="child in item.items" :key="renderItemKey(child)">
+                  <!-- 园丁子代理嵌套任务组：组头带标签、嵌套缩进，子项为其工具行 -->
+                  <TurnProcessGroup
+                    v-if="child.kind === 'subagent-group'"
+                    :group="child"
+                    nested
+                    @toggle="chatStore.toggleProcessGroup"
+                  >
+                    <template v-for="grandchild in child.items" :key="renderItemKey(grandchild)">
+                      <ToolCallRow v-if="grandchild.kind === 'tool-row'" :item="grandchild" />
+                    </template>
+                  </TurnProcessGroup>
+                  <ToolCallRow v-else-if="child.kind === 'tool-row'" :item="child" />
+                  <MessageItem
+                    v-else-if="child.kind === 'message'"
+                    :message="child.message"
+                    :streaming="child.message.id === chatStore.streamingMessageId"
+                    :newest-change-summary="child.message.id === lastChangeSummaryId"
+                  />
+                </template>
+              </TurnProcessGroup>
 
+              <!-- 工具行（调用/结果合一） -->
+              <ToolCallRow v-else-if="item.kind === 'tool-row'" :item="item" />
+
+              <!-- 普通消息 -->
+              <MessageItem
+                v-else-if="item.kind === 'message'"
+                :message="item.message"
+                :streaming="item.message.id === chatStore.streamingMessageId"
+                :newest-change-summary="item.message.id === lastChangeSummaryId"
+              />
+            </template>
+          </div>
         </div>
       </div>
+
+      <!-- 回到底部浮钮：退出跟随后出现；未跟随期间来过新内容时换文案提示 -->
+      <button
+        v-if="!isFollowing && chatStore.messages.length > 0"
+        class="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
+        @click="followAndScrollToBottom"
+      >
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        </svg>
+        {{ hasNewBelow ? '有新内容' : '回到底部' }}
+      </button>
     </div>
 
     <!-- 要素提取流程面板（R6） -->
@@ -420,6 +725,7 @@ async function handleExtractionConfirm() {
       :tool-name="chatStore.pendingConfirmation.toolName"
       :title="chatStore.pendingConfirmation.title"
       :summary="chatStore.pendingConfirmation.summary"
+      :agent-label="chatStore.pendingConfirmation.agentLabel"
       @confirm="chatStore.confirmWriteTool()"
       @reject="chatStore.rejectWriteTool()"
     />
@@ -427,6 +733,14 @@ async function handleExtractionConfirm() {
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
+        <!-- QueueDock：输入框正上方，渲染排队/插话队列（空队列不渲染） -->
+        <QueueDock
+          :queue="chatStore.queue"
+          :running="chatStore.isRunning"
+          @edit="chatStore.editQueuedMessage"
+          @remove="chatStore.removeQueuedMessage"
+          @steer="chatStore.steerQueuedMessage"
+        />
         <!-- chip 区：引用 chip（场景 chip 已移至底部状态栏） -->
         <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
           <SelectionChip
@@ -436,7 +750,7 @@ async function handleExtractionConfirm() {
             @remove="emit('clearQuote')"
           />
         </div>
-        <div class="relative flex gap-2">
+        <div class="relative">
           <!-- @场景 指令弹层（R4） -->
           <SceneCommandPopover
             v-if="isSceneCommandOpen"
@@ -462,51 +776,85 @@ async function handleExtractionConfirm() {
             @confirm="handleChapterPickerConfirm"
             @cancel="handleChapterPickerCancel"
           />
-          <textarea
-            ref="textareaRef"
-            v-model="inputText"
-            class="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            placeholder="输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)"
-            rows="1"
-            @keydown="handleKeydown"
-            @input="onTextareaInput"
-          />
-          <button
-            v-if="isStopping"
-            class="self-end rounded-lg border border-gray-200 bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-400"
-            title="正在停止…"
-            disabled
-          >
-            <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-          </button>
-          <button
-            v-else-if="isSending"
-            class="self-end rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-            title="停止运行"
-            @click="handleStop"
-          >
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
-            </svg>
-          </button>
-          <button
-            v-else
-            class="self-end rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
-            :disabled="!inputText.trim()"
-            @click="handleSend"
-          >
-            <svg
-              class="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
-          </button>
+          <!-- 卡片式输入框：textarea + ghost text 覆盖层 + 工具行（发送按钮） -->
+          <div class="chat-input-card">
+            <!-- textarea + ghost text 覆盖层（补全开启且有建议时） -->
+            <div class="relative">
+              <GhostTextOverlay
+                v-if="isCompletionVisible"
+                :input-text="inputText"
+                :suggestion="completionSuggestion"
+              />
+              <textarea
+                ref="textareaRef"
+                v-model="inputText"
+                class="chat-input-base resize-none bg-transparent text-gray-800 outline-none placeholder:text-gray-400"
+                :placeholder="chatStore.isRunning
+                  ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
+                  : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)'"
+                rows="2"
+                @keydown="handleKeydown"
+                @input="onTextareaInput"
+              />
+            </div>
+            <!-- 工具行：左侧权限档位，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示）。
+                 思考强度入口紧贴发送按钮左侧（各家 agent 产品的习惯位），弹层右锚向上弹出 -->
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <PermissionPresetPicker
+                  :preset="currentPermissionPreset"
+                  @select="handlePermissionPresetSelect"
+                />
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  v-if="isStopping"
+                  class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
+                  title="正在停止…"
+                  disabled
+                >
+                  <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                </button>
+                <button
+                  v-else-if="chatStore.isRunning"
+                  class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  title="停止运行"
+                  @click="handleStop"
+                >
+                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示 -->
+                <button
+                  v-if="chatStore.isRunning"
+                  class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
+                  :disabled="!inputText.trim()"
+                  title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
+                  @click="handleSend('steer')"
+                >
+                  插话
+                </button>
+                <ReasoningEffortPicker
+                  :effort="currentReasoningEffort"
+                  :options="reasoningEffortOptionList"
+                  :label="currentReasoningEffortLabel"
+                  @select="handleReasoningEffortSelect"
+                />
+                <button
+                  class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
+                  :disabled="!inputText.trim()"
+                  :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
+                  @click="handleSend('queue')"
+                >
+                  {{ chatStore.isRunning ? '排队发送' : '发送' }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
