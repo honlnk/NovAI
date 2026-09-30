@@ -16,6 +16,7 @@ export type ChatToolName =
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'KnowledgeLookup'
   | 'DelegateToGardener'
 
 export type UserTextMessage = {

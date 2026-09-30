@@ -10,6 +10,7 @@ import { ragSearchTool } from './rag-search'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
+import { knowledgeLookupTool } from './knowledge-lookup'
 import type {
   CoreToolName,
   CreateFileInput,
@@ -22,6 +23,8 @@ import type {
   FindFilesOutput,
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
+  KnowledgeLookupInput,
+  KnowledgeLookupOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -54,6 +57,8 @@ export type {
   FindFilesOutput,
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
+  KnowledgeLookupInput,
+  KnowledgeLookupOutput,
   ListDirectoryInput,
   ListDirectoryOutput,
   ReadFileInput,
@@ -85,6 +90,7 @@ type ToolOutputMap = {
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
+  KnowledgeLookup: KnowledgeLookupOutput
 }
 
 const tools = {
@@ -99,6 +105,7 @@ const tools = {
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,
+  KnowledgeLookup: knowledgeLookupTool,
 } satisfies Record<CoreToolName, ToolDefinition<CoreToolName, unknown, unknown>>
 
 export function getCoreTools() {

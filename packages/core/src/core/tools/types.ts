@@ -1,5 +1,6 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { FileChangeRecord } from '../../types/chat'
+import type { KnowledgePlatformName } from './knowledge-platforms'
 
 /**
  * core 工具注册表（tools/index.ts 的 `Record<CoreToolName, …>` 全键约束）的键集合。
@@ -18,6 +19,7 @@ export type CoreToolName =
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'KnowledgeLookup'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
@@ -323,5 +325,28 @@ export type WebFetchOutput = {
   /** 'browser' = 服务端浏览器渲染；缺省视为 http */
   renderedBy?: 'http' | 'browser'
   /** 服务端附带提示（如渲染升级失败的降级说明） */
+  notice?: string
+}
+
+export type KnowledgeLookupInput = {
+  /** 平台名（knowledge-platforms.ts 映射表的键） */
+  platform: KnowledgePlatformName
+  /** 条目名（非自然语言问题；MDN 为斜杠路径） */
+  term: string
+}
+
+export type KnowledgeLookupOutput = {
+  platform: string
+  term: string
+  /** 模板渲染后的实际请求 URL */
+  url: string
+  /** 重定向链终点（维基未命中判定依据：停留在 Special: 页） */
+  finalUrl?: string
+  statusCode?: number
+  /** false = 未命中（HTTP 4xx/5xx 或维基停在搜索页），content 为引导文案 */
+  found: boolean
+  content: string
+  truncated: boolean
+  renderedBy?: 'http' | 'browser'
   notice?: string
 }

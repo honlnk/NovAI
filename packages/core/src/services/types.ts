@@ -309,6 +309,7 @@ export type ToolNameView =
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'KnowledgeLookup'
   | 'DelegateToGardener'
 
 export type ToolCallView = {

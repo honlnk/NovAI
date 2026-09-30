@@ -12,6 +12,7 @@ export type AgentToolName =
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'KnowledgeLookup'
   | 'DelegateToGardener'
 
 export type AgentToolCall = {
