@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { GARDENER_TASK_PROMPT } from '@novai/core/services/agent-service'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
@@ -185,6 +186,15 @@ function handleNotImplemented(name: string) {
   toast.info(`${name}功能即将推出`)
 }
 
+/**
+ * 左栏「整理要素」入口：在全新会话中发送委派消息，不占用当前会话的上下文。
+ * 与聊天输入框工具栏的整理要素按钮（发到当前会话）互为补充。
+ */
+async function handleGardenerNewSession() {
+  await chatStore.createNewSession(projectId.value)
+  await chatStore.sendMessage(GARDENER_TASK_PROMPT)
+}
+
 async function handleSelectFile(path: string) {
   await projectStore.openFile(path)
   isContentPanelOpen.value = true
@@ -275,6 +285,7 @@ async function handleElementsWritten() {
         @proofread="handleNotImplemented('校对')"
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
+        @gardener="handleGardenerNewSession"
         @rag="isRagOpen = true"
       />
 
