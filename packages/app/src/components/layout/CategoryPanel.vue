@@ -43,6 +43,7 @@ const emit = defineEmits<{
   >
     <!-- 移动端关闭按钮 -->
     <button
+      aria-label="关闭分类面板"
       class="absolute right-2 top-2 z-10 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
       @click="emit('closeMobile')"
     >

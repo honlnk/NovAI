@@ -71,6 +71,9 @@ onUnmounted(() => {
   <div
     class="absolute left-0 top-0 z-10 hidden h-full w-1 cursor-col-resize -translate-x-1/2 bg-transparent transition-colors hover:bg-blue-400 lg:block"
     :class="{ 'bg-blue-400': isDragging }"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="拖拽调整面板宽度（双击重置）"
     @mousedown="handleMousedown"
     @dblclick="emit('reset')"
   />

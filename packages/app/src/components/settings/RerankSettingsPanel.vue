@@ -36,7 +36,7 @@ const emit = defineEmits<{
           <span class="block text-sm font-medium text-gray-900">启用 Rerank</span>
           <p class="mt-0.5 text-xs text-gray-500">关闭后直接使用粗召回排序</p>
         </div>
-        <ToggleSwitch v-model="form.enabled" @update:model-value="emit('save-immediately')" />
+        <ToggleSwitch v-model="form.enabled" label="启用 Rerank" @update:model-value="emit('save-immediately')" />
       </div>
 
       <template v-if="form.enabled">

@@ -598,6 +598,7 @@ async function handleExtractionConfirm() {
     <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex items-center gap-2">
         <button
+          aria-label="打开分类面板"
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
           @click="emit('toggleMobileSidebar')"
         >
@@ -606,6 +607,7 @@ async function handleExtractionConfirm() {
           </svg>
         </button>
         <button
+          :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
           class="hidden rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:block"
           @click="emit('toggleSidebar')"
         >
@@ -622,6 +624,7 @@ async function handleExtractionConfirm() {
       </div>
       <div class="flex items-center gap-1">
         <button
+          :aria-label="isContentPanelOpen ? '收起内容面板' : '展开内容面板'"
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
           @click="emit('toggleContentPanel')"
         >

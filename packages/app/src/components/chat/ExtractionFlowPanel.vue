@@ -179,6 +179,7 @@ function handleDismiss() {
             </div>
             <button
               type="button"
+              aria-label="关闭"
               class="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
               @click="closeModal"
             >

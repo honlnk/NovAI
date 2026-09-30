@@ -158,6 +158,8 @@ async function handleConfirmDeleteProject() {
               v-for="project in projectStore.recentProjects"
               :key="project.id"
               class="group cursor-pointer rounded-lg border border-gray-200 bg-white p-4 transition-all hover:border-gray-300 hover:shadow-sm"
+              role="button"
+              :aria-label="`打开项目 ${project.name}`"
               @click="handleSelectProject(project.id)"
             >
               <div class="flex items-start justify-between gap-3">

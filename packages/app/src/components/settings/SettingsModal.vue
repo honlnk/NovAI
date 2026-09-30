@@ -423,6 +423,7 @@ function restoreTab(): SettingsTab {
           'text-green-600': saveState === 'saved',
           'cursor-pointer font-medium text-red-600 hover:text-red-700': saveState === 'error',
         }"
+        :role="saveState === 'error' ? 'button' : undefined"
         @click="retrySave"
       >
         <span v-if="saveState === 'idle'">更改会自动保存</span>

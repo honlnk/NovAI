@@ -60,6 +60,7 @@ const effortOptions = computed(() => [
           </div>
           <ToggleSwitch
             v-model="form.modelOverride"
+            label="独立模型配置"
             @update:model-value="emit('save-immediately')"
           />
         </div>
@@ -100,6 +101,7 @@ const effortOptions = computed(() => [
           </div>
           <ToggleSwitch
             v-model="form.permissionOverride"
+            label="独立确认档位"
             @update:model-value="emit('save-immediately')"
           />
         </div>

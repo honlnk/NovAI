@@ -157,7 +157,9 @@ function isSceneActive(path: string): boolean {
               <span
                 v-if="isSceneActive(node.path)"
                 class="shrink-0 text-xs text-green-400"
+                role="button"
                 title="当前激活场景，点击关闭"
+                aria-label="关闭当前场景"
                 @click.stop="emit('changeScene', null)"
               >●</span>
               <!-- 未激活：空心点，hover 显示，点击激活 -->

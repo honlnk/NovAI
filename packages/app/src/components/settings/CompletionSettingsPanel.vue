@@ -35,7 +35,7 @@ const emit = defineEmits<{
           <span class="block text-sm font-medium text-gray-900">启用输入补全</span>
           <p class="mt-0.5 text-xs text-gray-500">关闭后输入框行为与原生完全一致</p>
         </div>
-        <ToggleSwitch v-model="form.enabled" @update:model-value="emit('save-immediately')" />
+        <ToggleSwitch v-model="form.enabled" label="启用输入补全" @update:model-value="emit('save-immediately')" />
       </div>
 
       <template v-if="form.enabled">
