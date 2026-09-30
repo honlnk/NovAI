@@ -260,7 +260,7 @@ describe('buildRenderItems 园丁嵌套任务组', () => {
 
     const nested = group.items[1]
     if (nested.kind !== 'subagent-group') throw new Error('unreachable')
-    expect(nested.label).toBe('🌿 园丁整理')
+    expect(nested.label).toBe('🌿 要素整理')
     expect(nested.toolCallCount).toBe(2)
     expect(nested.items).toHaveLength(2)
     expect(nested.items.every((row) => row.kind === 'tool-row')).toBe(true)

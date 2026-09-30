@@ -58,7 +58,7 @@ export type ChatRenderItem =
 
 /** 子代理归属 → 嵌套组头标签。 */
 export const SUBAGENT_GROUP_LABELS: Record<'gardener', string> = {
-  gardener: '🌿 园丁整理',
+  gardener: '🌿 要素整理',
 }
 
 function isTurnBoundary(item: ChatRenderItem): item is { kind: 'message'; message: UserTextMessageView } {

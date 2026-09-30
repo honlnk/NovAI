@@ -124,8 +124,8 @@ const changeLabels: Record<string, string> = {
           <span
             v-if="isGardenerChange(file)"
             class="shrink-0 rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700"
-            title="园丁子代理的改动"
-          >园丁</span>
+            title="要素整理子智能体的改动"
+          >要素整理</span>
           <span class="min-w-0 flex-1 truncate">
             <template v-if="file.status === 'renamed' && file.fromPath">
               {{ file.fromPath }} <span class="text-gray-400">→</span> {{ file.path }}

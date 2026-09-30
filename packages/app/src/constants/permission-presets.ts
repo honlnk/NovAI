@@ -17,9 +17,9 @@ export const PERMISSION_PRESET_OPTIONS = [
  * 五档中「章节档」对它效果等同「仅审阅」，故裁剪。文案按园丁口径描述。
  */
 export const GARDENER_PRESET_OPTIONS = [
-  { value: 'review', label: '仅审阅', hint: '园丁每次写要素文件都弹卡确认' },
-  { value: 'material', label: '素材静默', hint: '园丁修改已有要素正文免确认；新建文件仍弹卡' },
-  { value: 'full', label: '完全静默', hint: '园丁的所有写入免确认（路径闸仍限 elements/）' },
+  { value: 'review', label: '仅审阅', hint: '每次写要素文件都弹卡确认' },
+  { value: 'material', label: '素材静默', hint: '修改已有要素正文免确认；新建文件仍弹卡' },
+  { value: 'full', label: '完全静默', hint: '所有写入免确认（路径闸仍限 elements/）' },
 ] as const satisfies ReadonlyArray<{ value: GardenerPermissionPreset; label: string; hint: string }>
 
 export const DEFAULT_PERMISSION_PRESET_LABEL = '章节 + 素材'

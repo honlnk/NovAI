@@ -120,7 +120,7 @@ function isSceneActive(path: string): boolean {
         >
           <span class="shrink-0">🌿</span>
           <span class="truncate">{{ elementSchema.name }}</span>
-          <span class="ml-auto shrink-0 text-xs text-gray-500">园丁专用</span>
+          <span class="ml-auto shrink-0 text-xs text-gray-500">要素整理专用</span>
         </button>
         <p v-else class="px-2 py-2 text-xs text-gray-600">
           未找到要素规范（prompts/ELEMENT.md），修复项目后会自动补齐

@@ -35,7 +35,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'rerank', label: 'Rerank 配置' },
   { key: 'completion', label: '输入补全' },
   { key: 'search', label: '联网搜索' },
-  { key: 'gardener', label: '园丁' },
+  { key: 'gardener', label: '要素整理' },
   { key: 'project', label: '项目设置' },
 ]
 

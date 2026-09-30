@@ -214,7 +214,7 @@ describe('DelegateToGardener 委派端到端', () => {
     })
 
     // 委派结果回灌主 Agent：汇报全文可见
-    expect(result.content).toContain('园丁整理完成')
+    expect(result.content).toContain('要素整理完成')
     expect(result.content).toContain('无改动样例汇报正文')
 
     // 园丁的两次模型请求
@@ -279,7 +279,7 @@ describe('DelegateToGardener 委派端到端', () => {
     })
 
     expect(confirmRequests.length).toBe(1)
-    expect(confirmRequests[0]!.agentLabel).toBe('园丁')
+    expect(confirmRequests[0]!.agentLabel).toBe('要素整理')
     expect(confirmRequests[0]!.confirmation.kind).toBe('create')
     // 确认被接受后工具照常执行（假句柄上写入失败回灌，循环继续），最终拿到完整汇报
     expect(result.content).toContain('云溪.md（新建）')
@@ -467,7 +467,7 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
 
     // 主档位 chapter-material 本会静默；园丁覆盖 review 后弹卡——confirm 闭包方案做不到的方向（D1）
     expect(confirmRequests.length).toBe(1)
-    expect(confirmRequests[0]!.agentLabel).toBe('园丁')
+    expect(confirmRequests[0]!.agentLabel).toBe('要素整理')
   })
 
   it('园丁档位 full：结构操作（CreateFile）也静默', async () => {

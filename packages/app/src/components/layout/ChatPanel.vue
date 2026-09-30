@@ -835,7 +835,7 @@ async function handleExtractionConfirm() {
                 <button
                   type="button"
                   class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
-                  title="一键委派园丁整理要素库（Ctrl/Cmd+Shift+G）；Agent 运行中自动排队"
+                  title="一键整理要素库（Ctrl/Cmd+Shift+G，子智能体执行）；Agent 运行中自动排队"
                   @click="triggerGardener"
                 >
                   <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">

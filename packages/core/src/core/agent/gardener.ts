@@ -194,20 +194,20 @@ export async function runGardener(input: {
     : ''
 
   return {
-    report: report || (aborted ? '（园丁任务被停止，未产出完整汇报）' : '（园丁未产出汇报）'),
+    report: report || (aborted ? '（要素整理任务被停止，未产出完整汇报）' : '（子智能体未产出汇报）'),
     aborted,
     toolCallCount,
   }
 }
 
 /** /整理要素 斜杠命令的驱动 prompt（主 Agent 侧指令，照 INIT_NOVEL_PROMPT 用法）。 */
-export const GARDENER_TASK_PROMPT = `请把本次要素整理任务委派给园丁子代理：立即调用 DelegateToGardener 工具，不要自己直接修改要素文件。
+export const GARDENER_TASK_PROMPT = `请立即调用 DelegateToGardener 工具，把本次要素整理任务委派给要素整理子智能体执行，不要自己直接修改要素文件。
 
-对 task 的要求（园丁看不到本对话，必须自包含）：
+对 task 的要求（子智能体看不到本对话，必须自包含）：
 - 整理整个 elements/ 要素库：核对同名与近名条目合并、frontmatter 规范（tags 去重、relatedChapters 取并集、lastUpdatedChapter 取最新）、正文按模板小节归位、按规范补写素材间链接。
-- 园丁会自己读写文件并对写入操作请求确认；存疑事项它会列进汇报。
+- 子智能体会自己读写文件并对写入操作请求确认；存疑事项它会列进汇报。
 
-收到园丁汇报后，向用户转述要点：改了哪些文件、合并了什么、哪些存疑事项需要用户拍板、是否有建议删除的文件。`
+收到汇报后，向用户转述要点：改了哪些文件、合并了什么、哪些存疑事项需要用户拍板、是否有建议删除的文件。`
 
 export type DelegateToGardenerInput = {
   task: string
@@ -231,7 +231,7 @@ export function createDelegateToGardenerTool(context: {
 }): AgentRunnableTool<DelegateToGardenerInput, DelegateToGardenerOutput> {
   const confirm = context.confirm
     ? (request: WriteConfirmationRequest) =>
-        context.confirm!({ ...request, agentLabel: '园丁' })
+        context.confirm!({ ...request, agentLabel: '要素整理' })
     : undefined
 
   return {
@@ -242,17 +242,17 @@ export function createDelegateToGardenerTool(context: {
       type: 'function',
       function: {
         name: 'DelegateToGardener',
-        description: `委派园丁子代理整理 elements/ 要素库（合并重复条目、规范 frontmatter、补写链接）。园丁看不到当前对话，task 必须自包含：写清任务目标、范围与注意事项。园丁会实际读写文件、逐次请求写确认，并返回结构化汇报（改动清单/合并说明/存疑事项/建议删除）。不适合写作或章节修改。
+        description: `委派要素整理子智能体整理 elements/ 要素库（合并重复条目、规范 frontmatter、补写链接）。子智能体看不到当前对话，task 必须自包含：写清任务目标、范围与注意事项。它会实际读写文件、逐次请求写确认，并返回结构化汇报（改动清单/合并说明/存疑事项/建议删除）。不适合写作或章节修改。
 
 何时该委派：本轮写作新增要素条目较多（新人物/新地点/新设定连续出现）、人物状态或关系显著变化、设定出现前后矛盾、或用户提到「对不上/重复/记混了」等信号时，值得委派。改动轻微（只微调一两处、无新增实体）、要素无实质变化、或本会话已整理过且之后无新改动时，不要委派。
 
-委派前先建议：主动整理前先在回复末尾用一句话说明观察到的信号、建议让园丁整理，经用户同意后再调用本工具，不要未经同意静默发起。用户明确要求整理（含 /整理要素）时直接委派。`,
+委派前先建议：主动整理前先在回复末尾用一句话说明观察到的信号、建议整理要素（委派本工具执行），经用户同意后再调用，不要未经同意静默发起。用户明确要求整理（含 /整理要素）时直接委派。`,
         parameters: {
           type: 'object',
           properties: {
             task: {
               type: 'string',
-              description: '委派给园丁的任务描述，必须自包含（园丁看不到本对话）。例如：整理第 12 章涉及的要素，重点核对云溪的人物卡是否有重复条目。',
+              description: '委派给子智能体的任务描述，必须自包含（子智能体看不到本对话）。例如：整理第 12 章涉及的要素，重点核对云溪的人物卡是否有重复条目。',
             },
             scope: {
               type: 'string',
@@ -266,7 +266,7 @@ export function createDelegateToGardenerTool(context: {
     },
     core: {
       name: 'DelegateToGardener',
-      description: '委派园丁子代理整理要素库',
+      description: '委派要素整理子智能体整理要素库',
       validateInput(input: unknown): DelegateToGardenerInput {
         if (!input || typeof input !== 'object') {
           throw new Error('DelegateToGardener 参数必须是包含 task 的对象')
@@ -274,7 +274,7 @@ export function createDelegateToGardenerTool(context: {
         const record = input as Record<string, unknown>
         const task = typeof record.task === 'string' ? record.task.trim() : ''
         if (!task) {
-          throw new Error('task 不能为空：委派给园丁的任务描述（园丁看不到本对话，须自包含）')
+          throw new Error('task 不能为空：委派给子智能体的任务描述（子智能体看不到本对话，须自包含）')
         }
         const scope = typeof record.scope === 'string' ? record.scope.trim() : ''
         return { task, ...(scope ? { scope } : {}) }
@@ -298,15 +298,15 @@ export function createDelegateToGardenerTool(context: {
       },
       summarizeOutput(output: DelegateToGardenerOutput) {
         return output.aborted
-          ? `园丁任务被停止（已执行 ${output.toolCallCount} 次工具调用）`
-          : `园丁完成整理（${output.toolCallCount} 次工具调用）`
+          ? `要素整理任务被停止（已执行 ${output.toolCallCount} 次工具调用）`
+          : `要素整理完成（${output.toolCallCount} 次工具调用）`
       },
     },
     formatResult(output: DelegateToGardenerOutput) {
       return [
         output.aborted
-          ? '⚠️ 园丁任务被用户停止，以下为部分完成的汇报。'
-          : '园丁整理完成，汇报如下。',
+          ? '⚠️ 要素整理任务被用户停止，以下为部分完成的汇报。'
+          : '要素整理完成，汇报如下。',
         '',
         output.report,
       ].join('\n')

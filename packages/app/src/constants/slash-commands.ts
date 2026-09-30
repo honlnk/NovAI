@@ -29,7 +29,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'gardener',
     label: '/整理要素',
-    description: '委派园丁子代理整理 elements/ 要素库',
+    description: '整理 elements/ 要素库（专用子智能体执行）',
     icon: '🌿',
   },
   {

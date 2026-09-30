@@ -32,16 +32,20 @@ const emit = defineEmits<{ 'save-immediately': [] }>()
 
 /** 思考档选项 = 跟随主 Agent + 四档（按协议过滤 off，与输入区选择器同一份口径）。 */
 const effortOptions = computed(() => [
-  { value: '' as const, label: '跟随主 Agent', hint: '园丁沿用主对话模型委派当时的思考档位' },
+  { value: '' as const, label: '跟随主 Agent', hint: '沿用主对话模型委派当时的思考档位' },
   ...reasoningEffortOptions(props.form.protocol, props.form.baseUrl),
 ])
 </script>
 
 <template>
   <section aria-labelledby="gardener-settings-title">
-    <h3 id="gardener-settings-title" class="text-base font-semibold text-gray-900">园丁（要素整理）</h3>
+    <h3 id="gardener-settings-title" class="text-base font-semibold text-gray-900">要素整理</h3>
     <p class="mt-1 text-sm leading-relaxed text-gray-500">
-      要素整理子代理（/整理要素）的独立配置。未开启的覆盖项自动跟随主 Agent 当前配置。更改会自动保存。
+      要素整理是一个专用子智能体：由主 Agent 委派，专门负责整理 elements/ 要素库；运行时自动注入
+      prompts/ELEMENT.md 要素规范，无需手动配置提示词。
+    </p>
+    <p class="mt-1 text-xs text-gray-400">
+      此处配置它的独立模型与确认档位；未开启的覆盖项自动跟随主 Agent 当前配置。更改会自动保存。
     </p>
 
     <div class="mt-4 space-y-4">
@@ -91,7 +95,7 @@ const effortOptions = computed(() => [
           <div>
             <span class="block text-sm font-medium text-gray-900">独立确认档位</span>
             <p class="mt-0.5 text-xs text-gray-500">
-              园丁写要素文件时的确认策略；关闭则跟随主 Agent 档位
+              要素整理子智能体写文件时的确认策略；关闭则跟随主 Agent 档位
             </p>
           </div>
           <ToggleSwitch
