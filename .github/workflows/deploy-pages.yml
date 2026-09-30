@@ -49,3 +49,7 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+        env:
+          # deploy-pages@v5 内部依赖仍 require punycode（Node 24 运行时报 DEP0040），
+          # 上游未修，升无可升；仅该步静默，不影响构建步骤的诊断输出。
+          NODE_OPTIONS: --no-deprecation
