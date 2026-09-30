@@ -5,6 +5,7 @@ import {
   createDelegateToGardenerTool,
   createGardenerTools,
   GARDENER_PERSONA,
+  mergeGardenerOverrides,
 } from './gardener'
 import { isAgentToolName } from './tools'
 import { executeAgentTool } from './tool-execution'
@@ -126,6 +127,8 @@ describe('isAgentToolName', () => {
 // ---------- 委派端到端（fetch stub） ----------
 
 type FetchCall = {
+  url: string
+  model: string
   messages: Array<{ role: string; content?: string | null }>
   toolNames: string[]
 }
@@ -164,9 +167,11 @@ function textSse(text: string): Response {
 beforeEach(() => {
   fetchCalls = []
   fetchHandler = () => textSse('默认回答')
-  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: { body?: string }) => {
+  vi.stubGlobal('fetch', vi.fn(async (url: unknown, init?: { body?: string }) => {
     const body = JSON.parse(init?.body ?? '{}')
     const call: FetchCall = {
+      url: String(url),
+      model: body.model ?? '',
       messages: body.messages ?? [],
       toolNames: (body.tools ?? []).map((tool: { function?: { name?: string } }) => tool.function?.name),
     }
@@ -295,5 +300,240 @@ describe('DelegateToGardener 委派端到端', () => {
     expect(result.content).toContain('task 不能为空')
     // 校验失败不发起任何模型请求
     expect(fetchCalls.length).toBe(0)
+  })
+})
+
+// ---------- 园丁独立配置（Phase 2 计划 W1：mergeGardenerOverrides 合成快照） ----------
+
+describe('mergeGardenerOverrides', () => {
+  const baseConfig = {
+    llm: {
+      baseUrl: 'https://main.example.com',
+      apiKey: 'main-key',
+      model: 'main-model',
+      protocol: 'openai',
+      reasoningEffort: 'low',
+    },
+    settings: {
+      permissionPreset: 'review',
+    },
+  } as unknown as ProjectConfig
+
+  it('无覆盖块返回原引用（全继承，零合成开销）', () => {
+    expect(mergeGardenerOverrides(baseConfig)).toBe(baseConfig)
+  })
+
+  it('llm 覆盖整组生效；reasoningEffort 不带键时继承主值（不被 undefined 键遮蔽）', () => {
+    const config = {
+      ...baseConfig,
+      gardener: {
+        llm: { baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x', protocol: 'anthropic' },
+      },
+    } as ProjectConfig
+    const merged = mergeGardenerOverrides(config)
+    expect(merged.llm.baseUrl).toBe('https://strong.example.com')
+    expect(merged.llm.model).toBe('claude-x')
+    expect(merged.llm.protocol).toBe('anthropic')
+    // 覆盖块未带思考档 → 继承主 Agent 当前档（D4：动态继承，非关闭）
+    expect(merged.llm.reasoningEffort).toBe('low')
+    // 原配置对象不被就地修改
+    expect(baseConfig.llm.model).toBe('main-model')
+  })
+
+  it('llm 覆盖带思考档时覆盖生效', () => {
+    const config = {
+      ...baseConfig,
+      gardener: {
+        llm: {
+          baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'm', protocol: 'openai',
+          reasoningEffort: 'max',
+        },
+      },
+    } as ProjectConfig
+    expect(mergeGardenerOverrides(config).llm.reasoningEffort).toBe('max')
+  })
+
+  it('permissionPreset 覆盖写进 settings（判定链无感知）；未覆盖时取主档当前值', () => {
+    const overridden = mergeGardenerOverrides({
+      ...baseConfig,
+      gardener: { permissionPreset: 'full' },
+    } as ProjectConfig)
+    expect(overridden.settings.permissionPreset).toBe('full')
+
+    const inherited = mergeGardenerOverrides({
+      ...baseConfig,
+      gardener: { llm: { baseUrl: 'https://x.com', apiKey: 'k', model: 'm', protocol: 'openai' } },
+    } as ProjectConfig)
+    // 只覆盖模型不覆盖档位 → 档位动态继承主值（review）
+    expect(inherited.settings.permissionPreset).toBe('review')
+  })
+})
+
+describe('园丁独立配置端到端（覆盖生效）', () => {
+  it('园丁覆盖模型：请求打到覆盖 baseUrl/model，而非主 Agent 配置', async () => {
+    fetchHandler = () => textSse('## 改动文件清单\n\n- 无')
+
+    const config = {
+      ...stubConfig,
+      gardener: {
+        llm: {
+          baseUrl: 'https://gardener.example.com/v1',
+          apiKey: 'gardener-key',
+          model: 'gardener-model',
+          protocol: 'openai',
+        },
+      },
+    } as ProjectConfig
+    const delegate = createDelegateToGardenerTool({})
+    await executeAgentTool({
+      call: {
+        id: 'c-delegate-4', name: 'DelegateToGardener',
+        input: { task: '整理全库' }, createdAt: new Date().toISOString(),
+      },
+      project: { ...fakeProject('# 规范'), config },
+      tools: { DelegateToGardener: delegate },
+    })
+
+    expect(fetchCalls.length).toBe(1)
+    expect(fetchCalls[0]!.url).toBe('https://gardener.example.com/v1/chat/completions')
+    expect(fetchCalls[0]!.model).toBe('gardener-model')
+  })
+
+  it('园丁档位 material：EditFile 改 elements 正文静默执行，不弹确认卡', async () => {
+    const confirmRequests: WriteConfirmationRequest[] = []
+    fetchHandler = (_call, index) => {
+      if (index === 0) {
+        return toolCallSse('t-w1a', 'EditFile', {
+          path: 'elements/characters/云溪.md', oldText: '旧', newText: '新',
+        })
+      }
+      return textSse('## 改动文件清单\n\n- 无')
+    }
+
+    const config = {
+      ...stubConfig,
+      settings: { ...stubConfig.settings, permissionPreset: 'review' },
+      gardener: { permissionPreset: 'material' },
+    } as unknown as ProjectConfig
+    const delegate = createDelegateToGardenerTool({
+      confirm: (request) => {
+        confirmRequests.push(request)
+        return Promise.resolve({ accepted: true })
+      },
+    })
+    await executeAgentTool({
+      call: {
+        id: 'c-delegate-5', name: 'DelegateToGardener',
+        input: { task: '整理' }, createdAt: new Date().toISOString(),
+      },
+      project: { ...fakeProject('# 规范'), config },
+      tools: { DelegateToGardener: delegate },
+    })
+
+    // 主档位 review 本会全弹卡；园丁覆盖 material 后，elements 内容修改静默放行（收紧→放宽方向）
+    expect(confirmRequests.length).toBe(0)
+  })
+
+  it('园丁档位 review 收紧：主档位放行的修改也弹确认卡（双向生效）', async () => {
+    const confirmRequests: WriteConfirmationRequest[] = []
+    fetchHandler = (_call, index) => {
+      if (index === 0) {
+        return toolCallSse('t-w1b', 'EditFile', {
+          path: 'elements/characters/云溪.md', oldText: '旧', newText: '新',
+        })
+      }
+      return textSse('## 改动文件清单\n\n- 无')
+    }
+
+    const config = {
+      ...stubConfig,
+      settings: { ...stubConfig.settings, permissionPreset: 'chapter-material' },
+      gardener: { permissionPreset: 'review' },
+    } as unknown as ProjectConfig
+    const delegate = createDelegateToGardenerTool({
+      confirm: (request) => {
+        confirmRequests.push(request)
+        return Promise.resolve({ accepted: true })
+      },
+    })
+    await executeAgentTool({
+      call: {
+        id: 'c-delegate-6', name: 'DelegateToGardener',
+        input: { task: '整理' }, createdAt: new Date().toISOString(),
+      },
+      project: { ...fakeProject('# 规范'), config },
+      tools: { DelegateToGardener: delegate },
+    })
+
+    // 主档位 chapter-material 本会静默；园丁覆盖 review 后弹卡——confirm 闭包方案做不到的方向（D1）
+    expect(confirmRequests.length).toBe(1)
+    expect(confirmRequests[0]!.agentLabel).toBe('园丁')
+  })
+
+  it('园丁档位 full：结构操作（CreateFile）也静默', async () => {
+    const confirmRequests: WriteConfirmationRequest[] = []
+    fetchHandler = (_call, index) => {
+      if (index === 0) {
+        return toolCallSse('t-w1c', 'CreateFile', {
+          path: 'elements/entities/青霜剑.md', content: '# 青霜剑',
+        })
+      }
+      return textSse('## 改动文件清单\n\n- 无')
+    }
+
+    const config = {
+      ...stubConfig,
+      settings: { ...stubConfig.settings, permissionPreset: 'review' },
+      gardener: { permissionPreset: 'full' },
+    } as unknown as ProjectConfig
+    const delegate = createDelegateToGardenerTool({
+      confirm: (request) => {
+        confirmRequests.push(request)
+        return Promise.resolve({ accepted: true })
+      },
+    })
+    await executeAgentTool({
+      call: {
+        id: 'c-delegate-7', name: 'DelegateToGardener',
+        input: { task: '整理' }, createdAt: new Date().toISOString(),
+      },
+      project: { ...fakeProject('# 规范'), config },
+      tools: { DelegateToGardener: delegate },
+    })
+
+    expect(confirmRequests.length).toBe(0)
+  })
+
+  it('无覆盖块：园丁档位跟随主档位（继承基线，主 review → 全弹卡）', async () => {
+    const confirmRequests: WriteConfirmationRequest[] = []
+    fetchHandler = (_call, index) => {
+      if (index === 0) {
+        return toolCallSse('t-w1d', 'EditFile', {
+          path: 'elements/characters/云溪.md', oldText: '旧', newText: '新',
+        })
+      }
+      return textSse('## 改动文件清单\n\n- 无')
+    }
+
+    const config = {
+      ...stubConfig,
+      settings: { ...stubConfig.settings, permissionPreset: 'review' },
+    } as unknown as ProjectConfig
+    const delegate = createDelegateToGardenerTool({
+      confirm: (request) => {
+        confirmRequests.push(request)
+        return Promise.resolve({ accepted: true })
+      },
+    })
+    await executeAgentTool({
+      call: {
+        id: 'c-delegate-8', name: 'DelegateToGardener',
+        input: { task: '整理' }, createdAt: new Date().toISOString(),
+      },
+      project: { ...fakeProject('# 规范'), config },
+      tools: { DelegateToGardener: delegate },
+    })
+
+    expect(confirmRequests.length).toBe(1)
   })
 })

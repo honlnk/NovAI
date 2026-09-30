@@ -110,8 +110,34 @@ export type GardenerRunResult = {
 }
 
 /**
+ * 园丁运行配置合成（Phase 2 计划 D1/D2/D5）：
+ * - 无覆盖块 → 原样返回（动态继承：每次委派时取主配置当时值）；
+ * - llm 覆盖整组展开（normalize 已保证残缺块不落盘，此处覆盖字段必齐全）；
+ * - permissionPreset 覆盖写进 settings——判定链（permission.ts 读
+ *   project.config.settings.permissionPreset）无感知地双向生效：放宽与收紧都正确。
+ *   覆盖注入做在 confirm 闭包的方案已否决（判 allow 时不会走到 confirm，只能放宽不能收紧，D1）。
+ * - 合成结果仅在园丁运行内存中存在，不落盘；运行中主配置变更不影响本次（按次定格，D5）。
+ */
+export function mergeGardenerOverrides(config: ProjectConfig): ProjectConfig {
+  const gardener = config.gardener
+  if (!gardener) {
+    return config
+  }
+  const llm = gardener.llm ? { ...config.llm, ...gardener.llm } : config.llm
+  const permissionPreset = gardener.permissionPreset ?? config.settings.permissionPreset
+  return {
+    ...config,
+    llm,
+    settings: { ...config.settings, permissionPreset },
+  }
+}
+
+/**
  * 跑一次园丁任务：全新 ModelView（system = persona + ELEMENT.md，user = task）→
- * 复用主 Agent 的 query 循环（同模型、同压缩阈值、同 agentMaxTurns 安全阀，决策 3/4 全继承）。
+ * 复用主 Agent 的 query 循环（同压缩阈值、同 agentMaxTurns 安全阀）。
+ * 配置先经 mergeGardenerOverrides 合成（决策 3/4 的覆盖项：模型/思考档/确认档位，
+ * 未覆盖项动态继承主配置——按次取值，运行中定格，D5）；合成后的 project 快照
+ * 让权限判定与工具执行同步用园丁档位，handle 同引用零副作用。
  * 内层工具事件透传给 onEvent（带 agent: 'gardener'），写确认透传给 confirm（带「园丁」标签）。
  */
 export async function runGardener(input: {
@@ -124,6 +150,9 @@ export async function runGardener(input: {
   signal?: AbortSignal
   onEvent?: (event: TaggedToolExecutionEvent) => void
 }): Promise<GardenerRunResult> {
+  const effectiveConfig = mergeGardenerOverrides(input.config)
+  const effectiveProject: ProjectSnapshot = { ...input.project, config: effectiveConfig }
+
   const view = createModelView()
   setSystemMessage(view, buildGardenerSystemPrompt(input.elementSchema))
 
@@ -139,8 +168,8 @@ export async function runGardener(input: {
   let toolCallCount = 0
 
   const messages = await query({
-    config: input.config,
-    project: input.project,
+    config: effectiveConfig,
+    project: effectiveProject,
     view,
     tools: createGardenerTools(),
     signal: input.signal,

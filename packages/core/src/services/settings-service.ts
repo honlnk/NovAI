@@ -72,6 +72,14 @@ export async function updateConfig(
       ...currentConfig.search,
       ...patch.search,
     },
+    // 园丁块整组替换语义：patch 带 gardener 键即替换（两项覆盖都空 → 删除块回退全继承）；
+    // 不带键保持现状。与其他组的浅合并不同，见 ProjectConfigPatch 注释。
+    gardener:
+      patch.gardener !== undefined
+        ? patch.gardener.llm || patch.gardener.permissionPreset
+          ? patch.gardener
+          : undefined
+        : currentConfig.gardener,
     settings: {
       ...currentConfig.settings,
       ...patch.settings,

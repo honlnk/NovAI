@@ -1,4 +1,4 @@
-import type { PermissionPreset, SearchConfig } from '../types/project'
+import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
 import type { ReasoningEffort } from '../types/ai'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
@@ -49,6 +49,11 @@ export type ProjectConfigView = {
     maxTokens: number
   }
   search: SearchConfig
+  /**
+   * 园丁子代理覆盖配置（Phase 2 计划 D2-D5）：可选块，无值 = 全继承主 Agent
+   * 当前配置（每次委派时动态取值）。类型与语义见 types/project.ts。
+   */
+  gardener?: ProjectConfig['gardener']
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number
@@ -84,6 +89,11 @@ export type ProjectConfigPatch = Partial<{
   rerank: Partial<RerankConfigView>
   completion: Partial<CompletionConfigView>
   search: Partial<SearchConfigView>
+  /**
+   * 园丁块为整组替换语义（与其他组的浅合并不同）：带此键即替换整块——
+   * 覆盖项为空（两项都未覆盖）时写 undefined（删除块、回退全继承）；不带此键 = 保持现状。
+   */
+  gardener: ProjectConfig['gardener']
   settings: Partial<ProjectSettingsView>
 }>
 

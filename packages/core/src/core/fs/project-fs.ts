@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isGardenerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -324,6 +324,9 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
         ? config.search.provider
         : DEFAULT_CONFIG.search.provider,
     },
+    // 园丁覆盖块（Phase 2 计划 D2/D3）：块缺省 → undefined（全继承，零迁移）；
+    // llm 残缺/协议非法整组剔除、permissionPreset 非三档值剔除，均回退继承。
+    gardener: normalizeGardenerConfig(config.gardener),
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...config.settings,
@@ -352,6 +355,53 @@ function normalizeAgentMaxTurns(value: unknown): number {
     return 0
   }
   return Math.min(50, Math.max(0, rounded))
+}
+
+/**
+ * 园丁覆盖块归一化：块缺省/两覆盖项全被剔除 → undefined（全继承主 Agent）；
+ * 否则只保留合法覆盖项。不主动写入默认值（零迁移，D2）。
+ */
+function normalizeGardenerConfig(gardener: ProjectConfig['gardener']): ProjectConfig['gardener'] {
+  if (!gardener || typeof gardener !== 'object') {
+    return undefined
+  }
+  const llm = normalizeGardenerLlm(gardener.llm)
+  const permissionPreset = isGardenerPermissionPreset(gardener.permissionPreset)
+    ? gardener.permissionPreset
+    : undefined
+  if (!llm && !permissionPreset) {
+    return undefined
+  }
+  return {
+    ...(llm ? { llm } : {}),
+    ...(permissionPreset ? { permissionPreset } : {}),
+  }
+}
+
+/**
+ * 园丁 llm 覆盖块校验：四必填（baseUrl/apiKey/model/protocol）任一缺失或协议非法 →
+ * 整组剔除回退继承（防半覆盖拼出无效组合，D2）。reasoningEffort 合法才带键——
+ * 刻意不用显式 undefined：合成时展开覆盖，undefined 键会遮蔽主配置的思考档。
+ */
+function normalizeGardenerLlm(
+  llm: NonNullable<ProjectConfig['gardener']>['llm'],
+): NonNullable<ProjectConfig['gardener']>['llm'] {
+  if (!llm || typeof llm !== 'object') {
+    return undefined
+  }
+  const baseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim() : ''
+  const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey : ''
+  const model = typeof llm.model === 'string' ? llm.model.trim() : ''
+  if (!baseUrl || !model || !isModelProtocol(llm.protocol)) {
+    return undefined
+  }
+  return {
+    baseUrl,
+    apiKey,
+    model,
+    protocol: llm.protocol,
+    ...(isReasoningEffort(llm.reasoningEffort) ? { reasoningEffort: llm.reasoningEffort } : {}),
+  }
 }
 
 /**

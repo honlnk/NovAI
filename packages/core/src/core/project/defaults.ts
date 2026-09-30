@@ -183,6 +183,22 @@ export function isPermissionPreset(value: unknown): value is (typeof PERMISSION_
   return typeof value === 'string' && (PERMISSION_PRESETS as readonly string[]).includes(value)
 }
 
+/** 园丁档位合法值表（Phase 2 计划 D3 裁剪三档，语义见 types/project.ts 的 GardenerPermissionPreset）。 */
+export const GARDENER_PERMISSION_PRESETS = ['review', 'material', 'full'] as const
+
+export function isGardenerPermissionPreset(
+  value: unknown,
+): value is (typeof GARDENER_PERMISSION_PRESETS)[number] {
+  return typeof value === 'string' && (GARDENER_PERMISSION_PRESETS as readonly string[]).includes(value)
+}
+
+/** 模型协议合法值表（园丁覆盖块校验用；主 llm.protocol 走请求层协议分发报错，不在此拦）。 */
+export const MODEL_PROTOCOLS = ['openai', 'openai-responses', 'anthropic', 'gemini'] as const
+
+export function isModelProtocol(value: unknown): value is (typeof MODEL_PROTOCOLS)[number] {
+  return typeof value === 'string' && (MODEL_PROTOCOLS as readonly string[]).includes(value)
+}
+
 /** 联网搜索来源档位的合法值表与默认值（档位语义见 types/project.ts 的 SearchProviderKind）。 */
 export const SEARCH_PROVIDERS = [
   'linkseek-hosted',

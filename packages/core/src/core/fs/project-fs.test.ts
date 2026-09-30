@@ -153,7 +153,6 @@ describe('project config 数值钳制', () => {
 
     const config = await readProjectConfig(rootHandle)
     expect(config.settings.permissionPreset).toBe('chapter-material')
-
     await writeProjectConfig(rootHandle, {
       ...config,
       settings: { ...config.settings, permissionPreset: 'nonsense' as never },
@@ -166,6 +165,84 @@ describe('project config 数值钳制', () => {
       settings: { ...config.settings, permissionPreset: 'review' },
     })
     expect((await readProjectConfig(rootHandle)).settings.permissionPreset).toBe('review')
+  })
+})
+
+describe('园丁覆盖块归一化（Phase 2 计划 D2/D3）', () => {
+  it('无 gardener 块 → 保持 undefined（全继承，不主动写入默认值）', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
+
+    const config = await readProjectConfig(rootHandle)
+    expect(config.gardener).toBeUndefined()
+  })
+
+  it('完整 llm 覆盖 + 三档 preset 原样保留；reasoningEffort 非法剔除', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      gardener: {
+        llm: {
+          baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
+          protocol: 'anthropic', reasoningEffort: 'max',
+        },
+        permissionPreset: 'material',
+      },
+    }))
+
+    const config = await readProjectConfig(rootHandle)
+    expect(config.gardener?.llm).toEqual({
+      baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
+      protocol: 'anthropic', reasoningEffort: 'max',
+    })
+    expect(config.gardener?.permissionPreset).toBe('material')
+
+    // 非法思考档剔除（无键 → 合成时继承主档）
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      gardener: {
+        llm: {
+          baseUrl: 'https://x.com', apiKey: 'k', model: 'm',
+          protocol: 'openai', reasoningEffort: 'always' as never,
+        },
+      },
+    }))
+    const stripped = await readProjectConfig(rootHandle)
+    expect(stripped.gardener?.llm && 'reasoningEffort' in stripped.gardener.llm).toBe(false)
+  })
+
+  it('llm 覆盖残缺（缺必填/协议非法）→ 整组剔除回退继承；preset 合法则保留', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+
+    // 缺 model
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      gardener: {
+        llm: { baseUrl: 'https://x.com', apiKey: 'k', protocol: 'openai' },
+        permissionPreset: 'full',
+      },
+    }))
+    let config = await readProjectConfig(rootHandle)
+    expect(config.gardener?.llm).toBeUndefined()
+    expect(config.gardener?.permissionPreset).toBe('full')
+
+    // 协议非法（防半覆盖拼出无效组合）
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      gardener: {
+        llm: { baseUrl: 'https://x.com', apiKey: 'k', model: 'm', protocol: 'grpc' as never },
+      },
+    }))
+    config = await readProjectConfig(rootHandle)
+    expect(config.gardener).toBeUndefined()
+  })
+
+  it('permissionPreset 非三档值剔除（chapter/chapter-material 对园丁无意义，非法串同理）', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+
+    for (const preset of ['chapter', 'chapter-material', 'nonsense']) {
+      writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+        gardener: { permissionPreset: preset as never },
+      }))
+      const config = await readProjectConfig(rootHandle)
+      expect(config.gardener).toBeUndefined()
+    }
   })
 })
 

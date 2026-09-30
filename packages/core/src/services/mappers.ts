@@ -31,6 +31,8 @@ export function toProjectConfigView(config: ProjectConfig): ProjectConfigView {
     rerank: { ...config.rerank },
     completion: { ...config.completion },
     search: { ...config.search },
+    // 可选覆盖块：有则浅拷贝透传，无则不带键（设置页据此显示继承态）
+    ...(config.gardener ? { gardener: { ...config.gardener } } : {}),
     settings: { ...config.settings },
   }
 }

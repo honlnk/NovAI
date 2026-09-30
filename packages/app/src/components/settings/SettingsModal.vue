@@ -5,6 +5,7 @@ import type { ProjectConfigPatch, ProjectConfigView } from '@novai/core/services
 import BaseModal from '../ui/BaseModal.vue'
 import CompletionSettingsPanel from './CompletionSettingsPanel.vue'
 import EmbeddingSettingsPanel from './EmbeddingSettingsPanel.vue'
+import GardenerSettingsPanel from './GardenerSettingsPanel.vue'
 import LlmSettingsPanel from './LlmSettingsPanel.vue'
 import ProjectSettingsPanel from './ProjectSettingsPanel.vue'
 import RerankSettingsPanel from './RerankSettingsPanel.vue'
@@ -26,7 +27,7 @@ const settingsStore = useSettingsStore()
 const projectStore = useProjectStore()
 const toast = useToast()
 
-type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'project'
+type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'gardener' | 'project'
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'llm', label: 'LLM 配置' },
@@ -34,6 +35,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'rerank', label: 'Rerank 配置' },
   { key: 'completion', label: '输入补全' },
   { key: 'search', label: '联网搜索' },
+  { key: 'gardener', label: '园丁' },
   { key: 'project', label: '项目设置' },
 ]
 
@@ -78,6 +80,18 @@ const searchForm = reactive<SearchSettingsForm>({
   provider: 'linkseek-hosted',
   baseUrl: '',
   apiKey: '',
+})
+
+/** 园丁覆盖表单：开关只控制 UI 展开与覆盖是否写入；'' 思考档 = 跟随主 Agent。 */
+const gardenerForm = reactive({
+  modelOverride: false,
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  protocol: 'openai' as 'openai' | 'openai-responses' | 'anthropic' | 'gemini',
+  reasoningEffort: '' as '' | 'off' | 'low' | 'high' | 'max',
+  permissionOverride: false,
+  permissionPreset: 'material' as 'review' | 'material' | 'full',
 })
 
 const projectForm = reactive({
@@ -141,6 +155,17 @@ onMounted(async () => {
       baseUrl: config.search?.baseUrl ?? '',
       apiKey: config.search?.apiKey ?? '',
     })
+    const gardener = config.gardener
+    Object.assign(gardenerForm, {
+      modelOverride: Boolean(gardener?.llm),
+      baseUrl: gardener?.llm?.baseUrl ?? '',
+      apiKey: gardener?.llm?.apiKey ?? '',
+      model: gardener?.llm?.model ?? '',
+      protocol: gardener?.llm?.protocol ?? 'openai',
+      reasoningEffort: gardener?.llm?.reasoningEffort ?? '',
+      permissionOverride: Boolean(gardener?.permissionPreset),
+      permissionPreset: gardener?.permissionPreset ?? 'material',
+    })
     const settings = config.settings
     if (settings) {
       Object.assign(projectForm, {
@@ -165,6 +190,7 @@ watch(rerankForm, () => scheduleSave({ rerank: { ...rerankForm } }))
 watch(completionForm, () => scheduleSave({ completion: { ...completionForm } }))
 watch(searchForm, () => scheduleSave({ search: { ...searchForm } }))
 watch(projectForm, () => scheduleSave({ settings: { ...projectForm } }))
+watch(gardenerForm, () => scheduleSave({ gardener: buildGardenerPatch() }))
 
 watch(activeTab, (tab) => {
   try {
@@ -175,10 +201,34 @@ watch(activeTab, (tab) => {
 })
 
 /**
+ * 园丁表单 → 配置覆盖块。开关关闭或模型覆盖残缺（地址/模型未填全）→ 该项不写入
+ * （core normalize 对残缺 llm 块也会整组剔除，此处不写等于直接删覆盖）；两项皆空 →
+ * 写空对象（patch 带 gardener 键 = 整组替换语义，空对象落盘时删除块、回退全继承）。
+ */
+function buildGardenerPatch(): ProjectConfigPatch['gardener'] {
+  const llmComplete = gardenerForm.modelOverride && gardenerForm.baseUrl.trim() && gardenerForm.model.trim()
+  const llm = llmComplete
+    ? {
+      baseUrl: gardenerForm.baseUrl.trim(),
+      apiKey: gardenerForm.apiKey,
+      model: gardenerForm.model.trim(),
+      protocol: gardenerForm.protocol,
+      ...(gardenerForm.reasoningEffort ? { reasoningEffort: gardenerForm.reasoningEffort } : {}),
+    }
+    : undefined
+  const permissionPreset = gardenerForm.permissionOverride
+    ? gardenerForm.permissionPreset
+    : undefined
+  return {
+    ...(llm ? { llm } : {}),
+    ...(permissionPreset ? { permissionPreset } : {}),
+  }
+}
+
+/**
  * 表单变化进入自动保存队列：防抖 600ms 后整组落盘。
  * 开关类字段的立即保存由面板 emit('save-immediately') 触发 flushSave。
- */
-function scheduleSave(patch: ProjectConfigPatch) {
+ */function scheduleSave(patch: ProjectConfigPatch) {
   if (isInitializing) {
     return
   }
@@ -354,6 +404,11 @@ function restoreTab(): SettingsTab {
           @save-immediately="handleSaveImmediately"
         />
         <SearchSettingsPanel v-else-if="activeTab === 'search'" :form="searchForm" />
+        <GardenerSettingsPanel
+          v-else-if="activeTab === 'gardener'"
+          :form="gardenerForm"
+          @save-immediately="handleSaveImmediately"
+        />
         <ProjectSettingsPanel v-else :form="projectForm" />
       </div>
     </div>
