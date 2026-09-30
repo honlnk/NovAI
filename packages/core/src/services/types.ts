@@ -22,7 +22,7 @@ export type ProjectConfigView = {
     baseUrl: string
     apiKey: string
     model: string
-    /** LLM 服务的 API 协议；生成链路当前仅实现 openai（Chat Completions 兼容）。 */
+    /** LLM 服务的 API 协议；四协议生成链路均已接入（适配层 core/llm/protocol/）。 */
     protocol: 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
     /** 思考强度档位（输入框选择器写回，四档）；未配置 = 请求层按 off 解析（默认关闭）。 */
     reasoningEffort?: ReasoningEffort
