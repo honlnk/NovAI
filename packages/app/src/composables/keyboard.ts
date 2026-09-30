@@ -25,3 +25,12 @@ export function resolveSubmitMode(event: KeyboardLikeEvent): SubmitMode | null {
   }
   return event.ctrlKey || event.metaKey ? 'steer' : 'submit'
 }
+
+/**
+ * 一键整理要素快捷键（园丁 Phase 2 W2 快捷入口）：Ctrl/Cmd+Shift+G。
+ * 窗口级监听（不限输入框焦点）；带修饰键的组合不会处于输入法组合中，无需 IME 排除。
+ * Shift 按下时 key 为大写 'G'，比较前统一 toLowerCase。
+ */
+export function isGardenerShortcut(event: KeyboardLikeEvent): boolean {
+  return (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'g'
+}

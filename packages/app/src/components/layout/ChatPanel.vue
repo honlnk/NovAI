@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 import { useChatStore } from '../../stores/chat'
-import { isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
+import { isGardenerShortcut, isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useProjectStore } from '../../stores/project'
@@ -529,8 +529,7 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   if (id === 'gardener') {
     // 选中「整理要素」后，把驱动 prompt 直接作为用户意图发送：主 Agent 调用 DelegateToGardener
     // 委派园丁子代理整理要素库，园丁的工具行在聊天区折叠为嵌套任务组。无二级交互界面。
-    followAndScrollToBottom()
-    void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+    triggerGardener()
     return
   }
 
@@ -541,6 +540,33 @@ function handleSlashCommandSelect(id: SlashCommandId) {
     void chatStore.sendMessage(INIT_NOVEL_PROMPT)
   }
 }
+
+/**
+ * 一键整理要素（园丁 Phase 2 W2 快捷入口）：工具栏按钮 / 全局快捷键 / 斜杠命令三入口共用。
+ * 驱动 prompt 作为用户意图走 sendMessage——空闲即发，运行中进 QueueDock 排队，零 core 改动。
+ */
+function triggerGardener() {
+  followAndScrollToBottom()
+  void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+}
+
+/**
+ * 全局快捷键（window 级监听，不限输入框焦点）：Ctrl/Cmd+Shift+G 触发一键整理要素。
+ * 模态框（BaseModal 带 role=dialog）打开时不抢键，避免在设置页等弹窗背后触发委派。
+ */
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (!isGardenerShortcut(event) || document.querySelector('[role="dialog"]')) return
+  event.preventDefault()
+  triggerGardener()
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
 
 /**
  * ChapterPicker 确认：启动提取流程。
@@ -805,6 +831,19 @@ async function handleExtractionConfirm() {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
+                <!-- 一键整理要素（W2 快捷入口）：与全局 Ctrl/Cmd+Shift+G、/整理要素 同一触发链路 -->
+                <button
+                  type="button"
+                  class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
+                  title="一键委派园丁整理要素库（Ctrl/Cmd+Shift+G）；Agent 运行中自动排队"
+                  @click="triggerGardener"
+                >
+                  <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+                  </svg>
+                  <span>整理要素</span>
+                </button>
               </div>
               <div class="flex items-center gap-2">
                 <button
