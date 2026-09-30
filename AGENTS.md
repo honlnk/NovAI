@@ -2,7 +2,7 @@
 
 ## Purpose
 
-NovAI is intended to evolve toward an agentic novel-writing tool, closer to the interaction model of Claude Code / Vibe Coding tools than to a traditional chat app.
+NovAI is intended to evolve toward an agentic novel-writing tool, closer to the interaction model of Vibe Coding tools than to a traditional chat app.
 
 The core loop should be:
 
@@ -24,11 +24,35 @@ When making implementation decisions, prefer this framing:
 
 This means NovAI should gradually move away from a simple "single prompt -> single response" flow and toward a tool-using agent workflow for story creation and revision.
 
+## Repository Layout
+
+pnpm monorepo (`packageManager` pinned to pnpm@10.21.0, workspace globs `packages/*`):
+
+- `packages/core` (`@novai/core`) — framework-agnostic engine, consumed directly as TypeScript source (its `exports` point at `src/`, no build step). Key areas: Agent loop (`src/core/agent`), tool system (`src/core/tools`), LLM/embedding clients (`src/core/llm`, `src/core/embedding`), RAG (`src/core/rag`, built on Orama), and the services layer (`src/services/` — agent-service, file-service, element-service, rag-service, settings-service, project-service, …).
+- `packages/app` (`@novai/app`) — Vue 3 + Pinia + vue-router + Tailwind CSS 4 front end. Stores in `src/stores`, views in `src/views`, components grouped by domain (`chat`, `settings`, `rag`, `file-tree`, `category`, `layout`, `ui`).
+- `docs/` — git submodule holding the documentation center (see Documentation Map below).
+- Root also holds `CLAUDE.md`, `CONTRIBUTING.md`, `INTERFACE.md`, `folder-alias.json` / `private-folder-alias.json`.
+
+## Commands
+
+Run from the repo root:
+
+- `pnpm dev` — Vite dev server for `@novai/app` (the user keeps theirs at http://localhost:5173; never start another — see Local Development Environment).
+- `pnpm test` — `vitest run` across the workspace. Tests are co-located as `*.test.ts` next to sources under `packages/**/src/**` (include pattern in root `vitest.config.ts`).
+- `pnpm typecheck` — `tsc --build` project-wide. Per-package: `pnpm --filter @novai/app typecheck` (vue-tsc), `pnpm --filter @novai/core typecheck`.
+- `pnpm build` — vue-tsc + vite build for the app.
+
+## Architecture Boundaries
+
+- `@novai/core` must stay UI-agnostic: no Vue, no DOM, no store imports. It exposes only the root, `./services/*`, and `./types/*` subpaths (see `packages/core/package.json`).
+- `@novai/app` reaches core exclusively through that services layer; the UI↔core contract is specified in `docs/architecture/UI协作接口契约设计.md`.
+- Agent Loop terminology and structure follow the DeepSeek Harness reference (decision `docs/decisions/0005`): compaction, spill, scope permissions, turn/step loop, StreamChunk.
+
 ## Reference Repository
 
 For implementation reference and comparative study, keep this external repository available next to the NovAI repo:
 
-- `/Users/honlnk/project/claude-code`
+- `/Users/honlnk/project/deepseek-harness`
 
 This repository is intentionally cloned outside the NovAI git repository so that:
 
@@ -36,13 +60,15 @@ This repository is intentionally cloned outside the NovAI git repository so that
 - it is not accidentally committed,
 - it can still be read and compared during development.
 
-When useful, study that repository for patterns such as:
+It is the operative reference for Agent Loop internals (decision `0005`): compaction, spill, scope permissions, turn/step loop, StreamChunk.
 
-- agent loop design,
-- conversation state management,
-- tool invocation structure,
-- streaming interaction flow,
-- file-oriented execution behavior.
+## Documentation Map
+
+`docs/` (git submodule) is organized as `product/` / `architecture/` / `decisions/` / `plans/` / `project/` / `archive/` — start at `docs/README.md` for the full index and reading order. Key points:
+
+- Current status lives in `docs/project/当前进度.md`; update it as work lands (long-task phase gates require docs synced).
+- Settled trade-offs go in `docs/decisions/`; in-flight construction plans and wave gates (W0–W6) live in `docs/plans/` — read the relevant plan before touching an area it covers.
+- Several older docs carry an implementation-status warning at the top; trust code over stale sections (see Working Rule).
 
 ## Local Development Environment
 
@@ -62,6 +88,10 @@ When documentation and code appear to conflict, prefer the clarified product int
 ## Workflow Discipline
 
 These rules govern how AI agents interact with git in this repository. They are non-negotiable.
+
+### 0. Commit message format (enforced by commitlint + husky)
+
+`type(scope): 中文说明` — e.g. `feat(view): 完成首页布局`. Allowed types: feat / fix / docs / refactor / test / chore / build / ci / perf / style / revert. Scope suggestions are in `CONTRIBUTING.md`.
 
 ### 1. Commit only with user approval — except staged commits on long tasks
 
