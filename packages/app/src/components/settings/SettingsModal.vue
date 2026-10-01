@@ -17,6 +17,9 @@ import type { SearchSettingsForm } from '../../utils/search-settings'
 
 const props = defineProps<{
   projectId: string
+  /** 外部指定初始 tab（如园丁弹窗空态「新建快捷选项」跳转要素整理 tab，要素整理参数化 W2）；
+   *  仅首次挂载生效，组件 v-if 按需挂载、每次打开重读。 */
+  initialTab?: SettingsTab
 }>()
 
 const emit = defineEmits<{
@@ -42,7 +45,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
 const TAB_STORAGE_KEY = 'novai:settings-tab'
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
-const activeTab = ref<SettingsTab>(restoreTab())
+const activeTab = ref<SettingsTab>(props.initialTab ?? restoreTab())
 
 // 表单状态（reactive 引用直接传给面板，字段修改经 watch 触发自动保存）
 const llmForm = reactive({
@@ -407,6 +410,7 @@ function restoreTab(): SettingsTab {
         <GardenerSettingsPanel
           v-else-if="activeTab === 'gardener'"
           :form="gardenerForm"
+          :project-id="projectId"
           @save-immediately="handleSaveImmediately"
         />
         <ProjectSettingsPanel v-else :form="projectForm" />

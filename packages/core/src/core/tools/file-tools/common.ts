@@ -25,7 +25,8 @@ function foldInternalPath(path: string) {
 }
 
 function isInternalPath(folded: string) {
-  return folded === 'novel.config.json' || folded.startsWith('.novel/')
+  // .novai/ 为项目级隐藏配置目录（园丁快捷选项等，要素整理参数化 W2），与 novel.config.json 同级保护
+  return folded === 'novel.config.json' || folded.startsWith('.novel/') || folded.startsWith('.novai/')
 }
 
 /** spill 目录是内部目录中唯一放行读取的例外（详见 spill 重设计：省略标记必须可取回）。 */
@@ -35,7 +36,7 @@ export function assertMutableDocumentPath(path: string, label: string) {
   assertTextFilePath(path)
 
   if (isInternalPath(foldInternalPath(path))) {
-    throw new Error(`${label} 不能指向项目配置或 .novel 内部文件`)
+    throw new Error(`${label} 不能指向项目内部文件（novel.config.json、.novel、.novai）`)
   }
 }
 
@@ -43,7 +44,7 @@ export function assertWritableDocumentPath(path: string, label: string) {
   assertWritableTextFilePath(path)
 
   if (isInternalPath(foldInternalPath(path))) {
-    throw new Error(`${label} 不能指向项目配置或 .novel 内部文件`)
+    throw new Error(`${label} 不能指向项目内部文件（novel.config.json、.novel、.novai）`)
   }
 }
 
@@ -57,7 +58,7 @@ export function assertReadableDocumentPath(path: string, label: string) {
 
   const folded = foldInternalPath(path)
   if (isInternalPath(folded) && !folded.startsWith(SPILL_DIR_PREFIX)) {
-    throw new Error(`${label} 不能指向项目配置或 .novel 内部文件（.novel/spill/ 除外）`)
+    throw new Error(`${label} 不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）`)
   }
 }
 

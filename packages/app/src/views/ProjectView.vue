@@ -19,9 +19,10 @@ import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import GardenerTaskDialog from '../components/chat/GardenerTaskDialog.vue'
 import {
   buildGardenerTaskMessage,
-  type GardenerPresetOption,
   type GardenerTaskParams,
 } from '../components/chat/gardener-task'
+import { getGardenerPresets } from '@novai/core/services/settings-service'
+import type { GardenerPresetView } from '@novai/core/services/types'
 import type { Category } from '../constants/category'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 
@@ -197,8 +198,19 @@ function handleNotImplemented(name: string) {
 
 /** 弹窗是否打开（BaseModal 居中位；确认后先建新会话再发送） */
 const isGardenerDialogOpen = ref(false)
-/** 快捷选项数据源（W1 占位空数组，W2 接 .novai/gardener-presets.json） */
-const gardenerPresets = computed<GardenerPresetOption[]>(() => [])
+/** 快捷选项数据源（打开弹窗时从 .novai/gardener-presets.json 拉取，失败降级为空） */
+const gardenerPresets = ref<GardenerPresetView[]>([])
+/** 设置页初始 tab（园丁弹窗空态「新建快捷选项」跳转用，打开后失效） */
+const settingsInitialTab = ref<'gardener' | null>(null)
+
+async function loadGardenerPresets() {
+  try {
+    gardenerPresets.value = await getGardenerPresets(projectId.value)
+  } catch {
+    gardenerPresets.value = []
+  }
+}
+
 /**
  * 侧栏按钮单击/双击区分（D8）：单击延时开弹窗，双击在延时窗内取消并直发。
  * 双击时 click 会先于 dblclick 触发两次，定时器在位则第二击直接忽略。
@@ -210,6 +222,7 @@ function handleGardenerNewSession() {
   if (gardenerClickTimer !== null) return
   gardenerClickTimer = window.setTimeout(() => {
     gardenerClickTimer = null
+    void loadGardenerPresets()
     isGardenerDialogOpen.value = true
   }, 220)
 }
@@ -231,9 +244,10 @@ async function handleGardenerNewSessionConfirm(params: GardenerTaskParams) {
   await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
 }
 
-/** 两个弹窗实例的空态「新建快捷选项」：关弹窗开设置页（W2 起定位到要素整理 tab） */
+/** 两个弹窗实例的空态「新建快捷选项」：关弹窗开设置页并定位到要素整理 tab */
 function handleGardenerOpenSettings() {
   isGardenerDialogOpen.value = false
+  settingsInitialTab.value = 'gardener'
   handleOpenSettings()
 }
 
@@ -424,7 +438,8 @@ async function handleElementsWritten() {
     <SettingsModal
       v-if="isSettingsOpen"
       :project-id="projectId"
-      @close="isSettingsOpen = false"
+      :initial-tab="settingsInitialTab ?? undefined"
+      @close="isSettingsOpen = false; settingsInitialTab = null"
     />
 
     <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->

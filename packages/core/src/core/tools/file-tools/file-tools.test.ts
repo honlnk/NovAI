@@ -288,18 +288,37 @@ describe('file tools', () => {
       await expect(createFileTool.run({
         path: '.novel/spill/abc.txt',
         content: '写入内部目录',
-      }, runtime)).rejects.toThrow('不能指向项目配置或 .novel 内部文件')
+      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       await expect(createFileTool.run({
         path: '.novel/logs/today.json',
         content: '{}',
-      }, runtime)).rejects.toThrow('不能指向项目配置或 .novel 内部文件')
+      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       // validateInput 层同样拦（第一道闸）
       expect(() => createFileTool.validateInput({
         path: '.novel/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+    })
+
+    it('.novai/ 配置目录与 novel.config.json 同级禁写（要素整理参数化 W2：快捷选项仅 app service 层可写）', () => {
+      expect(() => createFileTool.validateInput({
+        path: '.novai/gardener-presets.json',
+        content: '{}',
+      })).toThrow('不能指向项目内部文件')
+
+      expect(() => editFileTool.validateInput({
+        path: '.novai/gardener-presets.json',
+        oldText: 'a',
+        newText: 'b',
+      })).toThrow('不能指向项目内部文件')
+
+      // 大小写变体同样被拒（APFS 大小写不敏感）
+      expect(() => createFileTool.validateInput({
+        path: '.NOVAI/other.json',
+        content: 'x',
+      })).toThrow('不能指向项目内部文件')
     })
 
     it('EditFile 禁止改 .novel/ 与 novel.config.json（validateInput 层拦截）', () => {
@@ -307,39 +326,39 @@ describe('file tools', () => {
         path: 'novel.config.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       expect(() => editFileTool.validateInput({
         path: '.novel/sessions/s1.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
 
     it('大小写变体同样被拒（APFS 大小写不敏感，Novel.Config.JSON 命中真实配置）', () => {
       expect(() => createFileTool.validateInput({
         path: '.NOVEL/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       expect(() => editFileTool.validateInput({
         path: 'Novel.Config.JSON',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       expect(() => editFileTool.validateInput({
         path: '.Novel/Spill/abc.txt',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
 
     it('spill 文件仍禁写/删/改名（只放行读）', () => {
       expect(() => deleteFileTool.validateInput({ path: '.novel/spill/abc.txt' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
       expect(() => renameFileTool.validateInput({ fromPath: 'a.md', toPath: '.novel/spill/b.txt' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
   })
 
@@ -406,14 +425,14 @@ describe('file tools', () => {
       expect(output.content).toBe('spill 完整内容')
 
       expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
       expect(() => readFileTool.validateInput({ path: '.novel/sessions/s1.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
       expect(() => readFileTool.validateInput({ path: 'novel.config.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
       // 大小写变体同规则
       expect(() => readFileTool.validateInput({ path: '.NOVEL/logs/today.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
     })
   })
 

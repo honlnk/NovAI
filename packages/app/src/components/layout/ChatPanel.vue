@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { getGardenerPresets } from '@novai/core/services/settings-service'
+import type { GardenerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
 import { isGardenerShortcut, isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
 import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
@@ -15,11 +17,7 @@ import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
 import GardenerTaskDialog from '../chat/GardenerTaskDialog.vue'
-import {
-  buildGardenerTaskMessage,
-  type GardenerPresetOption,
-  type GardenerTaskParams,
-} from '../chat/gardener-task'
+import { buildGardenerTaskMessage, type GardenerTaskParams } from '../chat/gardener-task'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
@@ -568,11 +566,20 @@ function triggerGardener() {
 
 /** 弹窗是否打开（锚定输入框上方） */
 const isGardenerDialogOpen = ref(false)
-/** 快捷选项数据源（W1 占位空数组，W2 接 .novai/gardener-presets.json） */
-const gardenerPresets = computed<GardenerPresetOption[]>(() => [])
+/** 快捷选项数据源（打开弹窗时从 .novai/gardener-presets.json 拉取，失败降级为空） */
+const gardenerPresets = ref<GardenerPresetView[]>([])
+
+async function loadGardenerPresets() {
+  try {
+    gardenerPresets.value = await getGardenerPresets(props.projectId)
+  } catch {
+    gardenerPresets.value = []
+  }
+}
 
 /** 输入框上方「🌿 整理要素」按钮 / 斜杠命令：打开参数弹窗（D1：当前会话） */
 function openGardenerDialog() {
+  void loadGardenerPresets()
   isGardenerDialogOpen.value = true
 }
 

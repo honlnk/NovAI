@@ -338,6 +338,56 @@ export async function writeProjectConfig(
   return nextConfig
 }
 
+/**
+ * 园丁任务快捷选项（要素整理参数化 W2）：项目级隐藏配置 `.novai/gardener-presets.json`。
+ * 与 novel.config.json 同级受 Agent 工具写保护（file-tools/common.ts 内部路径名单），
+ * 仅 app service 层经此读写；默认不预置任何选项，由用户在设置页新建。
+ */
+export type GardenerPreset = {
+  /** 列表显示名 */
+  label: string
+  /** 勾选后拼进园丁任务消息的文本 */
+  prompt: string
+}
+
+const GARDENER_PRESETS_PATH = '.novai/gardener-presets.json'
+
+/**
+ * 读取快捷选项。文件不存在或内容损坏（非法 JSON / presets 非数组 / 项字段非法）
+ * 一律容错为空数组，不抛错——弹窗降级为无快捷选项形态即可用，不该被配置文件炸挂。
+ */
+export async function readGardenerPresets(rootHandle: FileSystemDirectoryHandle): Promise<GardenerPreset[]> {
+  let raw: unknown
+  try {
+    raw = await readJson<unknown>(rootHandle, GARDENER_PRESETS_PATH)
+  } catch {
+    return []
+  }
+  const presets = (raw as { presets?: unknown } | null)?.presets
+  if (!Array.isArray(presets)) {
+    return []
+  }
+  return presets.filter(
+    (preset): preset is GardenerPreset =>
+      !!preset &&
+      typeof preset === 'object' &&
+      typeof (preset as GardenerPreset).label === 'string' &&
+      typeof (preset as GardenerPreset).prompt === 'string' &&
+      (preset as GardenerPreset).label.trim() !== '' &&
+      (preset as GardenerPreset).prompt.trim() !== '',
+  )
+}
+
+/**
+ * 写回快捷选项（整表替换）。`.novai/` 目录不存在时随写自动创建（ensureFileHandle 逐级 create）。
+ */
+export async function writeGardenerPresets(
+  rootHandle: FileSystemDirectoryHandle,
+  presets: GardenerPreset[],
+): Promise<void> {
+  await writeJson(rootHandle, GARDENER_PRESETS_PATH, { presets })
+}
+
 function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
   return {
     ...DEFAULT_CONFIG,
