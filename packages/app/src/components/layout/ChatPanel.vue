@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { GARDENER_TASK_PROMPT } from '@novai/core/services/agent-service'
 import { getGardenerPresets } from '@novai/core/services/settings-service'
 import type { GardenerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
@@ -23,7 +23,12 @@ import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
-import type { SlashCommandId } from '../../constants/slash-commands'
+import {
+  expandSlashCommand,
+  SLASH_COMMANDS,
+  slashCommandDraftText,
+  type SlashCommandId,
+} from '../../constants/slash-commands'
 import type { ChatRenderItem } from '../../stores/chat-render'
 import type { PermissionPreset } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
@@ -251,10 +256,13 @@ watch(
  * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
  */
 async function handleSend(mode: 'queue' | 'steer' = 'queue') {
-  if (!inputText.value.trim()) return
+  const draft = inputText.value.trim()
+  if (!draft) return
 
   clearSuggestion()
-  const message = inputText.value.trim()
+  // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
+  // 其后参数原样保留；不在行首的命令文本视作正文，不替换
+  const message = expandSlashCommand(draft)
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
   inputText.value = ''
@@ -271,8 +279,9 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     // 发送成功后清除引用 chip
     emit('clearQuote')
   } else {
-    // 发送失败草稿恢复：把文本填回输入框（dsh restoreFailedDrafts 简单版）
-    inputText.value = message
+    // 发送失败草稿恢复：把原草稿文本填回输入框（dsh restoreFailedDrafts 简化版；
+    // 填回的是用户输入的草稿而非替换后的 prompt 全文）
+    inputText.value = draft
   }
 }
 
@@ -436,16 +445,20 @@ const outlinePopoverRef = ref<InstanceType<typeof OutlineCommandPopover> | null>
 const OUTLINE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
 
 /**
- * 清除光标处匹配指定正则的 token（@大纲、/命令 共用）。
- * 清除后光标回位并重新聚焦 textarea。
+ * 清除/替换光标处匹配指定正则的 token（@大纲、/命令 共用；W3 起替换为命令文本）。
+ * 正则锚定 beforeCursor 结尾，替换后光标落在替换文本之后并重新聚焦 textarea。
+ * token 前的边界空白（正则的 (?:^|\s) 部分）保留，命令文本不会黏进前文。
  */
-function clearTokenAtCursor(re: RegExp) {
+function replaceTokenAtCursor(re: RegExp, replacement = '') {
   const textarea = textareaRef.value
   if (!textarea) return
   const cursor = textarea.selectionStart ?? 0
   const beforeCursor = inputText.value.slice(0, cursor)
   const afterCursor = inputText.value.slice(cursor)
-  const cleaned = beforeCursor.replace(re, '')
+  const cleaned = beforeCursor.replace(re, (match: string) => {
+    const boundary = match.startsWith('/') || match.startsWith('@') ? '' : match.slice(0, 1)
+    return `${boundary}${replacement}`
+  })
   inputText.value = cleaned + afterCursor
   nextTick(() => {
     if (textareaRef.value) {
@@ -460,7 +473,7 @@ function clearTokenAtCursor(re: RegExp) {
  * 选中大纲后：清除输入框里的 @token（含筛选词），激活大纲，关闭弹层。
  */
 function handleSelectOutline(path: string) {
-  clearTokenAtCursor(OUTLINE_COMMAND_RE)
+  replaceTokenAtCursor(OUTLINE_COMMAND_RE)
   isOutlineCommandOpen.value = false
   outlineQuery.value = ''
   emit('changeOutline', path)
@@ -524,33 +537,34 @@ function detectCommands() {
 }
 
 /**
- * 选中斜杠命令后：清除 / token，按命令类型展开二级界面。
+ * 选中斜杠命令后（W3 新范式）：清除 / token，把命令文本落进输入框（尾部带空格、
+ * 光标置后），命令是纯文本——用户可在其后补参数、可编辑可删除。
+ * gardener 额外打开参数弹窗（确认后以弹窗拼装的消息为准发送）；
+ * extract 保留 R6 旧行为（直接展开章节多选，不落文本——该命令随 W4 退役）。
  */
 function handleSlashCommandSelect(id: SlashCommandId) {
-  // 清除输入框里的 / token（含筛选词）
-  clearTokenAtCursor(SLASH_COMMAND_RE)
   isSlashMenuOpen.value = false
   slashQuery.value = ''
 
   if (id === 'extract') {
-    // 选中「提取要素」后展开章节多选
+    replaceTokenAtCursor(SLASH_COMMAND_RE)
     isChapterPickerOpen.value = props.chapters.length > 0
     return
   }
 
+  const command = SLASH_COMMANDS.find((entry) => entry.id === id)
+  if (!command) return
+  replaceTokenAtCursor(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
+
   if (id === 'gardener') {
-    // 选中「整理要素」后打开任务参数弹窗（要素整理参数化 W1；W3 起斜杠命令先落文本再开弹窗）。
-    // 确认后由 handleGardenerConfirm 按 D3 拼装消息发送，主 Agent 调 DelegateToGardener 委派园丁。
-    isGardenerDialogOpen.value = true
+    // 整理要素：落文本 + 打开参数弹窗；输入框残留的命令文本在弹窗确认发送时一并清掉，
+    // 弹窗拼装的消息为准（避免双发）
+    openGardenerDialog()
     return
   }
 
-  if (id === 'init') {
-    // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
-    // 不需要二级交互界面，复用普通对话发送链路。
-    followAndScrollToBottom()
-    void chatStore.sendMessage(INIT_NOVEL_PROMPT)
-  }
+  // init（/生成项目记忆）：落文本后不自动发送，用户可补参数后 Enter；
+  // 发送链路的前缀拦截会把命令文本替换为 INIT_NOVEL_PROMPT 全文
 }
 
 /**
@@ -583,11 +597,19 @@ function openGardenerDialog() {
   isGardenerDialogOpen.value = true
 }
 
-/** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队） */
+/** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队）。
+ *  斜杠入口落进输入框的 `/整理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
 async function handleGardenerConfirm(params: GardenerTaskParams) {
   isGardenerDialogOpen.value = false
+  const hasCommandResidue = inputText.value.trimStart().startsWith('/整理要素')
   followAndScrollToBottom()
-  await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+  const ok = await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+  if (ok && hasCommandResidue) {
+    inputText.value = ''
+    if (textareaRef.value) {
+      textareaRef.value.style.height = 'auto'
+    }
+  }
 }
 
 function handleGardenerDialogCancel() {
