@@ -16,29 +16,3 @@ export type ElementDocument = {
   body: string
   sourcePath: string
 }
-
-export type ElementExtractionItem = {
-  type: ElementType
-  name: string
-  summary: string
-  tags: string[]
-  lastUpdatedChapter: string
-  relatedChapters: string[]
-  body: string
-}
-
-export type ElementExtractionResult = {
-  characters: ElementExtractionItem[]
-  locations: ElementExtractionItem[]
-  entities: ElementExtractionItem[]
-  timeline: ElementExtractionItem[]
-  plots: ElementExtractionItem[]
-  worldbuilding: ElementExtractionItem[]
-}
-
-export type ElementWriteResult = {
-  created: string[]
-  updated: string[]
-  skipped: string[]
-  staleIndex: boolean
-}

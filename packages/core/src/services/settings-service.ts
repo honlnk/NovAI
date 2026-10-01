@@ -11,7 +11,9 @@ import { testRerankConnection } from '../core/ai/rerank-client'
 import { testEmbeddingConnection } from '../core/embedding/client'
 import { resolveSearchProvider } from '../core/web/search-provider'
 import {
+  readGardenerPresets,
   readProjectConfig,
+  writeGardenerPresets,
   writeProjectConfig,
 } from '../core/fs/project-fs'
 import { testLlmConnection } from '../core/llm/client'
@@ -25,6 +27,7 @@ import type {
   CompletionConfigView,
   ConnectionTestResultView,
   EmbeddingConfigView,
+  GardenerPresetView,
   ListModelsInputView,
   ListModelsResultView,
   LlmConfigView,
@@ -38,6 +41,31 @@ import type {
 export async function getConfig(projectId: string): Promise<ProjectConfigView> {
   const project = requireRuntimeProject(projectId)
   return toProjectConfigView(await readProjectConfig(project.handle))
+}
+
+/**
+ * 读取园丁任务快捷选项（要素整理参数化 W2）：`.novai/gardener-presets.json`，
+ * 独立于 novel.config.json 的读写链；文件缺失/损坏由 fs 层容错为空数组。
+ */
+export async function getGardenerPresets(projectId: string): Promise<GardenerPresetView[]> {
+  const project = requireRuntimeProject(projectId)
+  return readGardenerPresets(project.handle)
+}
+
+/**
+ * 保存快捷选项（整表替换）。落盘前规整：trim 两字段并丢弃空项，
+ * 保证读回与弹窗勾选到的都是有效选项。
+ */
+export async function saveGardenerPresets(
+  projectId: string,
+  presets: GardenerPresetView[],
+): Promise<GardenerPresetView[]> {
+  const project = requireRuntimeProject(projectId)
+  const cleaned = presets
+    .map((preset) => ({ label: preset.label.trim(), prompt: preset.prompt.trim() }))
+    .filter((preset) => preset.label !== '' && preset.prompt !== '')
+  await writeGardenerPresets(project.handle, cleaned)
+  return cleaned
 }
 
 export async function updateConfig(

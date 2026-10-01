@@ -13,8 +13,16 @@ import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
+import BaseModal from '../components/ui/BaseModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
+import GardenerTaskDialog from '../components/chat/GardenerTaskDialog.vue'
+import {
+  buildGardenerTaskMessage,
+  type GardenerTaskParams,
+} from '../components/chat/gardener-task'
+import { getGardenerPresets } from '@novai/core/services/settings-service'
+import type { GardenerPresetView } from '@novai/core/services/types'
 import type { Category } from '../constants/category'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 
@@ -79,7 +87,7 @@ const activeOutlineName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
-/** 章节列表（chapters/*.txt），供 ChatPanel 的 /提取要素 指令多选（R6）。.md 不算有效章节，不入列。 */
+/** 章节列表（chapters/*.txt），供园丁任务弹窗选择章节范围（要素整理参数化 W1）。.md 不算有效章节，不入列。 */
 const chapterList = computed(() => {
   const files = projectStore.currentProject?.files ?? []
   return pickDirectoryChildren(files, 'chapters').filter(
@@ -186,13 +194,61 @@ function handleNotImplemented(name: string) {
   toast.info(`${name}功能即将推出`)
 }
 
+// ===== 园丁任务弹窗（要素整理参数化 W1，target=new 实例：侧栏入口） =====
+
+/** 弹窗是否打开（BaseModal 居中位；确认后先建新会话再发送） */
+const isGardenerDialogOpen = ref(false)
+/** 快捷选项数据源（打开弹窗时从 .novai/gardener-presets.json 拉取，失败降级为空） */
+const gardenerPresets = ref<GardenerPresetView[]>([])
+/** 设置页初始 tab（园丁弹窗空态「新建快捷选项」跳转用，打开后失效） */
+const settingsInitialTab = ref<'gardener' | null>(null)
+
+async function loadGardenerPresets() {
+  try {
+    gardenerPresets.value = await getGardenerPresets(projectId.value)
+  } catch {
+    gardenerPresets.value = []
+  }
+}
+
 /**
- * 左栏「整理要素」入口：在全新会话中发送委派消息，不占用当前会话的上下文。
- * 与聊天输入框工具栏的整理要素按钮（发到当前会话）互为补充。
+ * 侧栏按钮单击/双击区分（D8）：单击延时开弹窗，双击在延时窗内取消并直发。
+ * 双击时 click 会先于 dblclick 触发两次，定时器在位则第二击直接忽略。
  */
-async function handleGardenerNewSession() {
+let gardenerClickTimer: number | null = null
+
+/** 侧栏「整理要素」单击：打开参数弹窗（D1：全新会话） */
+function handleGardenerNewSession() {
+  if (gardenerClickTimer !== null) return
+  gardenerClickTimer = window.setTimeout(() => {
+    gardenerClickTimer = null
+    void loadGardenerPresets()
+    isGardenerDialogOpen.value = true
+  }, 220)
+}
+
+/** 侧栏「整理要素」双击：跳过弹窗，直发裸 GARDENER_TASK_PROMPT（等同旧行为，D8） */
+async function handleGardenerDirectNewSession() {
+  if (gardenerClickTimer !== null) {
+    window.clearTimeout(gardenerClickTimer)
+    gardenerClickTimer = null
+  }
   await chatStore.createNewSession(projectId.value)
   await chatStore.sendMessage(GARDENER_TASK_PROMPT)
+}
+
+/** 弹窗确认：先建全新会话，再按 D3 拼装消息发送（不污染当前创作会话） */
+async function handleGardenerNewSessionConfirm(params: GardenerTaskParams) {
+  isGardenerDialogOpen.value = false
+  await chatStore.createNewSession(projectId.value)
+  await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+}
+
+/** 两个弹窗实例的空态「新建快捷选项」：关弹窗开设置页并定位到要素整理 tab */
+function handleGardenerOpenSettings() {
+  isGardenerDialogOpen.value = false
+  settingsInitialTab.value = 'gardener'
+  handleOpenSettings()
 }
 
 async function handleSelectFile(path: string) {
@@ -258,12 +314,6 @@ function handleGoToSettings() {
   showGuide.value = false
   handleOpenSettings()
 }
-
-async function handleElementsWritten() {
-  await projectStore.refreshTree()
-  // 索引过期状态由底部 IndexStatusBar 经事件总线自动反映，无需再弹 toast。
-  toast.success('要素文件已写入')
-}
 </script>
 
 <template>
@@ -286,6 +336,7 @@ async function handleElementsWritten() {
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
         @gardener="handleGardenerNewSession"
+        @gardener-direct="handleGardenerDirectNewSession"
         @rag="isRagOpen = true"
       />
 
@@ -322,7 +373,7 @@ async function handleElementsWritten() {
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
-        @elements-written="handleElementsWritten"
+        @open-gardener-settings="handleGardenerOpenSettings"
       >
         <!-- 首次使用引导 -->
         <template #guide>
@@ -358,11 +409,30 @@ async function handleElementsWritten() {
       @clear-outline="handleChangeOutline(null)"
     />
 
+    <!-- 园丁任务参数弹窗（侧栏入口，要素整理参数化 W1）：模态居中，确认后先建新会话再发送 -->
+    <BaseModal
+      :is-open="isGardenerDialogOpen"
+      content-class="max-w-lg"
+      aria-labelledby="gardener-task-title"
+      @close="isGardenerDialogOpen = false"
+    >
+      <GardenerTaskDialog
+        v-if="isGardenerDialogOpen"
+        target="new"
+        :chapters="chapterList"
+        :presets="gardenerPresets"
+        @confirm="handleGardenerNewSessionConfirm"
+        @cancel="isGardenerDialogOpen = false"
+        @open-settings="handleGardenerOpenSettings"
+      />
+    </BaseModal>
+
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
     <SettingsModal
       v-if="isSettingsOpen"
       :project-id="projectId"
-      @close="isSettingsOpen = false"
+      :initial-tab="settingsInitialTab ?? undefined"
+      @close="isSettingsOpen = false; settingsInitialTab = null"
     />
 
     <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->

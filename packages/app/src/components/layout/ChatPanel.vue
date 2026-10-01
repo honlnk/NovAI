@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { GARDENER_TASK_PROMPT } from '@novai/core/services/agent-service'
+import { getGardenerPresets } from '@novai/core/services/settings-service'
+import type { GardenerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
 import { isGardenerShortcut, isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
-import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
@@ -12,14 +13,19 @@ import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
-import ChapterPicker from '../chat/ChapterPicker.vue'
-import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import GardenerTaskDialog from '../chat/GardenerTaskDialog.vue'
+import { buildGardenerTaskMessage, type GardenerTaskParams } from '../chat/gardener-task'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
-import type { SlashCommandId } from '../../constants/slash-commands'
+import {
+  expandSlashCommand,
+  SLASH_COMMANDS,
+  slashCommandDraftText,
+  type SlashCommandId,
+} from '../../constants/slash-commands'
 import type { ChatRenderItem } from '../../stores/chat-render'
 import type { PermissionPreset } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
@@ -43,7 +49,7 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
-  /** 章节列表（chapters/*.txt|.md），供 /提取要素 选择（R6） */
+  /** 章节列表（chapters/*.txt），供园丁任务弹窗选择章节范围（要素整理参数化 W1） */
   chapters: ProjectFileNodeView[]
 }>()
 
@@ -54,8 +60,8 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
-  /** 要素写入完成，通知 ProjectView 刷新文件树（R6） */
-  elementsWritten: []
+  /** 园丁弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
+  openGardenerSettings: []
 }>()
 
 const chatStore = useChatStore()
@@ -245,10 +251,13 @@ watch(
  * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
  */
 async function handleSend(mode: 'queue' | 'steer' = 'queue') {
-  if (!inputText.value.trim()) return
+  const draft = inputText.value.trim()
+  if (!draft) return
 
   clearSuggestion()
-  const message = inputText.value.trim()
+  // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
+  // 其后参数原样保留；不在行首的命令文本视作正文，不替换
+  const message = expandSlashCommand(draft)
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
   inputText.value = ''
@@ -265,8 +274,9 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     // 发送成功后清除引用 chip
     emit('clearQuote')
   } else {
-    // 发送失败草稿恢复：把文本填回输入框（dsh restoreFailedDrafts 简单版）
-    inputText.value = message
+    // 发送失败草稿恢复：把原草稿文本填回输入框（dsh restoreFailedDrafts 简化版；
+    // 填回的是用户输入的草稿而非替换后的 prompt 全文）
+    inputText.value = draft
   }
 }
 
@@ -291,11 +301,11 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // /提取要素 章节选择打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isChapterPickerOpen.value) {
+  // 园丁任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
+  if (isGardenerDialogOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
-      isChapterPickerOpen.value = false
+      isGardenerDialogOpen.value = false
       return
     }
   }
@@ -364,7 +374,7 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 
-/** textarea input 统一入口：自适应高度 + 指令检测（R4 @大纲 / R6 /提取要素）+ 输入补全调度 */
+/** textarea input 统一入口：自适应高度 + 指令检测（@大纲 / 斜杠命令）+ 输入补全调度 */
 function onTextareaInput(event: Event) {
   autoResize(event)
   detectCommands()
@@ -375,7 +385,7 @@ function onTextareaInput(event: Event) {
  * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isChapterPickerOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isGardenerDialogOpen.value) {
     clearSuggestion()
     return
   }
@@ -424,16 +434,20 @@ const outlinePopoverRef = ref<InstanceType<typeof OutlineCommandPopover> | null>
 const OUTLINE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
 
 /**
- * 清除光标处匹配指定正则的 token（@大纲、/命令 共用）。
- * 清除后光标回位并重新聚焦 textarea。
+ * 清除/替换光标处匹配指定正则的 token（@大纲、/命令 共用；W3 起替换为命令文本）。
+ * 正则锚定 beforeCursor 结尾，替换后光标落在替换文本之后并重新聚焦 textarea。
+ * token 前的边界空白（正则的 (?:^|\s) 部分）保留，命令文本不会黏进前文。
  */
-function clearTokenAtCursor(re: RegExp) {
+function replaceTokenAtCursor(re: RegExp, replacement = '') {
   const textarea = textareaRef.value
   if (!textarea) return
   const cursor = textarea.selectionStart ?? 0
   const beforeCursor = inputText.value.slice(0, cursor)
   const afterCursor = inputText.value.slice(cursor)
-  const cleaned = beforeCursor.replace(re, '')
+  const cleaned = beforeCursor.replace(re, (match: string) => {
+    const boundary = match.startsWith('/') || match.startsWith('@') ? '' : match.slice(0, 1)
+    return `${boundary}${replacement}`
+  })
   inputText.value = cleaned + afterCursor
   nextTick(() => {
     if (textareaRef.value) {
@@ -448,7 +462,7 @@ function clearTokenAtCursor(re: RegExp) {
  * 选中大纲后：清除输入框里的 @token（含筛选词），激活大纲，关闭弹层。
  */
 function handleSelectOutline(path: string) {
-  clearTokenAtCursor(OUTLINE_COMMAND_RE)
+  replaceTokenAtCursor(OUTLINE_COMMAND_RE)
   isOutlineCommandOpen.value = false
   outlineQuery.value = ''
   emit('changeOutline', path)
@@ -458,7 +472,7 @@ function handleCloseOutlineCommand() {
   isOutlineCommandOpen.value = false
 }
 
-// ===== R6：斜杠命令菜单 / 提取要素 =====
+// ===== 斜杠命令菜单 =====
 
 /** 斜杠命令菜单是否打开（输入 / 后弹出命令列表） */
 const isSlashMenuOpen = ref(false)
@@ -466,10 +480,6 @@ const isSlashMenuOpen = ref(false)
 const slashQuery = ref('')
 /** 斜杠命令菜单组件引用（键盘导航用） */
 const slashMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null)
-/** /提取要素 章节多选弹层是否打开（选中命令后展开） */
-const isChapterPickerOpen = ref(false)
-/** 提取流程状态（composable 单例） */
-const extraction = useElementExtraction()
 
 /**
  * 匹配光标前最近的 / 命令前缀。
@@ -484,13 +494,13 @@ function detectCommands() {
   if (!textarea) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
+    isGardenerDialogOpen.value = false
     return
   }
   const cursor = textarea.selectionStart ?? 0
   const beforeCursor = inputText.value.slice(0, cursor)
 
-  // @大纲、/ 命令、章节选择三层互斥，同一时刻只开一个
+  // @大纲、/ 命令两层互斥，同一时刻只开一个
   const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
   const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
 
@@ -498,56 +508,93 @@ function detectCommands() {
     slashQuery.value = slashMatch[1]
     isSlashMenuOpen.value = true
     isOutlineCommandOpen.value = false
-    isChapterPickerOpen.value = false
   } else if (outlineMatch) {
     outlineQuery.value = outlineMatch[1]
     isOutlineCommandOpen.value = props.outlines.length > 0
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
   } else {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
   }
 }
 
 /**
- * 选中斜杠命令后：清除 / token，按命令类型展开二级界面。
+ * 选中斜杠命令后（W3 新范式）：清除 / token，把命令文本落进输入框（尾部带空格、
+ * 光标置后），命令是纯文本——用户可在其后补参数、可编辑可删除。
+ * gardener 额外打开参数弹窗（确认后以弹窗拼装的消息为准发送）。
  */
 function handleSlashCommandSelect(id: SlashCommandId) {
-  // 清除输入框里的 / token（含筛选词）
-  clearTokenAtCursor(SLASH_COMMAND_RE)
   isSlashMenuOpen.value = false
   slashQuery.value = ''
 
-  if (id === 'extract') {
-    // 选中「提取要素」后展开章节多选
-    isChapterPickerOpen.value = props.chapters.length > 0
-    return
-  }
+  const command = SLASH_COMMANDS.find((entry) => entry.id === id)
+  if (!command) return
+  replaceTokenAtCursor(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
 
   if (id === 'gardener') {
-    // 选中「整理要素」后，把驱动 prompt 直接作为用户意图发送：主 Agent 调用 DelegateToGardener
-    // 委派园丁子代理整理要素库，园丁的工具行在聊天区折叠为嵌套任务组。无二级交互界面。
-    triggerGardener()
+    // 整理要素：落文本 + 打开参数弹窗；输入框残留的命令文本在弹窗确认发送时一并清掉，
+    // 弹窗拼装的消息为准（避免双发）
+    openGardenerDialog()
     return
   }
 
-  if (id === 'init') {
-    // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
-    // 不需要二级交互界面，复用普通对话发送链路。
-    followAndScrollToBottom()
-    void chatStore.sendMessage(INIT_NOVEL_PROMPT)
-  }
+  // init（/生成项目记忆）：落文本后不自动发送，用户可补参数后 Enter；
+  // 发送链路的前缀拦截会把命令文本替换为 INIT_NOVEL_PROMPT 全文
 }
 
 /**
- * 一键整理要素（园丁 Phase 2 W2 快捷入口）：工具栏按钮 / 全局快捷键 / 斜杠命令三入口共用。
- * 驱动 prompt 作为用户意图走 sendMessage——空闲即发，运行中进 QueueDock 排队，零 core 改动。
+ * 一键整理要素（园丁 Phase 2 W2 快捷入口）：全局快捷键入口直发裸 GARDENER_TASK_PROMPT——
+ * 快捷键语义是「一键」，不弹参数弹窗；斜杠命令与工具栏按钮已改为参数弹窗（要素整理参数化 W1）。
  */
 function triggerGardener() {
   followAndScrollToBottom()
   void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+}
+
+// ===== 园丁任务参数弹窗（要素整理参数化 W1，target=current 实例） =====
+
+/** 弹窗是否打开（锚定输入框上方） */
+const isGardenerDialogOpen = ref(false)
+/** 快捷选项数据源（打开弹窗时从 .novai/gardener-presets.json 拉取，失败降级为空） */
+const gardenerPresets = ref<GardenerPresetView[]>([])
+
+async function loadGardenerPresets() {
+  try {
+    gardenerPresets.value = await getGardenerPresets(props.projectId)
+  } catch {
+    gardenerPresets.value = []
+  }
+}
+
+/** 输入框上方「🌿 整理要素」按钮 / 斜杠命令：打开参数弹窗（D1：当前会话） */
+function openGardenerDialog() {
+  void loadGardenerPresets()
+  isGardenerDialogOpen.value = true
+}
+
+/** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队）。
+ *  斜杠入口落进输入框的 `/整理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
+async function handleGardenerConfirm(params: GardenerTaskParams) {
+  isGardenerDialogOpen.value = false
+  const hasCommandResidue = inputText.value.trimStart().startsWith('/整理要素')
+  followAndScrollToBottom()
+  const ok = await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+  if (ok && hasCommandResidue) {
+    inputText.value = ''
+    if (textareaRef.value) {
+      textareaRef.value.style.height = 'auto'
+    }
+  }
+}
+
+function handleGardenerDialogCancel() {
+  isGardenerDialogOpen.value = false
+}
+
+/** 弹窗空态「新建快捷选项」：关弹窗并请求打开设置页（W2 起定位到要素整理 tab） */
+function handleGardenerOpenSettings() {
+  isGardenerDialogOpen.value = false
+  emit('openGardenerSettings')
 }
 
 /**
@@ -567,29 +614,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
 })
-
-/**
- * ChapterPicker 确认：启动提取流程。
- */
-function handleChapterPickerConfirm(chapters: ChapterPick[]) {
-  isChapterPickerOpen.value = false
-  extraction.startExtraction(props.projectId, chapters)
-}
-
-function handleChapterPickerCancel() {
-  isChapterPickerOpen.value = false
-}
-
-/**
- * 提取流程：确认写入。
- */
-async function handleExtractionConfirm() {
-  const result = await extraction.confirmWrite()
-  if (result) {
-    // 写入成功，通知 ProjectView 刷新文件树
-    emit('elementsWritten')
-  }
-}
 </script>
 
 <template>
@@ -732,21 +756,6 @@ async function handleExtractionConfirm() {
       </button>
     </div>
 
-    <!-- 要素提取流程面板（R6） -->
-    <ExtractionFlowPanel
-      v-if="extraction.phase.value !== 'idle'"
-      :phase="extraction.phase.value"
-      :extraction-result="extraction.extractionResult.value"
-      :write-result="extraction.writeResult.value"
-      :progress-current="extraction.progressCurrent.value"
-      :progress-total="extraction.progressTotal.value"
-      :progress-chapter-name="extraction.progressChapterName.value"
-      :error-message="extraction.errorMessage.value"
-      @confirm="handleExtractionConfirm"
-      @cancel="extraction.cancel()"
-      @dismiss="extraction.dismiss()"
-    />
-
     <!-- 写工具确认卡片（Agent Step 2/3） -->
     <WriteConfirmationCard
       v-if="chatStore.pendingConfirmation"
@@ -798,13 +807,17 @@ async function handleExtractionConfirm() {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
-          <!-- /提取要素 章节多选弹层（R6） -->
-          <ChapterPicker
-            v-if="isChapterPickerOpen"
-            :chapters="chapters"
-            @confirm="handleChapterPickerConfirm"
-            @cancel="handleChapterPickerCancel"
-          />
+          <!-- 园丁任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
+          <div v-if="isGardenerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">
+            <GardenerTaskDialog
+              target="current"
+              :chapters="chapters"
+              :presets="gardenerPresets"
+              @confirm="handleGardenerConfirm"
+              @cancel="handleGardenerDialogCancel"
+              @open-settings="handleGardenerOpenSettings"
+            />
+          </div>
           <!-- 卡片式输入框：textarea + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
             <!-- textarea + ghost text 覆盖层（补全开启且有建议时） -->
@@ -834,12 +847,12 @@ async function handleExtractionConfirm() {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
-                <!-- 一键整理要素（W2 快捷入口）：与全局 Ctrl/Cmd+Shift+G、/整理要素 同一触发链路 -->
+                <!-- 整理要素（参数弹窗入口，要素整理参数化 W1）：与斜杠命令同一入口；全局 Ctrl/Cmd+Shift+G 仍直发裸任务 -->
                 <button
                   type="button"
                   class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
-                  title="一键整理要素库（Ctrl/Cmd+Shift+G，子智能体执行）；Agent 运行中自动排队"
-                  @click="triggerGardener"
+                  title="整理要素库（可配任务参数；子智能体执行）；Agent 运行中自动排队"
+                  @click="openGardenerDialog"
                 >
                   <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />

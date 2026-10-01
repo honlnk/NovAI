@@ -78,6 +78,17 @@ export type RerankConfigView = ProjectConfigView['rerank']
 
 export type CompletionConfigView = ProjectConfigView['completion']
 
+/**
+ * 园丁任务快捷选项（要素整理参数化 W2）：存于项目级 `.novai/gardener-presets.json`
+ * （不走 novel.config.json），设置页编辑、弹窗勾选拼进任务消息。
+ */
+export type GardenerPresetView = {
+  /** 列表显示名 */
+  label: string
+  /** 勾选后拼进任务消息的文本 */
+  prompt: string
+}
+
 export type SearchConfigView = ProjectConfigView['search']
 
 export type ProjectSettingsView = ProjectConfigView['settings']
@@ -235,32 +246,6 @@ export type RetrievalExplanationView = {
   selectedBy: 'recall' | 'rerank' | 'final-context'
   reason: string
   lastUpdatedChapter: string
-}
-
-export type ElementExtractionItemView = {
-  type: ElementTypeView
-  name: string
-  summary: string
-  tags: string[]
-  lastUpdatedChapter: string
-  relatedChapters: string[]
-  body: string
-}
-
-export type ElementExtractionResultView = {
-  characters: ElementExtractionItemView[]
-  locations: ElementExtractionItemView[]
-  entities: ElementExtractionItemView[]
-  timeline: ElementExtractionItemView[]
-  plots: ElementExtractionItemView[]
-  worldbuilding: ElementExtractionItemView[]
-}
-
-export type ElementWriteResultView = {
-  created: string[]
-  updated: string[]
-  skipped: string[]
-  staleIndex: boolean
 }
 
 export type ProjectView = {

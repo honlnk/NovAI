@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createDefaultConfig, DEFAULT_ELEMENT_SCHEMA } from '../project/defaults'
-import { loadProjectFromHandle, readElementSchema, readOutlinePrompt, readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
+import { loadProjectFromHandle, readElementSchema, readGardenerPresets, readOutlinePrompt, readProjectConfig, repairProject, writeGardenerPresets, writeProjectConfig } from './project-fs'
 
 describe('project fs repair', () => {
   it('does not recreate the default outline template after it has been deleted or renamed', async () => {
@@ -326,6 +326,52 @@ describe('scenes→outlines 迁移（W3）', () => {
     expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBeNull()
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: { activeScenePromptPath: 42 } }))
     expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBeNull()
+  })
+})
+
+describe('gardener presets（.novai/gardener-presets.json，要素整理参数化 W2）', () => {
+  it('文件不存在：返回空数组不抛错（弹窗降级为无快捷选项形态）', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([])
+  })
+
+  it('正常读取 + 写回整表（.novai/ 目录随写自动创建）', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    const presets = [
+      { label: '只更新变更章节', prompt: '只整理指定章节涉及的要素，不动其他要素文件' },
+      { label: '保守合并', prompt: '存疑就不合并' },
+    ]
+
+    await writeGardenerPresets(rootHandle, presets)
+    await expect(readGardenerPresets(rootHandle)).resolves.toEqual(presets)
+    await expect(readProjectText(rootHandle, '.novai/gardener-presets.json')).resolves.toContain('只更新变更章节')
+
+    // 整表替换语义
+    await writeGardenerPresets(rootHandle, [{ label: '仅全库核对', prompt: '只核对不写入' }])
+    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([
+      { label: '仅全库核对', prompt: '只核对不写入' },
+    ])
+  })
+
+  it('损坏内容容错为空：非法 JSON / presets 非数组 / 项字段非法或为空白', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+
+    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', '{oops')
+    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([])
+
+    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', JSON.stringify({ presets: 'nope' }))
+    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([])
+
+    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', JSON.stringify({
+      presets: [
+        { label: '合法', prompt: '正常选项' },
+        { label: '', prompt: '空 label 被丢' },
+        { label: '空 prompt 被丢', prompt: '   ' },
+        { label: 42, prompt: '字段类型非法被丢' },
+        null,
+      ],
+    }))
+    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([{ label: '合法', prompt: '正常选项' }])
   })
 })
 
