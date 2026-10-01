@@ -11,7 +11,7 @@ import {
 import { createModelView, setSystemMessage, type ModelView } from './model-view'
 import type { AgentMessage } from './messages'
 import type { ChatSessionState } from '../../types/chat'
-import { DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_OUTLINE_TEMPLATE, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_OUTLINE_TEMPLATE, LEGACY_DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPT_V1 } from '../project/defaults'
 import { hashContent } from '../util/hash'
 
 describe('buildAgentSystemPrompt', () => {
@@ -68,6 +68,13 @@ describe('buildAgentSystemPrompt', () => {
     const prompt = buildAgentSystemPrompt({ systemPrompt: LEGACY_DEFAULT_SYSTEM_PROMPT })
     expect(prompt).not.toContain('# SYSTEM Prompt')
     expect(prompt).not.toContain('文件格式约定')
+  })
+
+  it('does not inject system.md when it is the untouched v1 legacy default template', () => {
+    // monorepo 重构前出厂的更早一代默认模板（真机回归 W4 发现的存量项目形态）
+    const prompt = buildAgentSystemPrompt({ systemPrompt: LEGACY_DEFAULT_SYSTEM_PROMPT_V1 })
+    expect(prompt).not.toContain('# SYSTEM Prompt')
+    expect(prompt).not.toContain('在这里定义整部小说的基调')
   })
 
   it('injects modified system.md after the fixed sections', () => {

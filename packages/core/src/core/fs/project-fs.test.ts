@@ -274,7 +274,10 @@ describe('scenes→outlines 迁移（W3）', () => {
     await expect(readProjectText(rootHandle, 'prompts/scenes/main.md')).rejects.toThrow('Not found')
     // config：旧字段名 + scenes/ 前缀 → activeOutlinePath + outlines/ 前缀，且已写回盘
     expect(project.config.settings.activeOutlinePath).toBe('prompts/outlines/main.md')
-    expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBe('prompts/outlines/main.md')
+    const writtenConfig = await readProjectConfig(rootHandle)
+    expect(writtenConfig.settings.activeOutlinePath).toBe('prompts/outlines/main.md')
+    // 旧字段名随写回丢弃（真机验证发现 ...spread 曾把它原样带回）
+    expect((writtenConfig.settings as Record<string, unknown>).activeScenePromptPath).toBeUndefined()
     // outlines/ 下的文件可按新路径读到
     await expect(readOutlinePrompt(rootHandle, 'prompts/outlines/main.md')).resolves.toBe('# 主线大纲')
     // 旧路径不再命中（readOutlinePrompt 只认 outlines/ 前缀）

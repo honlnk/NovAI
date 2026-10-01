@@ -28,6 +28,14 @@ export const LEGACY_DEFAULT_SYSTEM_PROMPT = `# SYSTEM Prompt
 - SYSTEM 与 SCENE 提示词写入 prompts/**/*.md。`
 
 /**
+ * 更早一代（monorepo 重构前出厂）的 system.md 默认模板：只有标题与占位句。
+ * 真机回归（W4）发现按此模板创建的旧项目字节比对不中、占位文本仍被注入，故一并豁免。
+ */
+export const LEGACY_DEFAULT_SYSTEM_PROMPT_V1 = `# SYSTEM Prompt
+
+在这里定义整部小说的基调、叙事视角、文风偏好与创作约束。`
+
+/**
  * `prompts/outlines/outline-001.md` 的大纲默认模板（W3 scenes→outlines 改名时换新）。
  *
  * 注入机制与 system.md 相同：保持原样（与常量逐字节相同）时不附加到对话上下文；

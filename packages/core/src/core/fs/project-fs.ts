@@ -202,9 +202,10 @@ export async function repairProject(
 export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandle): Promise<ProjectSnapshot> {
   const migrated = await migrateScenesToOutlines(rootHandle)
   const rawConfig = await readJson<ProjectConfig>(rootHandle, 'novel.config.json')
-  const hasLegacyOutlineReference = Boolean(
-    (rawConfig.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath,
-  )
+  // 旧字段只要存在（哪怕值为 null）就触发写回——null 是合法的「未选大纲」，
+  // 按真值判断会让已迁移项目的死字段永远留在盘上。
+  const hasLegacyOutlineReference =
+    (rawConfig.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath !== undefined
   const config = normalizeProjectConfig(rawConfig)
   // 迁移过或 config 还带旧字段：把归一化结果写回盘（路径前缀已替换、旧字段名被丢弃）
   if (migrated || hasLegacyOutlineReference) {
@@ -339,6 +340,11 @@ export async function writeProjectConfig(
 }
 
 function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
+  // 旧字段 activeScenePromptPath（W3 前身）读入后即被新字段取代，写回时不再保留。
+  const legacySettings = (config.settings ?? {}) as ProjectConfig['settings'] & {
+    activeScenePromptPath?: unknown
+  }
+  const { activeScenePromptPath: legacyScenePromptPath, ...settingsRest } = legacySettings
   return {
     ...DEFAULT_CONFIG,
     ...config,
@@ -382,7 +388,7 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     gardener: normalizeGardenerConfig(config.gardener),
     settings: {
       ...DEFAULT_CONFIG.settings,
-      ...config.settings,
+      ...settingsRest,
       ragCandidateLimit: clampInt(config.settings?.ragCandidateLimit, 1, 100, DEFAULT_CONFIG.settings.ragCandidateLimit),
       ragContextMaxItems: clampInt(config.settings?.ragContextMaxItems, 1, 50, DEFAULT_CONFIG.settings.ragContextMaxItems),
       conversationTokenLimit: clampInt(config.settings?.conversationTokenLimit, 1000, 200000, DEFAULT_CONFIG.settings.conversationTokenLimit),
@@ -397,12 +403,13 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       // 大纲路径（W3 改名）：新字段优先，旧字段 activeScenePromptPath 读入映射；
       // prompts/scenes/ 前缀随归一化替换为 outlines/（幂等，旧值随读随映射不丢用户选择）
       activeOutlinePath: remapOutlinePath(
-        config.settings?.activeOutlinePath
-          ?? (config.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath,
+        settingsRest.activeOutlinePath
+          ?? legacyScenePromptPath,
       ),
     },
   }
 }
+
 
 /** prompts/scenes/ 路径前缀 → prompts/outlines/；空/非法值归一为 null。 */
 function remapOutlinePath(path: unknown): string | null {

@@ -1,4 +1,4 @@
-import { DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_OUTLINE_TEMPLATE } from '../project/defaults'
+import { DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPT_V1, LEGACY_DEFAULT_OUTLINE_TEMPLATE } from '../project/defaults'
 import { hashContent } from '../util/hash'
 import { insertAfterSystem, replaceMessage, type ModelView } from './model-view'
 import type { AgentMessage } from './messages'
@@ -21,12 +21,13 @@ export function buildAgentSystemPrompt(input: {
     ? `你是 NovAI，一个使用 ${model} 模型驱动的小说创作 AI 智能体。`
     : '你是 NovAI，一个小说创作 AI 智能体。'
 
-  // system.md 注入条件：内容与默认模板（含旧版默认模板）逐字节不同才视为「用户改过」。
+  // system.md 注入条件：内容与默认模板（含历代旧版默认模板）逐字节不同才视为「用户改过」。
   // 机制注释句（「删掉本句即可生效」）写在模板里，用户删掉或改动任何内容都算已修改。
   const systemPrompt = input.systemPrompt
   const isUnmodifiedTemplate = systemPrompt === undefined
     || systemPrompt === DEFAULT_SYSTEM_PROMPT
     || systemPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT
+    || systemPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_V1
 
   const parts: string[] = [
     identity,
