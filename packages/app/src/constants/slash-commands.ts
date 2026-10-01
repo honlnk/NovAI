@@ -8,7 +8,7 @@ import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/ag
  * 发送链路对行首命中的命令做前缀拦截替换（expandSlashCommand）：
  * 裸命令文本本身不构成对主 Agent 的有效指令，替换为驱动 prompt 全文保证工程质量不丢。
  */
-export type SlashCommandId = 'extract' | 'init' | 'gardener'
+export type SlashCommandId = 'init' | 'gardener'
 
 export type SlashCommand = {
   /** 命令唯一标识 */
@@ -21,14 +21,8 @@ export type SlashCommand = {
   icon: string
 }
 
-/** 当前可用的斜杠命令 */
+/** 当前可用的斜杠命令（/提取要素 已于 2026-10 退役，要素整理参数化 W4） */
 export const SLASH_COMMANDS: SlashCommand[] = [
-  {
-    id: 'extract',
-    label: '/提取要素',
-    description: '从章节中提取人物、地点、剧情等要素（固定流水线，即将由整理要素替代）',
-    icon: '✨',
-  },
   {
     id: 'gardener',
     label: '/整理要素',

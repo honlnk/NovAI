@@ -135,7 +135,7 @@ function handleCancel() {
         </div>
       </div>
 
-      <!-- 3. 章节选择（右上角开关控制显隐；沿用 ChapterPicker 复选行样式，去筛选框） -->
+      <!-- 3. 章节选择（右上角开关控制显隐；自绘复选行，与快捷选项同款式） -->
       <div v-if="state.chapterListVisible.value" class="flex min-h-0 flex-col">
         <p class="mb-1.5 text-xs font-semibold text-gray-500">
           章节范围{{ state.selectedChapterPaths.value.size > 0 ? `（已选 ${state.selectedChapterPaths.value.size} 章）` : '' }}

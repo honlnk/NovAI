@@ -248,32 +248,6 @@ export type RetrievalExplanationView = {
   lastUpdatedChapter: string
 }
 
-export type ElementExtractionItemView = {
-  type: ElementTypeView
-  name: string
-  summary: string
-  tags: string[]
-  lastUpdatedChapter: string
-  relatedChapters: string[]
-  body: string
-}
-
-export type ElementExtractionResultView = {
-  characters: ElementExtractionItemView[]
-  locations: ElementExtractionItemView[]
-  entities: ElementExtractionItemView[]
-  timeline: ElementExtractionItemView[]
-  plots: ElementExtractionItemView[]
-  worldbuilding: ElementExtractionItemView[]
-}
-
-export type ElementWriteResultView = {
-  created: string[]
-  updated: string[]
-  skipped: string[]
-  staleIndex: boolean
-}
-
 export type ProjectView = {
   id: string
   name: string

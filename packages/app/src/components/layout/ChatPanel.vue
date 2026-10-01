@@ -6,7 +6,6 @@ import { getGardenerPresets } from '@novai/core/services/settings-service'
 import type { GardenerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
 import { isGardenerShortcut, isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
-import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
@@ -14,8 +13,6 @@ import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
-import ChapterPicker from '../chat/ChapterPicker.vue'
-import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
 import GardenerTaskDialog from '../chat/GardenerTaskDialog.vue'
 import { buildGardenerTaskMessage, type GardenerTaskParams } from '../chat/gardener-task'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
@@ -52,7 +49,7 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
-  /** 章节列表（chapters/*.txt|.md），供 /提取要素 选择（R6） */
+  /** 章节列表（chapters/*.txt），供园丁任务弹窗选择章节范围（要素整理参数化 W1） */
   chapters: ProjectFileNodeView[]
 }>()
 
@@ -63,8 +60,6 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
-  /** 要素写入完成，通知 ProjectView 刷新文件树（R6） */
-  elementsWritten: []
   /** 园丁弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
   openGardenerSettings: []
 }>()
@@ -306,11 +301,10 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // /提取要素 章节选择、园丁任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isChapterPickerOpen.value || isGardenerDialogOpen.value) {
+  // 园丁任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
+  if (isGardenerDialogOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
-      isChapterPickerOpen.value = false
       isGardenerDialogOpen.value = false
       return
     }
@@ -380,7 +374,7 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 
-/** textarea input 统一入口：自适应高度 + 指令检测（R4 @大纲 / R6 /提取要素）+ 输入补全调度 */
+/** textarea input 统一入口：自适应高度 + 指令检测（@大纲 / 斜杠命令）+ 输入补全调度 */
 function onTextareaInput(event: Event) {
   autoResize(event)
   detectCommands()
@@ -391,12 +385,7 @@ function onTextareaInput(event: Event) {
  * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (
-    isSlashMenuOpen.value ||
-    isOutlineCommandOpen.value ||
-    isChapterPickerOpen.value ||
-    isGardenerDialogOpen.value
-  ) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isGardenerDialogOpen.value) {
     clearSuggestion()
     return
   }
@@ -483,7 +472,7 @@ function handleCloseOutlineCommand() {
   isOutlineCommandOpen.value = false
 }
 
-// ===== R6：斜杠命令菜单 / 提取要素 =====
+// ===== 斜杠命令菜单 =====
 
 /** 斜杠命令菜单是否打开（输入 / 后弹出命令列表） */
 const isSlashMenuOpen = ref(false)
@@ -491,10 +480,6 @@ const isSlashMenuOpen = ref(false)
 const slashQuery = ref('')
 /** 斜杠命令菜单组件引用（键盘导航用） */
 const slashMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null)
-/** /提取要素 章节多选弹层是否打开（选中命令后展开） */
-const isChapterPickerOpen = ref(false)
-/** 提取流程状态（composable 单例） */
-const extraction = useElementExtraction()
 
 /**
  * 匹配光标前最近的 / 命令前缀。
@@ -509,13 +494,13 @@ function detectCommands() {
   if (!textarea) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
+    isGardenerDialogOpen.value = false
     return
   }
   const cursor = textarea.selectionStart ?? 0
   const beforeCursor = inputText.value.slice(0, cursor)
 
-  // @大纲、/ 命令、章节选择三层互斥，同一时刻只开一个
+  // @大纲、/ 命令两层互斥，同一时刻只开一个
   const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
   const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
 
@@ -523,34 +508,24 @@ function detectCommands() {
     slashQuery.value = slashMatch[1]
     isSlashMenuOpen.value = true
     isOutlineCommandOpen.value = false
-    isChapterPickerOpen.value = false
   } else if (outlineMatch) {
     outlineQuery.value = outlineMatch[1]
     isOutlineCommandOpen.value = props.outlines.length > 0
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
   } else {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
   }
 }
 
 /**
  * 选中斜杠命令后（W3 新范式）：清除 / token，把命令文本落进输入框（尾部带空格、
  * 光标置后），命令是纯文本——用户可在其后补参数、可编辑可删除。
- * gardener 额外打开参数弹窗（确认后以弹窗拼装的消息为准发送）；
- * extract 保留 R6 旧行为（直接展开章节多选，不落文本——该命令随 W4 退役）。
+ * gardener 额外打开参数弹窗（确认后以弹窗拼装的消息为准发送）。
  */
 function handleSlashCommandSelect(id: SlashCommandId) {
   isSlashMenuOpen.value = false
   slashQuery.value = ''
-
-  if (id === 'extract') {
-    replaceTokenAtCursor(SLASH_COMMAND_RE)
-    isChapterPickerOpen.value = props.chapters.length > 0
-    return
-  }
 
   const command = SLASH_COMMANDS.find((entry) => entry.id === id)
   if (!command) return
@@ -639,29 +614,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
 })
-
-/**
- * ChapterPicker 确认：启动提取流程。
- */
-function handleChapterPickerConfirm(chapters: ChapterPick[]) {
-  isChapterPickerOpen.value = false
-  extraction.startExtraction(props.projectId, chapters)
-}
-
-function handleChapterPickerCancel() {
-  isChapterPickerOpen.value = false
-}
-
-/**
- * 提取流程：确认写入。
- */
-async function handleExtractionConfirm() {
-  const result = await extraction.confirmWrite()
-  if (result) {
-    // 写入成功，通知 ProjectView 刷新文件树
-    emit('elementsWritten')
-  }
-}
 </script>
 
 <template>
@@ -804,21 +756,6 @@ async function handleExtractionConfirm() {
       </button>
     </div>
 
-    <!-- 要素提取流程面板（R6） -->
-    <ExtractionFlowPanel
-      v-if="extraction.phase.value !== 'idle'"
-      :phase="extraction.phase.value"
-      :extraction-result="extraction.extractionResult.value"
-      :write-result="extraction.writeResult.value"
-      :progress-current="extraction.progressCurrent.value"
-      :progress-total="extraction.progressTotal.value"
-      :progress-chapter-name="extraction.progressChapterName.value"
-      :error-message="extraction.errorMessage.value"
-      @confirm="handleExtractionConfirm"
-      @cancel="extraction.cancel()"
-      @dismiss="extraction.dismiss()"
-    />
-
     <!-- 写工具确认卡片（Agent Step 2/3） -->
     <WriteConfirmationCard
       v-if="chatStore.pendingConfirmation"
@@ -869,13 +806,6 @@ async function handleExtractionConfirm() {
             :query="slashQuery"
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
-          />
-          <!-- /提取要素 章节多选弹层（R6） -->
-          <ChapterPicker
-            v-if="isChapterPickerOpen"
-            :chapters="chapters"
-            @confirm="handleChapterPickerConfirm"
-            @cancel="handleChapterPickerCancel"
           />
           <!-- 园丁任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
           <div v-if="isGardenerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">

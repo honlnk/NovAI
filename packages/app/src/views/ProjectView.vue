@@ -87,7 +87,7 @@ const activeOutlineName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
-/** 章节列表（chapters/*.txt），供 ChatPanel 的 /提取要素 指令多选（R6）。.md 不算有效章节，不入列。 */
+/** 章节列表（chapters/*.txt），供园丁任务弹窗选择章节范围（要素整理参数化 W1）。.md 不算有效章节，不入列。 */
 const chapterList = computed(() => {
   const files = projectStore.currentProject?.files ?? []
   return pickDirectoryChildren(files, 'chapters').filter(
@@ -314,12 +314,6 @@ function handleGoToSettings() {
   showGuide.value = false
   handleOpenSettings()
 }
-
-async function handleElementsWritten() {
-  await projectStore.refreshTree()
-  // 索引过期状态由底部 IndexStatusBar 经事件总线自动反映，无需再弹 toast。
-  toast.success('要素文件已写入')
-}
 </script>
 
 <template>
@@ -379,7 +373,6 @@ async function handleElementsWritten() {
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
-        @elements-written="handleElementsWritten"
         @open-gardener-settings="handleGardenerOpenSettings"
       >
         <!-- 首次使用引导 -->
