@@ -69,7 +69,7 @@ export function createAgentTools(): AgentRunnableToolMap {
             properties: {
               path: {
                 type: 'string',
-                description: '项目内相对路径，例如 chapters/第001章-火中拾婴.txt',
+                description: '项目内相对路径，例如 chapters/第001章-试炼.txt',
               },
               offset: {
                 type: 'integer',
@@ -327,7 +327,7 @@ export function createAgentTools(): AgentRunnableToolMap {
             properties: {
               query: {
                 type: 'string',
-                description: '检索问题或关键词，例如“鸿影 云溪 武当派 第一章需要用到的设定”。',
+                description: '检索问题或关键词，例如“角色乙 角色甲 门派甲 第一章需要用到的设定”。',
               },
               topK: {
                 type: 'integer',

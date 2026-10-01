@@ -14,7 +14,7 @@ const PRESETS: GardenerPresetOption[] = [
 ]
 
 const CHAPTERS = [
-  { path: 'chapters/第001章-火中拾婴.txt', name: '第001章-火中拾婴.txt' },
+  { path: 'chapters/第001章-试炼.txt', name: '第001章-试炼.txt' },
   { path: 'chapters/第002章-风起.txt', name: '第002章-风起.txt' },
 ]
 

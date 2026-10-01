@@ -99,9 +99,9 @@ describe('createGardenerTools', () => {
   it('写路径闸：elements/ 下的写入放行（基础校验照常通过）', () => {
     const tools = createGardenerTools()
     expect(tools.CreateFile!.core.validateInput({
-      path: 'elements/characters/云溪.md',
-      content: '---\nname: 云溪\n---\n',
-    })).toMatchObject({ path: 'elements/characters/云溪.md' })
+      path: 'elements/characters/角色甲.md',
+      content: '---\nname: 角色甲\n---\n',
+    })).toMatchObject({ path: 'elements/characters/角色甲.md' })
     expect(tools.EditFile!.core.validateInput({
       path: 'elements/locations/剑冢.md',
       oldText: 'a',
@@ -112,7 +112,7 @@ describe('createGardenerTools', () => {
   it('写路径闸大小写不敏感：Elements/ 前缀不因大小写被误拒', () => {
     const tools = createGardenerTools()
     expect(() => tools.CreateFile!.core.validateInput({
-      path: 'Elements/characters/云溪.md',
+      path: 'Elements/characters/角色甲.md',
       content: 'x',
     })).not.toThrow()
   })
@@ -253,11 +253,11 @@ describe('DelegateToGardener 委派端到端', () => {
       if (index === 0) {
         // CreateFile 是结构操作：档位判定 ask → 走确认（写入在假句柄上会失败，确认链已验证）
         return toolCallSse('t-gardener-2', 'CreateFile', {
-          path: 'elements/characters/云溪.md',
-          content: '---\nname: 云溪\n---\n',
+          path: 'elements/characters/角色甲.md',
+          content: '---\nname: 角色甲\n---\n',
         })
       }
-      return textSse('## 改动文件清单\n\n- elements/characters/云溪.md（新建）')
+      return textSse('## 改动文件清单\n\n- elements/characters/角色甲.md（新建）')
     }
 
     const delegate = createDelegateToGardenerTool({
@@ -271,7 +271,7 @@ describe('DelegateToGardener 委派端到端', () => {
       call: {
         id: 'c-delegate-2',
         name: 'DelegateToGardener',
-        input: { task: '补建云溪人物卡', scope: 'elements/characters/' },
+        input: { task: '补建角色甲人物卡', scope: 'elements/characters/' },
         createdAt: new Date().toISOString(),
       },
       project: fakeProject('# 规范'),
@@ -282,7 +282,7 @@ describe('DelegateToGardener 委派端到端', () => {
     expect(confirmRequests[0]!.agentLabel).toBe('要素整理')
     expect(confirmRequests[0]!.confirmation.kind).toBe('create')
     // 确认被接受后工具照常执行（假句柄上写入失败回灌，循环继续），最终拿到完整汇报
-    expect(result.content).toContain('云溪.md（新建）')
+    expect(result.content).toContain('角色甲.md（新建）')
   })
 
   it('task 为空字符串被参数校验拒绝', async () => {
@@ -404,7 +404,7 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     fetchHandler = (_call, index) => {
       if (index === 0) {
         return toolCallSse('t-w1a', 'EditFile', {
-          path: 'elements/characters/云溪.md', oldText: '旧', newText: '新',
+          path: 'elements/characters/角色甲.md', oldText: '旧', newText: '新',
         })
       }
       return textSse('## 改动文件清单\n\n- 无')
@@ -439,7 +439,7 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     fetchHandler = (_call, index) => {
       if (index === 0) {
         return toolCallSse('t-w1b', 'EditFile', {
-          path: 'elements/characters/云溪.md', oldText: '旧', newText: '新',
+          path: 'elements/characters/角色甲.md', oldText: '旧', newText: '新',
         })
       }
       return textSse('## 改动文件清单\n\n- 无')
@@ -509,7 +509,7 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     fetchHandler = (_call, index) => {
       if (index === 0) {
         return toolCallSse('t-w1d', 'EditFile', {
-          path: 'elements/characters/云溪.md', oldText: '旧', newText: '新',
+          path: 'elements/characters/角色甲.md', oldText: '旧', newText: '新',
         })
       }
       return textSse('## 改动文件清单\n\n- 无')

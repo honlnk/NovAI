@@ -116,7 +116,7 @@ describe('GetFileChangeHistory 工具', () => {
     const stale = [
       record({
         id: 'old1',
-        change: { type: 'updated', path: 'elements/characters/鸿影.md' },
+        change: { type: 'updated', path: 'elements/characters/角色乙.md' },
         // 旧口径账本：一行换一行存的是净差 +0 −0
         diff: { oldText: '旧句', newText: '新句', linesAdded: 0, linesRemoved: 0 },
       }),
@@ -124,7 +124,7 @@ describe('GetFileChangeHistory 工具', () => {
     const input = getFileChangeHistoryTool.validateInput({})
     const output = await getFileChangeHistoryTool.run(input, runtimeWith(stale))
 
-    expect(output.content).toContain('修改 elements/characters/鸿影.md (+1 −1)')
+    expect(output.content).toContain('修改 elements/characters/角色乙.md (+1 −1)')
   })
 
   it('删除记录带被删行数（+0 −N）；旧账本无此字段的记录不显示计数', async () => {

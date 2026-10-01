@@ -447,27 +447,27 @@ describe('file tools', () => {
       }, runtime)).rejects.toThrow('章节文件名不规范')
       // 补零不足
       await expect(createFileTool.run({
-        path: 'chapters/第1章-火中拾婴.txt',
+        path: 'chapters/第1章-试炼.txt',
         content: '内容',
       }, runtime)).rejects.toThrow('章节文件名不规范')
       // 错扩展名（先撞扩展名约束）
       await expect(createFileTool.run({
-        path: 'chapters/第001章-火中拾婴.md',
+        path: 'chapters/第001章-试炼.md',
         content: '内容',
       }, runtime)).rejects.toThrow('章节正文必须写入 chapters/*.txt')
     })
 
     it('CreateFile allows a fresh chapter number and blocks a duplicated one', async () => {
       const runtime = createRuntime({
-        'chapters/第001章-火中拾婴.txt': '已有',
+        'chapters/第001章-试炼.txt': '已有',
       })
 
       // 不同编号正常创建
       await createFileTool.run({
-        path: 'chapters/第002章-留他一命.txt',
+        path: 'chapters/第002章-抉择.txt',
         content: '新章节',
       }, runtime)
-      await expect(readProjectText(runtime.project.handle, 'chapters/第002章-留他一命.txt')).resolves.toBe('新章节')
+      await expect(readProjectText(runtime.project.handle, 'chapters/第002章-抉择.txt')).resolves.toBe('新章节')
 
       // 同编号不同标题，被重号检测拦下
       await expect(createFileTool.run({

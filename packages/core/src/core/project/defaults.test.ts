@@ -33,7 +33,7 @@ describe('DEFAULT_ELEMENT_SCHEMA', () => {
   })
 
   it('链接约定按决策 5：素材→章节写路径、素材↔素材双方括号、正文不写链接', () => {
-    expect(DEFAULT_ELEMENT_SCHEMA).toContain('[[云溪]]')
+    expect(DEFAULT_ELEMENT_SCHEMA).toContain('[[角色甲]]')
     expect(DEFAULT_ELEMENT_SCHEMA).toContain('章节正文内不写任何链接')
   })
 

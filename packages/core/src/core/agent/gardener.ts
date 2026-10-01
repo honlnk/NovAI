@@ -252,7 +252,7 @@ export function createDelegateToGardenerTool(context: {
           properties: {
             task: {
               type: 'string',
-              description: '委派给子智能体的任务描述，必须自包含（子智能体看不到本对话）。例如：整理第 12 章涉及的要素，重点核对云溪的人物卡是否有重复条目。',
+              description: '委派给子智能体的任务描述，必须自包含（子智能体看不到本对话）。例如：整理第 12 章涉及的要素，重点核对角色甲的人物卡是否有重复条目。',
             },
             scope: {
               type: 'string',

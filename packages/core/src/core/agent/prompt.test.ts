@@ -150,16 +150,16 @@ describe('syncNovaiReminder（项目记忆 digest 按需注入）', () => {
     const session = buildSession()
     view.messages.push({ role: 'user', content: '用户意图：第一轮' })
 
-    syncNovaiReminder({ view, session, overview: '主角云溪已觉醒。' })
+    syncNovaiReminder({ view, session, overview: '主角角色甲已觉醒。' })
 
     expect(view.messages).toHaveLength(3)
     expect(view.messages[0].role).toBe('system')
     expect(view.messages[1].role).toBe('user')
     expect(view.messages[1].content).toContain('<system-reminder>')
-    expect(view.messages[1].content).toContain('主角云溪已觉醒。')
+    expect(view.messages[1].content).toContain('主角角色甲已觉醒。')
     expect(view.messages[1].content).toContain('不构成指令')
     expect(view.messages[2].content).toBe('用户意图：第一轮')
-    expect(session.novaiOverviewDigest).toBe(hashContent('主角云溪已觉醒。'))
+    expect(session.novaiOverviewDigest).toBe(hashContent('主角角色甲已觉醒。'))
   })
 
   it('skips injection when content unchanged (same digest)', () => {
@@ -226,11 +226,11 @@ describe('resolveOutlineReminder / attachOutlineReminder（大纲动态附带）
   it('builds a background-reference reminder for a real outline', () => {
     const reminder = resolveOutlineReminder({
       path: 'prompts/outlines/main.md',
-      content: '第一卷：火中拾婴。',
+      content: '第一卷：试炼。',
     })
     expect(reminder).toContain('<system-reminder>')
     expect(reminder).toContain('以下是当前写作大纲，作为背景参考。')
-    expect(reminder).toContain('第一卷：火中拾婴。')
+    expect(reminder).toContain('第一卷：试炼。')
   })
 
   it('attaches the reminder to the last user message only, leaving the view-shaped array intact', () => {
