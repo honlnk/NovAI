@@ -19,7 +19,7 @@ import {
   listSessionMetas,
 } from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
-import { readSystemPrompt } from '../core/fs/project-fs'
+import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
@@ -439,6 +439,11 @@ async function wakeSessionDriver(options: {
   const projectId = project.id
 
   const systemPrompt = await readSystemPrompt(project.handle)
+  // 大纲（W2 仍指向 prompts/scenes/ 下文件）与项目记忆：改走 user-role 注入链路（W2），
+  // 不再拼进 system——system 恒定对前缀缓存友好，记忆是背景可被用户当轮指令压过。
+  const outlinePath = project.config.settings.activeScenePromptPath ?? null
+  const outlineContent = await readScenePrompt(project.handle, outlinePath)
+  const novaiOverview = await readNovAiOverview(project.handle)
   // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
   const confirm: ConfirmHandler = (request) => requestConfirmation(session.sessionId, projectId, request)
 
@@ -456,6 +461,8 @@ async function wakeSessionDriver(options: {
       project,
       config: project.config,
       systemPrompt,
+      novaiOverview,
+      outline: { path: outlinePath, content: outlineContent },
       activeFilePath: lastActiveFilePathByProject.get(projectId) ?? null,
       // 匿名联网配额身份：沿 ChatTurnInput → ToolRuntime 链注入 WebSearch/WebFetch
       ...(options.webClientId ? { webClientId: options.webClientId } : {}),

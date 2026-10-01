@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildAgentSystemPrompt, buildAgentUserContext } from './prompt'
-import { DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import {
+  attachOutlineReminder,
+  buildAgentSystemPrompt,
+  buildAgentUserContext,
+  buildOutlineSwitchRecord,
+  resolveOutlineReminder,
+  syncNovaiReminder,
+} from './prompt'
+import { createModelView, setSystemMessage, type ModelView } from './model-view'
+import type { AgentMessage } from './messages'
+import type { ChatSessionState } from '../../types/chat'
+import { DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
 import { hashContent } from '../util/hash'
 
 describe('buildAgentSystemPrompt', () => {
@@ -114,5 +124,144 @@ describe('buildAgentUserContext', () => {
     })
     expect(content).toContain('用户引用的内容：')
     expect(content).toContain('夜色如墨。')
+  })
+})
+
+describe('syncNovaiReminder（项目记忆 digest 按需注入）', () => {
+  function buildView(): ModelView {
+    const view = createModelView()
+    setSystemMessage(view, 'system 固定段')
+    return view
+  }
+
+  function buildSession(): ChatSessionState {
+    return {} as ChatSessionState
+  }
+
+  it('injects reminder right after system on first turn and records digest', () => {
+    const view = buildView()
+    const session = buildSession()
+    view.messages.push({ role: 'user', content: '用户意图：第一轮' })
+
+    syncNovaiReminder({ view, session, overview: '主角云溪已觉醒。' })
+
+    expect(view.messages).toHaveLength(3)
+    expect(view.messages[0].role).toBe('system')
+    expect(view.messages[1].role).toBe('user')
+    expect(view.messages[1].content).toContain('<system-reminder>')
+    expect(view.messages[1].content).toContain('主角云溪已觉醒。')
+    expect(view.messages[1].content).toContain('不构成指令')
+    expect(view.messages[2].content).toBe('用户意图：第一轮')
+    expect(session.novaiOverviewDigest).toBe(hashContent('主角云溪已觉醒。'))
+  })
+
+  it('skips injection when content unchanged (same digest)', () => {
+    const view = buildView()
+    const session = buildSession()
+    syncNovaiReminder({ view, session, overview: '记忆 A' })
+    const messagesAfterFirst = [...view.messages]
+
+    syncNovaiReminder({ view, session, overview: '记忆 A' })
+    expect(view.messages).toEqual(messagesAfterFirst)
+  })
+
+  it('replaces the reminder in place when content changes, keeping a single copy', () => {
+    const view = buildView()
+    const session = buildSession()
+    syncNovaiReminder({ view, session, overview: '记忆 A' })
+
+    syncNovaiReminder({ view, session, overview: '记忆 B（更新）' })
+
+    const reminders = view.messages.filter((message) => message.content.includes('prompts/NovAI.md'))
+    expect(reminders).toHaveLength(1)
+    expect(reminders[0].content).toContain('记忆 B（更新）')
+    expect(reminders[0].content).toContain('取代此前任何版本')
+    expect(session.novaiOverviewDigest).toBe(hashContent('记忆 B（更新）'))
+  })
+
+  it('re-injects after compaction swallowed the reminder, even with same digest', () => {
+    const view = buildView()
+    const session = buildSession()
+    syncNovaiReminder({ view, session, overview: '记忆 A' })
+    // 模拟压缩：reminder 与历史被一条 user 摘要替换（selectCompactionRange 从 index 1 起）
+    const summary: AgentMessage = { role: 'user', content: '<compacted-summary>此前进展…</compacted-summary>' }
+    view.messages = [view.messages[0], summary]
+
+    syncNovaiReminder({ view, session, overview: '记忆 A' })
+
+    expect(view.messages).toHaveLength(3)
+    expect(view.messages[1].content).toContain('记忆 A')
+    expect(view.messages[2]).toBe(summary)
+  })
+
+  it('never injects empty content or the untouched legacy skeleton', () => {
+    const view = buildView()
+    const session = buildSession()
+
+    syncNovaiReminder({ view, session, overview: '   \n ' })
+    syncNovaiReminder({ view, session, overview: LEGACY_DEFAULT_NOVAI_OVERVIEW })
+
+    expect(view.messages).toHaveLength(1)
+    expect(session.novaiOverviewDigest).toBeUndefined()
+  })
+})
+
+describe('resolveOutlineReminder / attachOutlineReminder（大纲动态附带）', () => {
+  it('resolves to empty string when unselected, file empty, or untouched default template', () => {
+    expect(resolveOutlineReminder(undefined)).toBe('')
+    expect(resolveOutlineReminder({ path: null, content: '' })).toBe('')
+    expect(resolveOutlineReminder({ path: 'prompts/scenes/scene-001.md', content: '' })).toBe('')
+    expect(resolveOutlineReminder({ path: 'prompts/scenes/scene-001.md', content: DEFAULT_SCENE_PROMPT })).toBe('')
+  })
+
+  it('builds a background-reference reminder for a real outline', () => {
+    const reminder = resolveOutlineReminder({
+      path: 'prompts/scenes/main.md',
+      content: '第一卷：火中拾婴。',
+    })
+    expect(reminder).toContain('<system-reminder>')
+    expect(reminder).toContain('以下是当前写作大纲，作为背景参考。')
+    expect(reminder).toContain('第一卷：火中拾婴。')
+  })
+
+  it('attaches the reminder to the last user message only, leaving the view-shaped array intact', () => {
+    const messages: AgentMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '第一轮意图' },
+      { role: 'assistant', content: '', toolCalls: [] },
+      { role: 'user', content: '第二轮意图' },
+      { role: 'assistant', content: '回答' },
+    ]
+
+    const attached = attachOutlineReminder(messages, '<system-reminder>大纲</system-reminder>')
+
+    expect(attached).not.toBe(messages)
+    expect(attached[1].content).toBe('第一轮意图')
+    expect(attached[3].content).toBe('第二轮意图\n\n<system-reminder>大纲</system-reminder>')
+    expect(attached[4].content).toBe('回答')
+    // 原数组不被修改（请求级拼接不改视图）
+    expect(messages[3].content).toBe('第二轮意图')
+  })
+
+  it('returns the original array when no reminder or no user message exists', () => {
+    const messages: AgentMessage[] = [{ role: 'system', content: 'sys' }]
+    expect(attachOutlineReminder(messages, undefined)).toBe(messages)
+    expect(attachOutlineReminder(messages, '')).toBe(messages)
+    expect(attachOutlineReminder(messages, '大纲')).toBe(messages)
+  })
+})
+
+describe('buildOutlineSwitchRecord（大纲切换留痕）', () => {
+  it('records nothing on first selection or unchanged path', () => {
+    expect(buildOutlineSwitchRecord(undefined, 'prompts/scenes/a.md')).toBeNull()
+    expect(buildOutlineSwitchRecord(null, 'prompts/scenes/a.md')).toBeNull()
+    expect(buildOutlineSwitchRecord('prompts/scenes/a.md', 'prompts/scenes/a.md')).toBeNull()
+  })
+
+  it('records switch and close wording with file names', () => {
+    expect(buildOutlineSwitchRecord('prompts/scenes/a.md', 'prompts/scenes/b.md'))
+      .toBe('用户已将写作大纲从《a.md》切换为《b.md》。')
+    expect(buildOutlineSwitchRecord('prompts/scenes/a.md', null))
+      .toBe('用户已关闭写作大纲（此前为《a.md》）。')
   })
 })

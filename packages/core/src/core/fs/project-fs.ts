@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isGardenerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isGardenerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -52,7 +52,9 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
-  await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  // 项目记忆无默认模板（W2 起非空即注入为 user-role reminder）：新项目留空占位，
+  // 内容交给 /生成项目记忆 或用户手写，避免「待补充」骨架每轮灌进上下文。
+  await writeText(rootHandle, 'prompts/NovAI.md', '')
   await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
 
   return loadProjectFromHandle(rootHandle)
@@ -166,10 +168,11 @@ export async function repairProject(
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   }
 
-  // 项目总览 NovAI.md 缺失时补空骨架。它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），
-  // 因此不纳入 inspectProject 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
+  // 项目总览 NovAI.md 缺失时补空占位（同新项目：无默认模板，非空即注入）。
+  // 它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），因此不纳入 inspectProject
+  // 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
   if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
-    await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+    await writeText(rootHandle, 'prompts/NovAI.md', '')
   }
 
   // 要素库规范 ELEMENT.md 缺失时补默认内容（园丁子代理的唯一注入文件，随要素园丁 Phase 1 引入）。

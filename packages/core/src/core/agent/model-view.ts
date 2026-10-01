@@ -67,6 +67,19 @@ export function setSystemMessage(view: ModelView, content: string): void {
   view.messages = [{ role: 'system', content }, ...view.messages]
 }
 
+/**
+ * 在 system（index 0）之后插入一条消息。项目记忆 reminder 的专用位置：
+ * 紧跟 system、先于全部历史；压缩选区从 index 1 起，reminder 被吞后由 digest 机制重插。
+ */
+export function insertAfterSystem(view: ModelView, message: AgentMessage): void {
+  view.messages = [view.messages[0], message, ...view.messages.slice(1)]
+}
+
+/** 原地替换指定下标的消息（reminder 内容更新用，保持其余消息对象不变）。 */
+export function replaceMessage(view: ModelView, index: number, message: AgentMessage): void {
+  view.messages = view.messages.map((item, i) => (i === index ? message : item))
+}
+
 /** 产出最终发给模型的 messages 数组（防御性拷贝，调用方改动不影响视图）。 */
 export function toRequestMessages(view: ModelView): AgentMessage[] {
   return [...view.messages]

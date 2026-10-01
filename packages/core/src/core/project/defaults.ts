@@ -96,15 +96,13 @@ export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 - worldbuilding（世界观）：无固定模板，按规则体系自行组织分节。`
 
 /**
- * 项目总览 prompts/NovAI.md 的默认骨架。
+ * 旧版项目总览骨架（2026-10 提示词分层重构前，新项目默认写入的内容）。
  *
- * 作用类似 Claude Code 的 CLAUDE.md：项目级累积记忆，每轮注入到 Agent 的 system prompt。
- * 它回答“写到哪了、有哪些人物、哪些伏笔待回收、风格约定是什么”，让 Agent 不必每轮从零重建项目上下文。
- *
- * 新建项目时写入空骨架，用户可手动补充，或用 /生成项目记忆 让 Agent 扫描后填充。
- * 段落结构应与 init-novel-prompt.ts 的生成结构保持一致，便于手动与自动两种维护方式无缝衔接。
+ * NovAI.md 现在无默认模板：新项目创建时留空占位，内容交给 /生成项目记忆 或用户手写
+ * （非空即注入为 user-role reminder）。此常量仅用于「未动骨架不注入」比对——
+ * 旧项目从未改过的「待补充」骨架不应作为项目记忆注入。
  */
-export const DEFAULT_NOVAI_OVERVIEW = `# 项目总览（NovAI.md）
+export const LEGACY_DEFAULT_NOVAI_OVERVIEW = `# 项目总览（NovAI.md）
 
 这是本小说项目的项目级记忆。每轮 Agent 运行都会读取它作为上下文，让它知道“写到哪了、有哪些人物和设定、哪些伏笔待回收”。
 可以手动编辑，也可以在输入框用 /生成项目记忆 让 Agent 扫描全项目后自动更新。

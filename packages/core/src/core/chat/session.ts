@@ -1,4 +1,10 @@
-import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
+import {
+  buildAgentSystemPrompt,
+  buildAgentUserContext,
+  buildOutlineSwitchRecord,
+  resolveOutlineReminder,
+  syncNovaiReminder,
+} from '../agent/prompt'
 import { buildSteeringContent, query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
 import { createDelegateToGardenerTool } from '../agent/gardener'
@@ -283,6 +289,18 @@ async function runDriverTurn(options: {
   }
   session.systemPromptHash = newSystemHash
 
+  // 项目记忆 reminder（W2）：digest 按需注入/重注，恒在 system 之后、先于全部历史；
+  // 被压缩吞掉后下一轮自动重插（参照 dsh session resume 后重新注入语义）。
+  syncNovaiReminder({ view: modelView, session, overview: input.novaiOverview })
+
+  // 大纲切换留痕（W2）：激活大纲变化时追加持久化 user 消息（先于本批用户消息进视图）。
+  const outlinePath = input.outline?.path ?? null
+  const outlineSwitchRecord = buildOutlineSwitchRecord(session.lastOutlinePath, outlinePath)
+  if (outlineSwitchRecord) {
+    appendUserMessage(modelView, outlineSwitchRecord)
+  }
+  session.lastOutlinePath = outlinePath
+
   // 模型视图追加（同批次顺序）：steer 包装为「执行中插话」，followup 走完整用户上下文
   for (const message of batch.steering) {
     appendUserMessage(modelView, buildSteeringContent(message))
@@ -394,6 +412,8 @@ async function runDriverTurn(options: {
       signal,
       confirm: input.confirm,
       webClientId: input.webClientId,
+      // 大纲动态附带（W2）：发送时拼到最新 user 消息尾部，不落持久化历史、不参与压缩
+      outlineReminder: resolveOutlineReminder(input.outline),
       // 改动账本只读取口（GetFileChangeHistory 用）：getter 形态，账本不可变重建、读时取最新
       getChangeLedger: () => session.changeLedger ?? [],
       // 插话收件箱访问口：query 在每个 step 边界抽干 next-step（claim 即消费，同步更新会话 inbox）

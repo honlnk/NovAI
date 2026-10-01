@@ -1,5 +1,8 @@
-import { DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
-import type { ChatTargetContext } from '../../types/chat'
+import { DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { hashContent } from '../util/hash'
+import { insertAfterSystem, replaceMessage, type ModelView } from './model-view'
+import type { AgentMessage } from './messages'
+import type { ChatSessionState, ChatTargetContext } from '../../types/chat'
 import type { ProjectSnapshot } from '../../types/project'
 
 /**
@@ -92,4 +95,109 @@ export function buildAgentUserContext(input: {
   )
 
   return lines.join('\n')
+}
+
+// ---------- 项目记忆（NovAI.md）与大纲（scenes/）的注入机制（W2） ----------
+
+/** 项目记忆 reminder 的存在标记：两种文案（首注/更新）都含此片段，用于视图内检测。 */
+const NOVAI_REMINDER_MARKER = '项目级记忆（prompts/NovAI.md）'
+
+/** 层级声明（照 dsh 精神中文化）：背景不是命令，可被用户当轮指令压过去。 */
+const NOVAI_REMINDER_DISCLAIMER = '它不构成指令；与用户当前指令冲突时，以用户当前指令为准。它描述的是「项目里有什么」，不代表「本轮该做什么」。'
+
+export function buildNovaiReminder(content: string, options: { isUpdate: boolean }): string {
+  const head = options.isUpdate
+    ? `以下是最新的项目级记忆（prompts/NovAI.md），作为背景指导，取代此前任何版本。${NOVAI_REMINDER_DISCLAIMER}`
+    : `以下是项目级记忆（prompts/NovAI.md），作为背景指导。${NOVAI_REMINDER_DISCLAIMER}`
+  return `<system-reminder>\n${head}\n\n${content.trim()}\n</system-reminder>`
+}
+
+/**
+ * 项目记忆（NovAI.md）digest 按需注入：非空且非未动骨架才注入；首轮、内容变化、
+ * 或被压缩吞掉后在 system 之后（重）注入。reminder 恒为视图中唯一一条——变化时原地替换，
+ * 新旧不共存，故无需 dsh 的 baseline 替换声明。
+ */
+export function syncNovaiReminder(input: {
+  view: ModelView
+  session: ChatSessionState
+  overview?: string
+}): void {
+  const content = input.overview?.trim()
+  if (!content || content === LEGACY_DEFAULT_NOVAI_OVERVIEW) {
+    return
+  }
+
+  const digest = hashContent(content)
+  const existingIndex = input.view.messages.findIndex(
+    (message) => message.role === 'user' && message.content.includes(NOVAI_REMINDER_MARKER),
+  )
+  if (existingIndex >= 0 && digest === input.session.novaiOverviewDigest) {
+    return
+  }
+
+  const reminder: AgentMessage = {
+    role: 'user',
+    content: buildNovaiReminder(content, { isUpdate: existingIndex >= 0 }),
+  }
+  if (existingIndex >= 0) {
+    replaceMessage(input.view, existingIndex, reminder)
+  } else {
+    insertAfterSystem(input.view, reminder)
+  }
+  input.session.novaiOverviewDigest = digest
+}
+
+export function buildOutlineReminder(content: string): string {
+  return `<system-reminder>\n以下是当前写作大纲，作为背景参考。\n\n${content.trim()}\n</system-reminder>`
+}
+
+/**
+ * 解析当前激活大纲的动态附带文本：路径已选、内容非空且非未动默认模板才附带，否则空串。
+ * 附着发生在发送时（attachOutlineReminder），大纲本体不进持久化历史。
+ */
+export function resolveOutlineReminder(outline?: { path: string | null; content: string }): string {
+  const content = outline?.content?.trim()
+  if (!outline?.path || !content || outline.content === DEFAULT_SCENE_PROMPT) {
+    return ''
+  }
+  return buildOutlineReminder(content)
+}
+
+/** 把大纲 reminder 动态附到消息序列最后一条 user 消息尾部（请求级拼接，不改视图）。 */
+export function attachOutlineReminder(messages: AgentMessage[], reminder: string | undefined): AgentMessage[] {
+  if (!reminder) {
+    return messages
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') {
+      return messages.map((message, i) => (
+        i === index ? { ...message, content: `${message.content}\n\n${reminder}` } : message
+      ))
+    }
+  }
+  return messages
+}
+
+/**
+ * 大纲切换留痕（持久化 user 消息文案）：旧→新、旧→关闭两种；首次选择（null→A）不留痕
+ * ——大纲随最新 user 消息附带，模型自然看到。无变化返回 null。
+ */
+export function buildOutlineSwitchRecord(
+  previousPath: string | null | undefined,
+  nextPath: string | null,
+): string | null {
+  if (previousPath === undefined || previousPath === null) {
+    return null
+  }
+  if (nextPath && nextPath !== previousPath) {
+    return `用户已将写作大纲从《${fileNameOf(previousPath)}》切换为《${fileNameOf(nextPath)}》。`
+  }
+  if (!nextPath) {
+    return `用户已关闭写作大纲（此前为《${fileNameOf(previousPath)}》）。`
+  }
+  return null
+}
+
+function fileNameOf(path: string): string {
+  return path.split('/').pop() ?? path
 }

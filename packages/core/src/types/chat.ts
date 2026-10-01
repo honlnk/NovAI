@@ -220,6 +220,10 @@ export type ChatSessionState = {
   lastRagResult: RetrievalResult | null
   /** 当前会话已注入的 system message（身份 + 结构 + 工具规则 + 已修改的 system.md）hash，用于检测同会话内 system 变化并刷新。 */
   systemPromptHash?: string
+  /** 项目记忆 reminder 的内容 hash：digest 按需注入（首轮或内容变化时注入/重注，被压缩吞掉后重插）。 */
+  novaiOverviewDigest?: string
+  /** 最近一轮生效的大纲路径（null=未选择）；变化时向持久化历史追加切换留痕。 */
+  lastOutlinePath?: string | null
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
   title: string
   /** 会话创建时间（ISO），落盘与列表排序用 */
@@ -251,6 +255,10 @@ export type ChatTurnInput = {
   project: ProjectSnapshot
   config: ProjectConfig
   systemPrompt: string
+  /** 项目总览（prompts/NovAI.md）原文；非空且非未动骨架时以 user-role reminder 注入（digest 按需）。 */
+  novaiOverview?: string
+  /** 当前激活大纲（W2 仍指向 prompts/scenes/ 下文件，W3 随目录迁移为 outlines/）；path 为空 = 未选择/关闭。 */
+  outline?: { path: string | null; content: string }
   activeFilePath?: string | null
   /** 用户停止信号，透传到 Agent Loop。 */
   signal?: AbortSignal
