@@ -14,6 +14,12 @@ import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import GardenerTaskDialog from '../chat/GardenerTaskDialog.vue'
+import {
+  buildGardenerTaskMessage,
+  type GardenerPresetOption,
+  type GardenerTaskParams,
+} from '../chat/gardener-task'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
@@ -56,6 +62,8 @@ const emit = defineEmits<{
   changeOutline: [path: string | null]
   /** 要素写入完成，通知 ProjectView 刷新文件树（R6） */
   elementsWritten: []
+  /** 园丁弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
+  openGardenerSettings: []
 }>()
 
 const chatStore = useChatStore()
@@ -291,11 +299,12 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // /提取要素 章节选择打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isChapterPickerOpen.value) {
+  // /提取要素 章节选择、园丁任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
+  if (isChapterPickerOpen.value || isGardenerDialogOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
       isChapterPickerOpen.value = false
+      isGardenerDialogOpen.value = false
       return
     }
   }
@@ -375,7 +384,12 @@ function onTextareaInput(event: Event) {
  * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isChapterPickerOpen.value) {
+  if (
+    isSlashMenuOpen.value ||
+    isOutlineCommandOpen.value ||
+    isChapterPickerOpen.value ||
+    isGardenerDialogOpen.value
+  ) {
     clearSuggestion()
     return
   }
@@ -527,9 +541,9 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   }
 
   if (id === 'gardener') {
-    // 选中「整理要素」后，把驱动 prompt 直接作为用户意图发送：主 Agent 调用 DelegateToGardener
-    // 委派园丁子代理整理要素库，园丁的工具行在聊天区折叠为嵌套任务组。无二级交互界面。
-    triggerGardener()
+    // 选中「整理要素」后打开任务参数弹窗（要素整理参数化 W1；W3 起斜杠命令先落文本再开弹窗）。
+    // 确认后由 handleGardenerConfirm 按 D3 拼装消息发送，主 Agent 调 DelegateToGardener 委派园丁。
+    isGardenerDialogOpen.value = true
     return
   }
 
@@ -542,12 +556,41 @@ function handleSlashCommandSelect(id: SlashCommandId) {
 }
 
 /**
- * 一键整理要素（园丁 Phase 2 W2 快捷入口）：工具栏按钮 / 全局快捷键 / 斜杠命令三入口共用。
- * 驱动 prompt 作为用户意图走 sendMessage——空闲即发，运行中进 QueueDock 排队，零 core 改动。
+ * 一键整理要素（园丁 Phase 2 W2 快捷入口）：全局快捷键入口直发裸 GARDENER_TASK_PROMPT——
+ * 快捷键语义是「一键」，不弹参数弹窗；斜杠命令与工具栏按钮已改为参数弹窗（要素整理参数化 W1）。
  */
 function triggerGardener() {
   followAndScrollToBottom()
   void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+}
+
+// ===== 园丁任务参数弹窗（要素整理参数化 W1，target=current 实例） =====
+
+/** 弹窗是否打开（锚定输入框上方） */
+const isGardenerDialogOpen = ref(false)
+/** 快捷选项数据源（W1 占位空数组，W2 接 .novai/gardener-presets.json） */
+const gardenerPresets = computed<GardenerPresetOption[]>(() => [])
+
+/** 输入框上方「🌿 整理要素」按钮 / 斜杠命令：打开参数弹窗（D1：当前会话） */
+function openGardenerDialog() {
+  isGardenerDialogOpen.value = true
+}
+
+/** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队） */
+async function handleGardenerConfirm(params: GardenerTaskParams) {
+  isGardenerDialogOpen.value = false
+  followAndScrollToBottom()
+  await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+}
+
+function handleGardenerDialogCancel() {
+  isGardenerDialogOpen.value = false
+}
+
+/** 弹窗空态「新建快捷选项」：关弹窗并请求打开设置页（W2 起定位到要素整理 tab） */
+function handleGardenerOpenSettings() {
+  isGardenerDialogOpen.value = false
+  emit('openGardenerSettings')
 }
 
 /**
@@ -805,6 +848,17 @@ async function handleExtractionConfirm() {
             @confirm="handleChapterPickerConfirm"
             @cancel="handleChapterPickerCancel"
           />
+          <!-- 园丁任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
+          <div v-if="isGardenerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">
+            <GardenerTaskDialog
+              target="current"
+              :chapters="chapters"
+              :presets="gardenerPresets"
+              @confirm="handleGardenerConfirm"
+              @cancel="handleGardenerDialogCancel"
+              @open-settings="handleGardenerOpenSettings"
+            />
+          </div>
           <!-- 卡片式输入框：textarea + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
             <!-- textarea + ghost text 覆盖层（补全开启且有建议时） -->
@@ -834,12 +888,12 @@ async function handleExtractionConfirm() {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
-                <!-- 一键整理要素（W2 快捷入口）：与全局 Ctrl/Cmd+Shift+G、/整理要素 同一触发链路 -->
+                <!-- 整理要素（参数弹窗入口，要素整理参数化 W1）：与斜杠命令同一入口；全局 Ctrl/Cmd+Shift+G 仍直发裸任务 -->
                 <button
                   type="button"
                   class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
-                  title="一键整理要素库（Ctrl/Cmd+Shift+G，子智能体执行）；Agent 运行中自动排队"
-                  @click="triggerGardener"
+                  title="整理要素库（可配任务参数；子智能体执行）；Agent 运行中自动排队"
+                  @click="openGardenerDialog"
                 >
                   <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
