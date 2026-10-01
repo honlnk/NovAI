@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { createDefaultConfig, DEFAULT_ELEMENT_SCHEMA } from '../project/defaults'
-import { readElementSchema, readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
+import { loadProjectFromHandle, readElementSchema, readOutlinePrompt, readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
 
 describe('project fs repair', () => {
-  it('does not recreate the default scene prompt after it has been deleted or renamed', async () => {
+  it('does not recreate the default outline template after it has been deleted or renamed', async () => {
     const rootHandle = createMemoryDirectory('novel')
 
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
@@ -29,8 +29,9 @@ describe('project fs repair', () => {
       kind: 'directory',
       path: 'prompts',
     }))
-    await expect(readProjectText(rootHandle, 'prompts/scenes/scene-001.md')).rejects.toThrow('Not found')
-    await expect(readProjectText(rootHandle, 'prompts/scenes/renamed-scene.md')).resolves.toBe('# Renamed Scene Prompt')
+    // 旧 scenes/ 目录随打开迁移为 outlines/（内容不动），默认模板不会被重建
+    await expect(readProjectText(rootHandle, 'prompts/outlines/outline-001.md')).rejects.toThrow('Not found')
+    await expect(readProjectText(rootHandle, 'prompts/outlines/renamed-scene.md')).resolves.toBe('# Renamed Scene Prompt')
   })
 
   it('要素规范 ELEMENT.md：缺失时补默认内容，已有版本（含用户修改）不覆盖', async () => {
@@ -243,6 +244,85 @@ describe('园丁覆盖块归一化（Phase 2 计划 D2/D3）', () => {
       const config = await readProjectConfig(rootHandle)
       expect(config.gardener).toBeUndefined()
     }
+  })
+})
+
+describe('scenes→outlines 迁移（W3）', () => {
+  function writeLegacyProject(rootHandle: ReturnType<typeof createMemoryDirectory>) {
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      project: { name: 'novel', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+      settings: { activeScenePromptPath: 'prompts/scenes/main.md' },
+    }))
+    writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
+      projectId: 'p1', version: 1, createdAt: '2026-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    writeProjectTextSync(rootHandle, 'prompts/system.md', '# System Prompt')
+    writeProjectTextSync(rootHandle, 'prompts/scenes/main.md', '# 主线大纲')
+    writeProjectTextSync(rootHandle, 'prompts/scenes/scene-001.md', '# Scene Prompt\n\n在这里为具体章节记录本场景目标、冲突、登场人物与氛围。')
+  }
+
+  it('打开旧项目：scenes/ 文件搬进 outlines/（内容不动）、目录删除、config 路径与旧字段名映射', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeLegacyProject(rootHandle)
+
+    const project = await loadProjectFromHandle(rootHandle)
+
+    // 文件迁移且内容不动
+    await expect(readProjectText(rootHandle, 'prompts/outlines/main.md')).resolves.toBe('# 主线大纲')
+    await expect(readProjectText(rootHandle, 'prompts/outlines/scene-001.md')).resolves.toContain('# Scene Prompt')
+    // scenes/ 目录搬空后删除
+    await expect(readProjectText(rootHandle, 'prompts/scenes/main.md')).rejects.toThrow('Not found')
+    // config：旧字段名 + scenes/ 前缀 → activeOutlinePath + outlines/ 前缀，且已写回盘
+    expect(project.config.settings.activeOutlinePath).toBe('prompts/outlines/main.md')
+    expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBe('prompts/outlines/main.md')
+    // outlines/ 下的文件可按新路径读到
+    await expect(readOutlinePrompt(rootHandle, 'prompts/outlines/main.md')).resolves.toBe('# 主线大纲')
+    // 旧路径不再命中（readOutlinePrompt 只认 outlines/ 前缀）
+    await expect(readOutlinePrompt(rootHandle, 'prompts/scenes/main.md')).resolves.toBe('')
+  })
+
+  it('幂等：再次打开不重复迁移、状态稳定', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeLegacyProject(rootHandle)
+
+    await loadProjectFromHandle(rootHandle)
+    const second = await loadProjectFromHandle(rootHandle)
+
+    expect(second.config.settings.activeOutlinePath).toBe('prompts/outlines/main.md')
+    await expect(readProjectText(rootHandle, 'prompts/outlines/main.md')).resolves.toBe('# 主线大纲')
+    await expect(readProjectText(rootHandle, 'prompts/outlines/scene-001.md')).resolves.toContain('# Scene Prompt')
+  })
+
+  it('同名冲突：outlines/ 已有同名文件时 scenes/ 原文件保留、目录不删', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeLegacyProject(rootHandle)
+    writeProjectTextSync(rootHandle, 'prompts/outlines/main.md', '# 已存在的大纲')
+
+    await loadProjectFromHandle(rootHandle)
+
+    // 冲突文件不覆盖
+    await expect(readProjectText(rootHandle, 'prompts/outlines/main.md')).resolves.toBe('# 已存在的大纲')
+    // 无冲突的照常搬走；scenes 里只剩冲突文件、目录保留
+    await expect(readProjectText(rootHandle, 'prompts/scenes/main.md')).resolves.toBe('# 主线大纲')
+    await expect(readProjectText(rootHandle, 'prompts/scenes/scene-001.md')).rejects.toThrow('Not found')
+  })
+
+  it('config 归一化：旧字段/前缀随读随映射，null 与非法值归一', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+
+    // 新字段名 + 旧前缀（迁移中途态）也会被归一
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      settings: { activeOutlinePath: 'prompts/scenes/keep.md' },
+    }))
+    expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBe('prompts/outlines/keep.md')
+
+    // 缺省 / null / 非字符串
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
+    expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBeNull()
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: { activeScenePromptPath: null } }))
+    expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBeNull()
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: { activeScenePromptPath: 42 } }))
+    expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBeNull()
   })
 })
 

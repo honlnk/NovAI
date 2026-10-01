@@ -100,7 +100,7 @@ describe('五档判定：完全访问', () => {
 
   it('内容修改与结构操作全部免确认', () => {
     expect(decideWriteToolPermission('EditFile', { path: 'prompts/system.md' }, project)).toEqual({ kind: 'allow' })
-    expect(decideWriteToolPermission('CreateFile', { path: 'prompts/scenes/新场景.md' }, project)).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('CreateFile', { path: 'prompts/outlines/新设定.md' }, project)).toEqual({ kind: 'allow' })
     expect(decideWriteToolPermission('DeleteFile', { path: 'chapters/第001章-开头.txt' }, project)).toEqual({ kind: 'allow' })
     expect(decideWriteToolPermission('RenameFile', { fromPath: 'a.md', toPath: 'b.md' }, project)).toEqual({ kind: 'allow' })
   })

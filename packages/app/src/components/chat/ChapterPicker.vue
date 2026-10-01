@@ -6,7 +6,7 @@ import type { ProjectFileNodeView } from '@novai/core/services/types'
  * 章节多选弹层（R6）。
  *
  * 输入框输入 /提取要素 后触发，供用户多选要提取要素的章节。
- * 与 SceneCommandPopover（单选）交互差异大，独立组件。
+ * 与 OutlineCommandPopover（单选）交互差异大，独立组件。
  */
 const props = defineProps<{
   /** 章节列表（chapters/*.txt|.md，已扁平化） */

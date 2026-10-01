@@ -144,7 +144,7 @@ export type ChatMessage =
   | ChangeSummaryMessage
 
 export type ChatTargetContext = {
-  type: 'chapter' | 'prompt-system' | 'prompt-scene' | 'element' | 'project'
+  type: 'chapter' | 'prompt-system' | 'prompt-outline' | 'element' | 'project'
   primaryPath?: string
   groupName?: string
   displayName: string
@@ -257,7 +257,7 @@ export type ChatTurnInput = {
   systemPrompt: string
   /** 项目总览（prompts/NovAI.md）原文；非空且非未动骨架时以 user-role reminder 注入（digest 按需）。 */
   novaiOverview?: string
-  /** 当前激活大纲（W2 仍指向 prompts/scenes/ 下文件，W3 随目录迁移为 outlines/）；path 为空 = 未选择/关闭。 */
+  /** 当前激活大纲（prompts/outlines/ 下文件）；path 为空 = 未选择/关闭。 */
   outline?: { path: string | null; content: string }
   activeFilePath?: string | null
   /** 用户停止信号，透传到 Agent Loop。 */

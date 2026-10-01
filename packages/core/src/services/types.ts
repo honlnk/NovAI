@@ -64,7 +64,7 @@ export type ProjectConfigView = {
     permissionPreset: PermissionPreset
     embeddingTextVersion: number
     enableDebugLogging: boolean
-    activeScenePromptPath: string | null
+    activeOutlinePath: string | null
   }
 }
 
@@ -126,7 +126,7 @@ export type ChatTargetView = {
     | 'project'
     | 'chapter'
     | 'prompt-system'
-    | 'prompt-scene'
+    | 'prompt-outline'
     | 'element'
   primaryPath?: string
   groupName?: string
@@ -302,7 +302,7 @@ export type ProjectIssueView =
   | 'missing-manifest'
   | 'invalid-manifest'
   | 'missing-prompts-system'
-  | 'missing-prompts-scenes'
+  | 'missing-prompts-outlines'
   | 'missing-chapters'
   | 'missing-elements'
   | 'missing-internal-directory'

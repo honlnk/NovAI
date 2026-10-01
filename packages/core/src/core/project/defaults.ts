@@ -27,7 +27,33 @@ export const LEGACY_DEFAULT_SYSTEM_PROMPT = `# SYSTEM Prompt
 - 人物、地点、实体、情节、时间线、世界观等要素写入 elements/**/*.md。
 - SYSTEM 与 SCENE 提示词写入 prompts/**/*.md。`
 
-export const DEFAULT_SCENE_PROMPT = `# Scene Prompt
+/**
+ * `prompts/outlines/outline-001.md` 的大纲默认模板（W3 scenes→outlines 改名时换新）。
+ *
+ * 注入机制与 system.md 相同：保持原样（与常量逐字节相同）时不附加到对话上下文；
+ * 删掉首行机制注释句或改动任何内容即生效（随最新 user 消息动态附带）。
+ * 三节骨架（梗概/主线/关键节点）是建议结构，用户可自由改写。
+ */
+export const DEFAULT_OUTLINE_TEMPLATE = `注：本文件当前为大纲模板，保持原样不修改时不会附加到对话上下文；删掉本句即可让以下大纲生效：
+
+## 梗概
+
+- 一句话概括本卷或全书的故事。
+
+## 主线
+
+- 主线冲突与阶段走向。
+
+## 关键节点
+
+- 已确定的关键情节节点与伏笔落点。`
+
+/**
+ * 旧版场景提示词默认模板（W3 之前的 `prompts/scenes/scene-001.md` 默认内容）。
+ * 「未修改不附加」的比对把旧模板一并视为未修改——迁移过来的旧项目从未动过的
+ * scene-001.md（内容原样搬进 outlines/）不应附加到上下文。
+ */
+export const LEGACY_DEFAULT_OUTLINE_TEMPLATE = `# Scene Prompt
 
 在这里为具体章节记录本场景目标、冲突、登场人物与氛围。`
 
@@ -186,7 +212,7 @@ export const DEFAULT_CONFIG = {
     permissionPreset: 'chapter-material',
     embeddingTextVersion: 1,
     enableDebugLogging: false,
-    activeScenePromptPath: null,
+    activeOutlinePath: null,
   },
 } as const
 

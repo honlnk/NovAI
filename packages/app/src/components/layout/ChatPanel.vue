@@ -11,7 +11,7 @@ import MessageItem from '../chat/MessageItem.vue'
 import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
-import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
+import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
 import ChapterPicker from '../chat/ChapterPicker.vue'
 import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
@@ -39,10 +39,10 @@ const props = defineProps<{
   isSidebarOpen: boolean
   isContentPanelOpen: boolean
   quote: SelectionQuote | null
-  /** 场景提示词列表（prompts/scenes/*.md），供 @ 指令选择 */
-  scenes: ProjectFileNodeView[]
-  /** 当前激活的场景路径，null 表示未激活 */
-  activeScenePromptPath: string | null
+  /** 写作大纲列表（prompts/outlines/*.md），供 @ 指令选择 **/
+  outlines: ProjectFileNodeView[]
+  /** 当前激活的大纲路径，null 表示未激活 **/
+  activeOutlinePath: string | null
   /** 章节列表（chapters/*.txt|.md），供 /提取要素 选择（R6） */
   chapters: ProjectFileNodeView[]
 }>()
@@ -52,8 +52,8 @@ const emit = defineEmits<{
   toggleContentPanel: []
   toggleMobileSidebar: []
   clearQuote: []
-  /** 切换激活场景，path 为 null 表示关闭 */
-  changeScene: [path: string | null]
+  /** 切换激活大纲，path 为 null 表示关闭 **/
+  changeOutline: [path: string | null]
   /** 要素写入完成，通知 ProjectView 刷新文件树（R6） */
   elementsWritten: []
 }>()
@@ -322,26 +322,26 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // @场景 弹层打开时：拦截导航键交给弹层
-  if (isSceneCommandOpen.value && scenePopoverRef.value) {
+  // @大纲 弹层打开时：拦截导航键交给弹层
+  if (isOutlineCommandOpen.value && outlinePopoverRef.value) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      scenePopoverRef.value.moveDown()
+      outlinePopoverRef.value.moveDown()
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      scenePopoverRef.value.moveUp()
+      outlinePopoverRef.value.moveUp()
       return
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      scenePopoverRef.value.confirm()
+      outlinePopoverRef.value.confirm()
       return
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      handleCloseSceneCommand()
+      handleCloseOutlineCommand()
       return
     }
   }
@@ -364,7 +364,7 @@ function autoResize(event: Event) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
 }
 
-/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素）+ 输入补全调度 */
+/** textarea input 统一入口：自适应高度 + 指令检测（R4 @大纲 / R6 /提取要素）+ 输入补全调度 */
 function onTextareaInput(event: Event) {
   autoResize(event)
   detectCommands()
@@ -372,10 +372,10 @@ function onTextareaInput(event: Event) {
 }
 
 /**
- * 调度输入补全。命令菜单 / @场景 / 章节选择打开时不调度，避免与这些交互冲突。
+ * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isSceneCommandOpen.value || isChapterPickerOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isChapterPickerOpen.value) {
     clearSuggestion()
     return
   }
@@ -407,24 +407,24 @@ function acceptCompletionSegment() {
   }
 }
 
-// ===== R4：@场景 指令检测 =====
+// ===== R4：@大纲 指令检测 =====
 
-/** @场景 弹层是否打开 */
-const isSceneCommandOpen = ref(false)
+/** @大纲 弹层是否打开 */
+const isOutlineCommandOpen = ref(false)
 /** @ 后的筛选词 */
-const sceneQuery = ref('')
+const outlineQuery = ref('')
 /** 弹层组件引用（键盘导航用） */
-const scenePopoverRef = ref<InstanceType<typeof SceneCommandPopover> | null>(null)
+const outlinePopoverRef = ref<InstanceType<typeof OutlineCommandPopover> | null>(null)
 
 /**
  * 匹配光标前最近的 @ 指令。
  * 规则：@ 前是行首或空白，@ 后到光标间不含空格/换行/@。
  * 捕获组即筛选词（可能为空字符串）。
  */
-const SCENE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
+const OUTLINE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
 
 /**
- * 清除光标处匹配指定正则的 token（@场景、/命令 共用）。
+ * 清除光标处匹配指定正则的 token（@大纲、/命令 共用）。
  * 清除后光标回位并重新聚焦 textarea。
  */
 function clearTokenAtCursor(re: RegExp) {
@@ -445,17 +445,17 @@ function clearTokenAtCursor(re: RegExp) {
 }
 
 /**
- * 选中场景后：清除输入框里的 @token（含筛选词），激活场景，关闭弹层。
+ * 选中大纲后：清除输入框里的 @token（含筛选词），激活大纲，关闭弹层。
  */
-function handleSelectScene(path: string) {
-  clearTokenAtCursor(SCENE_COMMAND_RE)
-  isSceneCommandOpen.value = false
-  sceneQuery.value = ''
-  emit('changeScene', path)
+function handleSelectOutline(path: string) {
+  clearTokenAtCursor(OUTLINE_COMMAND_RE)
+  isOutlineCommandOpen.value = false
+  outlineQuery.value = ''
+  emit('changeOutline', path)
 }
 
-function handleCloseSceneCommand() {
-  isSceneCommandOpen.value = false
+function handleCloseOutlineCommand() {
+  isOutlineCommandOpen.value = false
 }
 
 // ===== R6：斜杠命令菜单 / 提取要素 =====
@@ -473,7 +473,7 @@ const extraction = useElementExtraction()
 
 /**
  * 匹配光标前最近的 / 命令前缀。
- * 规则与 @场景 同构：/ 前是行首或空白，/ 后到光标间不含空格/换行/。
+ * 规则与 @大纲 同构：/ 前是行首或空白，/ 后到光标间不含空格/换行/。
  * 捕获组即筛选词（可能为空）。
  */
 const SLASH_COMMAND_RE = /(?:^|\s)\/([^\s/]*)$/
@@ -482,7 +482,7 @@ const SLASH_COMMAND_RE = /(?:^|\s)\/([^\s/]*)$/
 function detectCommands() {
   const textarea = textareaRef.value
   if (!textarea) {
-    isSceneCommandOpen.value = false
+    isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
     isChapterPickerOpen.value = false
     return
@@ -490,22 +490,22 @@ function detectCommands() {
   const cursor = textarea.selectionStart ?? 0
   const beforeCursor = inputText.value.slice(0, cursor)
 
-  // @场景、/ 命令、章节选择三层互斥，同一时刻只开一个
-  const sceneMatch = SCENE_COMMAND_RE.exec(beforeCursor)
+  // @大纲、/ 命令、章节选择三层互斥，同一时刻只开一个
+  const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
   const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
 
   if (slashMatch) {
     slashQuery.value = slashMatch[1]
     isSlashMenuOpen.value = true
-    isSceneCommandOpen.value = false
+    isOutlineCommandOpen.value = false
     isChapterPickerOpen.value = false
-  } else if (sceneMatch) {
-    sceneQuery.value = sceneMatch[1]
-    isSceneCommandOpen.value = props.scenes.length > 0
+  } else if (outlineMatch) {
+    outlineQuery.value = outlineMatch[1]
+    isOutlineCommandOpen.value = props.outlines.length > 0
     isSlashMenuOpen.value = false
     isChapterPickerOpen.value = false
   } else {
-    isSceneCommandOpen.value = false
+    isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
     isChapterPickerOpen.value = false
   }
@@ -770,7 +770,7 @@ async function handleExtractionConfirm() {
           @remove="chatStore.removeQueuedMessage"
           @steer="chatStore.steerQueuedMessage"
         />
-        <!-- chip 区：引用 chip（场景 chip 已移至底部状态栏） -->
+        <!-- chip 区：引用 chip（大纲 chip 已移至底部状态栏） -->
         <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
           <SelectionChip
             v-if="quote"
@@ -780,15 +780,15 @@ async function handleExtractionConfirm() {
           />
         </div>
         <div class="relative">
-          <!-- @场景 指令弹层（R4） -->
-          <SceneCommandPopover
-            v-if="isSceneCommandOpen"
-            ref="scenePopoverRef"
-            :scenes="scenes"
-            :active-scene-path="activeScenePromptPath"
-            :query="sceneQuery"
-            @select="handleSelectScene"
-            @close="handleCloseSceneCommand"
+          <!-- @大纲 指令弹层（R4） -->
+          <OutlineCommandPopover
+            v-if="isOutlineCommandOpen"
+            ref="outlinePopoverRef"
+            :outlines="outlines"
+            :active-outline-path="activeOutlinePath"
+            :query="outlineQuery"
+            @select="handleSelectOutline"
+            @close="handleCloseOutlineCommand"
           />
           <!-- 斜杠命令菜单（R6） -->
           <SlashCommandMenu
@@ -820,7 +820,7 @@ async function handleExtractionConfirm() {
                 class="chat-input-base resize-none bg-transparent text-gray-800 outline-none placeholder:text-gray-400"
                 :placeholder="chatStore.isRunning
                   ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
-                  : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)'"
+                  : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)'"
                 rows="2"
                 @keydown="handleKeydown"
                 @input="onTextareaInput"

@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isGardenerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, isGardenerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -22,10 +22,13 @@ const REQUIRED_DIRECTORY_PATHS = [
   'elements/plots',
   'elements/worldbuilding',
   'prompts',
-  'prompts/scenes',
+  'prompts/outlines',
   '.novel',
   '.novel/logs',
 ] as const
+
+const OUTLINES_DIRECTORY = 'prompts/outlines'
+const LEGACY_SCENES_DIRECTORY = 'prompts/scenes'
 
 /**
  * 判断当前运行环境是否支持浏览器目录读写能力。
@@ -51,7 +54,7 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
-  await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
+  await writeText(rootHandle, 'prompts/outlines/outline-001.md', DEFAULT_OUTLINE_TEMPLATE)
   // 项目记忆无默认模板（W2 起非空即注入为 user-role reminder）：新项目留空占位，
   // 内容交给 /生成项目记忆 或用户手写，避免「待补充」骨架每轮灌进上下文。
   await writeText(rootHandle, 'prompts/NovAI.md', '')
@@ -104,8 +107,13 @@ export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Pro
     issues.push('missing-prompts-system')
   }
 
-  if (!(await pathExists(rootHandle, 'prompts/scenes', 'directory'))) {
-    issues.push('missing-prompts-scenes')
+  // 兼容旧目录：未迁移的旧项目仍是 prompts/scenes/（loadProjectFromHandle 会自动迁移），
+  // 不能因此判损坏——两目录任一存在即通过。
+  if (
+    !(await pathExists(rootHandle, OUTLINES_DIRECTORY, 'directory'))
+    && !(await pathExists(rootHandle, LEGACY_SCENES_DIRECTORY, 'directory'))
+  ) {
+    issues.push('missing-prompts-outlines')
   }
 
   if (!(await pathExists(rootHandle, 'chapters', 'directory'))) {
@@ -187,9 +195,21 @@ export async function repairProject(
 /**
  * 从一个已知合法的目录句柄中读取配置、清单和文件树，并组装成项目快照。
  * 这是测试页后续所有项目级操作的基础输入。
+ *
+ * W3 起打开旧项目时先做 scenes→outlines 迁移（幂等），config 的大纲路径前缀与
+ * 旧字段名随迁移/归一化自动映射，用户文件只改名不动内容。
  */
 export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandle): Promise<ProjectSnapshot> {
-  const config = normalizeProjectConfig(await readJson<ProjectConfig>(rootHandle, 'novel.config.json'))
+  const migrated = await migrateScenesToOutlines(rootHandle)
+  const rawConfig = await readJson<ProjectConfig>(rootHandle, 'novel.config.json')
+  const hasLegacyOutlineReference = Boolean(
+    (rawConfig.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath,
+  )
+  const config = normalizeProjectConfig(rawConfig)
+  // 迁移过或 config 还带旧字段：把归一化结果写回盘（路径前缀已替换、旧字段名被丢弃）
+  if (migrated || hasLegacyOutlineReference) {
+    await writeJson(rootHandle, 'novel.config.json', config)
+  }
   const manifest = await readJson<ProjectManifest>(rootHandle, '.novel/manifest.json')
   const tree = await scanDirectory(rootHandle)
 
@@ -203,6 +223,36 @@ export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandl
     tree,
     metadata: summarizeProject(tree, config, manifest),
   }
+}
+
+/**
+ * 旧项目迁移（W3，幂等）：`prompts/scenes/` → `prompts/outlines/`。
+ * 文件逐个搬移（内容不动）；目标同名冲突的文件留在原处不覆盖；scenes 目录搬空后删除，
+ * 仍有残留（同名冲突）则保留。返回是否发生了搬移。
+ */
+async function migrateScenesToOutlines(rootHandle: FileSystemDirectoryHandle): Promise<boolean> {
+  if (!(await pathExists(rootHandle, LEGACY_SCENES_DIRECTORY, 'directory'))) {
+    return false
+  }
+
+  await ensureDirectory(rootHandle, OUTLINES_DIRECTORY)
+  const legacyFiles = await listFilesInDirectory(rootHandle, LEGACY_SCENES_DIRECTORY)
+  let movedAny = false
+  for (const filePath of legacyFiles) {
+    const targetPath = `${OUTLINES_DIRECTORY}/${filePath.slice(LEGACY_SCENES_DIRECTORY.length + 1)}`
+    if (await pathExists(rootHandle, targetPath, 'file')) {
+      continue
+    }
+    await moveProjectTextFile(rootHandle, filePath, targetPath)
+    movedAny = true
+  }
+
+  // 搬空才删目录；仍有文件（同名冲突未搬）则保留，等用户处理
+  const remaining = await listFilesInDirectory(rootHandle, LEGACY_SCENES_DIRECTORY)
+  if (remaining.length === 0) {
+    await removeFile(rootHandle, LEGACY_SCENES_DIRECTORY)
+  }
+  return movedAny
 }
 
 /**
@@ -344,8 +394,24 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       // agentMaxTurns：0=不限（现行默认）。恰为 8 是旧版出厂默认，视为需要迁移的旧值按 0 处理
       // （用户显式选过其他值如 5 的尊重保留）；缺字段/非法值回退 0。下次保存设置自然落盘为 0。
       agentMaxTurns: normalizeAgentMaxTurns(config.settings?.agentMaxTurns),
+      // 大纲路径（W3 改名）：新字段优先，旧字段 activeScenePromptPath 读入映射；
+      // prompts/scenes/ 前缀随归一化替换为 outlines/（幂等，旧值随读随映射不丢用户选择）
+      activeOutlinePath: remapOutlinePath(
+        config.settings?.activeOutlinePath
+          ?? (config.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath,
+      ),
     },
   }
+}
+
+/** prompts/scenes/ 路径前缀 → prompts/outlines/；空/非法值归一为 null。 */
+function remapOutlinePath(path: unknown): string | null {
+  if (typeof path !== 'string' || !path.trim()) {
+    return null
+  }
+  return path.startsWith(LEGACY_SCENES_DIRECTORY)
+    ? `${OUTLINES_DIRECTORY}${path.slice(LEGACY_SCENES_DIRECTORY.length)}`
+    : path
 }
 
 /** agentMaxTurns 迁移 + 钳制：非有限数 → 0（默认）；8（旧版出厂默认）→ 0；其余钳到 0-50。 */
@@ -479,21 +545,21 @@ export async function readSystemPrompt(rootHandle: FileSystemDirectoryHandle) {
 }
 
 /**
- * 读取当前激活的场景级提示词。
- * path 为空、不是 prompts/scenes/ 下文件或文件缺失时，返回空字符串，不抛错。
+ * 读取当前激活的写作大纲（`prompts/outlines/` 下文件）。
+ * path 为空、不是 outlines/ 下文件或文件缺失时，返回空字符串，不抛错。
  */
-export async function readScenePrompt(
+export async function readOutlinePrompt(
   rootHandle: FileSystemDirectoryHandle,
   path?: string | null,
 ): Promise<string> {
-  const scenePath = path?.trim()
+  const outlinePath = path?.trim()
 
-  if (!scenePath || !scenePath.startsWith('prompts/scenes/')) {
+  if (!outlinePath || !outlinePath.startsWith(`${OUTLINES_DIRECTORY}/`)) {
     return ''
   }
 
   try {
-    return await readText(rootHandle, scenePath)
+    return await readText(rootHandle, outlinePath)
   } catch {
     return ''
   }

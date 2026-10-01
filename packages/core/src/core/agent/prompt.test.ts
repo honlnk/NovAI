@@ -11,7 +11,7 @@ import {
 import { createModelView, setSystemMessage, type ModelView } from './model-view'
 import type { AgentMessage } from './messages'
 import type { ChatSessionState } from '../../types/chat'
-import { DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_OUTLINE_TEMPLATE, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
 import { hashContent } from '../util/hash'
 
 describe('buildAgentSystemPrompt', () => {
@@ -210,13 +210,15 @@ describe('resolveOutlineReminder / attachOutlineReminder（大纲动态附带）
   it('resolves to empty string when unselected, file empty, or untouched default template', () => {
     expect(resolveOutlineReminder(undefined)).toBe('')
     expect(resolveOutlineReminder({ path: null, content: '' })).toBe('')
-    expect(resolveOutlineReminder({ path: 'prompts/scenes/scene-001.md', content: '' })).toBe('')
-    expect(resolveOutlineReminder({ path: 'prompts/scenes/scene-001.md', content: DEFAULT_SCENE_PROMPT })).toBe('')
+    expect(resolveOutlineReminder({ path: 'prompts/outlines/outline-001.md', content: '' })).toBe('')
+    expect(resolveOutlineReminder({ path: 'prompts/outlines/outline-001.md', content: DEFAULT_OUTLINE_TEMPLATE })).toBe('')
+    // 迁移过来的旧项目未动过的 scene-001.md（旧默认模板）同样不附加
+    expect(resolveOutlineReminder({ path: 'prompts/outlines/scene-001.md', content: LEGACY_DEFAULT_OUTLINE_TEMPLATE })).toBe('')
   })
 
   it('builds a background-reference reminder for a real outline', () => {
     const reminder = resolveOutlineReminder({
-      path: 'prompts/scenes/main.md',
+      path: 'prompts/outlines/main.md',
       content: '第一卷：火中拾婴。',
     })
     expect(reminder).toContain('<system-reminder>')
@@ -253,15 +255,15 @@ describe('resolveOutlineReminder / attachOutlineReminder（大纲动态附带）
 
 describe('buildOutlineSwitchRecord（大纲切换留痕）', () => {
   it('records nothing on first selection or unchanged path', () => {
-    expect(buildOutlineSwitchRecord(undefined, 'prompts/scenes/a.md')).toBeNull()
-    expect(buildOutlineSwitchRecord(null, 'prompts/scenes/a.md')).toBeNull()
-    expect(buildOutlineSwitchRecord('prompts/scenes/a.md', 'prompts/scenes/a.md')).toBeNull()
+    expect(buildOutlineSwitchRecord(undefined, 'prompts/outlines/a.md')).toBeNull()
+    expect(buildOutlineSwitchRecord(null, 'prompts/outlines/a.md')).toBeNull()
+    expect(buildOutlineSwitchRecord('prompts/outlines/a.md', 'prompts/outlines/a.md')).toBeNull()
   })
 
   it('records switch and close wording with file names', () => {
-    expect(buildOutlineSwitchRecord('prompts/scenes/a.md', 'prompts/scenes/b.md'))
+    expect(buildOutlineSwitchRecord('prompts/outlines/a.md', 'prompts/outlines/b.md'))
       .toBe('用户已将写作大纲从《a.md》切换为《b.md》。')
-    expect(buildOutlineSwitchRecord('prompts/scenes/a.md', null))
+    expect(buildOutlineSwitchRecord('prompts/outlines/a.md', null))
       .toBe('用户已关闭写作大纲（此前为《a.md》）。')
   })
 })

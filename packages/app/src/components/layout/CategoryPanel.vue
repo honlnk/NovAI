@@ -10,7 +10,7 @@ defineProps<{
   activeCategory: Category
   files: ProjectFileNodeView[]
   activeFilePath?: string
-  activeScenePromptPath: string | null
+  activeOutlinePath: string | null
   /** 历史会话列表（对话分类面板用） */
   sessions: ChatSessionSummaryView[]
   /** 当前激活会话 id（对话分类面板高亮用） */
@@ -23,7 +23,7 @@ defineProps<{
 
 const emit = defineEmits<{
   selectFile: [path: string]
-  changeScene: [path: string | null]
+  changeOutline: [path: string | null]
   closeMobile: []
   selectSession: [sessionId: string]
   createSession: []
@@ -78,9 +78,9 @@ const emit = defineEmits<{
       v-else-if="activeCategory === 'prompt'"
       :files="files"
       :active-file-path="activeFilePath"
-      :active-scene-prompt-path="activeScenePromptPath"
+      :active-outline-path="activeOutlinePath"
       @select-file="emit('selectFile', $event)"
-      @change-scene="emit('changeScene', $event)"
+      @change-outline="emit('changeOutline', $event)"
     />
   </aside>
 </template>

@@ -42,7 +42,7 @@ function createConfigView(overrides: Partial<ProjectConfigView> = {}): ProjectCo
       permissionPreset: 'chapter-material',
       embeddingTextVersion: 1,
       enableDebugLogging: false,
-      activeScenePromptPath: null,
+      activeOutlinePath: null,
     },
     ...overrides,
   }

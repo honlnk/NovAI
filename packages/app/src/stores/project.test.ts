@@ -62,7 +62,7 @@ function createProjectView(files: ProjectView['files']): ProjectView {
         permissionPreset: 'chapter-material',
         embeddingTextVersion: 1,
         enableDebugLogging: false,
-        activeScenePromptPath: null,
+        activeOutlinePath: null,
       },
     },
   }

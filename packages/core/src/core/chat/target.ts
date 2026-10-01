@@ -29,9 +29,9 @@ export function deriveChatTargetFromPath(path?: string | null): ChatTargetContex
     }
   }
 
-  if (path.startsWith('prompts/scenes/')) {
+  if (path.startsWith('prompts/outlines/')) {
     return {
-      type: 'prompt-scene',
+      type: 'prompt-outline',
       primaryPath: path,
       groupName: 'prompts',
       displayName: basename(path),

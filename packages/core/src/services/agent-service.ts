@@ -19,7 +19,7 @@ import {
   listSessionMetas,
 } from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
-import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
+import { readNovAiOverview, readOutlinePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
@@ -439,10 +439,10 @@ async function wakeSessionDriver(options: {
   const projectId = project.id
 
   const systemPrompt = await readSystemPrompt(project.handle)
-  // 大纲（W2 仍指向 prompts/scenes/ 下文件）与项目记忆：改走 user-role 注入链路（W2），
+  // 大纲（prompts/outlines/，W3 起改名+迁移）与项目记忆：走 user-role 注入链路（W2），
   // 不再拼进 system——system 恒定对前缀缓存友好，记忆是背景可被用户当轮指令压过。
-  const outlinePath = project.config.settings.activeScenePromptPath ?? null
-  const outlineContent = await readScenePrompt(project.handle, outlinePath)
+  const outlinePath = project.config.settings.activeOutlinePath ?? null
+  const outlineContent = await readOutlinePrompt(project.handle, outlinePath)
   const novaiOverview = await readNovAiOverview(project.handle)
   // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
   const confirm: ConfirmHandler = (request) => requestConfirmation(session.sessionId, projectId, request)

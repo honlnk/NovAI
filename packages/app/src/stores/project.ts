@@ -338,29 +338,30 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
-   * 切换当前激活的场景提示词。
+   * 切换当前激活的写作大纲。
    *
    * 这条 action 解决了一个已知坑点：直接调 settingsStore.saveConfig 只会更新 settingsStore
    * 自己的 config 副本，不会同步到 projectStore.currentProject.config（后者是 setCurrentProject
    * 那一刻生成的快照）。分类面板读取的是 projectStore 侧，因此这里在写盘成功后显式调
    * updateCurrentProjectConfig 同步本地，避免 UI 显示过期数据。
    *
-   * @param path 场景提示词路径，传 null 表示关闭场景
+   * @param path 大纲路径，传 null 表示关闭大纲。大纲随最新消息动态附带（W2 注入机制），
+   *   切换/关闭在当前会话下一条消息即生效，无需新建会话。
    */
-  async function changeActiveScenePromptPath(projectId: string, path: string | null) {
+  async function changeActiveOutlinePath(projectId: string, path: string | null) {
     errorMessage.value = ''
 
     try {
       const savedConfig = await updateConfig(projectId, {
-        settings: { activeScenePromptPath: path },
+        settings: { activeOutlinePath: path },
       })
       updateCurrentProjectConfig(savedConfig)
       statusMessage.value = path
-        ? '已切换场景提示词，新建会话后生效'
-        : '已关闭场景提示词，新建会话后生效'
+        ? '已切换写作大纲'
+        : '已关闭写作大纲'
       return savedConfig
     } catch (error) {
-      errorMessage.value = toMessage(error, '切换场景提示词失败')
+      errorMessage.value = toMessage(error, '切换写作大纲失败')
       return null
     }
   }
@@ -429,7 +430,7 @@ export const useProjectStore = defineStore('project', () => {
     lastProjectSummary,
     recentProjects,
     statusMessage,
-    changeActiveScenePromptPath,
+    changeActiveOutlinePath,
     changePermissionPreset,
     changeReasoningEffort,
     clearActiveFile,

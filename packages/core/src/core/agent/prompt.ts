@@ -1,4 +1,4 @@
-import { DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT } from '../project/defaults'
+import { DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_NOVAI_OVERVIEW, LEGACY_DEFAULT_SYSTEM_PROMPT, LEGACY_DEFAULT_OUTLINE_TEMPLATE } from '../project/defaults'
 import { hashContent } from '../util/hash'
 import { insertAfterSystem, replaceMessage, type ModelView } from './model-view'
 import type { AgentMessage } from './messages'
@@ -42,7 +42,7 @@ export function buildAgentSystemPrompt(input: {
     '  - timeline/：时间线阶段，一个故事阶段一文件。',
     '  - worldbuilding/：世界观——抽象规则与体系（力量体系、社会制度、种族设定、地理总览等）。',
     '  要素文件用 .md，文件名即要素名。',
-    '- prompts/：提示词文件。system.md 是全局基调与硬性约束，scenes/ 是大纲，NovAI.md 是项目级记忆，ELEMENT.md 是要素库整理规范。',
+    '- prompts/：提示词文件。system.md 是全局基调与硬性约束，outlines/ 是大纲，NovAI.md 是项目级记忆，ELEMENT.md 是要素库整理规范。',
     '- .novel/：应用内部数据（会话、日志、回收站、RAG 索引），不要直接读写。',
     '',
     '工具使用规则：',
@@ -152,12 +152,15 @@ export function buildOutlineReminder(content: string): string {
 }
 
 /**
- * 解析当前激活大纲的动态附带文本：路径已选、内容非空且非未动默认模板才附带，否则空串。
- * 附着发生在发送时（attachOutlineReminder），大纲本体不进持久化历史。
+ * 解析当前激活大纲的动态附带文本：路径已选、内容非空且非未动默认模板（含旧版场景模板）
+ * 才附带，否则空串。附着发生在发送时（attachOutlineReminder），大纲本体不进持久化历史。
  */
 export function resolveOutlineReminder(outline?: { path: string | null; content: string }): string {
   const content = outline?.content?.trim()
-  if (!outline?.path || !content || outline.content === DEFAULT_SCENE_PROMPT) {
+  const isUnmodifiedTemplate = !outline
+    || outline.content === DEFAULT_OUTLINE_TEMPLATE
+    || outline.content === LEGACY_DEFAULT_OUTLINE_TEMPLATE
+  if (!outline?.path || !content || isUnmodifiedTemplate) {
     return ''
   }
   return buildOutlineReminder(content)

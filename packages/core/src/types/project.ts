@@ -138,10 +138,11 @@ export type ProjectConfig = {
     embeddingTextVersion: number
     enableDebugLogging: boolean
     /**
-     * 当前激活的场景级提示词路径（相对于项目根，如 prompts/scenes/scene-001.md）。
-     * 留空时不注入任何场景提示词；切换后会话首轮注入生效。
+     * 当前激活的写作大纲路径（相对于项目根，如 prompts/outlines/outline-001.md）。
+     * 留空时不附加任何大纲；已激活时随最新 user 消息动态附带，切换/关闭当轮即生效
+     * （W2 注入机制 + W3 改名迁移；旧配置 activeScenePromptPath 读取时自动映射）。
      */
-    activeScenePromptPath: string | null
+    activeOutlinePath: string | null
   }
 }
 
@@ -158,7 +159,7 @@ export type ProjectIssue =
   | 'missing-manifest'
   | 'invalid-manifest'
   | 'missing-prompts-system'
-  | 'missing-prompts-scenes'
+  | 'missing-prompts-outlines'
   | 'missing-chapters'
   | 'missing-elements'
   | 'missing-internal-directory'

@@ -6,19 +6,19 @@ import { pickDirectoryChildren } from '../../utils/file-tree'
 const props = defineProps<{
   files: ProjectFileNodeView[]
   activeFilePath?: string
-  /** 当前激活的场景提示词路径，null 表示未激活任何场景 */
-  activeScenePromptPath: string | null
+  /** 当前激活的写作大纲路径，null 表示未激活任何大纲 */
+  activeOutlinePath: string | null
 }>()
 
 const emit = defineEmits<{
   selectFile: [path: string]
-  /** 切换激活场景，path 为 null 表示关闭场景 */
-  changeScene: [path: string | null]
+  /** 切换激活大纲，path 为 null 表示关闭大纲 */
+  changeOutline: [path: string | null]
 }>()
 
 /**
  * prompts/ 目录的直接子项。
- * 通常包含：system.md（系统提示词文件）+ scenes/（场景提示词子目录）。
+ * 通常包含：system.md（系统提示词文件）+ outlines/（大纲子目录）。
  */
 const promptRootChildren = computed(() => pickDirectoryChildren(props.files, 'prompts'))
 
@@ -29,7 +29,7 @@ const systemPrompt = computed<ProjectFileNodeView | null>(() => {
   ) ?? null
 })
 
-/** 项目总览：prompts/NovAI.md。每轮注入到 system prompt 的项目级累积记忆，可手动编辑或用 /生成项目记忆 刷新 */
+/** 项目总览：prompts/NovAI.md。非空时以背景提醒注入（user-role reminder），可手动编辑或用 /生成项目记忆 刷新 */
 const novaiOverview = computed<ProjectFileNodeView | null>(() => {
   return promptRootChildren.value.find(
     n => n.kind === 'file' && n.path === 'prompts/NovAI.md',
@@ -43,14 +43,14 @@ const elementSchema = computed<ProjectFileNodeView | null>(() => {
   ) ?? null
 })
 
-/** 场景提示词：prompts/scenes/ 目录下的所有 .md 文件（拉平） */
-const scenePrompts = computed<ProjectFileNodeView[]>(() => {
-  const sceneChildren = pickDirectoryChildren(props.files, 'prompts/scenes')
-  return sceneChildren.filter(n => n.kind === 'file' && n.path.endsWith('.md'))
+/** 写作大纲：prompts/outlines/ 目录下的所有 .md 文件（拉平） */
+const outlines = computed<ProjectFileNodeView[]>(() => {
+  const outlineChildren = pickDirectoryChildren(props.files, 'prompts/outlines')
+  return outlineChildren.filter(n => n.kind === 'file' && n.path.endsWith('.md'))
 })
 
-function isSceneActive(path: string): boolean {
-  return props.activeScenePromptPath === path
+function isOutlineActive(path: string): boolean {
+  return props.activeOutlinePath === path
 }
 </script>
 
@@ -98,7 +98,7 @@ function isSceneActive(path: string): boolean {
         >
           <span class="shrink-0">📋</span>
           <span class="truncate">{{ novaiOverview.name }}</span>
-          <span class="ml-auto shrink-0 text-xs text-gray-500">恒注入</span>
+          <span class="ml-auto shrink-0 text-xs text-gray-500">背景注入</span>
         </button>
         <p v-else class="px-2 py-2 text-xs text-gray-600">
           未找到项目总览（prompts/NovAI.md）
@@ -127,21 +127,21 @@ function isSceneActive(path: string): boolean {
         </p>
       </div>
 
-      <!-- 场景提示词 -->
+      <!-- 写作大纲 -->
       <div>
-        <p class="px-2 py-1 text-xs font-medium uppercase tracking-wide text-gray-500">场景提示词</p>
+        <p class="px-2 py-1 text-xs font-medium uppercase tracking-wide text-gray-500">写作大纲</p>
 
-        <!-- 场景列表为空 -->
+        <!-- 大纲列表为空 -->
         <p
-          v-if="scenePrompts.length === 0"
+          v-if="outlines.length === 0"
           class="px-2 py-2 text-xs text-gray-600"
         >
-          暂无场景提示词，在 prompts/scenes/ 下新增 .md 文件即可
+          暂无大纲，在 prompts/outlines/ 下新增 .md 文件即可
         </p>
 
         <ul v-else class="space-y-0.5">
-          <li v-for="node in scenePrompts" :key="node.path">
-            <!-- 场景项：点击预览，右侧标记控制激活态 -->
+          <li v-for="node in outlines" :key="node.path">
+            <!-- 大纲项：点击预览，右侧标记控制激活态 -->
             <button
               :class="[
                 'group flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
@@ -151,24 +151,24 @@ function isSceneActive(path: string): boolean {
               ]"
               @click="emit('selectFile', node.path)"
             >
-              <span class="shrink-0">🎬</span>
+              <span class="shrink-0">📜</span>
               <span class="flex-1 truncate">{{ node.name }}</span>
               <!-- 已激活：绿色实心点，点击关闭 -->
               <span
-                v-if="isSceneActive(node.path)"
+                v-if="isOutlineActive(node.path)"
                 class="shrink-0 text-xs text-green-400"
                 role="button"
-                title="当前激活场景，点击关闭"
-                aria-label="关闭当前场景"
-                @click.stop="emit('changeScene', null)"
-              >●</span>
+                title="当前激活大纲，点击关闭"
+                aria-label="关闭当前大纲"
+                @click.stop="emit('changeOutline', null)"
+                >●</span>
               <!-- 未激活：空心点，hover 显示，点击激活 -->
               <button
                 v-else
                 class="shrink-0 rounded px-1 text-xs text-gray-600 opacity-0 transition-opacity hover:text-gray-300 group-hover:opacity-100"
-                title="设为当前场景"
-                @click.stop="emit('changeScene', node.path)"
-              >○</button>
+                title="设为当前大纲"
+                @click.stop="emit('changeOutline', node.path)"
+                >○</button>
             </button>
           </li>
         </ul>
