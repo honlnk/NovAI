@@ -271,11 +271,11 @@ async function runDriverTurn(options: {
   const modelView = createModelView(session.modelView?.messages ?? [])
   session.modelView = modelView
 
-  // 同会话内 system.md 或场景提示词变化时，刷新视图里的 system message（恒在 index 0）。
+  // 同会话内 system.md 变化或模型切换时，刷新视图里的 system message（恒在 index 0）。
+  // 身份行含模型名：换 LLM → 身份变化 → hash 变化 → system 重建一次（前缀缓存本就随换模型作废）。
   const newSystemContent = buildAgentSystemPrompt({
+    model: input.config.llm.model,
     systemPrompt: input.systemPrompt,
-    scenePrompt: input.scenePrompt,
-    novaiOverview: input.novaiOverview,
   })
   const newSystemHash = hashContent(newSystemContent)
   if (modelView.messages.length === 0 || session.systemPromptHash !== newSystemHash) {

@@ -147,7 +147,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'CreateFile',
-          description: '在当前小说项目中新建文本文件；中间目录会自动创建，目标已存在时会失败。章节必须创建为 chapters/第NNN章-标题.txt（编号至少 3 位补零，标题非空），同编号章节会被拒绝；要素和提示词使用 .md。已有文件请用 EditFile 修改。',
+          description: '在当前小说项目中新建文本文件；中间目录会自动创建，目标已存在时会失败。章节必须创建为 chapters/第NNN章-标题.txt（编号至少 3 位补零，标题非空），同编号章节会被拒绝；要素和提示词使用 .md。',
           parameters: {
             type: 'object',
             properties: {
@@ -209,7 +209,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'DeleteFile',
-          description: '将当前小说项目中的单个文本文件移入回收站；不会直接永久删除。',
+          description: '将当前小说项目中的单个文本文件移入回收站；不会直接永久删除。仅在用户明确要求删除时使用。',
           parameters: {
             type: 'object',
             properties: {
@@ -321,7 +321,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'RagSearch',
-          description: '从当前小说项目的 RAG 要素索引中语义检索相关人物、地点、剧情、时间线和世界观设定；适合在写作、改稿或回答设定问题前召回背景上下文。',
+          description: '从当前小说项目的要素索引中语义检索人物、地点、实体、剧情、时间线、世界观设定。',
           parameters: {
             type: 'object',
             properties: {
@@ -403,7 +403,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'GetFileChangeHistory',
-          description: '查询本会话此前的文件修改历史（改了哪些文件、什么时间、增删行数）；当你需要回忆或核对之前的改动时使用。',
+          description: '查询本会话内对项目文件的修改历史（改了哪些文件、什么时间、增删行数）。',
           parameters: {
             type: 'object',
             properties: {

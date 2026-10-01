@@ -218,7 +218,7 @@ export type ChatSessionState = {
   status: ChatSessionStatus
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
-  /** 当前会话已注入的 system message（systemPrompt + scenePrompt 拼接结果）hash，用于检测同会话内提示词变化并刷新。 */
+  /** 当前会话已注入的 system message（身份 + 结构 + 工具规则 + 已修改的 system.md）hash，用于检测同会话内 system 变化并刷新。 */
   systemPromptHash?: string
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
   title: string
@@ -251,9 +251,6 @@ export type ChatTurnInput = {
   project: ProjectSnapshot
   config: ProjectConfig
   systemPrompt: string
-  scenePrompt?: string
-  /** 项目总览（prompts/NovAI.md），每轮注入到 system prompt 的项目级累积记忆。 */
-  novaiOverview?: string
   activeFilePath?: string | null
   /** 用户停止信号，透传到 Agent Loop。 */
   signal?: AbortSignal

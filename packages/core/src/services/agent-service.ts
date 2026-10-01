@@ -19,7 +19,7 @@ import {
   listSessionMetas,
 } from '../core/chat/session-store'
 import { deriveChatTargetFromPath } from '../core/chat/target'
-import { readNovAiOverview, readScenePrompt, readSystemPrompt } from '../core/fs/project-fs'
+import { readSystemPrompt } from '../core/fs/project-fs'
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
@@ -439,12 +439,6 @@ async function wakeSessionDriver(options: {
   const projectId = project.id
 
   const systemPrompt = await readSystemPrompt(project.handle)
-  const scenePrompt = await readScenePrompt(
-    project.handle,
-    project.config.settings.activeScenePromptPath,
-  )
-  // 项目总览（prompts/NovAI.md）：每轮注入 system prompt，让 Agent 知道写到哪了、有哪些人物和伏笔。
-  const novaiOverview = await readNovAiOverview(project.handle)
   // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
   const confirm: ConfirmHandler = (request) => requestConfirmation(session.sessionId, projectId, request)
 
@@ -462,8 +456,6 @@ async function wakeSessionDriver(options: {
       project,
       config: project.config,
       systemPrompt,
-      scenePrompt,
-      novaiOverview,
       activeFilePath: lastActiveFilePathByProject.get(projectId) ?? null,
       // 匿名联网配额身份：沿 ChatTurnInput → ToolRuntime 链注入 WebSearch/WebFetch
       ...(options.webClientId ? { webClientId: options.webClientId } : {}),
