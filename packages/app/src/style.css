@@ -53,12 +53,12 @@
 /**
  * 对话输入框共享样式（仿 gpt-image-studio 的卡片式输入框）。
  *
- * textarea 与 ghost text 覆盖层共用同一组字体/行高/内边距，
- * 才能保证灰色建议文字与 textarea 光标精确对齐。
+ * Lexical 编辑器宿主与 ghost text 覆盖层、占位符层共用同一组字体/行高/内边距，
+ * 才能保证灰色建议文字与编辑器光标精确对齐。
  *
  * 视觉由外层卡片容器（.chat-input-card）提供：白底、大圆角、描边、阴影、focus 反馈。
- * textarea 本体透明、无描边，负责渲染已输入文字（正常深色，不做透明处理）；
- * 覆盖层只渲染灰色建议，其中已输入部分用 invisible 撑布局以定位建议位置。
+ * 编辑器宿主渲染已输入文字（正常深色）；覆盖层只渲染灰色建议，
+ * 其中已输入部分用 invisible 撑布局以定位建议位置。
  */
 .chat-input-base {
   width: 100%;
@@ -68,6 +68,21 @@
   padding: 0.25rem 0; /* py-1，左右无内边距，由外层卡片提供 */
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/**
+ * Lexical 编辑器宿主（富文本化 W1 起 textarea 退役）：
+ * min-height 等价旧 rows=2（两行行高 + 纵向 padding），超上限后内部滚动
+ * （autoResizeEditor 钳 200px）。段落 <p> 的 margin 必须归零——ghost 镜像层
+ * 与占位符按纯文本 '\n' 分行，段落自带外边距会使换行位置错开。
+ */
+.chat-input-editable {
+  min-height: calc(3.25em + 0.5rem);
+  overflow-y: auto;
+  cursor: text;
+}
+.chat-input-editable p {
+  margin: 0;
 }
 
 /**

@@ -5,8 +5,9 @@ import { GARDENER_TASK_PROMPT } from '@novai/core/services/agent-service'
 import { getGardenerPresets } from '@novai/core/services/settings-service'
 import type { GardenerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
-import { isGardenerShortcut, isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
+import { isGardenerShortcut, resolveSubmitMode } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
+import { useComposerBridge } from '../../composables/useComposerBridge'
 import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
 import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
@@ -66,9 +67,20 @@ const emit = defineEmits<{
 
 const chatStore = useChatStore()
 const projectStore = useProjectStore()
-const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
+/** Lexical 编辑器宿主（contenteditable 根元素；富文本化 W1 起 textarea 退役） */
+const editorHostRef = ref<HTMLDivElement | null>(null)
+
+// 编辑器桥：Lexical 是草稿唯一真值，draft 是纯文本投影（onTextChange 等价旧 @input 回调：
+// 自适应高度 + 指令检测 + 补全调度；selection-only 更新不触发，与旧 textarea 行为一致）
+const composer = useComposerBridge({
+  onTextChange: () => {
+    autoResizeEditor()
+    detectCommands()
+    scheduleInlineCompletion()
+  },
+})
+const { draft } = composer
 
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
@@ -251,21 +263,17 @@ watch(
  * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
  */
 async function handleSend(mode: 'queue' | 'steer' = 'queue') {
-  const draft = inputText.value.trim()
-  if (!draft) return
+  const draftText = draft.value.trim()
+  if (!draftText) return
 
   clearSuggestion()
   // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
   // 其后参数原样保留；不在行首的命令文本视作正文，不替换
-  const message = expandSlashCommand(draft)
+  const message = expandSlashCommand(draftText)
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
-  inputText.value = ''
-
-  // 重置 textarea 高度
-  if (textareaRef.value) {
-    textareaRef.value.style.height = 'auto'
-  }
+  // 清空走桥（onTextChange 会顺带重置高度与指令状态）
+  composer.setDraft('')
 
   // 自己发消息恒吸底：发送即「要看最新输出」的显式意图
   followAndScrollToBottom()
@@ -276,7 +284,7 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
   } else {
     // 发送失败草稿恢复：把原草稿文本填回输入框（dsh restoreFailedDrafts 简化版；
     // 填回的是用户输入的草稿而非替换后的 prompt 全文）
-    inputText.value = draft
+    composer.setDraft(draftText)
   }
 }
 
@@ -285,11 +293,13 @@ function handleStop() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // IME 组字期（含 Safari compositionend 后 10ms 尾窗，dsh keymap 三条件）一切按键
+  // 放行给输入法/浏览器——补全采纳、菜单导航、发送均不抢键
+  if (composer.isComposing(event)) return
   // 输入框 AI 补全交互（最高优先级，贴近光标）：
-  // - IME 组合态放行，避免在中文选词时误触 Tab/Esc
   // - Tab 接受建议的首个分词单位；Esc 丢弃剩余建议
   // - 仅当 ghost text 可见时拦截，避免吞掉其他场景的 Tab/Esc
-  if (!isImeComposing(event) && isCompletionVisible.value) {
+  if (isCompletionVisible.value) {
     if (event.key === 'Tab') {
       event.preventDefault()
       acceptCompletionSegment()
@@ -356,29 +366,27 @@ function handleKeydown(event: KeyboardEvent) {
     }
   }
   // 发送模式（dsh resolveSubmitMode）：Enter = 发送/排队，Ctrl/Cmd+Enter = 插话，
-  // Shift+Enter 换行；空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
+  // Shift+Enter 换行（contenteditable 的默认行为是产生段落，交给 Lexical）；
+  // 空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
   const submitMode = resolveSubmitMode(event)
   if (submitMode) {
     event.preventDefault()
-    if (submitMode === 'steer' && !inputText.value.trim()) {
+    if (submitMode === 'steer' && !draft.value.trim()) {
       void steerAllQueued()
       return
     }
     handleSend(submitMode === 'steer' ? 'steer' : 'queue')
+    return
   }
+  // Shift+Enter 换行：默认行为即可（Lexical insertParagraph），无需处理
 }
 
-function autoResize(event: Event) {
-  const textarea = event.target as HTMLTextAreaElement
-  textarea.style.height = 'auto'
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
-}
-
-/** textarea input 统一入口：自适应高度 + 指令检测（@大纲 / 斜杠命令）+ 输入补全调度 */
-function onTextareaInput(event: Event) {
-  autoResize(event)
-  detectCommands()
-  scheduleInlineCompletion()
+/** 编辑区自适应高度：与旧 textarea 同语义（auto → scrollHeight，上限 200px） */
+function autoResizeEditor() {
+  const host = editorHostRef.value
+  if (!host) return
+  host.style.height = 'auto'
+  host.style.height = `${Math.min(host.scrollHeight, 200)}px`
 }
 
 /**
@@ -389,27 +397,18 @@ function scheduleInlineCompletion() {
     clearSuggestion()
     return
   }
-  const cursor = textareaRef.value?.selectionStart ?? 0
-  scheduleCompletion(inputText.value, cursor, completionConfig.value)
+  const cursor = composer.caretOffset() ?? draft.value.length
+  scheduleCompletion(draft.value, cursor, completionConfig.value)
 }
 
 /**
- * 接受建议的首个分词单位：拼到 inputText 末尾，吃光后清空状态并重置高度。
+ * 接受建议的首个分词单位：在光标处插入（ghost 场景光标恒在末尾），
+ * 光标随插入后移；插入触发 onTextChange → 高度重置 + 补全重调度由桥接管。
  */
 function acceptCompletionSegment() {
   const { accepted, hasMore } = acceptNextSegment()
   if (accepted) {
-    inputText.value += accepted
-    // 同步光标到末尾，让后续补全基于新光标位置
-    nextTick(() => {
-      if (textareaRef.value) {
-        const end = inputText.value.length
-        textareaRef.value.selectionStart = end
-        textareaRef.value.selectionEnd = end
-        textareaRef.value.style.height = 'auto'
-        textareaRef.value.style.height = `${Math.min(textareaRef.value.scrollHeight, 200)}px`
-      }
-    })
+    composer.insertAtCaret(accepted)
   }
   if (!hasMore) {
     // 建议已吃完，基于新内容重新调度一次（可能续出下一段）
@@ -434,35 +433,11 @@ const outlinePopoverRef = ref<InstanceType<typeof OutlineCommandPopover> | null>
 const OUTLINE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
 
 /**
- * 清除/替换光标处匹配指定正则的 token（@大纲、/命令 共用；W3 起替换为命令文本）。
- * 正则锚定 beforeCursor 结尾，替换后光标落在替换文本之后并重新聚焦 textarea。
- * token 前的边界空白（正则的 (?:^|\s) 部分）保留，命令文本不会黏进前文。
- */
-function replaceTokenAtCursor(re: RegExp, replacement = '') {
-  const textarea = textareaRef.value
-  if (!textarea) return
-  const cursor = textarea.selectionStart ?? 0
-  const beforeCursor = inputText.value.slice(0, cursor)
-  const afterCursor = inputText.value.slice(cursor)
-  const cleaned = beforeCursor.replace(re, (match: string) => {
-    const boundary = match.startsWith('/') || match.startsWith('@') ? '' : match.slice(0, 1)
-    return `${boundary}${replacement}`
-  })
-  inputText.value = cleaned + afterCursor
-  nextTick(() => {
-    if (textareaRef.value) {
-      textareaRef.value.selectionStart = cleaned.length
-      textareaRef.value.selectionEnd = cleaned.length
-      textareaRef.value.focus()
-    }
-  })
-}
-
-/**
  * 选中大纲后：清除输入框里的 @token（含筛选词），激活大纲，关闭弹层。
+ * token 清除走桥的 replaceTokenBeforeCaret（边界空白保留、光标落替换处并聚焦）。
  */
 function handleSelectOutline(path: string) {
-  replaceTokenAtCursor(OUTLINE_COMMAND_RE)
+  composer.replaceTokenBeforeCaret(OUTLINE_COMMAND_RE)
   isOutlineCommandOpen.value = false
   outlineQuery.value = ''
   emit('changeOutline', path)
@@ -488,17 +463,16 @@ const slashMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null)
  */
 const SLASH_COMMAND_RE = /(?:^|\s)\/([^\s/]*)$/
 
-/** 指令检测入口：input 回调统一调用 */
+/** 指令检测入口：编辑器文本变化回调统一调用 */
 function detectCommands() {
-  const textarea = textareaRef.value
-  if (!textarea) {
+  if (!composer.isMounted()) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
     isGardenerDialogOpen.value = false
     return
   }
-  const cursor = textarea.selectionStart ?? 0
-  const beforeCursor = inputText.value.slice(0, cursor)
+  const cursor = composer.caretOffset() ?? draft.value.length
+  const beforeCursor = draft.value.slice(0, cursor)
 
   // @大纲、/ 命令两层互斥，同一时刻只开一个
   const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
@@ -529,7 +503,7 @@ function handleSlashCommandSelect(id: SlashCommandId) {
 
   const command = SLASH_COMMANDS.find((entry) => entry.id === id)
   if (!command) return
-  replaceTokenAtCursor(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
+  composer.replaceTokenBeforeCaret(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
 
   if (id === 'gardener') {
     // 整理要素：落文本 + 打开参数弹窗；输入框残留的命令文本在弹窗确认发送时一并清掉，
@@ -576,14 +550,11 @@ function openGardenerDialog() {
  *  斜杠入口落进输入框的 `/整理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
 async function handleGardenerConfirm(params: GardenerTaskParams) {
   isGardenerDialogOpen.value = false
-  const hasCommandResidue = inputText.value.trimStart().startsWith('/整理要素')
+  const hasCommandResidue = draft.value.trimStart().startsWith('/整理要素')
   followAndScrollToBottom()
   const ok = await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
   if (ok && hasCommandResidue) {
-    inputText.value = ''
-    if (textareaRef.value) {
-      textareaRef.value.style.height = 'auto'
-    }
+    composer.setDraft('')
   }
 }
 
@@ -609,10 +580,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
+  // 编辑器挂载 + 初始高度（空态两行的 min-height 由 CSS 提供，此处量一次收口）
+  if (editorHostRef.value) {
+    composer.mount(editorHostRef.value)
+    autoResizeEditor()
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
+  composer.unmount()
 })
 </script>
 
@@ -818,25 +795,31 @@ onBeforeUnmount(() => {
               @open-settings="handleGardenerOpenSettings"
             />
           </div>
-          <!-- 卡片式输入框：textarea + ghost text 覆盖层 + 工具行（发送按钮） -->
+          <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
-            <!-- textarea + ghost text 覆盖层（补全开启且有建议时） -->
+            <!-- 编辑器 + ghost text 覆盖层（补全开启且有建议时） -->
             <div class="relative">
               <GhostTextOverlay
                 v-if="isCompletionVisible"
-                :input-text="inputText"
+                :input-text="draft"
                 :suggestion="completionSuggestion"
               />
-              <textarea
-                ref="textareaRef"
-                v-model="inputText"
-                class="chat-input-base resize-none bg-transparent text-gray-800 outline-none placeholder:text-gray-400"
-                :placeholder="chatStore.isRunning
-                  ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
-                  : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)'"
-                rows="2"
+              <!-- 占位符：空草稿时显示（Lexical 根节点恒有段落元素，CSS :empty 不可用） -->
+              <div
+                v-if="draft === ''"
+                class="chat-input-base pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-gray-400"
+                aria-hidden="true"
+              >{{ chatStore.isRunning
+                ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
+                : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)' }}</div>
+              <!-- Lexical 编辑器宿主：contenteditable 由 setRootElement 接管，键入与选区归编辑器管 -->
+              <div
+                ref="editorHostRef"
+                class="chat-input-base chat-input-editable text-gray-800 outline-none"
+                role="textbox"
+                aria-multiline="true"
+                aria-label="聊天输入框"
                 @keydown="handleKeydown"
-                @input="onTextareaInput"
               />
             </div>
             <!-- 工具行：左侧权限档位，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示）。
@@ -887,7 +870,7 @@ onBeforeUnmount(() => {
                 <button
                   v-if="chatStore.isRunning"
                   class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
-                  :disabled="!inputText.trim()"
+                  :disabled="!draft.trim()"
                   title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
                   @click="handleSend('steer')"
                 >
@@ -901,7 +884,7 @@ onBeforeUnmount(() => {
                 />
                 <button
                   class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
-                  :disabled="!inputText.trim()"
+                  :disabled="!draft.trim()"
                   :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
                   @click="handleSend('queue')"
                 >
