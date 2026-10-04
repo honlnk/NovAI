@@ -16,6 +16,12 @@ import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
 import GardenerTaskDialog from '../chat/GardenerTaskDialog.vue'
 import { buildGardenerTaskMessage, type GardenerTaskParams } from '../chat/gardener-task'
+import {
+  registerTextRefs,
+  rescanTextRefs,
+  TextRefNode,
+  type TextRefLexicon,
+} from '../chat/text-ref'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
@@ -74,6 +80,7 @@ const editorHostRef = ref<HTMLDivElement | null>(null)
 // 编辑器桥：Lexical 是草稿唯一真值，draft 是纯文本投影（onTextChange 等价旧 @input 回调：
 // 自适应高度 + 指令检测 + 补全调度；selection-only 更新不触发，与旧 textarea 行为一致）
 const composer = useComposerBridge({
+  nodes: [TextRefNode],
   onTextChange: () => {
     autoResizeEditor()
     detectCommands()
@@ -81,6 +88,14 @@ const composer = useComposerBridge({
   },
 })
 const { draft } = composer
+
+// token 高亮词表（W3）：斜杠命令取 labels（含 '/' 前缀），大纲取 '@' + 展示名（与弹层查询口径一致）
+const textRefLexicon = computed<TextRefLexicon>(() => ({
+  slash: SLASH_COMMANDS.map((entry) => entry.label),
+  outline: props.outlines.map((node) => `@${node.name.replace(/\.md$/i, '')}`),
+}))
+/** registerTextRefs 注销句柄（onMounted 注册，onBeforeUnmount 注销） */
+let unregisterTextRefs: (() => void) | null = null
 
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
@@ -585,10 +600,22 @@ onMounted(() => {
     composer.mount(editorHostRef.value)
     autoResizeEditor()
   }
+  // token 高亮注册（挂载后编辑器实例就绪；词表经 getter 每次取最新）
+  unregisterTextRefs = registerTextRefs(composer.editor, () => textRefLexicon.value)
 })
+
+// 大纲列表变化（增删/改名）时全量重扫：已输入的 @token 命中/失效都要跟着变
+watch(
+  () => props.outlines,
+  () => {
+    if (composer.isMounted()) rescanTextRefs(composer.editor)
+  },
+)
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
+  unregisterTextRefs?.()
+  unregisterTextRefs = null
   composer.unmount()
 })
 </script>

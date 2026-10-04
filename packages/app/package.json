@@ -12,6 +12,7 @@
   "dependencies": {
     "@lexical/history": "^0.49.0",
     "@lexical/plain-text": "^0.49.0",
+    "@lexical/text": "^0.49.0",
     "@novai/core": "workspace:*",
     "diff": "^9.0.0",
     "lexical": "^0.49.0",

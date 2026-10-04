@@ -12,6 +12,7 @@ import {
   $setSelection,
   createEditor,
   type ElementNode,
+  type Klass,
   type LexicalEditor,
   type LexicalNode,
 } from 'lexical'
@@ -64,6 +65,8 @@ export interface ComposerBridge {
 export interface ComposerBridgeOptions {
   /** 文本内容变化时回调（selection-only 更新不触发），挂 autoResize / 指令检测 / 补全调度 */
   onTextChange?: (text: string) => void
+  /** 追加注册的节点类（如 W3 的 TextRefNode；Paragraph/Text 默认已注册） */
+  nodes?: Klass<LexicalNode>[]
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -197,7 +200,7 @@ function $selectAtOffset(target: number): void {
 export function useComposerBridge(options: ComposerBridgeOptions = {}): ComposerBridge {
   const editor: LexicalEditor = createEditor({
     namespace: 'novai-composer',
-    nodes: [],
+    nodes: options.nodes ?? [],
     onError(error) {
       throw error
     },
