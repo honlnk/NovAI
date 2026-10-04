@@ -803,6 +803,7 @@ onBeforeUnmount(() => {
                 v-if="isCompletionVisible"
                 :input-text="draft"
                 :suggestion="completionSuggestion"
+                :host="editorHostRef"
               />
               <!-- 占位符：空草稿时显示（Lexical 根节点恒有段落元素，CSS :empty 不可用） -->
               <div
