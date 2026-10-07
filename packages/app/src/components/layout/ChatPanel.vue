@@ -509,8 +509,9 @@ function detectCommands() {
 
 /**
  * 选中斜杠命令后（W3 新范式）：清除 / token，把命令文本落进输入框（尾部带空格、
- * 光标置后），命令是纯文本——用户可在其后补参数、可编辑可删除。
- * gardener 额外打开参数弹窗（确认后以弹窗拼装的消息为准发送）。
+ * 光标置后），命令是纯文本——用户可在其后补参数、可编辑可删除。所有命令一视同仁，
+ * 不开任何弹窗；参数弹窗只属于工具栏按钮入口（发送链路的前缀拦截负责替换为驱动
+ * prompt 全文，裸命令文本不构成有效指令）。
  */
 function handleSlashCommandSelect(id: SlashCommandId) {
   isSlashMenuOpen.value = false
@@ -520,15 +521,8 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   if (!command) return
   composer.replaceTokenBeforeCaret(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
 
-  if (id === 'gardener') {
-    // 整理要素：落文本 + 打开参数弹窗；输入框残留的命令文本在弹窗确认发送时一并清掉，
-    // 弹窗拼装的消息为准（避免双发）
-    openGardenerDialog()
-    return
-  }
-
-  // init（/生成项目记忆）：落文本后不自动发送，用户可补参数后 Enter；
-  // 发送链路的前缀拦截会把命令文本替换为 INIT_NOVEL_PROMPT 全文
+  // 落文本后不自动发送：gardener / init 用户均可补参数后 Enter；
+  // 发送链路的前缀拦截分别替换为 GARDENER_TASK_PROMPT / INIT_NOVEL_PROMPT 全文
 }
 
 /**
@@ -555,14 +549,14 @@ async function loadGardenerPresets() {
   }
 }
 
-/** 输入框上方「🌿 整理要素」按钮 / 斜杠命令：打开参数弹窗（D1：当前会话） */
+/** 输入框上方「🌿 整理要素」按钮：打开参数弹窗（D1：当前会话；斜杠命令只落文本不开弹窗） */
 function openGardenerDialog() {
   void loadGardenerPresets()
   isGardenerDialogOpen.value = true
 }
 
 /** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队）。
- *  斜杠入口落进输入框的 `/整理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
+ *  输入框里手输/斜杠落的 `/整理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
 async function handleGardenerConfirm(params: GardenerTaskParams) {
   isGardenerDialogOpen.value = false
   const hasCommandResidue = draft.value.trimStart().startsWith('/整理要素')
