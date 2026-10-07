@@ -306,6 +306,10 @@ export function useComposerBridge(options: ComposerBridgeOptions = {}): Composer
       if (rootEl === el) return
       unmount()
       rootEl = el
+      // Lexical 0.49 契约：setRootElement 只接管事件与渲染，从不设置 contenteditable
+      // （对照 dsh ComposerContentEditable.tsx：绑定层负责渲染可编辑性）——漏了它
+      // 元素不可编辑且无任何报错，点击无光标。挂载即隐含可编辑，在此统一设置。
+      el.contentEditable = 'true'
       editor.setRootElement(el)
       el.addEventListener('compositionstart', onCompositionStart)
       el.addEventListener('compositionend', onCompositionEnd)
