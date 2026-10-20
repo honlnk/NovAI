@@ -36,9 +36,10 @@ const ELEMENT_MANAGER_PROFILE = {
     'RagSearch',
     'CreateFile',
     'EditFile',
+    'RenameFile',
   ] as const,
   /** 可写工具（白名单子集）：入口集合，运行层再强制 writeScope 路径闸。 */
-  writableTools: ['CreateFile', 'EditFile'] as const,
+  writableTools: ['CreateFile', 'EditFile', 'RenameFile'] as const,
   /** 写入范围：可写工具的目标路径前缀（路径闸判据）。 */
   writeScope: 'elements/',
 } as const
@@ -135,7 +136,10 @@ export function createElementManagerTools(): AgentRunnableToolMap {
   return tools
 }
 
-/** 把可写工具的 validateInput 包上 elements/ 前缀闸（大小写不敏感；文件名本身保留大小写）。 */
+/**
+ * 把可写工具的 validateInput 包上 elements/ 前缀闸（大小写不敏感；文件名本身保留大小写）。
+ * RenameFile 入参是 fromPath/toPath（无 path 字段），W3 起双向都必须落在 elements/ 内。
+ */
 function guardElementsScope(tool: AgentRunnableTool): AgentRunnableTool {
   return {
     ...tool,
@@ -143,8 +147,16 @@ function guardElementsScope(tool: AgentRunnableTool): AgentRunnableTool {
       ...tool.core,
       validateInput(input: unknown) {
         const validated = tool.core.validateInput(input)
-        const path = (validated as { path?: unknown }).path
-        if (typeof path !== 'string' || !path.toLowerCase().startsWith(ELEMENT_MANAGER_PROFILE.writeScope)) {
+        const record = validated as Record<string, unknown>
+        const withinScope = (path: unknown) =>
+          typeof path === 'string' && path.toLowerCase().startsWith(ELEMENT_MANAGER_PROFILE.writeScope)
+        if (tool.name === 'RenameFile') {
+          if (!withinScope(record.fromPath) || !withinScope(record.toPath)) {
+            throw new Error('要素管理员只能重命名 elements/ 下的要素文件；源文件与目标文件都必须在 elements/ 内。')
+          }
+          return validated
+        }
+        if (!withinScope(record.path)) {
           throw new Error('要素管理员只能写入 elements/ 下的要素文件；该位置只读。如需改动请列入汇报交用户处理。')
         }
         return validated

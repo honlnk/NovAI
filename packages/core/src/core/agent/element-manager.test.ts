@@ -120,10 +120,10 @@ describe('buildElementSchemaReminder', () => {
 })
 
 describe('createElementManagerTools', () => {
-  it('工具白名单精确：六工具，无 DeleteFile/RenameFile/GetFileChangeHistory/Web/委派工具', () => {
+  it('工具白名单精确：七工具（W3 起 RenameFile 已放开），无 DeleteFile/GetFileChangeHistory/Web/委派工具', () => {
     const tools = createElementManagerTools()
     expect(Object.keys(tools).sort()).toEqual(
-      ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile'],
+      ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile', 'RenameFile'],
     )
   })
 
@@ -159,6 +159,30 @@ describe('createElementManagerTools', () => {
       path: 'Elements/characters/角色甲.md',
       content: 'x',
     })).not.toThrow()
+  })
+
+  it('RenameFile 路径闸：fromPath/toPath 双向都在 elements/ 内放行（基础校验照常通过）', () => {
+    const tools = createElementManagerTools()
+    expect(tools.RenameFile!.core.validateInput({
+      fromPath: 'elements/characters/角色甲.md',
+      toPath: 'elements/characters/甲.md',
+    })).toMatchObject({ fromPath: 'elements/characters/角色甲.md', toPath: 'elements/characters/甲.md' })
+  })
+
+  it('RenameFile 路径闸：fromPath 越界（chapters/）被拒', () => {
+    const tools = createElementManagerTools()
+    expect(() => tools.RenameFile!.core.validateInput({
+      fromPath: 'chapters/第001章-夜探剑冢.txt',
+      toPath: 'elements/characters/剑冢.md',
+    })).toThrowError(/要素管理员只能重命名 elements\//)
+  })
+
+  it('RenameFile 路径闸：toPath 越界（prompts/）被拒', () => {
+    const tools = createElementManagerTools()
+    expect(() => tools.RenameFile!.core.validateInput({
+      fromPath: 'elements/characters/角色甲.md',
+      toPath: 'prompts/角色甲.md',
+    })).toThrowError(/源文件与目标文件都必须在 elements\//)
   })
 })
 
@@ -282,9 +306,9 @@ describe('DelegateToElementManager 委派端到端', () => {
     expect(userMessages[userMessages.length - 1]?.content).toContain('管理第 12 章涉及的要素')
     expect(userMessages[userMessages.length - 1]?.content).toContain('整个 elements/ 要素库')
 
-    // 要素管理员工具面：白名单六工具，无委派工具（不嵌套）、无删除/改名/历史/Web
+    // 要素管理员工具面：白名单七工具（W3 起 RenameFile 已放开），无委派工具（不嵌套）、无删除/历史/Web
     expect(fetchCalls[0]!.toolNames.sort()).toEqual(
-      ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile'],
+      ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile', 'RenameFile'],
     )
 
     // 要素管理员内层工具事件带 element-manager 归属标记（session 层据此折叠嵌套任务组）
