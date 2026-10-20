@@ -1,84 +1,135 @@
 import { appendUserMessage, createModelView, setSystemMessage } from './model-view'
 import { query } from './query'
 import { createAgentTools, type AgentRunnableTool, type AgentRunnableToolMap } from './tools'
+import { PROJECT_STRUCTURE_SECTION } from './prompt'
 import type { ConfirmHandler, TaggedToolExecutionEvent, WriteConfirmationRequest } from './tool-execution'
 import { readElementSchema } from '../fs/project-fs'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
 /**
- * 要素管理员子代理（一次性、每次全新上下文，《要素园丁子代理设计》v3）。
+ * 要素管理员子代理（一次性、每次全新上下文，《要素园丁子代理设计》v3 起源）。
  *
- * 提示词栈只有两层：硬编码 persona + prompts/ELEMENT.md 全文（§7.4）——
- * 提示词家族其余文件（system.md / NovAI.md / scenes/）一律不进要素管理员上下文。
+ * 提示词拼装与主 Agent 同款分层（升级 W2）：system = 身份（含模型名）+ 项目结构段
+ * （与主 Agent 共用 PROJECT_STRUCTURE_SECTION）+ 白名单内工具使用规则 + Notes 铁律 + 汇报格式；
+ * prompts/ELEMENT.md 以 user-role `<system-reminder>` 恒注入（一次性上下文无去重需求，D2/D3），
+ * 提示词家族其余文件（system.md / NovAI.md / outlines/）一律不进要素管理员上下文。
  * 工具白名单 + elements/ 写路径闸在运行层强制，不依赖模型自觉。
  */
 
-/** 要素管理员角色定义（硬编码，不可让渡的边界都在这里；工作细则在 ELEMENT.md）。 */
-export const ELEMENT_MANAGER_PERSONA = `你是小说要素库的要素管理员，负责维护 elements/ 目录下的事实性要素文件。
-
-铁律：
-- 你从不修改 chapters/ 正文，也从不修改 prompts/ 下的任何文件（包括随本提示词注入的要素规范本身）。
-- 你只能写入 elements/ 下的文件；其余一切只读。
-- 合并同名/近名要素时保留旧文件全部事实；存疑不合并，列入汇报交用户拍板。
-- 不删除、不重命名任何文件；确需删除/改名的列入汇报交用户处理。
-
-任务结束时输出固定结构汇报：
-## 改动文件清单
-（每个文件一句话说明改了什么）
-## 合并与迁移说明
-（哪些条目被合并进哪里、依据是什么）
-## 存疑事项
-（需要用户拍板的疑似重复/冲突；没有则写「无」）
-## 建议删除
-（建议用户手动删除或改名的文件及理由；没有则写「无」）`
+/**
+ * 要素管理员 profile（D8 声明式）：子智能体的身份、工具白名单、写入范围的单一声明处。
+ * 仅是代码组织方式（内置常量）——NovAI 的子智能体是产品内置角色，不开放用户自定义，
+ * 不引入 ZCode 式 markdown profile 扫描机制（讨论记录拍板）。
+ */
+const ELEMENT_MANAGER_PROFILE = {
+  /** 身份段：含模型名（与主 Agent 同款句式）；模型未知时退化为无模型名版本。 */
+  identity(model?: string): string {
+    return model
+      ? `你是 NovAI 要素管理员，一个使用 ${model} 模型驱动的子智能体，专门负责管理小说项目的要素库（elements/ 目录）。`
+      : '你是 NovAI 要素管理员，一个子智能体，专门负责管理小说项目的要素库（elements/ 目录）。'
+  },
+  /** 完整工具白名单（按 D4 从主 Agent 14 条规则裁剪对应工具集）。 */
+  tools: [
+    'ListDirectory',
+    'FindFiles',
+    'ReadFile',
+    'RagSearch',
+    'CreateFile',
+    'EditFile',
+  ] as const,
+  /** 可写工具（白名单子集）：入口集合，运行层再强制 writeScope 路径闸。 */
+  writableTools: ['CreateFile', 'EditFile'] as const,
+  /** 写入范围：可写工具的目标路径前缀（路径闸判据）。 */
+  writeScope: 'elements/',
+} as const
 
 /** ELEMENT.md 缺失时的兜底提示（正常路径 repair 已补齐；防御性不阻塞运行）。 */
 const SCHEMA_MISSING_NOTE = '（规范文件 prompts/ELEMENT.md 缺失，按上述内置守则工作）'
 
+/** 固定四段汇报格式（D6：「合并与迁移说明」扩写重命名说明；「建议删除」只谈删除——重命名已属分内事）。 */
+const REPORT_FORMAT_SECTION = `任务结束时输出固定结构汇报：
+## 改动文件清单
+（每个文件一句话说明改了什么）
+## 合并与迁移说明
+（哪些条目被合并进哪里、依据是什么；重命名了哪些文件、理由是什么）
+## 存疑事项
+（需要用户拍板的疑似重复/冲突；没有则写「无」）
+## 建议删除
+（建议用户手动删除的文件及理由；没有则写「无」）`
+
 /**
- * 组装要素管理员 system prompt：persona + ELEMENT.md 全文，仅此两层。
- * schema 为空串时附缺失提示，不阻塞。
+ * 工具使用规则段（D4）：不整抄主 Agent 的 14 条，只写白名单内工具——
+ * 删 WebSearch/WebFetch/KnowledgeLookup/DeleteFile（白名单外）、章节编号规则（不写章节）；
+ * 保留 spill 说明（读长要素文件同样会撞超限）；CreateFile 条目去掉章节正文口径只留要素文件相关。
  */
-export function buildElementManagerSystemPrompt(elementSchema: string): string {
-  const schema = elementSchema.trim()
+function buildElementManagerToolRules(): string {
   return [
-    ELEMENT_MANAGER_PERSONA,
-    '',
-    '---',
-    '',
-    '【本书要素规范（prompts/ELEMENT.md）】',
-    '',
-    schema || SCHEMA_MISSING_NOTE,
+    '工具使用规则：',
+    '- 所有工具 path 都是项目根目录内部的相对路径；不要把项目文件夹名写进 path。查看项目根目录时，ListDirectory 不传 path 或传空字符串。',
+    '- ReadFile 用于读取 .md、.json、.txt 文件，返回带行号内容；默认最多读取 2000 行，单次返回有约 50KB 字节上限。长文件或已知目标位置时，使用 offset/limit 分段读取；超限截断时按提示的 offset 继续。',
+    '- 单个工具结果过长时，系统会把完整内容存入 .novel/spill/ 目录，上下文中只留预览和取回指引；指引中的路径可用 ReadFile 以 offset/limit 分段读回省略的部分。',
+    '- EditFile 用于精确替换已有文件中的片段。oldText 必须来自 ReadFile 结果，但不要包含行号前缀；保留原文缩进，尽量提供足够上下文避免误替换。新增文件请用 CreateFile。',
+    '- CreateFile 用于创建不存在的新文件；目标已存在时会失败。要素文件使用 .md，文件名即要素名。',
+    '- RenameFile 用于重命名或移动单个 .md、.json、.txt 文件；源文件必须存在，目标文件不能存在，父目录会自动创建。重命名要素文件需在汇报中说明理由。',
+    '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。探索目录结构时先看目录清单，不要为了探索而批量读取文件。',
+    '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、elements/characters/*.md。它不会读取文件正文；找到候选文件后再用 ReadFile 精读。',
+    '- RagSearch 用于从项目要素索引中语义检索人物、地点、实体、剧情、时间线、世界观设定；返回的 sourcePath 可用于后续 ReadFile 精读。',
+    '- 可以连续使用多个工具完成任务。完成工具调用后，继续根据工具结果判断是否还需要下一步。',
   ].join('\n')
 }
 
-/** 要素管理员可写工具（其余全项目只读）：入口是这两个，路径闸再强制 elements/ 前缀。 */
-const ELEMENT_MANAGER_WRITABLE_TOOLS = ['CreateFile', 'EditFile'] as const
-
-/** 要素管理员完整工具白名单（设计 §3.2 拍板：无 DeleteFile / RenameFile / GetFileChangeHistory / Web 工具 / 委派工具）。 */
-const ELEMENT_MANAGER_TOOL_WHITELIST = [
-  'ListDirectory',
-  'FindFiles',
-  'ReadFile',
-  'RagSearch',
-  ...ELEMENT_MANAGER_WRITABLE_TOOLS,
-] as const
+/** Notes 段（ZCode 式铁律，从旧 persona 抽出）：不可让渡的边界都在这里，工作细则在 ELEMENT.md。 */
+function buildElementManagerNotes(): string {
+  return [
+    'Notes:',
+    '- 你只能写入 elements/ 下的文件；其余一切只读。',
+    '- 合并同名/近名要素时保留旧文件全部事实；存疑不合并，列入汇报交用户拍板。',
+    '- 你可以重命名 elements/ 下的要素文件，重命名需在汇报中说明理由；不删除任何文件，确需删除的列入汇报交用户处理。',
+    '- 从不修改 chapters/ 正文，也不修改 prompts/ 下的任何文件。',
+  ].join('\n')
+}
 
 /**
- * 组装要素管理员工具面：全量工具表按白名单过滤，可写工具包一层 validateInput 路径闸——
+ * 组装要素管理员 system prompt：身份 + 项目结构 + 工具规则 + Notes + 汇报格式，五段分层。
+ * ELEMENT.md 不进 system（改 user-role reminder 恒注入，D2）。
+ */
+export function buildElementManagerSystemPrompt(input: { model?: string }): string {
+  return [
+    ELEMENT_MANAGER_PROFILE.identity(input.model?.trim() || undefined),
+    '',
+    PROJECT_STRUCTURE_SECTION,
+    '',
+    buildElementManagerToolRules(),
+    '',
+    buildElementManagerNotes(),
+    '',
+    REPORT_FORMAT_SECTION,
+  ].join('\n')
+}
+
+/**
+ * ELEMENT.md reminder（D2/D3 拆板）：一次性上下文恒注入，无 digest 去重、
+ * 无「未修改默认模板不注入」——默认模板本身就是完整工作守则，未修改 ≠ 无内容。
+ */
+export function buildElementSchemaReminder(content: string): string {
+  return `<system-reminder>\n以下是本书要素规范（prompts/ELEMENT.md），作为工作守则。\n\n${content.trim()}\n</system-reminder>`
+}
+
+/**
+ * 组装要素管理员工具面：全量工具表按 profile 白名单过滤，可写工具包一层 validateInput 路径闸——
  * 写目标不在 elements/ 下直接报错回灌（运行层强制，模型越界请求只会收到失败结果）。
  */
 export function createElementManagerTools(): AgentRunnableToolMap {
   const full = createAgentTools()
   const tools: AgentRunnableToolMap = {}
-  for (const name of ELEMENT_MANAGER_TOOL_WHITELIST) {
+  for (const name of ELEMENT_MANAGER_PROFILE.tools) {
     const tool = full[name]
     if (!tool) {
       throw new Error(`要素管理员工具白名单引用了未注册工具：${name}`)
     }
     tools[name] = tool
   }
-  for (const name of ELEMENT_MANAGER_WRITABLE_TOOLS) {
+  for (const name of ELEMENT_MANAGER_PROFILE.writableTools) {
     tools[name] = guardElementsScope(tools[name]!)
   }
   return tools
@@ -93,7 +144,7 @@ function guardElementsScope(tool: AgentRunnableTool): AgentRunnableTool {
       validateInput(input: unknown) {
         const validated = tool.core.validateInput(input)
         const path = (validated as { path?: unknown }).path
-        if (typeof path !== 'string' || !path.toLowerCase().startsWith('elements/')) {
+        if (typeof path !== 'string' || !path.toLowerCase().startsWith(ELEMENT_MANAGER_PROFILE.writeScope)) {
           throw new Error('要素管理员只能写入 elements/ 下的要素文件；该位置只读。如需改动请列入汇报交用户处理。')
         }
         return validated
@@ -133,12 +184,12 @@ export function mergeElementManagerOverrides(config: ProjectConfig): ProjectConf
 }
 
 /**
- * 跑一次要素管理员任务：全新 ModelView（system = persona + ELEMENT.md，user = task）→
+ * 跑一次要素管理员任务：全新 ModelView（system = 分层拼装；user = ELEMENT.md reminder + 任务）→
  * 复用主 Agent 的 query 循环（同压缩阈值、同 agentMaxTurns 安全阀）。
  * 配置先经 mergeElementManagerOverrides 合成（决策 3/4 的覆盖项：模型/思考档/确认档位，
  * 未覆盖项动态继承主配置——按次取值，运行中定格，D5）；合成后的 project 快照
- * 让权限判定与工具执行同步用要素管理员档位，handle 同引用零副作用。
- * 内层工具事件透传给 onEvent（带 agent: 'element-manager'），写确认透传给 confirm（带「要素管理员」标签）。
+ * 让权限判定与工具执行同步用要素管理员档位，handle 同引用零副作用；身份段模型名随合成后配置取值。
+ * 内层工具事件透传给 onEvent（带 agent: 'element-manager'），写确认透传给 confirm（带「要素管理」标签）。
  */
 export async function runElementManager(input: {
   task: string
@@ -154,13 +205,16 @@ export async function runElementManager(input: {
   const effectiveProject: ProjectSnapshot = { ...input.project, config: effectiveConfig }
 
   const view = createModelView()
-  setSystemMessage(view, buildElementManagerSystemPrompt(input.elementSchema))
+  setSystemMessage(view, buildElementManagerSystemPrompt({ model: effectiveConfig.llm.model }))
+
+  // ELEMENT.md 恒注入为 user-role reminder（D2/D3：一次性上下文无去重需求；默认模板即有效守则）
+  appendUserMessage(view, buildElementSchemaReminder(input.elementSchema.trim() || SCHEMA_MISSING_NOTE))
 
   const userLines = [
-    `整理任务：${input.task}`,
-    input.scope?.trim() ? `整理范围：${input.scope.trim()}` : '整理范围：整个 elements/ 要素库',
+    `管理任务：${input.task}`,
+    input.scope?.trim() ? `管理范围：${input.scope.trim()}` : '管理范围：整个 elements/ 要素库',
     '',
-    '请按要素规范整理，结束时输出固定结构汇报。',
+    '请按要素规范管理，结束时输出固定结构汇报。',
   ]
   appendUserMessage(view, userLines.join('\n'))
 
@@ -204,7 +258,7 @@ export async function runElementManager(input: {
 export const ELEMENT_MANAGER_TASK_PROMPT = `请立即调用 DelegateToElementManager 工具，把本次要素管理任务委派给要素管理子智能体执行，不要自己直接修改要素文件。
 
 对 task 的要求（子智能体看不到本对话，必须自包含）：
-- 整理整个 elements/ 要素库：核对同名与近名条目合并、frontmatter 规范（tags 去重、relatedChapters 取并集、lastUpdatedChapter 取最新）、正文按模板小节归位、按规范补写素材间链接。
+- 管理整个 elements/ 要素库：核对同名与近名条目合并、frontmatter 规范（tags 去重、relatedChapters 取并集、lastUpdatedChapter 取最新）、正文按模板小节归位、按规范补写素材间链接。
 - 子智能体会自己读写文件并对写入操作请求确认；存疑事项它会列进汇报。
 
 收到汇报后，向用户转述要点：改了哪些文件、合并了什么、哪些存疑事项需要用户拍板、是否有建议删除的文件。`
@@ -242,21 +296,21 @@ export function createDelegateToElementManagerTool(context: {
       type: 'function',
       function: {
         name: 'DelegateToElementManager',
-        description: `委派要素管理子智能体整理 elements/ 要素库（合并重复条目、规范 frontmatter、补写链接）。子智能体看不到当前对话，task 必须自包含：写清任务目标、范围与注意事项。它会实际读写文件、逐次请求写确认，并返回结构化汇报（改动清单/合并说明/存疑事项/建议删除）。不适合写作或章节修改。
+        description: `委派要素管理子智能体管理 elements/ 要素库（合并重复条目、规范 frontmatter、补写链接、重命名要素文件）。子智能体看不到当前对话，task 必须自包含：写清任务目标、范围与注意事项。它会实际读写文件、逐次请求写确认，并返回结构化汇报（改动清单/合并说明/存疑事项/建议删除）。不适合写作或章节修改。
 
-何时该委派：本轮写作新增要素条目较多（新人物/新地点/新设定连续出现）、人物状态或关系显著变化、设定出现前后矛盾、或用户提到「对不上/重复/记混了」等信号时，值得委派。改动轻微（只微调一两处、无新增实体）、要素无实质变化、或本会话已整理过且之后无新改动时，不要委派。
+何时该委派：本轮写作新增要素条目较多（新人物/新地点/新设定连续出现）、人物状态或关系显著变化、设定出现前后矛盾、要素文件命名不当、或用户提到「对不上/重复/记混了」等信号时，值得委派。改动轻微（只微调一两处、无新增实体）、要素无实质变化、或本会话已整理过且之后无新改动时，不要委派。
 
-委派前先建议：主动整理前先在回复末尾用一句话说明观察到的信号、建议管理要素（委派本工具执行），经用户同意后再调用，不要未经同意静默发起。用户明确要求整理（含 /管理要素）时直接委派。`,
+委派前先建议：主动管理前先在回复末尾用一句话说明观察到的信号、建议管理要素（委派本工具执行），经用户同意后再调用，不要未经同意静默发起。用户明确要求管理（含 /管理要素）时直接委派。`,
         parameters: {
           type: 'object',
           properties: {
             task: {
               type: 'string',
-              description: '委派给子智能体的任务描述，必须自包含（子智能体看不到本对话）。例如：整理第 12 章涉及的要素，重点核对角色甲的人物卡是否有重复条目。',
+              description: '委派给子智能体的任务描述，必须自包含（子智能体看不到本对话）。例如：管理第 12 章涉及的要素，重点核对角色甲的人物卡是否有重复条目。',
             },
             scope: {
               type: 'string',
-              description: '可选，圈定整理范围（文件或子目录）；缺省为整个 elements/ 要素库。',
+              description: '可选，圈定管理范围（文件或子目录）；缺省为整个 elements/ 要素库。',
             },
           },
           required: ['task'],
@@ -294,7 +348,7 @@ export function createDelegateToElementManagerTool(context: {
       },
       summarizeInput(input: DelegateToElementManagerInput) {
         const scope = input.scope ? `（范围：${input.scope}）` : ''
-        return `委派要素管理员整理${scope}：${input.task}`
+        return `委派要素管理员管理${scope}：${input.task}`
       },
       summarizeOutput(output: DelegateToElementManagerOutput) {
         return output.aborted

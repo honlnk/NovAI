@@ -6,6 +6,28 @@ import type { ChatSessionState, ChatTargetContext } from '../../types/chat'
 import type { ProjectSnapshot } from '../../types/project'
 
 /**
+ * 项目结构段（固定事实的目录描述）。主 Agent 与要素管理员子代理共用同一份常量
+ * ——两边都陈述「这个世界是什么」，抽成单一来源避免两份漂移（要素管理员升级 W2 拍板）。
+ */
+const PROJECT_STRUCTURE_LINES = [
+  '本项目是一个小说工程，目录结构固定：',
+  '',
+  '- chapters/：章节正文。一章一个 .txt 文件，纯文本，首行写章节标题，文件名形如 第NNN章-标题.txt（编号至少 3 位补零）。',
+  '- elements/：要素库，承载人物、设定等长期信息，按六类分目录：',
+  '  - characters/：人物，一人一文件。',
+  '  - locations/：地点，一地一文件。',
+  '  - entities/：具体实体——武器、武功、坐骑、丹药、信物、法器、书籍等会被点名、持有或发生状态变化的东西。',
+  '  - plots/：剧情事件，一个独立事件一文件。',
+  '  - timeline/：时间线阶段，一个故事阶段一文件。',
+  '  - worldbuilding/：世界观——抽象规则与体系（力量体系、社会制度、种族设定、地理总览等）。',
+  '  要素文件用 .md，文件名即要素名。',
+  '- prompts/：提示词文件。system.md 是全局基调与硬性约束，outlines/ 是大纲，NovAI.md 是项目级记忆，ELEMENT.md 是要素库管理规范。',
+  '- .novel/：应用内部数据（会话、日志、回收站、RAG 索引），不要直接读写。',
+]
+
+export const PROJECT_STRUCTURE_SECTION = PROJECT_STRUCTURE_LINES.join('\n')
+
+/**
  * 主 Agent system prompt：身份一句 + 项目结构说明 + 逐工具使用规则 +（已修改的）system.md 后置。
  *
  * 学 dsh 的克制——system 只讲「身份 + 这个世界是什么」，不讲「你该在什么场景做什么事」
@@ -32,19 +54,7 @@ export function buildAgentSystemPrompt(input: {
   const parts: string[] = [
     identity,
     '',
-    '本项目是一个小说工程，目录结构固定：',
-    '',
-    '- chapters/：章节正文。一章一个 .txt 文件，纯文本，首行写章节标题，文件名形如 第NNN章-标题.txt（编号至少 3 位补零）。',
-    '- elements/：要素库，承载人物、设定等长期信息，按六类分目录：',
-    '  - characters/：人物，一人一文件。',
-    '  - locations/：地点，一地一文件。',
-    '  - entities/：具体实体——武器、武功、坐骑、丹药、信物、法器、书籍等会被点名、持有或发生状态变化的东西。',
-    '  - plots/：剧情事件，一个独立事件一文件。',
-    '  - timeline/：时间线阶段，一个故事阶段一文件。',
-    '  - worldbuilding/：世界观——抽象规则与体系（力量体系、社会制度、种族设定、地理总览等）。',
-    '  要素文件用 .md，文件名即要素名。',
-    '- prompts/：提示词文件。system.md 是全局基调与硬性约束，outlines/ 是大纲，NovAI.md 是项目级记忆，ELEMENT.md 是要素库整理规范。',
-    '- .novel/：应用内部数据（会话、日志、回收站、RAG 索引），不要直接读写。',
+    ...PROJECT_STRUCTURE_LINES,
     '',
     '工具使用规则：',
     '- 所有工具 path 都是项目根目录内部的相对路径；不要把项目文件夹名写进 path。查看项目根目录时，ListDirectory 不传 path 或传空字符串。',

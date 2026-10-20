@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildElementManagerSystemPrompt,
+  buildElementSchemaReminder,
   createDelegateToElementManagerTool,
   createElementManagerTools,
-  ELEMENT_MANAGER_PERSONA,
   mergeElementManagerOverrides,
 } from './element-manager'
+import { PROJECT_STRUCTURE_SECTION } from './prompt'
 import { isAgentToolName } from './tools'
 import { executeAgentTool } from './tool-execution'
 import type { TaggedToolExecutionEvent, WriteConfirmationRequest } from './tool-execution'
@@ -14,7 +15,8 @@ import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
 /**
  * 要素管理员子代理（委派式，一次性上下文）测试：
- * - 提示词两层组装（persona + ELEMENT.md，无其他提示词家族文件）
+ * - system 五段分层（身份含模型名 + 项目结构共用段 + 工具规则 + Notes + 汇报格式，升级 W2）
+ * - ELEMENT.md 以 user-role `<system-reminder>` 恒注入（D2/D3），不再拼进 system
  * - 工具白名单 + elements/ 写路径闸（运行层强制）
  * - 委派端到端（fetch stub）：主 Agent 调 DelegateToElementManager → 要素管理员独立请求 → 汇报回灌
  * 全链只 stub fetch（SSE 编排），query / 工具执行 / 确认链全真实（照 session-driver.test.ts 模式）。
@@ -60,18 +62,60 @@ const stubConfig = {
 } as unknown as ProjectConfig
 
 describe('buildElementManagerSystemPrompt', () => {
-  it('persona + ELEMENT.md 全文两层组装；规范在 persona 之后', () => {
-    const prompt = buildElementManagerSystemPrompt('# 我的规范\n\n一人一文件。')
-    expect(prompt.startsWith(ELEMENT_MANAGER_PERSONA)).toBe(true)
-    expect(prompt).toContain('【本书要素规范（prompts/ELEMENT.md）】')
-    expect(prompt).toContain('# 我的规范\n\n一人一文件。')
-    expect(prompt.indexOf(ELEMENT_MANAGER_PERSONA)).toBeLessThan(prompt.indexOf('# 我的规范'))
+  it('五段分层：身份（含模型名）+ 项目结构 + 工具规则 + Notes + 汇报格式，依序排列', () => {
+    const prompt = buildElementManagerSystemPrompt({ model: 'deepseek-chat' })
+    expect(prompt).toContain('你是 NovAI 要素管理员，一个使用 deepseek-chat 模型驱动的子智能体')
+    // 项目结构段与主 Agent 共用同一份常量（单一来源，防两份漂移）
+    expect(prompt).toContain(PROJECT_STRUCTURE_SECTION)
+    expect(prompt).toContain('工具使用规则：')
+    expect(prompt).toContain('Notes:')
+    expect(prompt).toContain('## 改动文件清单')
+
+    const sectionOrder = [
+      prompt.indexOf('你是 NovAI 要素管理员'),
+      prompt.indexOf('本项目是一个小说工程'),
+      prompt.indexOf('工具使用规则：'),
+      prompt.indexOf('Notes:'),
+      prompt.indexOf('任务结束时输出固定结构汇报'),
+    ]
+    expect(sectionOrder.every((index) => index >= 0)).toBe(true)
+    expect([...sectionOrder].sort((a, b) => a - b)).toEqual(sectionOrder)
   })
 
-  it('规范缺失（空串）时附缺失提示，不阻塞', () => {
-    const prompt = buildElementManagerSystemPrompt('')
-    expect(prompt).toContain(ELEMENT_MANAGER_PERSONA)
-    expect(prompt).toContain('规范文件 prompts/ELEMENT.md 缺失')
+  it('工具规则段只写白名单内工具：无 Web/删除/章节编号口径，保留 spill 与要素口径', () => {
+    const prompt = buildElementManagerSystemPrompt({ model: 'm' })
+    expect(prompt).toContain('spill')
+    expect(prompt).toContain('文件名即要素名')
+    expect(prompt).not.toContain('WebSearch')
+    expect(prompt).not.toContain('WebFetch')
+    expect(prompt).not.toContain('KnowledgeLookup')
+    expect(prompt).not.toContain('DeleteFile')
+    expect(prompt).not.toContain('chapters/*.txt 盘点')
+  })
+
+  it('Notes 铁律与汇报格式：elements/ 写边界、重命名说明理由、四段汇报', () => {
+    const prompt = buildElementManagerSystemPrompt({ model: 'm' })
+    expect(prompt).toContain('你只能写入 elements/ 下的文件')
+    expect(prompt).toContain('你可以重命名 elements/ 下的要素文件')
+    expect(prompt).toContain('不删除任何文件')
+    expect(prompt).toContain('## 合并与迁移说明')
+    expect(prompt).toContain('## 存疑事项')
+    expect(prompt).toContain('## 建议删除')
+  })
+
+  it('模型缺省或空白时退化为无模型名身份段', () => {
+    expect(buildElementManagerSystemPrompt({})).toContain('你是 NovAI 要素管理员，一个子智能体')
+    expect(buildElementManagerSystemPrompt({ model: '   ' })).not.toContain('模型驱动')
+  })
+})
+
+describe('buildElementSchemaReminder', () => {
+  it('ELEMENT.md 全文包裹为 user-role system-reminder', () => {
+    const reminder = buildElementSchemaReminder('# 我的规范\n\n一人一文件。')
+    expect(reminder.startsWith('<system-reminder>')).toBe(true)
+    expect(reminder.endsWith('</system-reminder>')).toBe(true)
+    expect(reminder).toContain('以下是本书要素规范（prompts/ELEMENT.md）')
+    expect(reminder).toContain('# 我的规范\n\n一人一文件。')
   })
 })
 
@@ -185,7 +229,7 @@ afterEach(() => {
 })
 
 describe('DelegateToElementManager 委派端到端', () => {
-  it('主 Agent 调委派 → 要素管理员独立请求（persona+规范、白名单工具面）→ 汇报回灌主 Agent', async () => {
+  it('主 Agent 调委派 → 要素管理员独立请求（分层 system + ELEMENT.md reminder、白名单工具面）→ 汇报回灌主 Agent', async () => {
     const schema = '# 我的要素规范\n\n一人一文件。'
     fetchHandler = (_call, index) => {
       if (index === 0) {
@@ -205,7 +249,7 @@ describe('DelegateToElementManager 委派端到端', () => {
       call: {
         id: 'c-delegate-1',
         name: 'DelegateToElementManager',
-        input: { task: '整理第 12 章涉及的要素' },
+        input: { task: '管理第 12 章涉及的要素' },
         createdAt: new Date().toISOString(),
       },
       project: fakeProject(schema),
@@ -220,23 +264,30 @@ describe('DelegateToElementManager 委派端到端', () => {
     // 要素管理员的两次模型请求
     expect(fetchCalls.length).toBe(2)
 
-    // 要素管理员请求的 system = persona + ELEMENT.md 全文（且只有这两层）
+    // system = 五段分层（身份含模型名 + 项目结构 + 工具规则 + Notes + 汇报格式），
+    // 且不再含 ELEMENT.md 内容（W2 D2：规范改走 user-role reminder）
     const systemMessage = fetchCalls[0]!.messages.find((message) => message.role === 'system')
-    expect(systemMessage?.content).toContain(ELEMENT_MANAGER_PERSONA)
-    expect(systemMessage?.content).toContain('# 我的要素规范')
-    expect(systemMessage?.content).toContain('【本书要素规范（prompts/ELEMENT.md）】')
+    expect(systemMessage?.content).toContain('你是 NovAI 要素管理员，一个使用 model 模型驱动的子智能体')
+    expect(systemMessage?.content).toContain(PROJECT_STRUCTURE_SECTION)
+    expect(systemMessage?.content).toContain('Notes:')
+    expect(systemMessage?.content).toContain('## 改动文件清单')
+    expect(systemMessage?.content).not.toContain('# 我的要素规范')
+    expect(systemMessage?.content).not.toContain('【本书要素规范')
 
-    // 要素管理员请求的 user 消息含任务与范围
-    const userMessage = [...fetchCalls[0]!.messages].reverse().find((message) => message.role === 'user')
-    expect(userMessage?.content).toContain('整理第 12 章涉及的要素')
-    expect(userMessage?.content).toContain('整个 elements/ 要素库')
+    // user 第一条是 ELEMENT.md reminder（恒注入，含全文）；最后一条是任务与范围
+    const userMessages = fetchCalls[0]!.messages.filter((message) => message.role === 'user')
+    expect(userMessages[0]?.content).toContain('<system-reminder>')
+    expect(userMessages[0]?.content).toContain('以下是本书要素规范（prompts/ELEMENT.md）')
+    expect(userMessages[0]?.content).toContain('# 我的要素规范')
+    expect(userMessages[userMessages.length - 1]?.content).toContain('管理第 12 章涉及的要素')
+    expect(userMessages[userMessages.length - 1]?.content).toContain('整个 elements/ 要素库')
 
     // 要素管理员工具面：白名单六工具，无委派工具（不嵌套）、无删除/改名/历史/Web
     expect(fetchCalls[0]!.toolNames.sort()).toEqual(
       ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile'],
     )
 
-    // 要素管理员内层工具事件带 elementManager 归属标记（session 层据此折叠嵌套任务组）
+    // 要素管理员内层工具事件带 element-manager 归属标记（session 层据此折叠嵌套任务组）
     expect(subagentEvents.length).toBeGreaterThanOrEqual(2)
     expect(subagentEvents.every((event) => event.agent === 'element-manager')).toBe(true)
     expect(subagentEvents.some((event) => event.type === 'tool-call')).toBe(true)
@@ -247,7 +298,26 @@ describe('DelegateToElementManager 委派端到端', () => {
     expect(outerEvents.every((event) => event.agent === undefined)).toBe(true)
   })
 
-  it('要素管理员写确认带「要素管理员」标签（与主 Agent 共用确认链，归属可辨）', async () => {
+  it('ELEMENT.md 缺失：reminder 附缺失提示，不阻塞运行', async () => {
+    fetchHandler = () => textSse('## 改动文件清单\n\n- 无')
+
+    const delegate = createDelegateToElementManagerTool({})
+    await executeAgentTool({
+      call: {
+        id: 'c-delegate-missing', name: 'DelegateToElementManager',
+        input: { task: '管理全库' }, createdAt: new Date().toISOString(),
+      },
+      project: fakeProject(null),
+      tools: { DelegateToElementManager: delegate },
+    })
+
+    expect(fetchCalls.length).toBe(1)
+    const userMessages = fetchCalls[0]!.messages.filter((message) => message.role === 'user')
+    expect(userMessages[0]?.content).toContain('<system-reminder>')
+    expect(userMessages[0]?.content).toContain('ELEMENT.md 缺失')
+  })
+
+  it('要素管理员写确认带「要素管理」标签（与主 Agent 共用确认链，归属可辨）', async () => {
     const confirmRequests: WriteConfirmationRequest[] = []
     fetchHandler = (_call, index) => {
       if (index === 0) {
@@ -370,7 +440,7 @@ describe('mergeElementManagerOverrides', () => {
 })
 
 describe('要素管理员独立配置端到端（覆盖生效）', () => {
-  it('要素管理员覆盖模型：请求打到覆盖 baseUrl/model，而非主 Agent 配置', async () => {
+  it('要素管理员覆盖模型：请求打到覆盖 baseUrl/model，身份段模型名随覆盖值', async () => {
     fetchHandler = () => textSse('## 改动文件清单\n\n- 无')
 
     const config = {
@@ -388,7 +458,7 @@ describe('要素管理员独立配置端到端（覆盖生效）', () => {
     await executeAgentTool({
       call: {
         id: 'c-delegate-4', name: 'DelegateToElementManager',
-        input: { task: '整理全库' }, createdAt: new Date().toISOString(),
+        input: { task: '管理全库' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
       tools: { DelegateToElementManager: delegate },
@@ -397,6 +467,9 @@ describe('要素管理员独立配置端到端（覆盖生效）', () => {
     expect(fetchCalls.length).toBe(1)
     expect(fetchCalls[0]!.url).toBe('https://elementManager.example.com/v1/chat/completions')
     expect(fetchCalls[0]!.model).toBe('elementManager-model')
+    // 身份段模型名跟随合成后的覆盖模型（W2：与主 Agent 同款句式）
+    const systemMessage = fetchCalls[0]!.messages.find((message) => message.role === 'system')
+    expect(systemMessage?.content).toContain('使用 elementManager-model 模型驱动的子智能体')
   })
 
   it('要素管理员档位 material：EditFile 改 elements 正文静默执行，不弹确认卡', async () => {
@@ -424,7 +497,7 @@ describe('要素管理员独立配置端到端（覆盖生效）', () => {
     await executeAgentTool({
       call: {
         id: 'c-delegate-5', name: 'DelegateToElementManager',
-        input: { task: '整理' }, createdAt: new Date().toISOString(),
+        input: { task: '管理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
       tools: { DelegateToElementManager: delegate },
@@ -459,7 +532,7 @@ describe('要素管理员独立配置端到端（覆盖生效）', () => {
     await executeAgentTool({
       call: {
         id: 'c-delegate-6', name: 'DelegateToElementManager',
-        input: { task: '整理' }, createdAt: new Date().toISOString(),
+        input: { task: '管理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
       tools: { DelegateToElementManager: delegate },
@@ -495,7 +568,7 @@ describe('要素管理员独立配置端到端（覆盖生效）', () => {
     await executeAgentTool({
       call: {
         id: 'c-delegate-7', name: 'DelegateToElementManager',
-        input: { task: '整理' }, createdAt: new Date().toISOString(),
+        input: { task: '管理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
       tools: { DelegateToElementManager: delegate },
@@ -528,7 +601,7 @@ describe('要素管理员独立配置端到端（覆盖生效）', () => {
     await executeAgentTool({
       call: {
         id: 'c-delegate-8', name: 'DelegateToElementManager',
-        input: { task: '整理' }, createdAt: new Date().toISOString(),
+        input: { task: '管理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
       tools: { DelegateToElementManager: delegate },
