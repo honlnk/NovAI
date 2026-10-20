@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createDefaultConfig, DEFAULT_ELEMENT_SCHEMA } from '../project/defaults'
-import { loadProjectFromHandle, readElementSchema, readGardenerPresets, readOutlinePrompt, readProjectConfig, repairProject, writeGardenerPresets, writeProjectConfig } from './project-fs'
+import { loadProjectFromHandle, readElementSchema, readElementManagerPresets, readOutlinePrompt, readProjectConfig, repairProject, writeElementManagerPresets, writeProjectConfig } from './project-fs'
 
 describe('project fs repair', () => {
   it('does not recreate the default outline template after it has been deleted or renamed', async () => {
@@ -169,19 +169,19 @@ describe('project config 数值钳制', () => {
   })
 })
 
-describe('园丁覆盖块归一化（Phase 2 计划 D2/D3）', () => {
-  it('无 gardener 块 → 保持 undefined（全继承，不主动写入默认值）', async () => {
+describe('要素管理员覆盖块归一化（Phase 2 计划 D2/D3）', () => {
+  it('无 elementManager 块 → 保持 undefined（全继承，不主动写入默认值）', async () => {
     const rootHandle = createMemoryDirectory('novel')
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({ settings: {} }))
 
     const config = await readProjectConfig(rootHandle)
-    expect(config.gardener).toBeUndefined()
+    expect(config.elementManager).toBeUndefined()
   })
 
   it('完整 llm 覆盖 + 三档 preset 原样保留；reasoningEffort 非法剔除', async () => {
     const rootHandle = createMemoryDirectory('novel')
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-      gardener: {
+      elementManager: {
         llm: {
           baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
           protocol: 'anthropic', reasoningEffort: 'max',
@@ -191,15 +191,15 @@ describe('园丁覆盖块归一化（Phase 2 计划 D2/D3）', () => {
     }))
 
     const config = await readProjectConfig(rootHandle)
-    expect(config.gardener?.llm).toEqual({
+    expect(config.elementManager?.llm).toEqual({
       baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
       protocol: 'anthropic', reasoningEffort: 'max',
     })
-    expect(config.gardener?.permissionPreset).toBe('material')
+    expect(config.elementManager?.permissionPreset).toBe('material')
 
     // 非法思考档剔除（无键 → 合成时继承主档）
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-      gardener: {
+      elementManager: {
         llm: {
           baseUrl: 'https://x.com', apiKey: 'k', model: 'm',
           protocol: 'openai', reasoningEffort: 'always' as never,
@@ -207,7 +207,7 @@ describe('园丁覆盖块归一化（Phase 2 计划 D2/D3）', () => {
       },
     }))
     const stripped = await readProjectConfig(rootHandle)
-    expect(stripped.gardener?.llm && 'reasoningEffort' in stripped.gardener.llm).toBe(false)
+    expect(stripped.elementManager?.llm && 'reasoningEffort' in stripped.elementManager.llm).toBe(false)
   })
 
   it('llm 覆盖残缺（缺必填/协议非法）→ 整组剔除回退继承；preset 合法则保留', async () => {
@@ -215,34 +215,34 @@ describe('园丁覆盖块归一化（Phase 2 计划 D2/D3）', () => {
 
     // 缺 model
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-      gardener: {
+      elementManager: {
         llm: { baseUrl: 'https://x.com', apiKey: 'k', protocol: 'openai' },
         permissionPreset: 'full',
       },
     }))
     let config = await readProjectConfig(rootHandle)
-    expect(config.gardener?.llm).toBeUndefined()
-    expect(config.gardener?.permissionPreset).toBe('full')
+    expect(config.elementManager?.llm).toBeUndefined()
+    expect(config.elementManager?.permissionPreset).toBe('full')
 
     // 协议非法（防半覆盖拼出无效组合）
     writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-      gardener: {
+      elementManager: {
         llm: { baseUrl: 'https://x.com', apiKey: 'k', model: 'm', protocol: 'grpc' as never },
       },
     }))
     config = await readProjectConfig(rootHandle)
-    expect(config.gardener).toBeUndefined()
+    expect(config.elementManager).toBeUndefined()
   })
 
-  it('permissionPreset 非三档值剔除（chapter/chapter-material 对园丁无意义，非法串同理）', async () => {
+  it('permissionPreset 非三档值剔除（chapter/chapter-material 对要素管理员无意义，非法串同理）', async () => {
     const rootHandle = createMemoryDirectory('novel')
 
     for (const preset of ['chapter', 'chapter-material', 'nonsense']) {
       writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-        gardener: { permissionPreset: preset as never },
+        elementManager: { permissionPreset: preset as never },
       }))
       const config = await readProjectConfig(rootHandle)
-      expect(config.gardener).toBeUndefined()
+      expect(config.elementManager).toBeUndefined()
     }
   })
 })
@@ -329,10 +329,10 @@ describe('scenes→outlines 迁移（W3）', () => {
   })
 })
 
-describe('gardener presets（.novai/gardener-presets.json，要素整理参数化 W2）', () => {
+describe('elementManager presets（.novai/element-manager-presets.json，要素整理参数化 W2）', () => {
   it('文件不存在：返回空数组不抛错（弹窗降级为无快捷选项形态）', async () => {
     const rootHandle = createMemoryDirectory('novel')
-    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([])
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([])
   })
 
   it('正常读取 + 写回整表（.novai/ 目录随写自动创建）', async () => {
@@ -342,13 +342,13 @@ describe('gardener presets（.novai/gardener-presets.json，要素整理参数�
       { label: '保守合并', prompt: '存疑就不合并' },
     ]
 
-    await writeGardenerPresets(rootHandle, presets)
-    await expect(readGardenerPresets(rootHandle)).resolves.toEqual(presets)
-    await expect(readProjectText(rootHandle, '.novai/gardener-presets.json')).resolves.toContain('只更新变更章节')
+    await writeElementManagerPresets(rootHandle, presets)
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual(presets)
+    await expect(readProjectText(rootHandle, '.novai/element-manager-presets.json')).resolves.toContain('只更新变更章节')
 
     // 整表替换语义
-    await writeGardenerPresets(rootHandle, [{ label: '仅全库核对', prompt: '只核对不写入' }])
-    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([
+    await writeElementManagerPresets(rootHandle, [{ label: '仅全库核对', prompt: '只核对不写入' }])
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([
       { label: '仅全库核对', prompt: '只核对不写入' },
     ])
   })
@@ -356,13 +356,13 @@ describe('gardener presets（.novai/gardener-presets.json，要素整理参数�
   it('损坏内容容错为空：非法 JSON / presets 非数组 / 项字段非法或为空白', async () => {
     const rootHandle = createMemoryDirectory('novel')
 
-    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', '{oops')
-    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([])
+    writeProjectTextSync(rootHandle, '.novai/element-manager-presets.json', '{oops')
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([])
 
-    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', JSON.stringify({ presets: 'nope' }))
-    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([])
+    writeProjectTextSync(rootHandle, '.novai/element-manager-presets.json', JSON.stringify({ presets: 'nope' }))
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([])
 
-    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', JSON.stringify({
+    writeProjectTextSync(rootHandle, '.novai/element-manager-presets.json', JSON.stringify({
       presets: [
         { label: '合法', prompt: '正常选项' },
         { label: '', prompt: '空 label 被丢' },
@@ -371,7 +371,69 @@ describe('gardener presets（.novai/gardener-presets.json，要素整理参数�
         null,
       ],
     }))
-    await expect(readGardenerPresets(rootHandle)).resolves.toEqual([{ label: '合法', prompt: '正常选项' }])
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([{ label: '合法', prompt: '正常选项' }])
+  })
+})
+
+describe('园丁→要素管理员改名迁移（W1）', () => {
+  it('老配置 gardener 覆盖块读取映射为 elementManager；打开项目后写回只留新字段', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      gardener: {
+        llm: {
+          baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
+          protocol: 'anthropic', reasoningEffort: 'max',
+        },
+        permissionPreset: 'material',
+      },
+    }))
+    writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
+      projectId: 'p1', version: 1, createdAt: '2026-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
+    }))
+
+    const project = await loadProjectFromHandle(rootHandle)
+    // 模型覆盖、思考档、权限档全量映射不丢
+    expect(project.config.elementManager?.llm).toEqual({
+      baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
+      protocol: 'anthropic', reasoningEffort: 'max',
+    })
+    expect(project.config.elementManager?.permissionPreset).toBe('material')
+
+    // 写回盘上：新字段在，老 gardener 键被丢弃
+    const onDisk = await readProjectText(rootHandle, 'novel.config.json')
+    expect(onDisk).toContain('elementManager')
+    expect(onDisk).not.toContain('gardener')
+  })
+
+  it('新旧字段并存时以新字段为准', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+      gardener: { permissionPreset: 'full' },
+      elementManager: { permissionPreset: 'review' },
+    }))
+    const config = await readProjectConfig(rootHandle)
+    expect(config.elementManager?.permissionPreset).toBe('review')
+  })
+
+  it('老 presets 文件名回退读取；写回只写新文件名、老文件不删', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', JSON.stringify({
+      presets: [{ label: '老选项', prompt: '老提示语' }],
+    }))
+
+    // 新文件不存在 → 回退读老文件
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([
+      { label: '老选项', prompt: '老提示语' },
+    ])
+
+    // 写回只写新文件名；老文件内容原样保留（用户数据不删）
+    await writeElementManagerPresets(rootHandle, [{ label: '新选项', prompt: '新提示语' }])
+    await expect(readProjectText(rootHandle, '.novai/element-manager-presets.json')).resolves.toContain('新选项')
+    await expect(readProjectText(rootHandle, '.novai/gardener-presets.json')).resolves.toContain('老选项')
+    // 新文件存在后读取不再回退
+    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([
+      { label: '新选项', prompt: '新提示语' },
+    ])
   })
 })
 

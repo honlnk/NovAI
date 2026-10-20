@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, isGardenerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, isElementManagerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -183,7 +183,7 @@ export async function repairProject(
     await writeText(rootHandle, 'prompts/NovAI.md', '')
   }
 
-  // 要素库规范 ELEMENT.md 缺失时补默认内容（园丁子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
+  // 要素库规范 ELEMENT.md 缺失时补默认内容（要素管理员子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
   // 与 NovAI.md 同策略：温和补齐、不覆盖用户已修改的版本、不纳入强制检测项。
   if (!(await pathExists(rootHandle, 'prompts/ELEMENT.md', 'file'))) {
     await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
@@ -206,9 +206,11 @@ export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandl
   // 按真值判断会让已迁移项目的死字段永远留在盘上。
   const hasLegacyOutlineReference =
     (rawConfig.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath !== undefined
+  // 老配置带园丁改名前的 gardener 覆盖块：归一化映射后写回，老键从盘上消失（新键 elementManager）
+  const hasLegacyGardenerBlock = (rawConfig as { gardener?: unknown }).gardener !== undefined
   const config = normalizeProjectConfig(rawConfig)
   // 迁移过或 config 还带旧字段：把归一化结果写回盘（路径前缀已替换、旧字段名被丢弃）
-  if (migrated || hasLegacyOutlineReference) {
+  if (migrated || hasLegacyOutlineReference || hasLegacyGardenerBlock) {
     await writeJson(rootHandle, 'novel.config.json', config)
   }
   const manifest = await readJson<ProjectManifest>(rootHandle, '.novel/manifest.json')
@@ -340,53 +342,60 @@ export async function writeProjectConfig(
 }
 
 /**
- * 园丁任务快捷选项（要素整理参数化 W2）：项目级隐藏配置 `.novai/gardener-presets.json`。
+ * 要素管理员任务快捷选项（要素整理参数化 W2）：项目级隐藏配置 `.novai/element-manager-presets.json`。
  * 与 novel.config.json 同级受 Agent 工具写保护（file-tools/common.ts 内部路径名单），
  * 仅 app service 层经此读写；默认不预置任何选项，由用户在设置页新建。
  */
-export type GardenerPreset = {
+export type ElementManagerPreset = {
   /** 列表显示名 */
   label: string
-  /** 勾选后拼进园丁任务消息的文本 */
+  /** 勾选后拼进要素管理员任务消息的文本 */
   prompt: string
 }
 
-const GARDENER_PRESETS_PATH = '.novai/gardener-presets.json'
+const ELEMENT_MANAGER_PRESETS_PATH = '.novai/element-manager-presets.json'
+/** 改名前（W1 园丁→要素管理员）的快捷选项文件名：读取回退用，写回只写新名、老文件不删。 */
+const LEGACY_GARDENER_PRESETS_PATH = '.novai/gardener-presets.json'
 
 /**
  * 读取快捷选项。文件不存在或内容损坏（非法 JSON / presets 非数组 / 项字段非法）
  * 一律容错为空数组，不抛错——弹窗降级为无快捷选项形态即可用，不该被配置文件炸挂。
+ * 老项目文件名回退：新文件不存在时再试老文件名（.novai/gardener-presets.json）。
  */
-export async function readGardenerPresets(rootHandle: FileSystemDirectoryHandle): Promise<GardenerPreset[]> {
+export async function readElementManagerPresets(rootHandle: FileSystemDirectoryHandle): Promise<ElementManagerPreset[]> {
   let raw: unknown
   try {
-    raw = await readJson<unknown>(rootHandle, GARDENER_PRESETS_PATH)
+    raw = await readJson<unknown>(rootHandle, ELEMENT_MANAGER_PRESETS_PATH)
   } catch {
-    return []
+    try {
+      raw = await readJson<unknown>(rootHandle, LEGACY_GARDENER_PRESETS_PATH)
+    } catch {
+      return []
+    }
   }
   const presets = (raw as { presets?: unknown } | null)?.presets
   if (!Array.isArray(presets)) {
     return []
   }
   return presets.filter(
-    (preset): preset is GardenerPreset =>
+    (preset): preset is ElementManagerPreset =>
       !!preset &&
       typeof preset === 'object' &&
-      typeof (preset as GardenerPreset).label === 'string' &&
-      typeof (preset as GardenerPreset).prompt === 'string' &&
-      (preset as GardenerPreset).label.trim() !== '' &&
-      (preset as GardenerPreset).prompt.trim() !== '',
+      typeof (preset as ElementManagerPreset).label === 'string' &&
+      typeof (preset as ElementManagerPreset).prompt === 'string' &&
+      (preset as ElementManagerPreset).label.trim() !== '' &&
+      (preset as ElementManagerPreset).prompt.trim() !== '',
   )
 }
 
 /**
  * 写回快捷选项（整表替换）。`.novai/` 目录不存在时随写自动创建（ensureFileHandle 逐级 create）。
  */
-export async function writeGardenerPresets(
+export async function writeElementManagerPresets(
   rootHandle: FileSystemDirectoryHandle,
-  presets: GardenerPreset[],
+  presets: ElementManagerPreset[],
 ): Promise<void> {
-  await writeJson(rootHandle, GARDENER_PRESETS_PATH, { presets })
+  await writeJson(rootHandle, ELEMENT_MANAGER_PRESETS_PATH, { presets })
 }
 
 function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
@@ -395,9 +404,15 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     activeScenePromptPath?: unknown
   }
   const { activeScenePromptPath: legacyScenePromptPath, ...settingsRest } = legacySettings
+  // 改名迁移（园丁→要素管理员）：老 gardener 覆盖块读入映射为 elementManager，
+  // 两者并存时新字段优先；老键随归一化丢弃，写回不再保留。
+  const { gardener: legacyGardenerBlock, ...configRest } = config as ProjectConfig & {
+    gardener?: ProjectConfig['elementManager']
+  }
+  const elementManagerSource = configRest.elementManager ?? legacyGardenerBlock
   return {
     ...DEFAULT_CONFIG,
-    ...config,
+    ...configRest,
     project: {
       ...DEFAULT_CONFIG.project,
       ...config.project,
@@ -433,9 +448,10 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
         ? config.search.provider
         : DEFAULT_CONFIG.search.provider,
     },
-    // 园丁覆盖块（Phase 2 计划 D2/D3）：块缺省 → undefined（全继承，零迁移）；
+    // 要素管理员覆盖块（Phase 2 计划 D2/D3）：块缺省 → undefined（全继承，零迁移）；
     // llm 残缺/协议非法整组剔除、permissionPreset 非三档值剔除，均回退继承。
-    gardener: normalizeGardenerConfig(config.gardener),
+    // 入参优先取新字段，老 gardener 块已在上文映射进来（W1 改名迁移）。
+    elementManager: normalizeElementManagerConfig(elementManagerSource),
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...settingsRest,
@@ -484,16 +500,16 @@ function normalizeAgentMaxTurns(value: unknown): number {
 }
 
 /**
- * 园丁覆盖块归一化：块缺省/两覆盖项全被剔除 → undefined（全继承主 Agent）；
+ * 要素管理员覆盖块归一化：块缺省/两覆盖项全被剔除 → undefined（全继承主 Agent）；
  * 否则只保留合法覆盖项。不主动写入默认值（零迁移，D2）。
  */
-function normalizeGardenerConfig(gardener: ProjectConfig['gardener']): ProjectConfig['gardener'] {
-  if (!gardener || typeof gardener !== 'object') {
+function normalizeElementManagerConfig(elementManager: ProjectConfig['elementManager']): ProjectConfig['elementManager'] {
+  if (!elementManager || typeof elementManager !== 'object') {
     return undefined
   }
-  const llm = normalizeGardenerLlm(gardener.llm)
-  const permissionPreset = isGardenerPermissionPreset(gardener.permissionPreset)
-    ? gardener.permissionPreset
+  const llm = normalizeElementManagerLlm(elementManager.llm)
+  const permissionPreset = isElementManagerPermissionPreset(elementManager.permissionPreset)
+    ? elementManager.permissionPreset
     : undefined
   if (!llm && !permissionPreset) {
     return undefined
@@ -505,13 +521,13 @@ function normalizeGardenerConfig(gardener: ProjectConfig['gardener']): ProjectCo
 }
 
 /**
- * 园丁 llm 覆盖块校验：四必填（baseUrl/apiKey/model/protocol）任一缺失或协议非法 →
+ * 要素管理员 llm 覆盖块校验：四必填（baseUrl/apiKey/model/protocol）任一缺失或协议非法 →
  * 整组剔除回退继承（防半覆盖拼出无效组合，D2）。reasoningEffort 合法才带键——
  * 刻意不用显式 undefined：合成时展开覆盖，undefined 键会遮蔽主配置的思考档。
  */
-function normalizeGardenerLlm(
-  llm: NonNullable<ProjectConfig['gardener']>['llm'],
-): NonNullable<ProjectConfig['gardener']>['llm'] {
+function normalizeElementManagerLlm(
+  llm: NonNullable<ProjectConfig['elementManager']>['llm'],
+): NonNullable<ProjectConfig['elementManager']>['llm'] {
   if (!llm || typeof llm !== 'object') {
     return undefined
   }
@@ -638,10 +654,10 @@ export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): 
 }
 
 /**
- * 读取要素库规范 `prompts/ELEMENT.md`（园丁子代理的唯一注入文件）。
+ * 读取要素库规范 `prompts/ELEMENT.md`（要素管理员子代理的唯一注入文件）。
  *
- * 只注入园丁、不注入主 Agent（《要素园丁子代理设计》§7.4）；
- * 文件缺失时返回空字符串，不抛错——园丁 prompt 组装层会附「规范缺失」兜底提示。
+ * 只注入要素管理员、不注入主 Agent（《要素园丁子代理设计》§7.4）；
+ * 文件缺失时返回空字符串，不抛错——要素管理员 prompt 组装层会附「规范缺失」兜底提示。
  */
 export async function readElementSchema(rootHandle: FileSystemDirectoryHandle): Promise<string> {
   try {

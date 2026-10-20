@@ -20,7 +20,7 @@ import { registerLexicalTextEntity } from '@lexical/text'
  * 识别规则（纯函数 scanTextRefs，与 dsh decorations.ts 同构，中文名适配）：
  * 触发符 / 或 @ 必须在行首或空白后；name 为连续非空白段（[^\s@/]+）；
  * `/名字` 整体精确命中 lexicon 且其后紧跟空白或结尾才高亮——
- * `/整理要素。`、`x/整理要素`、`/整理` 都不高亮。
+ * `/管理要素。`、`x/管理要素`、`/整理` 都不高亮。
  */
 
 export type TextRefKind = 'slash' | 'outline'
@@ -76,7 +76,7 @@ interface SerializedTextRefNode extends SerializedTextNode {
 }
 
 export interface TextRefLexicon {
-  /** 斜杠命令 label 集（含 / 前缀，如 '/整理要素'） */
+  /** 斜杠命令 label 集（含 / 前缀，如 '/管理要素'） */
   slash: readonly string[]
   /** 大纲引用集（含 @ 前缀，如 '@主线'） */
   outline: readonly string[]

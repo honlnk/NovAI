@@ -34,9 +34,9 @@ function diffRecords(file: TurnFileChangeView): FileChangeRecordView[] {
   return file.records.filter((record) => record.diff)
 }
 
-/** 该文件的改动是否全部/部分来自园丁子代理（写回面板归属标记） */
-function isGardenerChange(file: TurnFileChangeView): boolean {
-  return file.records.some((record) => record.agent === 'gardener')
+/** 该文件的改动是否全部/部分来自要素管理员子代理（写回面板归属标记） */
+function isElementManagerChange(file: TurnFileChangeView): boolean {
+  return file.records.some((record) => record.agent === 'element-manager')
 }
 
 function toggleFiles() {
@@ -122,10 +122,10 @@ const changeLabels: Record<string, string> = {
             {{ changeLabels[file.status] }}
           </span>
           <span
-            v-if="isGardenerChange(file)"
+            v-if="isElementManagerChange(file)"
             class="shrink-0 rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700"
-            title="要素整理子智能体的改动"
-          >要素整理</span>
+            title="要素管理子智能体的改动"
+          >要素管理</span>
           <span class="min-w-0 flex-1 truncate">
             <template v-if="file.status === 'renamed' && file.fromPath">
               {{ file.fromPath }} <span class="text-gray-400">→</span> {{ file.path }}

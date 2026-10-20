@@ -13,7 +13,7 @@ export type AgentToolName =
   | 'WebSearch'
   | 'WebFetch'
   | 'KnowledgeLookup'
-  | 'DelegateToGardener'
+  | 'DelegateToElementManager'
 
 export type AgentToolCall = {
   id: string

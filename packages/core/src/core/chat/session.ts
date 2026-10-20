@@ -7,7 +7,7 @@ import {
 } from '../agent/prompt'
 import { buildSteeringContent, query } from '../agent/query'
 import { createAgentTools } from '../agent/tools'
-import { createDelegateToGardenerTool } from '../agent/gardener'
+import { createDelegateToElementManagerTool } from '../agent/element-manager'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
   appendUserMessage,
@@ -316,7 +316,7 @@ async function runDriverTurn(options: {
   const requestMessages = toRequestMessages(modelView)
   /**
    * 工具事件 → 显示层消息（含改动账本累积）。主 Agent 事件无 agent 字段；
-   * 园丁子代理的事件带 gardener（委派工具透传），渲染层据此折叠为嵌套园丁任务组。
+   * 要素管理员子代理的事件带 elementManager（委派工具透传），渲染层据此折叠为嵌套要素管理员任务组。
    */
   const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
     if (event.type === 'tool-call') {
@@ -340,7 +340,7 @@ async function runDriverTurn(options: {
     if (event.type === 'tool-result') {
       // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
       // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
-      // 园丁的写入同 runId 归本轮面板，记录带 agent 归属标记。
+      // 要素管理员的写入同 runId 归本轮面板，记录带 agent 归属标记。
       if (event.ok && event.fileChange) {
         session.changeLedger = [
           ...(session.changeLedger ?? []),
@@ -373,11 +373,11 @@ async function runDriverTurn(options: {
     }
   }
 
-  // 主 Agent 工具面：全量文件工具 + 园丁委派工具（运行态 confirm/signal/事件转发闭包注入——
-  // 这些是会话层所有，不进 ToolRuntime）。园丁自己的工具面在 gardener.ts 内独立组装（无委派工具）。
+  // 主 Agent 工具面：全量文件工具 + 要素管理员委派工具（运行态 confirm/signal/事件转发闭包注入——
+  // 这些是会话层所有，不进 ToolRuntime）。要素管理员自己的工具面在 elementManager.ts 内独立组装（无委派工具）。
   const tools = {
     ...createAgentTools(),
-    DelegateToGardener: createDelegateToGardenerTool({
+    DelegateToElementManager: createDelegateToElementManagerTool({
       confirm: input.confirm,
       signal,
       onSubagentEvent: appendToolEventMessage,

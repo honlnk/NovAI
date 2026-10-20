@@ -1,30 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  buildGardenerSystemPrompt,
-  createDelegateToGardenerTool,
-  createGardenerTools,
-  GARDENER_PERSONA,
-  mergeGardenerOverrides,
-} from './gardener'
+  buildElementManagerSystemPrompt,
+  createDelegateToElementManagerTool,
+  createElementManagerTools,
+  ELEMENT_MANAGER_PERSONA,
+  mergeElementManagerOverrides,
+} from './element-manager'
 import { isAgentToolName } from './tools'
 import { executeAgentTool } from './tool-execution'
 import type { TaggedToolExecutionEvent, WriteConfirmationRequest } from './tool-execution'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
 /**
- * 园丁子代理（委派式，一次性上下文）测试：
+ * 要素管理员子代理（委派式，一次性上下文）测试：
  * - 提示词两层组装（persona + ELEMENT.md，无其他提示词家族文件）
  * - 工具白名单 + elements/ 写路径闸（运行层强制）
- * - 委派端到端（fetch stub）：主 Agent 调 DelegateToGardener → 园丁独立请求 → 汇报回灌
+ * - 委派端到端（fetch stub）：主 Agent 调 DelegateToElementManager → 要素管理员独立请求 → 汇报回灌
  * 全链只 stub fetch（SSE 编排），query / 工具执行 / 确认链全真实（照 session-driver.test.ts 模式）。
  */
 
 /** 假项目句柄：只支持 readElementSchema 的读取路径（prompts/ELEMENT.md）。 */
 function fakeProject(elementSchema: string | null): ProjectSnapshot {
   return {
-    id: 'proj-gardener',
-    name: '园丁测试项目',
+    id: 'proj-elementManager',
+    name: '要素管理员测试项目',
     config: stubConfig,
     handle: {
       async getDirectoryHandle(name: string) {
@@ -59,45 +59,45 @@ const stubConfig = {
   },
 } as unknown as ProjectConfig
 
-describe('buildGardenerSystemPrompt', () => {
+describe('buildElementManagerSystemPrompt', () => {
   it('persona + ELEMENT.md 全文两层组装；规范在 persona 之后', () => {
-    const prompt = buildGardenerSystemPrompt('# 我的规范\n\n一人一文件。')
-    expect(prompt.startsWith(GARDENER_PERSONA)).toBe(true)
+    const prompt = buildElementManagerSystemPrompt('# 我的规范\n\n一人一文件。')
+    expect(prompt.startsWith(ELEMENT_MANAGER_PERSONA)).toBe(true)
     expect(prompt).toContain('【本书要素规范（prompts/ELEMENT.md）】')
     expect(prompt).toContain('# 我的规范\n\n一人一文件。')
-    expect(prompt.indexOf(GARDENER_PERSONA)).toBeLessThan(prompt.indexOf('# 我的规范'))
+    expect(prompt.indexOf(ELEMENT_MANAGER_PERSONA)).toBeLessThan(prompt.indexOf('# 我的规范'))
   })
 
   it('规范缺失（空串）时附缺失提示，不阻塞', () => {
-    const prompt = buildGardenerSystemPrompt('')
-    expect(prompt).toContain(GARDENER_PERSONA)
+    const prompt = buildElementManagerSystemPrompt('')
+    expect(prompt).toContain(ELEMENT_MANAGER_PERSONA)
     expect(prompt).toContain('规范文件 prompts/ELEMENT.md 缺失')
   })
 })
 
-describe('createGardenerTools', () => {
+describe('createElementManagerTools', () => {
   it('工具白名单精确：六工具，无 DeleteFile/RenameFile/GetFileChangeHistory/Web/委派工具', () => {
-    const tools = createGardenerTools()
+    const tools = createElementManagerTools()
     expect(Object.keys(tools).sort()).toEqual(
       ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile'],
     )
   })
 
   it('写路径闸：EditFile 拒绝 chapters/，CreateFile 拒绝 prompts/ELEMENT.md', () => {
-    const tools = createGardenerTools()
+    const tools = createElementManagerTools()
     expect(() => tools.EditFile!.core.validateInput({
       path: 'chapters/第001章-夜探剑冢.txt',
       oldText: 'a',
       newText: 'b',
-    })).toThrowError(/园丁只能写入 elements\//)
+    })).toThrowError(/要素管理员只能写入 elements\//)
     expect(() => tools.CreateFile!.core.validateInput({
       path: 'prompts/ELEMENT.md',
       content: 'x',
-    })).toThrowError(/园丁只能写入 elements\//)
+    })).toThrowError(/要素管理员只能写入 elements\//)
   })
 
   it('写路径闸：elements/ 下的写入放行（基础校验照常通过）', () => {
-    const tools = createGardenerTools()
+    const tools = createElementManagerTools()
     expect(tools.CreateFile!.core.validateInput({
       path: 'elements/characters/角色甲.md',
       content: '---\nname: 角色甲\n---\n',
@@ -110,7 +110,7 @@ describe('createGardenerTools', () => {
   })
 
   it('写路径闸大小写不敏感：Elements/ 前缀不因大小写被误拒', () => {
-    const tools = createGardenerTools()
+    const tools = createElementManagerTools()
     expect(() => tools.CreateFile!.core.validateInput({
       path: 'Elements/characters/角色甲.md',
       content: 'x',
@@ -119,8 +119,8 @@ describe('createGardenerTools', () => {
 })
 
 describe('isAgentToolName', () => {
-  it('DelegateToGardener 已入联合类型', () => {
-    expect(isAgentToolName('DelegateToGardener')).toBe(true)
+  it('DelegateToElementManager 已入联合类型', () => {
+    expect(isAgentToolName('DelegateToElementManager')).toBe(true)
   })
 })
 
@@ -184,61 +184,61 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('DelegateToGardener 委派端到端', () => {
-  it('主 Agent 调委派 → 园丁独立请求（persona+规范、白名单工具面）→ 汇报回灌主 Agent', async () => {
+describe('DelegateToElementManager 委派端到端', () => {
+  it('主 Agent 调委派 → 要素管理员独立请求（persona+规范、白名单工具面）→ 汇报回灌主 Agent', async () => {
     const schema = '# 我的要素规范\n\n一人一文件。'
     fetchHandler = (_call, index) => {
       if (index === 0) {
-        // 园丁第一轮：调一个只读工具（在假句柄上会失败回灌，循环照常继续）
-        return toolCallSse('t-gardener-1', 'ListDirectory', {})
+        // 要素管理员第一轮：调一个只读工具（在假句柄上会失败回灌，循环照常继续）
+        return toolCallSse('t-elementManager-1', 'ListDirectory', {})
       }
       return textSse('## 改动文件清单\n\n- 无改动样例汇报正文')
     }
 
     const subagentEvents: TaggedToolExecutionEvent[] = []
     const outerEvents: TaggedToolExecutionEvent[] = []
-    const delegate = createDelegateToGardenerTool({
+    const delegate = createDelegateToElementManagerTool({
       onSubagentEvent: (event) => subagentEvents.push(event),
     })
 
     const result = await executeAgentTool({
       call: {
         id: 'c-delegate-1',
-        name: 'DelegateToGardener',
+        name: 'DelegateToElementManager',
         input: { task: '整理第 12 章涉及的要素' },
         createdAt: new Date().toISOString(),
       },
       project: fakeProject(schema),
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
       onEvent: (event) => outerEvents.push(event),
     })
 
     // 委派结果回灌主 Agent：汇报全文可见
-    expect(result.content).toContain('要素整理完成')
+    expect(result.content).toContain('要素管理完成')
     expect(result.content).toContain('无改动样例汇报正文')
 
-    // 园丁的两次模型请求
+    // 要素管理员的两次模型请求
     expect(fetchCalls.length).toBe(2)
 
-    // 园丁请求的 system = persona + ELEMENT.md 全文（且只有这两层）
+    // 要素管理员请求的 system = persona + ELEMENT.md 全文（且只有这两层）
     const systemMessage = fetchCalls[0]!.messages.find((message) => message.role === 'system')
-    expect(systemMessage?.content).toContain(GARDENER_PERSONA)
+    expect(systemMessage?.content).toContain(ELEMENT_MANAGER_PERSONA)
     expect(systemMessage?.content).toContain('# 我的要素规范')
     expect(systemMessage?.content).toContain('【本书要素规范（prompts/ELEMENT.md）】')
 
-    // 园丁请求的 user 消息含任务与范围
+    // 要素管理员请求的 user 消息含任务与范围
     const userMessage = [...fetchCalls[0]!.messages].reverse().find((message) => message.role === 'user')
     expect(userMessage?.content).toContain('整理第 12 章涉及的要素')
     expect(userMessage?.content).toContain('整个 elements/ 要素库')
 
-    // 园丁工具面：白名单六工具，无委派工具（不嵌套）、无删除/改名/历史/Web
+    // 要素管理员工具面：白名单六工具，无委派工具（不嵌套）、无删除/改名/历史/Web
     expect(fetchCalls[0]!.toolNames.sort()).toEqual(
       ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile'],
     )
 
-    // 园丁内层工具事件带 gardener 归属标记（session 层据此折叠嵌套任务组）
+    // 要素管理员内层工具事件带 elementManager 归属标记（session 层据此折叠嵌套任务组）
     expect(subagentEvents.length).toBeGreaterThanOrEqual(2)
-    expect(subagentEvents.every((event) => event.agent === 'gardener')).toBe(true)
+    expect(subagentEvents.every((event) => event.agent === 'element-manager')).toBe(true)
     expect(subagentEvents.some((event) => event.type === 'tool-call')).toBe(true)
     expect(subagentEvents.some((event) => event.type === 'tool-result')).toBe(true)
 
@@ -247,12 +247,12 @@ describe('DelegateToGardener 委派端到端', () => {
     expect(outerEvents.every((event) => event.agent === undefined)).toBe(true)
   })
 
-  it('园丁写确认带「园丁」标签（与主 Agent 共用确认链，归属可辨）', async () => {
+  it('要素管理员写确认带「要素管理员」标签（与主 Agent 共用确认链，归属可辨）', async () => {
     const confirmRequests: WriteConfirmationRequest[] = []
     fetchHandler = (_call, index) => {
       if (index === 0) {
         // CreateFile 是结构操作：档位判定 ask → 走确认（写入在假句柄上会失败，确认链已验证）
-        return toolCallSse('t-gardener-2', 'CreateFile', {
+        return toolCallSse('t-elementManager-2', 'CreateFile', {
           path: 'elements/characters/角色甲.md',
           content: '---\nname: 角色甲\n---\n',
         })
@@ -260,7 +260,7 @@ describe('DelegateToGardener 委派端到端', () => {
       return textSse('## 改动文件清单\n\n- elements/characters/角色甲.md（新建）')
     }
 
-    const delegate = createDelegateToGardenerTool({
+    const delegate = createDelegateToElementManagerTool({
       confirm: async (request) => {
         confirmRequests.push(request)
         return { accepted: true }
@@ -270,32 +270,32 @@ describe('DelegateToGardener 委派端到端', () => {
     const result = await executeAgentTool({
       call: {
         id: 'c-delegate-2',
-        name: 'DelegateToGardener',
+        name: 'DelegateToElementManager',
         input: { task: '补建角色甲人物卡', scope: 'elements/characters/' },
         createdAt: new Date().toISOString(),
       },
       project: fakeProject('# 规范'),
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
 
     expect(confirmRequests.length).toBe(1)
-    expect(confirmRequests[0]!.agentLabel).toBe('要素整理')
+    expect(confirmRequests[0]!.agentLabel).toBe('要素管理')
     expect(confirmRequests[0]!.confirmation.kind).toBe('create')
     // 确认被接受后工具照常执行（假句柄上写入失败回灌，循环继续），最终拿到完整汇报
     expect(result.content).toContain('角色甲.md（新建）')
   })
 
   it('task 为空字符串被参数校验拒绝', async () => {
-    const delegate = createDelegateToGardenerTool({})
+    const delegate = createDelegateToElementManagerTool({})
     const result = await executeAgentTool({
       call: {
         id: 'c-delegate-3',
-        name: 'DelegateToGardener',
+        name: 'DelegateToElementManager',
         input: { task: '   ' },
         createdAt: new Date().toISOString(),
       },
       project: fakeProject('# 规范'),
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
     expect(result.content).toContain('task 不能为空')
     // 校验失败不发起任何模型请求
@@ -303,9 +303,9 @@ describe('DelegateToGardener 委派端到端', () => {
   })
 })
 
-// ---------- 园丁独立配置（Phase 2 计划 W1：mergeGardenerOverrides 合成快照） ----------
+// ---------- 要素管理员独立配置（Phase 2 计划 W1：mergeElementManagerOverrides 合成快照） ----------
 
-describe('mergeGardenerOverrides', () => {
+describe('mergeElementManagerOverrides', () => {
   const baseConfig = {
     llm: {
       baseUrl: 'https://main.example.com',
@@ -320,17 +320,17 @@ describe('mergeGardenerOverrides', () => {
   } as unknown as ProjectConfig
 
   it('无覆盖块返回原引用（全继承，零合成开销）', () => {
-    expect(mergeGardenerOverrides(baseConfig)).toBe(baseConfig)
+    expect(mergeElementManagerOverrides(baseConfig)).toBe(baseConfig)
   })
 
   it('llm 覆盖整组生效；reasoningEffort 不带键时继承主值（不被 undefined 键遮蔽）', () => {
     const config = {
       ...baseConfig,
-      gardener: {
+      elementManager: {
         llm: { baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x', protocol: 'anthropic' },
       },
     } as ProjectConfig
-    const merged = mergeGardenerOverrides(config)
+    const merged = mergeElementManagerOverrides(config)
     expect(merged.llm.baseUrl).toBe('https://strong.example.com')
     expect(merged.llm.model).toBe('claude-x')
     expect(merged.llm.protocol).toBe('anthropic')
@@ -343,63 +343,63 @@ describe('mergeGardenerOverrides', () => {
   it('llm 覆盖带思考档时覆盖生效', () => {
     const config = {
       ...baseConfig,
-      gardener: {
+      elementManager: {
         llm: {
           baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'm', protocol: 'openai',
           reasoningEffort: 'max',
         },
       },
     } as ProjectConfig
-    expect(mergeGardenerOverrides(config).llm.reasoningEffort).toBe('max')
+    expect(mergeElementManagerOverrides(config).llm.reasoningEffort).toBe('max')
   })
 
   it('permissionPreset 覆盖写进 settings（判定链无感知）；未覆盖时取主档当前值', () => {
-    const overridden = mergeGardenerOverrides({
+    const overridden = mergeElementManagerOverrides({
       ...baseConfig,
-      gardener: { permissionPreset: 'full' },
+      elementManager: { permissionPreset: 'full' },
     } as ProjectConfig)
     expect(overridden.settings.permissionPreset).toBe('full')
 
-    const inherited = mergeGardenerOverrides({
+    const inherited = mergeElementManagerOverrides({
       ...baseConfig,
-      gardener: { llm: { baseUrl: 'https://x.com', apiKey: 'k', model: 'm', protocol: 'openai' } },
+      elementManager: { llm: { baseUrl: 'https://x.com', apiKey: 'k', model: 'm', protocol: 'openai' } },
     } as ProjectConfig)
     // 只覆盖模型不覆盖档位 → 档位动态继承主值（review）
     expect(inherited.settings.permissionPreset).toBe('review')
   })
 })
 
-describe('园丁独立配置端到端（覆盖生效）', () => {
-  it('园丁覆盖模型：请求打到覆盖 baseUrl/model，而非主 Agent 配置', async () => {
+describe('要素管理员独立配置端到端（覆盖生效）', () => {
+  it('要素管理员覆盖模型：请求打到覆盖 baseUrl/model，而非主 Agent 配置', async () => {
     fetchHandler = () => textSse('## 改动文件清单\n\n- 无')
 
     const config = {
       ...stubConfig,
-      gardener: {
+      elementManager: {
         llm: {
-          baseUrl: 'https://gardener.example.com/v1',
-          apiKey: 'gardener-key',
-          model: 'gardener-model',
+          baseUrl: 'https://elementManager.example.com/v1',
+          apiKey: 'elementManager-key',
+          model: 'elementManager-model',
           protocol: 'openai',
         },
       },
     } as ProjectConfig
-    const delegate = createDelegateToGardenerTool({})
+    const delegate = createDelegateToElementManagerTool({})
     await executeAgentTool({
       call: {
-        id: 'c-delegate-4', name: 'DelegateToGardener',
+        id: 'c-delegate-4', name: 'DelegateToElementManager',
         input: { task: '整理全库' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
 
     expect(fetchCalls.length).toBe(1)
-    expect(fetchCalls[0]!.url).toBe('https://gardener.example.com/v1/chat/completions')
-    expect(fetchCalls[0]!.model).toBe('gardener-model')
+    expect(fetchCalls[0]!.url).toBe('https://elementManager.example.com/v1/chat/completions')
+    expect(fetchCalls[0]!.model).toBe('elementManager-model')
   })
 
-  it('园丁档位 material：EditFile 改 elements 正文静默执行，不弹确认卡', async () => {
+  it('要素管理员档位 material：EditFile 改 elements 正文静默执行，不弹确认卡', async () => {
     const confirmRequests: WriteConfirmationRequest[] = []
     fetchHandler = (_call, index) => {
       if (index === 0) {
@@ -413,9 +413,9 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     const config = {
       ...stubConfig,
       settings: { ...stubConfig.settings, permissionPreset: 'review' },
-      gardener: { permissionPreset: 'material' },
+      elementManager: { permissionPreset: 'material' },
     } as unknown as ProjectConfig
-    const delegate = createDelegateToGardenerTool({
+    const delegate = createDelegateToElementManagerTool({
       confirm: (request) => {
         confirmRequests.push(request)
         return Promise.resolve({ accepted: true })
@@ -423,18 +423,18 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     })
     await executeAgentTool({
       call: {
-        id: 'c-delegate-5', name: 'DelegateToGardener',
+        id: 'c-delegate-5', name: 'DelegateToElementManager',
         input: { task: '整理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
 
-    // 主档位 review 本会全弹卡；园丁覆盖 material 后，elements 内容修改静默放行（收紧→放宽方向）
+    // 主档位 review 本会全弹卡；要素管理员覆盖 material 后，elements 内容修改静默放行（收紧→放宽方向）
     expect(confirmRequests.length).toBe(0)
   })
 
-  it('园丁档位 review 收紧：主档位放行的修改也弹确认卡（双向生效）', async () => {
+  it('要素管理员档位 review 收紧：主档位放行的修改也弹确认卡（双向生效）', async () => {
     const confirmRequests: WriteConfirmationRequest[] = []
     fetchHandler = (_call, index) => {
       if (index === 0) {
@@ -448,9 +448,9 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     const config = {
       ...stubConfig,
       settings: { ...stubConfig.settings, permissionPreset: 'chapter-material' },
-      gardener: { permissionPreset: 'review' },
+      elementManager: { permissionPreset: 'review' },
     } as unknown as ProjectConfig
-    const delegate = createDelegateToGardenerTool({
+    const delegate = createDelegateToElementManagerTool({
       confirm: (request) => {
         confirmRequests.push(request)
         return Promise.resolve({ accepted: true })
@@ -458,19 +458,19 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     })
     await executeAgentTool({
       call: {
-        id: 'c-delegate-6', name: 'DelegateToGardener',
+        id: 'c-delegate-6', name: 'DelegateToElementManager',
         input: { task: '整理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
 
-    // 主档位 chapter-material 本会静默；园丁覆盖 review 后弹卡——confirm 闭包方案做不到的方向（D1）
+    // 主档位 chapter-material 本会静默；要素管理员覆盖 review 后弹卡——confirm 闭包方案做不到的方向（D1）
     expect(confirmRequests.length).toBe(1)
-    expect(confirmRequests[0]!.agentLabel).toBe('要素整理')
+    expect(confirmRequests[0]!.agentLabel).toBe('要素管理')
   })
 
-  it('园丁档位 full：结构操作（CreateFile）也静默', async () => {
+  it('要素管理员档位 full：结构操作（CreateFile）也静默', async () => {
     const confirmRequests: WriteConfirmationRequest[] = []
     fetchHandler = (_call, index) => {
       if (index === 0) {
@@ -484,9 +484,9 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     const config = {
       ...stubConfig,
       settings: { ...stubConfig.settings, permissionPreset: 'review' },
-      gardener: { permissionPreset: 'full' },
+      elementManager: { permissionPreset: 'full' },
     } as unknown as ProjectConfig
-    const delegate = createDelegateToGardenerTool({
+    const delegate = createDelegateToElementManagerTool({
       confirm: (request) => {
         confirmRequests.push(request)
         return Promise.resolve({ accepted: true })
@@ -494,17 +494,17 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     })
     await executeAgentTool({
       call: {
-        id: 'c-delegate-7', name: 'DelegateToGardener',
+        id: 'c-delegate-7', name: 'DelegateToElementManager',
         input: { task: '整理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
 
     expect(confirmRequests.length).toBe(0)
   })
 
-  it('无覆盖块：园丁档位跟随主档位（继承基线，主 review → 全弹卡）', async () => {
+  it('无覆盖块：要素管理员档位跟随主档位（继承基线，主 review → 全弹卡）', async () => {
     const confirmRequests: WriteConfirmationRequest[] = []
     fetchHandler = (_call, index) => {
       if (index === 0) {
@@ -519,7 +519,7 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
       ...stubConfig,
       settings: { ...stubConfig.settings, permissionPreset: 'review' },
     } as unknown as ProjectConfig
-    const delegate = createDelegateToGardenerTool({
+    const delegate = createDelegateToElementManagerTool({
       confirm: (request) => {
         confirmRequests.push(request)
         return Promise.resolve({ accepted: true })
@@ -527,11 +527,11 @@ describe('园丁独立配置端到端（覆盖生效）', () => {
     })
     await executeAgentTool({
       call: {
-        id: 'c-delegate-8', name: 'DelegateToGardener',
+        id: 'c-delegate-8', name: 'DelegateToElementManager',
         input: { task: '整理' }, createdAt: new Date().toISOString(),
       },
       project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToGardener: delegate },
+      tools: { DelegateToElementManager: delegate },
     })
 
     expect(confirmRequests.length).toBe(1)

@@ -7,7 +7,7 @@ import type { ProcessGroupItem, SubagentGroupItem } from '../../stores/chat-rend
  * 默认整体折叠成一行计数摘要；永不折叠的白名单成员（user / 最终回答 / change-summary / error）
  * 由父级渲染序列直接排布，不进本组件。子项经默认插槽注入（包裹容器实现折叠）。
  *
- * 子代理嵌套形态（园丁任务组）：group 带 label 时组头显示「标签 · N 次工具调用」，
+ * 子代理嵌套形态（要素管理员任务组）：group 带 label 时组头显示「标签 · N 次工具调用」，
  * 传 nested 获得一层缩进——嵌套组渲染在轮过程组的插槽内部。
  */
 const props = defineProps<{

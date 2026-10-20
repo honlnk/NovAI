@@ -68,14 +68,14 @@ export const LEGACY_DEFAULT_OUTLINE_TEMPLATE = `# Scene Prompt
 /**
  * 要素库规范 `prompts/ELEMENT.md` 的默认内容（《要素园丁子代理设计》§7.3 六节定稿文本）。
  *
- * 定位：本书要素库的「宪法」——园丁子代理的全部机构记忆（它每次全新上下文，只注入本文件）；
+ * 定位：本书要素库的「宪法」——要素管理员子代理的全部机构记忆（它每次全新上下文，只注入本文件）；
  * 用户可自由修改，改坏时模板分节说明有 core `templates.ts` 代码兜底。
  * 内容必须与代码资产保持一致：frontmatter 字段（types/elements.ts）、
  * 六类目录职责、五类模板分节名（core/elements/templates.ts）。
  */
 export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 
-这是本书要素库的整理规范。它只注入给「园丁」子代理（/整理要素 与要素整理任务专用），不进入主创作 Agent 的提示词。可以自由修改——园丁每次都以全新上下文启动，这份文件就是它全部的工作守则。
+这是本书要素库的整理规范。它只注入给「要素管理员」子代理（/管理要素 与要素管理任务专用），不进入主创作 Agent 的提示词。可以自由修改——要素管理员每次都以全新上下文启动，这份文件就是它全部的工作守则。
 
 ## 六类目录职责与边界
 
@@ -109,7 +109,7 @@ export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 - 素材 ↔ 素材：正文里用双方括号引用要素名（如 \`[[角色甲]]\`、\`[[佩剑甲]]\`）。
 - 章节正文内不写任何链接——链接只存在于 elements/ 下的素材文件中。
 
-## 园丁工作守则
+## 要素管理员工作守则
 
 - 合并同名/近名要素时，保留旧文件中的全部事实信息，新信息按模板小节归位，不允许静默丢弃。
 - 存疑不合并：不能确信两条目是同一要素时，保持原样并列入汇报的「存疑事项」。
@@ -233,16 +233,16 @@ export function isPermissionPreset(value: unknown): value is (typeof PERMISSION_
   return typeof value === 'string' && (PERMISSION_PRESETS as readonly string[]).includes(value)
 }
 
-/** 园丁档位合法值表（Phase 2 计划 D3 裁剪三档，语义见 types/project.ts 的 GardenerPermissionPreset）。 */
-export const GARDENER_PERMISSION_PRESETS = ['review', 'material', 'full'] as const
+/** 要素管理员档位合法值表（Phase 2 计划 D3 裁剪三档，语义见 types/project.ts 的 ElementManagerPermissionPreset）。 */
+export const ELEMENT_MANAGER_PERMISSION_PRESETS = ['review', 'material', 'full'] as const
 
-export function isGardenerPermissionPreset(
+export function isElementManagerPermissionPreset(
   value: unknown,
-): value is (typeof GARDENER_PERMISSION_PRESETS)[number] {
-  return typeof value === 'string' && (GARDENER_PERMISSION_PRESETS as readonly string[]).includes(value)
+): value is (typeof ELEMENT_MANAGER_PERMISSION_PRESETS)[number] {
+  return typeof value === 'string' && (ELEMENT_MANAGER_PERMISSION_PRESETS as readonly string[]).includes(value)
 }
 
-/** 模型协议合法值表（园丁覆盖块校验用；主 llm.protocol 走请求层协议分发报错，不在此拦）。 */
+/** 模型协议合法值表（要素管理员覆盖块校验用；主 llm.protocol 走请求层协议分发报错，不在此拦）。 */
 export const MODEL_PROTOCOLS = ['openai', 'openai-responses', 'anthropic', 'gemini'] as const
 
 export function isModelProtocol(value: unknown): value is (typeof MODEL_PROTOCOLS)[number] {

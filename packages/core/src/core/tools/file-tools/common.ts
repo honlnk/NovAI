@@ -25,7 +25,7 @@ function foldInternalPath(path: string) {
 }
 
 function isInternalPath(folded: string) {
-  // .novai/ 为项目级隐藏配置目录（园丁快捷选项等，要素整理参数化 W2），与 novel.config.json 同级保护
+  // .novai/ 为项目级隐藏配置目录（要素管理员快捷选项等，要素整理参数化 W2），与 novel.config.json 同级保护
   return folded === 'novel.config.json' || folded.startsWith('.novel/') || folded.startsWith('.novai/')
 }
 

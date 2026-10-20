@@ -36,7 +36,7 @@ const novaiOverview = computed<ProjectFileNodeView | null>(() => {
   ) ?? null
 })
 
-/** 要素库规范：prompts/ELEMENT.md。只注入园丁子代理（/整理要素），不进主 Agent 提示词栈 */
+/** 要素库规范：prompts/ELEMENT.md。只注入要素管理员子代理（/管理要素），不进主 Agent 提示词栈 */
 const elementSchema = computed<ProjectFileNodeView | null>(() => {
   return promptRootChildren.value.find(
     n => n.kind === 'file' && n.path === 'prompts/ELEMENT.md',
@@ -118,9 +118,9 @@ function isOutlineActive(path: string): boolean {
           ]"
           @click="emit('selectFile', elementSchema.path)"
         >
-          <span class="shrink-0">🌿</span>
+          <span class="shrink-0">📚</span>
           <span class="truncate">{{ elementSchema.name }}</span>
-          <span class="ml-auto shrink-0 text-xs text-gray-500">要素整理专用</span>
+          <span class="ml-auto shrink-0 text-xs text-gray-500">要素管理专用</span>
         </button>
         <p v-else class="px-2 py-2 text-xs text-gray-600">
           未找到要素规范（prompts/ELEMENT.md），修复项目后会自动补齐

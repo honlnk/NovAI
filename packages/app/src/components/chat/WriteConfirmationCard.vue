@@ -13,7 +13,7 @@ const props = defineProps<{
   toolName: string
   title: string
   summary: string
-  /** 归属标签（如「园丁」）：园丁子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
+  /** 归属标签（如「要素管理员」）：要素管理员子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
   agentLabel?: string
 }>()
 

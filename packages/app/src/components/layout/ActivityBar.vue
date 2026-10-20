@@ -14,10 +14,10 @@ const emit = defineEmits<{
   proofread: []
   organize: []
   version: []
-  /** 整理要素：单击打开任务参数弹窗（新建会话发送） */
-  gardener: []
-  /** 整理要素双击：跳过弹窗直发裸任务（要素整理参数化 W1 D8） */
-  gardenerDirect: []
+  /** 管理要素：单击打开任务参数弹窗（新建会话发送） */
+  'element-manager': []
+  /** 管理要素双击：跳过弹窗直发裸任务（要素整理参数化 W1 D8） */
+  'element-manager-direct': []
   /** 打开向量索引独立管理页（RagIndexModal） */
   rag: []
 }>()
@@ -36,17 +36,17 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
 /**
  * 底部功能项。
  * enabled 标记是否已实现：已实现的正常态可点击，未实现的灰一档提示「即将推出」。
- * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理，整理要素与向量索引为后补。
+ * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理，管理要素与向量索引为后补。
  */
-const actionItems: { key: 'proofread' | 'organize' | 'version' | 'gardener' | 'rag'; label: string; icon: string; enabled: boolean }[] = [
+const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag'; label: string; icon: string; enabled: boolean }[] = [
   { key: 'proofread', label: '校对', icon: 'check', enabled: false },
   // 章节整理的机械改名工具已下线（2026-09-21）：它是未来 AI 整理模块的前置基建，
   // 待该模块立计划开发时再启用；命名规范的工具层强制不受影响。
   { key: 'organize', label: '章节整理', icon: 'list', enabled: false },
   { key: 'version', label: '版本管理', icon: 'branch', enabled: false },
-  // 整理要素：与聊天输入框工具栏同款委派入口，区别在于固定在全新会话中发送，
+  // 管理要素：与聊天输入框工具栏同款委派入口，区别在于固定在全新会话中发送，
   // 不占用当前会话的上下文。图标与 ChatPanel 工具栏按钮同为叶子。
-  { key: 'gardener', label: '整理要素', icon: 'leaf', enabled: true },
+  { key: 'element-manager', label: '管理要素', icon: 'library', enabled: true },
   { key: 'rag', label: '向量索引', icon: 'database', enabled: true },
 ]
 
@@ -54,12 +54,12 @@ const actionItems: { key: 'proofread' | 'organize' | 'version' | 'gardener' | 'r
  * 模板里不能直接动态调 emit（联合类型无法匹配 emit 重载），
  * 在 script 里集中分发。
  */
-function emitAction(key: 'proofread' | 'organize' | 'version' | 'gardener' | 'rag') {
+function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag') {
   switch (key) {
     case 'proofread': emit('proofread'); break
     case 'organize': emit('organize'); break
     case 'version': emit('version'); break
-    case 'gardener': emit('gardener'); break
+    case 'element-manager': emit('element-manager'); break
     case 'rag': emit('rag'); break
   }
 }
@@ -124,7 +124,7 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'gardener' | 'ra
               : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
           ]"
           @click="emitAction(item.key)"
-          @dblclick="item.key === 'gardener' ? emit('gardenerDirect') : undefined"
+          @dblclick="item.key === 'element-manager' ? emit('element-manager-direct') : undefined"
         >
           <!-- 校对 -->
           <svg v-if="item.icon === 'check'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -138,10 +138,9 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'gardener' | 'ra
           <svg v-else-if="item.icon === 'branch'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
           </svg>
-          <!-- 整理要素（叶子，与聊天工具栏按钮同款） -->
-          <svg v-else-if="item.icon === 'leaf'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+          <!-- 管理要素（书架，与聊天工具栏按钮同款） -->
+          <svg v-else-if="item.icon === 'library'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
           </svg>
           <!-- 向量索引（circle-stack） -->
           <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

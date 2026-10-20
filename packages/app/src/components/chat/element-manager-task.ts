@@ -2,14 +2,14 @@ import { computed, ref } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 
 /**
- * 园丁任务参数弹窗的逻辑层（要素整理参数化计划 W1）。
+ * 要素管理员任务参数弹窗的逻辑层（要素整理参数化计划 W1）。
  *
- * 组件 GardenerTaskDialog 只做视图，可测的状态与拼装规则收在本模块
+ * 组件 ElementManagerTaskDialog 只做视图，可测的状态与拼装规则收在本模块
  * （仓库测试为 node 环境纯逻辑测试，无组件挂载基建，照 reasoning-collapse 模式抽状态机）。
  */
 
-/** 快捷选项（与 W2 的 core 侧 GardenerPresetView 同形，接线后由 core 类型收编） */
-export type GardenerPresetOption = {
+/** 快捷选项（与 W2 的 core 侧 ElementManagerPresetView 同形，接线后由 core 类型收编） */
+export type ElementManagerPresetOption = {
   /** 列表显示名 */
   label: string
   /** 勾选后拼进任务消息的文本 */
@@ -17,7 +17,7 @@ export type GardenerPresetOption = {
 }
 
 /** 弹窗确认产物（D3 拼装原料，path/name 均来自章节清单） */
-export type GardenerTaskParams = {
+export type ElementManagerTaskParams = {
   /** 任务描述自由文本（未 trim，拼装时再治） */
   text: string
   /** 勾选的快捷选项 prompt 逐条 */
@@ -27,11 +27,11 @@ export type GardenerTaskParams = {
 }
 
 /**
- * 拼装园丁任务消息（D3）：base（GARDENER_TASK_PROMPT）+ 自由文本 + 快捷选项逐条 + 章节范围。
- * 空参数时只有 base 本身，与现状裸发行为一致。章节以文本指明范围——园丁自己读文件，
+ * 拼装要素管理员任务消息（D3）：base（ELEMENT_MANAGER_TASK_PROMPT）+ 自由文本 + 快捷选项逐条 + 章节范围。
+ * 空参数时只有 base 本身，与现状裸发行为一致。章节以文本指明范围——要素管理员自己读文件，
  * 不需要结构化数据。
  */
-export function buildGardenerTaskMessage(base: string, params: GardenerTaskParams): string {
+export function buildElementManagerTaskMessage(base: string, params: ElementManagerTaskParams): string {
   const sections: string[] = [base]
   const text = params.text.trim()
   if (text) {
@@ -52,13 +52,13 @@ export function buildGardenerTaskMessage(base: string, params: GardenerTaskParam
 /**
  * 弹窗状态机（D2 形态的语义核心）：
  * - 开关「选择章节」只控制章节列表显隐（默认开）；快捷选项列表恒显，未配置时给空态。
- * - 确认按钮文案（D2）：无任何输入/勾选 →「直接整理」；有任一 →「确认发送」。
+ * - 确认按钮文案（D2）：无任何输入/勾选 →「直接管理」；有任一 →「确认发送」。
  *
  * presets/chapters 走 getter（组件传 props 的读取函数，测试传常量数组），
  * 状态随来源变化自动重算。
  */
-export function createGardenerTaskState(options: {
-  presets: () => GardenerPresetOption[]
+export function createElementManagerTaskState(options: {
+  presets: () => ElementManagerPresetOption[]
   chapters: () => Pick<ProjectFileNodeView, 'path' | 'name'>[]
 }) {
   const text = ref('')
@@ -83,7 +83,7 @@ export function createGardenerTaskState(options: {
   )
 
   /** 确认按钮动态文案（D2） */
-  const confirmLabel = computed(() => (hasAnyInput.value ? '确认发送' : '直接整理'))
+  const confirmLabel = computed(() => (hasAnyInput.value ? '确认发送' : '直接管理'))
 
   function togglePreset(label: string) {
     const next = new Set(selectedPresetLabels.value)
@@ -106,7 +106,7 @@ export function createGardenerTaskState(options: {
   }
 
   /** 确认：按勾选集合从来源列表取值（顺序跟随列表，不跟随勾选先后） */
-  function confirmParams(): GardenerTaskParams {
+  function confirmParams(): ElementManagerTaskParams {
     return {
       text: text.value,
       presetPrompts: presetList.value

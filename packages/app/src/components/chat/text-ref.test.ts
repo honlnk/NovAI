@@ -11,7 +11,7 @@ import { registerTextRefs, rescanTextRefs, scanTextRefs, TextRefNode } from './t
  */
 
 const LEXICON = {
-  slash: ['/整理要素', '/生成项目记忆'],
+  slash: ['/管理要素', '/生成项目记忆'],
   outline: ['@主线', '@暗线'],
 }
 
@@ -22,19 +22,19 @@ function refTexts(bridge: ComposerBridge): string[] {
 
 describe('scanTextRefs 识别规则', () => {
   it('行首完整命令高亮（光标即结尾场景）', () => {
-    expect(scanTextRefs('/整理要素', LEXICON)).toEqual([{ start: 0, end: 5, kind: 'slash' }])
+    expect(scanTextRefs('/管理要素', LEXICON)).toEqual([{ start: 0, end: 5, kind: 'slash' }])
   })
 
   it('命令后跟空白（补参数形态）高亮，范围不含尾空白', () => {
-    expect(scanTextRefs('/整理要素 重点核对', LEXICON)).toEqual([{ start: 0, end: 5, kind: 'slash' }])
+    expect(scanTextRefs('/管理要素 重点核对', LEXICON)).toEqual([{ start: 0, end: 5, kind: 'slash' }])
   })
 
   it('非行首（前文紧贴）不高亮', () => {
-    expect(scanTextRefs('x/整理要素', LEXICON)).toEqual([])
+    expect(scanTextRefs('x/管理要素', LEXICON)).toEqual([])
   })
 
   it('命令后紧跟非空白字符（prose 提及）不高亮', () => {
-    expect(scanTextRefs('/整理要素。', LEXICON)).toEqual([])
+    expect(scanTextRefs('/管理要素。', LEXICON)).toEqual([])
   })
 
   it('未注册命令 / 前缀不完整不高亮', () => {
@@ -51,7 +51,7 @@ describe('scanTextRefs 识别规则', () => {
   })
 
   it('跨行不跨段识别（换行前的贴字不算行首）', () => {
-    expect(scanTextRefs('a/整理要素\n/整理要素', LEXICON)).toEqual([
+    expect(scanTextRefs('a/管理要素\n/管理要素', LEXICON)).toEqual([
       { start: 7, end: 12, kind: 'slash' },
     ])
   })
@@ -76,23 +76,23 @@ describe('headless 集成：transform 建节点与降级', () => {
 
   it('setDraft 含命令时建 TextRefNode，投影文本不变', () => {
     const bridge = createHighlightedBridge()
-    bridge.setDraft('/整理要素 重点核对第 12 章')
-    expect(bridge.draft.value).toBe('/整理要素 重点核对第 12 章')
-    expect(refTexts(bridge)).toEqual(['/整理要素'])
+    bridge.setDraft('/管理要素 重点核对第 12 章')
+    expect(bridge.draft.value).toBe('/管理要素 重点核对第 12 章')
+    expect(refTexts(bridge)).toEqual(['/管理要素'])
   })
 
   it('编辑后不再匹配则降级为普通文本节点', () => {
     const bridge = createHighlightedBridge()
-    bridge.setDraft('/整理要素')
-    expect(refTexts(bridge)).toEqual(['/整理要素'])
-    bridge.setDraft('/整理要素x')
+    bridge.setDraft('/管理要素')
+    expect(refTexts(bridge)).toEqual(['/管理要素'])
+    bridge.setDraft('/管理要素x')
     expect(refTexts(bridge)).toEqual([])
-    expect(bridge.draft.value).toBe('/整理要素x')
+    expect(bridge.draft.value).toBe('/管理要素x')
   })
 
   it('光标映射跨 TextRef 节点正确（着色分段不改坐标系）', () => {
     const bridge = createHighlightedBridge()
-    bridge.setDraft('/整理要素 重点')
+    bridge.setDraft('/管理要素 重点')
     expect(bridge.caretOffset()).toBe(8)
     bridge.setCaretOffset(3)
     expect(bridge.caretOffset()).toBe(3)
@@ -101,12 +101,12 @@ describe('headless 集成：transform 建节点与降级', () => {
   it('expandSlashCommand 对高亮态草稿照常展开（序列化不变回归）', async () => {
     const { expandSlashCommand } = await import('../../constants/slash-commands')
     const bridge = createHighlightedBridge()
-    bridge.setDraft('/整理要素 重点核对第 12 章')
-    expect(refTexts(bridge)).toEqual(['/整理要素'])
+    bridge.setDraft('/管理要素 重点核对第 12 章')
+    expect(refTexts(bridge)).toEqual(['/管理要素'])
     // 发送链路读的是纯文本投影，与无高亮时逐字相同
     const message = expandSlashCommand(bridge.draft.value)
     expect(message).toContain('重点核对第 12 章')
-    expect(message).not.toContain('/整理要素 重点核对第 12 章'.slice(0, 5))
+    expect(message).not.toContain('/管理要素 重点核对第 12 章'.slice(0, 5))
   })
 
   it('大纲 token 同样高亮', () => {
@@ -128,9 +128,9 @@ describe('headless 集成：transform 建节点与降级', () => {
 
   it('多段落各自行首命令分别高亮', () => {
     const bridge = createHighlightedBridge()
-    bridge.setDraft('/生成项目记忆\n正文行\n再看 /整理要素')
-    expect(refTexts(bridge)).toEqual(['/生成项目记忆', '/整理要素'])
-    expect(bridge.draft.value).toBe('/生成项目记忆\n正文行\n再看 /整理要素')
+    bridge.setDraft('/生成项目记忆\n正文行\n再看 /管理要素')
+    expect(refTexts(bridge)).toEqual(['/生成项目记忆', '/管理要素'])
+    expect(bridge.draft.value).toBe('/生成项目记忆\n正文行\n再看 /管理要素')
   })
 })
 

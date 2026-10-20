@@ -11,9 +11,9 @@ import { testRerankConnection } from '../core/ai/rerank-client'
 import { testEmbeddingConnection } from '../core/embedding/client'
 import { resolveSearchProvider } from '../core/web/search-provider'
 import {
-  readGardenerPresets,
+  readElementManagerPresets,
   readProjectConfig,
-  writeGardenerPresets,
+  writeElementManagerPresets,
   writeProjectConfig,
 } from '../core/fs/project-fs'
 import { testLlmConnection } from '../core/llm/client'
@@ -27,7 +27,7 @@ import type {
   CompletionConfigView,
   ConnectionTestResultView,
   EmbeddingConfigView,
-  GardenerPresetView,
+  ElementManagerPresetView,
   ListModelsInputView,
   ListModelsResultView,
   LlmConfigView,
@@ -44,27 +44,27 @@ export async function getConfig(projectId: string): Promise<ProjectConfigView> {
 }
 
 /**
- * 读取园丁任务快捷选项（要素整理参数化 W2）：`.novai/gardener-presets.json`，
+ * 读取要素管理员任务快捷选项（要素整理参数化 W2）：`.novai/element-manager-presets.json`，
  * 独立于 novel.config.json 的读写链；文件缺失/损坏由 fs 层容错为空数组。
  */
-export async function getGardenerPresets(projectId: string): Promise<GardenerPresetView[]> {
+export async function getElementManagerPresets(projectId: string): Promise<ElementManagerPresetView[]> {
   const project = requireRuntimeProject(projectId)
-  return readGardenerPresets(project.handle)
+  return readElementManagerPresets(project.handle)
 }
 
 /**
  * 保存快捷选项（整表替换）。落盘前规整：trim 两字段并丢弃空项，
  * 保证读回与弹窗勾选到的都是有效选项。
  */
-export async function saveGardenerPresets(
+export async function saveElementManagerPresets(
   projectId: string,
-  presets: GardenerPresetView[],
-): Promise<GardenerPresetView[]> {
+  presets: ElementManagerPresetView[],
+): Promise<ElementManagerPresetView[]> {
   const project = requireRuntimeProject(projectId)
   const cleaned = presets
     .map((preset) => ({ label: preset.label.trim(), prompt: preset.prompt.trim() }))
     .filter((preset) => preset.label !== '' && preset.prompt !== '')
-  await writeGardenerPresets(project.handle, cleaned)
+  await writeElementManagerPresets(project.handle, cleaned)
   return cleaned
 }
 
@@ -100,14 +100,14 @@ export async function updateConfig(
       ...currentConfig.search,
       ...patch.search,
     },
-    // 园丁块整组替换语义：patch 带 gardener 键即替换（两项覆盖都空 → 删除块回退全继承）；
+    // 要素管理员块整组替换语义：patch 带 elementManager 键即替换（两项覆盖都空 → 删除块回退全继承）；
     // 不带键保持现状。与其他组的浅合并不同，见 ProjectConfigPatch 注释。
-    gardener:
-      patch.gardener !== undefined
-        ? patch.gardener.llm || patch.gardener.permissionPreset
-          ? patch.gardener
+    elementManager:
+      patch.elementManager !== undefined
+        ? patch.elementManager.llm || patch.elementManager.permissionPreset
+          ? patch.elementManager
           : undefined
-        : currentConfig.gardener,
+        : currentConfig.elementManager,
     settings: {
       ...currentConfig.settings,
       ...patch.settings,

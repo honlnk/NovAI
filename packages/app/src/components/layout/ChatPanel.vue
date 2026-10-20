@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { GARDENER_TASK_PROMPT } from '@novai/core/services/agent-service'
-import { getGardenerPresets } from '@novai/core/services/settings-service'
-import type { GardenerPresetView } from '@novai/core/services/types'
+import { ELEMENT_MANAGER_TASK_PROMPT } from '@novai/core/services/agent-service'
+import { getElementManagerPresets } from '@novai/core/services/settings-service'
+import type { ElementManagerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
-import { isGardenerShortcut, resolveSubmitMode } from '../../composables/keyboard'
+import { isElementManagerShortcut, resolveSubmitMode } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useComposerBridge } from '../../composables/useComposerBridge'
 import { useProjectStore } from '../../stores/project'
@@ -14,8 +14,8 @@ import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
-import GardenerTaskDialog from '../chat/GardenerTaskDialog.vue'
-import { buildGardenerTaskMessage, type GardenerTaskParams } from '../chat/gardener-task'
+import ElementManagerTaskDialog from '../chat/ElementManagerTaskDialog.vue'
+import { buildElementManagerTaskMessage, type ElementManagerTaskParams } from '../chat/element-manager-task'
 import {
   registerTextRefs,
   rescanTextRefs,
@@ -56,7 +56,7 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
-  /** 章节列表（chapters/*.txt），供园丁任务弹窗选择章节范围（要素整理参数化 W1） */
+  /** 章节列表（chapters/*.txt），供要素管理员任务弹窗选择章节范围（要素整理参数化 W1） */
   chapters: ProjectFileNodeView[]
 }>()
 
@@ -67,8 +67,8 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
-  /** 园丁弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
-  openGardenerSettings: []
+  /** 要素管理员弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
+  openElementManagerSettings: []
 }>()
 
 const chatStore = useChatStore()
@@ -326,11 +326,11 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // 园丁任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isGardenerDialogOpen.value) {
+  // 要素管理员任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
+  if (isElementManagerDialogOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
-      isGardenerDialogOpen.value = false
+      isElementManagerDialogOpen.value = false
       return
     }
   }
@@ -408,7 +408,7 @@ function autoResizeEditor() {
  * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isGardenerDialogOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isElementManagerDialogOpen.value) {
     clearSuggestion()
     return
   }
@@ -483,7 +483,7 @@ function detectCommands() {
   if (!composer.isMounted()) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isGardenerDialogOpen.value = false
+    isElementManagerDialogOpen.value = false
     return
   }
   const cursor = composer.caretOffset() ?? draft.value.length
@@ -521,70 +521,70 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   if (!command) return
   composer.replaceTokenBeforeCaret(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
 
-  // 落文本后不自动发送：gardener / init 用户均可补参数后 Enter；
-  // 发送链路的前缀拦截分别替换为 GARDENER_TASK_PROMPT / INIT_NOVEL_PROMPT 全文
+  // 落文本后不自动发送：elementManager / init 用户均可补参数后 Enter；
+  // 发送链路的前缀拦截分别替换为 ELEMENT_MANAGER_TASK_PROMPT / INIT_NOVEL_PROMPT 全文
 }
 
 /**
- * 一键整理要素（园丁 Phase 2 W2 快捷入口）：全局快捷键入口直发裸 GARDENER_TASK_PROMPT——
+ * 一键管理要素（要素管理员 Phase 2 W2 快捷入口）：全局快捷键入口直发裸 ELEMENT_MANAGER_TASK_PROMPT——
  * 快捷键语义是「一键」，不弹参数弹窗；斜杠命令与工具栏按钮已改为参数弹窗（要素整理参数化 W1）。
  */
-function triggerGardener() {
+function triggerElementManager() {
   followAndScrollToBottom()
-  void chatStore.sendMessage(GARDENER_TASK_PROMPT)
+  void chatStore.sendMessage(ELEMENT_MANAGER_TASK_PROMPT)
 }
 
-// ===== 园丁任务参数弹窗（要素整理参数化 W1，target=current 实例） =====
+// ===== 要素管理员任务参数弹窗（要素整理参数化 W1，target=current 实例） =====
 
 /** 弹窗是否打开（锚定输入框上方） */
-const isGardenerDialogOpen = ref(false)
-/** 快捷选项数据源（打开弹窗时从 .novai/gardener-presets.json 拉取，失败降级为空） */
-const gardenerPresets = ref<GardenerPresetView[]>([])
+const isElementManagerDialogOpen = ref(false)
+/** 快捷选项数据源（打开弹窗时从 .novai/element-manager-presets.json 拉取，失败降级为空） */
+const elementManagerPresets = ref<ElementManagerPresetView[]>([])
 
-async function loadGardenerPresets() {
+async function loadElementManagerPresets() {
   try {
-    gardenerPresets.value = await getGardenerPresets(props.projectId)
+    elementManagerPresets.value = await getElementManagerPresets(props.projectId)
   } catch {
-    gardenerPresets.value = []
+    elementManagerPresets.value = []
   }
 }
 
-/** 输入框上方「🌿 整理要素」按钮：打开参数弹窗（D1：当前会话；斜杠命令只落文本不开弹窗） */
-function openGardenerDialog() {
-  void loadGardenerPresets()
-  isGardenerDialogOpen.value = true
+/** 输入框上方「📚 管理要素」按钮：打开参数弹窗（D1：当前会话；斜杠命令只落文本不开弹窗） */
+function openElementManagerDialog() {
+  void loadElementManagerPresets()
+  isElementManagerDialogOpen.value = true
 }
 
 /** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队）。
- *  输入框里手输/斜杠落的 `/整理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
-async function handleGardenerConfirm(params: GardenerTaskParams) {
-  isGardenerDialogOpen.value = false
-  const hasCommandResidue = draft.value.trimStart().startsWith('/整理要素')
+ *  输入框里手输/斜杠落的 `/管理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
+async function handleElementManagerConfirm(params: ElementManagerTaskParams) {
+  isElementManagerDialogOpen.value = false
+  const hasCommandResidue = draft.value.trimStart().startsWith('/管理要素')
   followAndScrollToBottom()
-  const ok = await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+  const ok = await chatStore.sendMessage(buildElementManagerTaskMessage(ELEMENT_MANAGER_TASK_PROMPT, params))
   if (ok && hasCommandResidue) {
     composer.setDraft('')
   }
 }
 
-function handleGardenerDialogCancel() {
-  isGardenerDialogOpen.value = false
+function handleElementManagerDialogCancel() {
+  isElementManagerDialogOpen.value = false
 }
 
-/** 弹窗空态「新建快捷选项」：关弹窗并请求打开设置页（W2 起定位到要素整理 tab） */
-function handleGardenerOpenSettings() {
-  isGardenerDialogOpen.value = false
-  emit('openGardenerSettings')
+/** 弹窗空态「新建快捷选项」：关弹窗并请求打开设置页（W2 起定位到要素管理 tab） */
+function handleElementManagerOpenSettings() {
+  isElementManagerDialogOpen.value = false
+  emit('openElementManagerSettings')
 }
 
 /**
- * 全局快捷键（window 级监听，不限输入框焦点）：Ctrl/Cmd+Shift+G 触发一键整理要素。
+ * 全局快捷键（window 级监听，不限输入框焦点）：Ctrl/Cmd+Shift+G 触发一键管理要素。
  * 模态框（BaseModal 带 role=dialog）打开时不抢键，避免在设置页等弹窗背后触发委派。
  */
 function handleGlobalKeydown(event: KeyboardEvent) {
-  if (!isGardenerShortcut(event) || document.querySelector('[role="dialog"]')) return
+  if (!isElementManagerShortcut(event) || document.querySelector('[role="dialog"]')) return
   event.preventDefault()
-  triggerGardener()
+  triggerElementManager()
 }
 
 onMounted(() => {
@@ -705,7 +705,7 @@ onBeforeUnmount(() => {
                 @toggle="chatStore.toggleProcessGroup"
               >
                 <template v-for="child in item.items" :key="renderItemKey(child)">
-                  <!-- 园丁子代理嵌套任务组：组头带标签、嵌套缩进，子项为其工具行 -->
+                  <!-- 要素管理员子代理嵌套任务组：组头带标签、嵌套缩进，子项为其工具行 -->
                   <TurnProcessGroup
                     v-if="child.kind === 'subagent-group'"
                     :group="child"
@@ -805,15 +805,15 @@ onBeforeUnmount(() => {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
-          <!-- 园丁任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
-          <div v-if="isGardenerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">
-            <GardenerTaskDialog
+          <!-- 要素管理员任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
+          <div v-if="isElementManagerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">
+            <ElementManagerTaskDialog
               target="current"
               :chapters="chapters"
-              :presets="gardenerPresets"
-              @confirm="handleGardenerConfirm"
-              @cancel="handleGardenerDialogCancel"
-              @open-settings="handleGardenerOpenSettings"
+              :presets="elementManagerPresets"
+              @confirm="handleElementManagerConfirm"
+              @cancel="handleElementManagerDialogCancel"
+              @open-settings="handleElementManagerOpenSettings"
             />
           </div>
           <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
@@ -852,18 +852,18 @@ onBeforeUnmount(() => {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
-                <!-- 整理要素（参数弹窗入口，要素整理参数化 W1）：与斜杠命令同一入口；全局 Ctrl/Cmd+Shift+G 仍直发裸任务 -->
+                <!-- 管理要素（参数弹窗入口，要素整理参数化 W1）：与斜杠命令同一入口；全局 Ctrl/Cmd+Shift+G 仍直发裸任务 -->
                 <button
                   type="button"
                   class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
-                  title="整理要素库（可配任务参数；子智能体执行）；Agent 运行中自动排队"
-                  @click="openGardenerDialog"
+                  title="管理要素库（可配任务参数；子智能体执行）；Agent 运行中自动排队"
+                  @click="openElementManagerDialog"
                 >
                   <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
                   </svg>
-                  <span>整理要素</span>
+                  <span>管理要素</span>
                 </button>
               </div>
               <div class="flex items-center gap-2">

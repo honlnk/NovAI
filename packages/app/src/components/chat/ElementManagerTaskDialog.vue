@@ -3,13 +3,13 @@ import { computed } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import ToggleSwitch from '../ui/ToggleSwitch.vue'
 import {
-  createGardenerTaskState,
-  type GardenerPresetOption,
-  type GardenerTaskParams,
-} from './gardener-task'
+  createElementManagerTaskState,
+  type ElementManagerPresetOption,
+  type ElementManagerTaskParams,
+} from './element-manager-task'
 
 /**
- * 园丁任务参数弹窗（要素整理参数化计划 W1，D2 形态）。
+ * 要素管理员任务参数弹窗（要素整理参数化计划 W1，D2 形态）。
  *
  * 自上而下：任务描述文本域 → 快捷选项复选列表 → 章节复选列表（右上角开关控制显隐）。
  * 只渲染面板本体，不自带定位：ChatPanel 用锚定输入框上方的 popover 位，
@@ -21,22 +21,22 @@ const props = withDefaults(
     target: 'current' | 'new'
     /** 章节清单（chapters/*.txt，已扁平化） */
     chapters: ProjectFileNodeView[]
-    /** 快捷选项（W1 传空数组，W2 接 .novai/gardener-presets.json） */
-    presets?: GardenerPresetOption[]
+    /** 快捷选项（W1 传空数组，W2 接 .novai/element-manager-presets.json） */
+    presets?: ElementManagerPresetOption[]
   }>(),
   { presets: () => [] },
 )
 
 const emit = defineEmits<{
-  /** 确认：payload 为拼装原料（base 由父组件注入 GARDENER_TASK_PROMPT） */
-  confirm: [params: GardenerTaskParams]
+  /** 确认：payload 为拼装原料（base 由父组件注入 ELEMENT_MANAGER_TASK_PROMPT） */
+  confirm: [params: ElementManagerTaskParams]
   /** 取消/关闭 */
   cancel: []
-  /** 空态「新建快捷选项」：跳设置页（W1 只开 modal，W2 定位到要素整理 tab） */
+  /** 空态「新建快捷选项」：跳设置页（W1 只开 modal，W2 定位到要素管理 tab） */
   openSettings: []
 }>()
 
-const state = createGardenerTaskState({
+const state = createElementManagerTaskState({
   presets: () => props.presets,
   chapters: () => props.chapters,
 })
@@ -61,8 +61,8 @@ function handleCancel() {
     <!-- 头部：标题 + 「选择章节」开关（D2：右上角） -->
     <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3">
       <div>
-        <p id="gardener-task-title" class="text-sm font-semibold text-gray-800">整理要素</p>
-        <p class="mt-0.5 text-xs text-gray-400">可先描述任务、勾选范围，再委派要素整理子智能体</p>
+        <p id="element-manager-task-title" class="text-sm font-semibold text-gray-800">管理要素</p>
+        <p class="mt-0.5 text-xs text-gray-400">可先描述任务、勾选范围，再委派要素管理子智能体</p>
       </div>
       <label class="flex items-center gap-2">
         <span class="text-xs font-semibold text-gray-500">选择章节</span>
@@ -124,7 +124,7 @@ function handleCancel() {
           class="flex items-center justify-between gap-2 rounded-lg border border-dashed border-gray-200 px-3 py-2.5"
           :class="{ 'flex-col': state.isPresetEmptyState.value }"
         >
-          <span class="text-xs text-gray-400">未配置快捷选项，可在设置页「要素整理」中新建</span>
+          <span class="text-xs text-gray-400">未配置快捷选项，可在设置页「要素管理」中新建</span>
           <button
             type="button"
             class="shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"

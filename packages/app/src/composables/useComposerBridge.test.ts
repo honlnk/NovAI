@@ -112,26 +112,26 @@ describe('useComposerBridge replaceTokenBeforeCaret', () => {
   it('替换行首斜杠 token：边界空白不存在时直接替换', () => {
     const { bridge } = createBridge()
     bridge.setDraft('/整理')
-    const replaced = bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/整理要素 ')
+    const replaced = bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/管理要素 ')
     expect(replaced).toBe(true)
-    expect(bridge.draft.value).toBe('/整理要素 ')
-    expect(bridge.caretOffset()).toBe('/整理要素 '.length)
+    expect(bridge.draft.value).toBe('/管理要素 ')
+    expect(bridge.caretOffset()).toBe('/管理要素 '.length)
   })
 
   it('替换保留 token 前的边界空白', () => {
     const { bridge } = createBridge()
     bridge.setDraft('写完这章 /整理')
-    bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/整理要素 ')
-    expect(bridge.draft.value).toBe('写完这章 /整理要素 ')
+    bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/管理要素 ')
+    expect(bridge.draft.value).toBe('写完这章 /管理要素 ')
   })
 
   it('替换后光标之后的内容原样保留（token 后原空格保留，替换文本尾空格叠加）', () => {
     const { bridge } = createBridge()
     bridge.setDraft('/整理 这后面的参数')
     bridge.setCaretOffset(3)
-    bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/整理要素 ')
+    bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/管理要素 ')
     // 与旧 replaceTokenAtCursor 行为一致：替换文本自带尾空格 + afterCursor 原有的空格
-    expect(bridge.draft.value).toBe('/整理要素  这后面的参数')
+    expect(bridge.draft.value).toBe('/管理要素  这后面的参数')
   })
 
   it('@token 清除（选中大纲场景：替换为空）', () => {
@@ -145,7 +145,7 @@ describe('useComposerBridge replaceTokenBeforeCaret', () => {
   it('无匹配返回 false 且草稿不变', () => {
     const { bridge } = createBridge()
     bridge.setDraft('普通文本')
-    expect(bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/整理要素 ')).toBe(false)
+    expect(bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/管理要素 ')).toBe(false)
     expect(bridge.draft.value).toBe('普通文本')
   })
 })

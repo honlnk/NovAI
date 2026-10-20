@@ -1,4 +1,4 @@
-import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { ELEMENT_MANAGER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 
 /**
  * 斜杠命令注册表（R6 起源；要素整理参数化 W3 起新范式）。
@@ -8,7 +8,7 @@ import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/ag
  * 发送链路对行首命中的命令做前缀拦截替换（expandSlashCommand）：
  * 裸命令文本本身不构成对主 Agent 的有效指令，替换为驱动 prompt 全文保证工程质量不丢。
  */
-export type SlashCommandId = 'init' | 'gardener'
+export type SlashCommandId = 'init' | 'element-manager'
 
 export type SlashCommand = {
   /** 命令唯一标识 */
@@ -24,10 +24,10 @@ export type SlashCommand = {
 /** 当前可用的斜杠命令（/提取要素 已于 2026-10 退役，要素整理参数化 W4） */
 export const SLASH_COMMANDS: SlashCommand[] = [
   {
-    id: 'gardener',
-    label: '/整理要素',
-    description: '整理 elements/ 要素库（专用子智能体执行）；选中后填入输入框，可在其后补充参数',
-    icon: '🌿',
+    id: 'element-manager',
+    label: '/管理要素',
+    description: '管理 elements/ 要素库（专用子智能体执行）；选中后填入输入框，可在其后补充参数',
+    icon: '📚',
   },
   {
     id: 'init',
@@ -44,7 +44,7 @@ export function slashCommandDraftText(label: string): string {
 
 /** 行首命中即替换的命令 → 驱动 prompt 映射（发送链路前缀拦截，W3 D6） */
 const SLASH_COMMAND_EXPANSIONS: Array<{ command: string; prompt: string }> = [
-  { command: '/整理要素', prompt: GARDENER_TASK_PROMPT },
+  { command: '/管理要素', prompt: ELEMENT_MANAGER_TASK_PROMPT },
   { command: '/生成项目记忆', prompt: INIT_NOVEL_PROMPT },
 ]
 

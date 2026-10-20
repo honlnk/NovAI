@@ -8,11 +8,11 @@ import type { ModelProtocol, ReasoningEffort } from './ai'
 export type PermissionPreset = 'review' | 'chapter' | 'material' | 'chapter-material' | 'full'
 
 /**
- * 园丁专用权限档位（Phase 2 计划 D3 裁剪三档）：园丁被路径闸限制只能写 elements/，
+ * 要素管理员专用权限档位（Phase 2 计划 D3 裁剪三档）：要素管理员被路径闸限制只能写 elements/，
  * 五档中「章节档」对它效果等同「仅审阅」（elements 改动照样全弹卡），故裁剪。
  * 值域落在 PermissionPreset 内，判定复用 decideWriteToolPermission，无独立分支。
  */
-export type GardenerPermissionPreset = Extract<PermissionPreset, 'review' | 'material' | 'full'>
+export type ElementManagerPermissionPreset = Extract<PermissionPreset, 'review' | 'material' | 'full'>
 
 export type ProjectSummary = {
   id: string
@@ -106,11 +106,11 @@ export type ProjectConfig = {
   /** 联网搜索（WebSearch/WebFetch 工具的后端配置）；默认托管档零配置可用。 */
   search: SearchConfig
   /**
-   * 园丁子代理覆盖配置（《要素园丁 Phase 2 施工计划》D2-D5）。
+   * 要素管理员子代理覆盖配置（《要素园丁 Phase 2 施工计划》D2-D5）。
    * 整块可选：无此块 = 全继承主 Agent 当前配置——每次委派时动态取主配置当时值
    * （按次取值、运行中定格）；normalize 不主动写入，仅用户在设置页开启覆盖时落盘。
    */
-  gardener?: {
+  elementManager?: {
     /**
      * 未定义 = 继承主 Agent llm。整组覆盖（协议+地址+key+模型+思考档），不拆字段混搭；
      * 残缺块由 normalize 整体剔除回退继承，防半覆盖拼出无效组合。
@@ -124,7 +124,7 @@ export type ProjectConfig = {
       reasoningEffort?: ReasoningEffort
     }
     /** 未定义 = 继承 settings.permissionPreset；只接受三档（D3）。 */
-    permissionPreset?: GardenerPermissionPreset
+    permissionPreset?: ElementManagerPermissionPreset
   }
   settings: {
     ragCandidateLimit: number

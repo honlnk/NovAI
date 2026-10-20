@@ -18,7 +18,7 @@ function assistantMessage(id: string, text: string): ChatMessageView {
   return { id, role: 'assistant', kind: 'text', text, createdAt: '2026-09-19T00:00:00.000Z' }
 }
 
-function toolCall(id: string, callId: string | undefined, name: ToolNameView = 'EditFile', agent?: 'gardener'): ChatMessageView {
+function toolCall(id: string, callId: string | undefined, name: ToolNameView = 'EditFile', agent?: 'element-manager'): ChatMessageView {
   return {
     id,
     role: 'system',
@@ -31,7 +31,7 @@ function toolCall(id: string, callId: string | undefined, name: ToolNameView = '
   }
 }
 
-function toolResult(id: string, callId: string | undefined, ok = true, agent?: 'gardener'): ChatMessageView {
+function toolResult(id: string, callId: string | undefined, ok = true, agent?: 'element-manager'): ChatMessageView {
   return {
     id,
     role: 'system',
@@ -235,16 +235,16 @@ describe('buildRenderItems 任务组折叠', () => {
   })
 })
 
-describe('buildRenderItems 园丁嵌套任务组', () => {
-  it('连续园丁工具行折叠为 subagent-group 嵌在轮过程组内部；主 Agent 工具行不受影响', () => {
+describe('buildRenderItems 要素管理员嵌套任务组', () => {
+  it('连续要素管理员工具行折叠为 subagent-group 嵌在轮过程组内部；主 Agent 工具行不受影响', () => {
     const items = buildRenderItems([
       userMessage('u1', '整理一下要素'),
-      toolCall('c0', 'call-0', 'DelegateToGardener'),
+      toolCall('c0', 'call-0', 'DelegateToElementManager'),
       toolResult('r0', 'call-0'),
-      toolCall('c1', 'call-1', 'ReadFile', 'gardener'),
-      toolResult('r1', 'call-1', true, 'gardener'),
-      toolCall('c2', 'call-2', 'EditFile', 'gardener'),
-      toolResult('r2', 'call-2', true, 'gardener'),
+      toolCall('c1', 'call-1', 'ReadFile', 'element-manager'),
+      toolResult('r1', 'call-1', true, 'element-manager'),
+      toolCall('c2', 'call-2', 'EditFile', 'element-manager'),
+      toolResult('r2', 'call-2', true, 'element-manager'),
       toolCall('c3', 'call-3', 'ListDirectory'),
       toolResult('r3', 'call-3'),
       assistantMessage('a1', '整理完成'),
@@ -255,12 +255,12 @@ describe('buildRenderItems 园丁嵌套任务组', () => {
     const group = items[1]
     if (group.kind !== 'process-group') throw new Error('unreachable')
 
-    // 过程组内：委派工具行 + 嵌套园丁组 + 主 Agent 工具行（顺序保持）
+    // 过程组内：委派工具行 + 嵌套要素管理员组 + 主 Agent 工具行（顺序保持）
     expect(group.items.map((item) => item.kind)).toEqual(['tool-row', 'subagent-group', 'tool-row'])
 
     const nested = group.items[1]
     if (nested.kind !== 'subagent-group') throw new Error('unreachable')
-    expect(nested.label).toBe('🌿 要素整理')
+    expect(nested.label).toBe('📚 要素管理')
     expect(nested.toolCallCount).toBe(2)
     expect(nested.items).toHaveLength(2)
     expect(nested.items.every((row) => row.kind === 'tool-row')).toBe(true)
@@ -272,10 +272,10 @@ describe('buildRenderItems 园丁嵌套任务组', () => {
   it('运行中最后一轮嵌套组随外层默认展开；结束后收起；用户显式切换优先且互不干扰', () => {
     const messages = [
       userMessage('u1', '整理一下要素'),
-      toolCall('c0', 'call-0', 'DelegateToGardener'),
+      toolCall('c0', 'call-0', 'DelegateToElementManager'),
       toolResult('r0', 'call-0'),
-      toolCall('c1', 'call-1', 'ReadFile', 'gardener'),
-      toolResult('r1', 'call-1', true, 'gardener'),
+      toolCall('c1', 'call-1', 'ReadFile', 'element-manager'),
+      toolResult('r1', 'call-1', true, 'element-manager'),
       assistantMessage('a1', '整理完成'),
     ]
 
@@ -321,17 +321,17 @@ describe('buildRenderItems 园丁嵌套任务组', () => {
     expect(group.items.map((item) => item.kind)).toEqual(['tool-row', 'tool-row'])
   })
 
-  it('同一轮内两段不相邻的园丁工作段各自成组，中间主 Agent 工具行保持原位', () => {
+  it('同一轮内两段不相邻的要素管理员工作段各自成组，中间主 Agent 工具行保持原位', () => {
     const items = buildRenderItems([
       userMessage('u1', '整理一下要素'),
-      toolCall('c0', 'call-0', 'DelegateToGardener'),
+      toolCall('c0', 'call-0', 'DelegateToElementManager'),
       toolResult('r0', 'call-0'),
-      toolCall('c1', 'call-1', 'ReadFile', 'gardener'),
-      toolResult('r1', 'call-1', true, 'gardener'),
+      toolCall('c1', 'call-1', 'ReadFile', 'element-manager'),
+      toolResult('r1', 'call-1', true, 'element-manager'),
       toolCall('c2', 'call-2', 'ListDirectory'),
       toolResult('r2', 'call-2'),
-      toolCall('c3', 'call-3', 'EditFile', 'gardener'),
-      toolResult('r3', 'call-3', true, 'gardener'),
+      toolCall('c3', 'call-3', 'EditFile', 'element-manager'),
+      toolResult('r3', 'call-3', true, 'element-manager'),
       assistantMessage('a1', '两段整理完成'),
     ], { running: false })
 

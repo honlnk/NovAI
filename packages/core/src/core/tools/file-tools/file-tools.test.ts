@@ -304,12 +304,12 @@ describe('file tools', () => {
 
     it('.novai/ 配置目录与 novel.config.json 同级禁写（要素整理参数化 W2：快捷选项仅 app service 层可写）', () => {
       expect(() => createFileTool.validateInput({
-        path: '.novai/gardener-presets.json',
+        path: '.novai/element-manager-presets.json',
         content: '{}',
       })).toThrow('不能指向项目内部文件')
 
       expect(() => editFileTool.validateInput({
-        path: '.novai/gardener-presets.json',
+        path: '.novai/element-manager-presets.json',
         oldText: 'a',
         newText: 'b',
       })).toThrow('不能指向项目内部文件')

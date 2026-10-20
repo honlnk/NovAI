@@ -50,10 +50,10 @@ export type ProjectConfigView = {
   }
   search: SearchConfig
   /**
-   * 园丁子代理覆盖配置（Phase 2 计划 D2-D5）：可选块，无值 = 全继承主 Agent
+   * 要素管理员子代理覆盖配置（Phase 2 计划 D2-D5）：可选块，无值 = 全继承主 Agent
    * 当前配置（每次委派时动态取值）。类型与语义见 types/project.ts。
    */
-  gardener?: ProjectConfig['gardener']
+  elementManager?: ProjectConfig['elementManager']
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number
@@ -79,10 +79,10 @@ export type RerankConfigView = ProjectConfigView['rerank']
 export type CompletionConfigView = ProjectConfigView['completion']
 
 /**
- * 园丁任务快捷选项（要素整理参数化 W2）：存于项目级 `.novai/gardener-presets.json`
+ * 要素管理员任务快捷选项（要素整理参数化 W2）：存于项目级 `.novai/element-manager-presets.json`
  * （不走 novel.config.json），设置页编辑、弹窗勾选拼进任务消息。
  */
-export type GardenerPresetView = {
+export type ElementManagerPresetView = {
   /** 列表显示名 */
   label: string
   /** 勾选后拼进任务消息的文本 */
@@ -101,10 +101,10 @@ export type ProjectConfigPatch = Partial<{
   completion: Partial<CompletionConfigView>
   search: Partial<SearchConfigView>
   /**
-   * 园丁块为整组替换语义（与其他组的浅合并不同）：带此键即替换整块——
+   * 要素管理员块为整组替换语义（与其他组的浅合并不同）：带此键即替换整块——
    * 覆盖项为空（两项都未覆盖）时写 undefined（删除块、回退全继承）；不带此键 = 保持现状。
    */
-  gardener: ProjectConfig['gardener']
+  elementManager: ProjectConfig['elementManager']
   settings: Partial<ProjectSettingsView>
 }>
 
@@ -305,7 +305,7 @@ export type ToolNameView =
   | 'WebSearch'
   | 'WebFetch'
   | 'KnowledgeLookup'
-  | 'DelegateToGardener'
+  | 'DelegateToElementManager'
 
 export type ToolCallView = {
   id: string
@@ -362,8 +362,8 @@ export type FileChangeRecordView = {
     linesAdded: number
     linesRemoved: number
   }
-  /** 改动归属：园丁子代理的记录带 gardener（写回面板归属标记）；主 Agent 记录无此字段 */
-  agent?: 'gardener'
+  /** 改动归属：要素管理员子代理的记录带 elementManager（写回面板归属标记）；主 Agent 记录无此字段 */
+  agent?: 'element-manager'
 }
 
 /**
@@ -430,8 +430,8 @@ export type ChatMessageView =
       toolName: ToolNameView
       /** 与 tool-result 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
       toolCallId?: string
-      /** 事件归属：园丁子代理的工具行带 gardener，渲染层折叠为嵌套园丁任务组 */
-      agent?: 'gardener'
+      /** 事件归属：要素管理员子代理的工具行带 elementManager，渲染层折叠为嵌套要素管理员任务组 */
+      agent?: 'element-manager'
       createdAt: string
     }
   | {
@@ -443,8 +443,8 @@ export type ChatMessageView =
       toolName: ToolNameView
       /** 与 tool-call 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
       toolCallId?: string
-      /** 事件归属：园丁子代理的工具行带 gardener，渲染层折叠为嵌套园丁任务组 */
-      agent?: 'gardener'
+      /** 事件归属：要素管理员子代理的工具行带 elementManager，渲染层折叠为嵌套要素管理员任务组 */
+      agent?: 'element-manager'
       createdAt: string
     }
   | {
@@ -557,7 +557,7 @@ export type FileChangeConfirmationView = {
   summary: string
   /** 写工具执行前的预览数据，用于 UI 展示 diff。 */
   confirmation: WriteConfirmationView
-  /** 归属标签（如「园丁」）：园丁子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
+  /** 归属标签（如「要素管理员」）：要素管理员子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
   agentLabel?: string
 }
 

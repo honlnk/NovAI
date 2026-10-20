@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { GARDENER_TASK_PROMPT } from '@novai/core/services/agent-service'
+import { ELEMENT_MANAGER_TASK_PROMPT } from '@novai/core/services/agent-service'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
@@ -16,13 +16,13 @@ import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import BaseModal from '../components/ui/BaseModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
-import GardenerTaskDialog from '../components/chat/GardenerTaskDialog.vue'
+import ElementManagerTaskDialog from '../components/chat/ElementManagerTaskDialog.vue'
 import {
-  buildGardenerTaskMessage,
-  type GardenerTaskParams,
-} from '../components/chat/gardener-task'
-import { getGardenerPresets } from '@novai/core/services/settings-service'
-import type { GardenerPresetView } from '@novai/core/services/types'
+  buildElementManagerTaskMessage,
+  type ElementManagerTaskParams,
+} from '../components/chat/element-manager-task'
+import { getElementManagerPresets } from '@novai/core/services/settings-service'
+import type { ElementManagerPresetView } from '@novai/core/services/types'
 import type { Category } from '../constants/category'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 
@@ -87,7 +87,7 @@ const activeOutlineName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
-/** 章节列表（chapters/*.txt），供园丁任务弹窗选择章节范围（要素整理参数化 W1）。.md 不算有效章节，不入列。 */
+/** 章节列表（chapters/*.txt），供要素管理员任务弹窗选择章节范围（要素整理参数化 W1）。.md 不算有效章节，不入列。 */
 const chapterList = computed(() => {
   const files = projectStore.currentProject?.files ?? []
   return pickDirectoryChildren(files, 'chapters').filter(
@@ -194,20 +194,20 @@ function handleNotImplemented(name: string) {
   toast.info(`${name}功能即将推出`)
 }
 
-// ===== 园丁任务弹窗（要素整理参数化 W1，target=new 实例：侧栏入口） =====
+// ===== 要素管理员任务弹窗（要素整理参数化 W1，target=new 实例：侧栏入口） =====
 
 /** 弹窗是否打开（BaseModal 居中位；确认后先建新会话再发送） */
-const isGardenerDialogOpen = ref(false)
-/** 快捷选项数据源（打开弹窗时从 .novai/gardener-presets.json 拉取，失败降级为空） */
-const gardenerPresets = ref<GardenerPresetView[]>([])
-/** 设置页初始 tab（园丁弹窗空态「新建快捷选项」跳转用，打开后失效） */
-const settingsInitialTab = ref<'gardener' | null>(null)
+const isElementManagerDialogOpen = ref(false)
+/** 快捷选项数据源（打开弹窗时从 .novai/element-manager-presets.json 拉取，失败降级为空） */
+const elementManagerPresets = ref<ElementManagerPresetView[]>([])
+/** 设置页初始 tab（要素管理员弹窗空态「新建快捷选项」跳转用，打开后失效） */
+const settingsInitialTab = ref<'element-manager' | null>(null)
 
-async function loadGardenerPresets() {
+async function loadElementManagerPresets() {
   try {
-    gardenerPresets.value = await getGardenerPresets(projectId.value)
+    elementManagerPresets.value = await getElementManagerPresets(projectId.value)
   } catch {
-    gardenerPresets.value = []
+    elementManagerPresets.value = []
   }
 }
 
@@ -215,39 +215,39 @@ async function loadGardenerPresets() {
  * 侧栏按钮单击/双击区分（D8）：单击延时开弹窗，双击在延时窗内取消并直发。
  * 双击时 click 会先于 dblclick 触发两次，定时器在位则第二击直接忽略。
  */
-let gardenerClickTimer: number | null = null
+let elementManagerClickTimer: number | null = null
 
-/** 侧栏「整理要素」单击：打开参数弹窗（D1：全新会话） */
-function handleGardenerNewSession() {
-  if (gardenerClickTimer !== null) return
-  gardenerClickTimer = window.setTimeout(() => {
-    gardenerClickTimer = null
-    void loadGardenerPresets()
-    isGardenerDialogOpen.value = true
+/** 侧栏「管理要素」单击：打开参数弹窗（D1：全新会话） */
+function handleElementManagerNewSession() {
+  if (elementManagerClickTimer !== null) return
+  elementManagerClickTimer = window.setTimeout(() => {
+    elementManagerClickTimer = null
+    void loadElementManagerPresets()
+    isElementManagerDialogOpen.value = true
   }, 220)
 }
 
-/** 侧栏「整理要素」双击：跳过弹窗，直发裸 GARDENER_TASK_PROMPT（等同旧行为，D8） */
-async function handleGardenerDirectNewSession() {
-  if (gardenerClickTimer !== null) {
-    window.clearTimeout(gardenerClickTimer)
-    gardenerClickTimer = null
+/** 侧栏「管理要素」双击：跳过弹窗，直发裸 ELEMENT_MANAGER_TASK_PROMPT（等同旧行为，D8） */
+async function handleElementManagerDirectNewSession() {
+  if (elementManagerClickTimer !== null) {
+    window.clearTimeout(elementManagerClickTimer)
+    elementManagerClickTimer = null
   }
   await chatStore.createNewSession(projectId.value)
-  await chatStore.sendMessage(GARDENER_TASK_PROMPT)
+  await chatStore.sendMessage(ELEMENT_MANAGER_TASK_PROMPT)
 }
 
 /** 弹窗确认：先建全新会话，再按 D3 拼装消息发送（不污染当前创作会话） */
-async function handleGardenerNewSessionConfirm(params: GardenerTaskParams) {
-  isGardenerDialogOpen.value = false
+async function handleElementManagerNewSessionConfirm(params: ElementManagerTaskParams) {
+  isElementManagerDialogOpen.value = false
   await chatStore.createNewSession(projectId.value)
-  await chatStore.sendMessage(buildGardenerTaskMessage(GARDENER_TASK_PROMPT, params))
+  await chatStore.sendMessage(buildElementManagerTaskMessage(ELEMENT_MANAGER_TASK_PROMPT, params))
 }
 
-/** 两个弹窗实例的空态「新建快捷选项」：关弹窗开设置页并定位到要素整理 tab */
-function handleGardenerOpenSettings() {
-  isGardenerDialogOpen.value = false
-  settingsInitialTab.value = 'gardener'
+/** 两个弹窗实例的空态「新建快捷选项」：关弹窗开设置页并定位到要素管理 tab */
+function handleElementManagerOpenSettings() {
+  isElementManagerDialogOpen.value = false
+  settingsInitialTab.value = 'element-manager'
   handleOpenSettings()
 }
 
@@ -335,8 +335,8 @@ function handleGoToSettings() {
         @proofread="handleNotImplemented('校对')"
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
-        @gardener="handleGardenerNewSession"
-        @gardener-direct="handleGardenerDirectNewSession"
+        @elementManager="handleElementManagerNewSession"
+        @element-manager-direct="handleElementManagerDirectNewSession"
         @rag="isRagOpen = true"
       />
 
@@ -373,7 +373,7 @@ function handleGoToSettings() {
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
-        @open-gardener-settings="handleGardenerOpenSettings"
+        @open-elementManager-settings="handleElementManagerOpenSettings"
       >
         <!-- 首次使用引导 -->
         <template #guide>
@@ -409,21 +409,21 @@ function handleGoToSettings() {
       @clear-outline="handleChangeOutline(null)"
     />
 
-    <!-- 园丁任务参数弹窗（侧栏入口，要素整理参数化 W1）：模态居中，确认后先建新会话再发送 -->
+    <!-- 要素管理员任务参数弹窗（侧栏入口，要素整理参数化 W1）：模态居中，确认后先建新会话再发送 -->
     <BaseModal
-      :is-open="isGardenerDialogOpen"
+      :is-open="isElementManagerDialogOpen"
       content-class="max-w-lg"
-      aria-labelledby="gardener-task-title"
-      @close="isGardenerDialogOpen = false"
+      aria-labelledby="element-manager-task-title"
+      @close="isElementManagerDialogOpen = false"
     >
-      <GardenerTaskDialog
-        v-if="isGardenerDialogOpen"
+      <ElementManagerTaskDialog
+        v-if="isElementManagerDialogOpen"
         target="new"
         :chapters="chapterList"
-        :presets="gardenerPresets"
-        @confirm="handleGardenerNewSessionConfirm"
-        @cancel="isGardenerDialogOpen = false"
-        @open-settings="handleGardenerOpenSettings"
+        :presets="elementManagerPresets"
+        @confirm="handleElementManagerNewSessionConfirm"
+        @cancel="isElementManagerDialogOpen = false"
+        @open-settings="handleElementManagerOpenSettings"
       />
     </BaseModal>
 

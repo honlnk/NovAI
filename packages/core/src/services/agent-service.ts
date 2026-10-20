@@ -23,7 +23,7 @@ import { readNovAiOverview, readOutlinePrompt, readSystemPrompt } from '../core/
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
-import { GARDENER_TASK_PROMPT } from '../core/agent/gardener'
+import { ELEMENT_MANAGER_TASK_PROMPT } from '../core/agent/element-manager'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
 import type { ChatMessage, ChatSessionState, ChatTargetContext, FileChangeRecord } from '../types/chat'
 import type { ProjectSnapshot } from '../types/project'
@@ -35,10 +35,10 @@ import type { ProjectSnapshot } from '../types/project'
 export { INIT_NOVEL_PROMPT }
 
 /**
- * /整理要素 斜杠命令的驱动 prompt。
- * 指示主 Agent 立即委派 DelegateToGardener（园丁子代理）整理要素库，并转述其结构化汇报。
+ * /管理要素 斜杠命令的驱动 prompt。
+ * 指示主 Agent 立即委派 DelegateToElementManager（要素管理员子代理）管理要素库，并转述其结构化汇报。
  */
-export { GARDENER_TASK_PROMPT }
+export { ELEMENT_MANAGER_TASK_PROMPT }
 
 import {
   requireRuntimeProject,

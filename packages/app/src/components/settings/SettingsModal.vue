@@ -5,7 +5,7 @@ import type { ProjectConfigPatch, ProjectConfigView } from '@novai/core/services
 import BaseModal from '../ui/BaseModal.vue'
 import CompletionSettingsPanel from './CompletionSettingsPanel.vue'
 import EmbeddingSettingsPanel from './EmbeddingSettingsPanel.vue'
-import GardenerSettingsPanel from './GardenerSettingsPanel.vue'
+import ElementManagerSettingsPanel from './ElementManagerSettingsPanel.vue'
 import LlmSettingsPanel from './LlmSettingsPanel.vue'
 import ProjectSettingsPanel from './ProjectSettingsPanel.vue'
 import RerankSettingsPanel from './RerankSettingsPanel.vue'
@@ -17,7 +17,7 @@ import type { SearchSettingsForm } from '../../utils/search-settings'
 
 const props = defineProps<{
   projectId: string
-  /** 外部指定初始 tab（如园丁弹窗空态「新建快捷选项」跳转要素整理 tab，要素整理参数化 W2）；
+  /** 外部指定初始 tab（如要素管理员弹窗空态「新建快捷选项」跳转要素管理 tab，要素整理参数化 W2）；
    *  仅首次挂载生效，组件 v-if 按需挂载、每次打开重读。 */
   initialTab?: SettingsTab
 }>()
@@ -30,7 +30,7 @@ const settingsStore = useSettingsStore()
 const projectStore = useProjectStore()
 const toast = useToast()
 
-type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'gardener' | 'project'
+type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'element-manager' | 'project'
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'llm', label: 'LLM 配置' },
@@ -38,7 +38,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'rerank', label: 'Rerank 配置' },
   { key: 'completion', label: '输入补全' },
   { key: 'search', label: '联网搜索' },
-  { key: 'gardener', label: '要素整理' },
+  { key: 'element-manager', label: '要素管理' },
   { key: 'project', label: '项目设置' },
 ]
 
@@ -85,8 +85,8 @@ const searchForm = reactive<SearchSettingsForm>({
   apiKey: '',
 })
 
-/** 园丁覆盖表单：开关只控制 UI 展开与覆盖是否写入；'' 思考档 = 跟随主 Agent。 */
-const gardenerForm = reactive({
+/** 要素管理员覆盖表单：开关只控制 UI 展开与覆盖是否写入；'' 思考档 = 跟随主 Agent。 */
+const elementManagerForm = reactive({
   modelOverride: false,
   baseUrl: '',
   apiKey: '',
@@ -158,16 +158,16 @@ onMounted(async () => {
       baseUrl: config.search?.baseUrl ?? '',
       apiKey: config.search?.apiKey ?? '',
     })
-    const gardener = config.gardener
-    Object.assign(gardenerForm, {
-      modelOverride: Boolean(gardener?.llm),
-      baseUrl: gardener?.llm?.baseUrl ?? '',
-      apiKey: gardener?.llm?.apiKey ?? '',
-      model: gardener?.llm?.model ?? '',
-      protocol: gardener?.llm?.protocol ?? 'openai',
-      reasoningEffort: gardener?.llm?.reasoningEffort ?? '',
-      permissionOverride: Boolean(gardener?.permissionPreset),
-      permissionPreset: gardener?.permissionPreset ?? 'material',
+    const elementManager = config.elementManager
+    Object.assign(elementManagerForm, {
+      modelOverride: Boolean(elementManager?.llm),
+      baseUrl: elementManager?.llm?.baseUrl ?? '',
+      apiKey: elementManager?.llm?.apiKey ?? '',
+      model: elementManager?.llm?.model ?? '',
+      protocol: elementManager?.llm?.protocol ?? 'openai',
+      reasoningEffort: elementManager?.llm?.reasoningEffort ?? '',
+      permissionOverride: Boolean(elementManager?.permissionPreset),
+      permissionPreset: elementManager?.permissionPreset ?? 'material',
     })
     const settings = config.settings
     if (settings) {
@@ -193,7 +193,7 @@ watch(rerankForm, () => scheduleSave({ rerank: { ...rerankForm } }))
 watch(completionForm, () => scheduleSave({ completion: { ...completionForm } }))
 watch(searchForm, () => scheduleSave({ search: { ...searchForm } }))
 watch(projectForm, () => scheduleSave({ settings: { ...projectForm } }))
-watch(gardenerForm, () => scheduleSave({ gardener: buildGardenerPatch() }))
+watch(elementManagerForm, () => scheduleSave({ elementManager: buildElementManagerPatch() }))
 
 watch(activeTab, (tab) => {
   try {
@@ -204,23 +204,23 @@ watch(activeTab, (tab) => {
 })
 
 /**
- * 园丁表单 → 配置覆盖块。开关关闭或模型覆盖残缺（地址/模型未填全）→ 该项不写入
+ * 要素管理员表单 → 配置覆盖块。开关关闭或模型覆盖残缺（地址/模型未填全）→ 该项不写入
  * （core normalize 对残缺 llm 块也会整组剔除，此处不写等于直接删覆盖）；两项皆空 →
- * 写空对象（patch 带 gardener 键 = 整组替换语义，空对象落盘时删除块、回退全继承）。
+ * 写空对象（patch 带 elementManager 键 = 整组替换语义，空对象落盘时删除块、回退全继承）。
  */
-function buildGardenerPatch(): ProjectConfigPatch['gardener'] {
-  const llmComplete = gardenerForm.modelOverride && gardenerForm.baseUrl.trim() && gardenerForm.model.trim()
+function buildElementManagerPatch(): ProjectConfigPatch['elementManager'] {
+  const llmComplete = elementManagerForm.modelOverride && elementManagerForm.baseUrl.trim() && elementManagerForm.model.trim()
   const llm = llmComplete
     ? {
-      baseUrl: gardenerForm.baseUrl.trim(),
-      apiKey: gardenerForm.apiKey,
-      model: gardenerForm.model.trim(),
-      protocol: gardenerForm.protocol,
-      ...(gardenerForm.reasoningEffort ? { reasoningEffort: gardenerForm.reasoningEffort } : {}),
+      baseUrl: elementManagerForm.baseUrl.trim(),
+      apiKey: elementManagerForm.apiKey,
+      model: elementManagerForm.model.trim(),
+      protocol: elementManagerForm.protocol,
+      ...(elementManagerForm.reasoningEffort ? { reasoningEffort: elementManagerForm.reasoningEffort } : {}),
     }
     : undefined
-  const permissionPreset = gardenerForm.permissionOverride
-    ? gardenerForm.permissionPreset
+  const permissionPreset = elementManagerForm.permissionOverride
+    ? elementManagerForm.permissionPreset
     : undefined
   return {
     ...(llm ? { llm } : {}),
@@ -407,9 +407,9 @@ function restoreTab(): SettingsTab {
           @save-immediately="handleSaveImmediately"
         />
         <SearchSettingsPanel v-else-if="activeTab === 'search'" :form="searchForm" />
-        <GardenerSettingsPanel
-          v-else-if="activeTab === 'gardener'"
-          :form="gardenerForm"
+        <ElementManagerSettingsPanel
+          v-else-if="activeTab === 'element-manager'"
+          :form="elementManagerForm"
           :project-id="projectId"
           @save-immediately="handleSaveImmediately"
         />

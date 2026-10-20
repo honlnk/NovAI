@@ -36,8 +36,8 @@ export type ProcessGroupItem = {
 }
 
 /**
- * 子代理嵌套任务组：园丁（agent === 'gardener'）连续的工具行在轮过程组内部
- * 再折叠一层，组头带标签（如「🌿 园丁整理」）。默认展开/收起与外层任务组同规则。
+ * 子代理嵌套任务组：要素管理员（agent === 'element-manager'）连续的工具行在轮过程组内部
+ * 再折叠一层，组头带标签（如「📚 要素管理」）。默认展开/收起与外层任务组同规则。
  */
 export type SubagentGroupItem = {
   kind: 'subagent-group'
@@ -57,8 +57,8 @@ export type ChatRenderItem =
   | SubagentGroupItem
 
 /** 子代理归属 → 嵌套组头标签。 */
-export const SUBAGENT_GROUP_LABELS: Record<'gardener', string> = {
-  gardener: '🌿 要素整理',
+export const SUBAGENT_GROUP_LABELS: Record<'element-manager', string> = {
+  'element-manager': '📚 要素管理',
 }
 
 function isTurnBoundary(item: ChatRenderItem): item is { kind: 'message'; message: UserTextMessageView } {
@@ -106,8 +106,8 @@ function isProcessItem(item: ChatRenderItem, turnItems: ChatRenderItem[]): boole
   return false
 }
 
-/** 园丁子代理的工具行（call 或 result 带 agent === 'gardener'）。 */
-function isSubagentRow(item: ChatRenderItem, agent: 'gardener'): boolean {
+/** 要素管理员子代理的工具行（call 或 result 带 agent === 'element-manager'）。 */
+function isSubagentRow(item: ChatRenderItem, agent: 'element-manager'): boolean {
   if (item.kind !== 'tool-row') {
     return false
   }
@@ -116,7 +116,7 @@ function isSubagentRow(item: ChatRenderItem, agent: 'gardener'): boolean {
 
 /**
  * 把轮内连续的子代理工具行折叠为嵌套组。组 id 取首行 id 前缀 subagent-
- * （同一轮内出现多段园丁工作段时天然分组建组；不同轮不共用 id）。
+ * （同一轮内出现多段要素管理员工作段时天然分组建组；不同轮不共用 id）。
  */
 function foldSubagentRuns(items: ChatRenderItem[], indexSeed: number): ChatRenderItem[] {
   const output: ChatRenderItem[] = []
@@ -130,7 +130,7 @@ function foldSubagentRuns(items: ChatRenderItem[], indexSeed: number): ChatRende
     output.push({
       kind: 'subagent-group',
       id: `subagent-${first.kind === 'tool-row' ? first.id : indexSeed}-${output.length}`,
-      label: SUBAGENT_GROUP_LABELS.gardener,
+      label: SUBAGENT_GROUP_LABELS['element-manager'],
       items: run,
       toolCallCount: run.filter((item) => item.kind === 'tool-row').length,
       messageCount: 0,
@@ -140,7 +140,7 @@ function foldSubagentRuns(items: ChatRenderItem[], indexSeed: number): ChatRende
   }
 
   for (const item of items) {
-    if (isSubagentRow(item, 'gardener')) {
+    if (isSubagentRow(item, 'element-manager')) {
       run.push(item)
       continue
     }
@@ -199,7 +199,7 @@ export function buildRenderItems(
   const output: ChatRenderItem[] = [...leading]
   turns.forEach((turn, turnIndex) => {
     const isLastTurn = turnIndex === turns.length - 1
-    // 连续的园丁工具行先折叠为嵌套组（整体是一个过程项），再做过程消息判定
+    // 连续的要素管理员工具行先折叠为嵌套组（整体是一个过程项），再做过程消息判定
     const folded = foldSubagentRuns(turn.items, turnIndex)
     const processItems = folded.filter((item) => isProcessItem(item, folded))
 
@@ -211,7 +211,7 @@ export function buildRenderItems(
 
     const override = options.expandedOverrides?.get(turn.id)
     const expanded = override ?? (isLastTurn && options.running)
-    // 嵌套园丁组默认展开/收起与外层任务组同规则；用户显式切换优先
+    // 嵌套要素管理员组默认展开/收起与外层任务组同规则；用户显式切换优先
     for (const item of processItems) {
       if (item.kind === 'subagent-group') {
         item.collapsed = !(options.expandedOverrides?.get(item.id) ?? expanded)

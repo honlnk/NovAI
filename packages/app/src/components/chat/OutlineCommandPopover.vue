@@ -6,7 +6,7 @@ import type { ProjectFileNodeView } from '@novai/core/services/types'
  * 大纲指令弹层（R4）。
  *
  * 输入框输入 @ 后弹出，列出 prompts/outlines/ 下的写作大纲供单选激活。
- * 专用组件（单选锚定弹层；多选形态已由园丁任务弹窗承接，要素整理参数化 W4）。
+ * 专用组件（单选锚定弹层；多选形态已由要素管理员任务弹窗承接，要素整理参数化 W4）。
  *
  * 键盘导航由父组件（ChatPanel）在 keydown 时调用 moveUp/moveDown/confirm/cancel；
  * 鼠标点击直接选中。
