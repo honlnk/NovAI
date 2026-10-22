@@ -1,6 +1,7 @@
 import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { ModelView } from '../core/agent/model-view'
+import type { AgentRoleId } from '../core/agent/roles'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import type { ChangeDiff, FileChange } from '../core/tools/types'
 
@@ -199,6 +200,8 @@ export type FileChangeRecord = {
 export type ChatSessionState = {
   sessionId: string
   projectId: string
+  /** 会话角色（roles.ts 注册表的键）：驱动该会话的智能体声明；缺省即主角色。 */
+  agent?: AgentRoleId
   messages: ChatMessage[]
   /**
    * 双队列收件箱。可选字段：旧会话 JSON 无此字段，视为空队列，无需迁移。

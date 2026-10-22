@@ -1,13 +1,10 @@
 import {
-  buildAgentSystemPrompt,
-  buildAgentUserContext,
   buildOutlineSwitchRecord,
   resolveOutlineReminder,
   syncNovaiReminder,
 } from '../agent/prompt'
 import { buildSteeringContent, query } from '../agent/query'
-import { createAgentTools } from '../agent/tools'
-import { createDelegateToElementManagerTool } from '../agent/element-manager'
+import { getAgentRole } from '../agent/roles'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
   appendUserMessage,
@@ -277,9 +274,12 @@ async function runDriverTurn(options: {
   const modelView = createModelView(session.modelView?.messages ?? [])
   session.modelView = modelView
 
+  // 会话角色：装配的唯一来源是角色声明（roles.ts 注册表），运行时核心不认识具体角色
+  const role = getAgentRole(session.agent)
+
   // 同会话内 system.md 变化或模型切换时，刷新视图里的 system message（恒在 index 0）。
   // 身份行含模型名：换 LLM → 身份变化 → hash 变化 → system 重建一次（前缀缓存本就随换模型作废）。
-  const newSystemContent = buildAgentSystemPrompt({
+  const newSystemContent = role.buildSystemPrompt({
     model: input.config.llm.model,
     systemPrompt: input.systemPrompt,
   })
@@ -289,24 +289,27 @@ async function runDriverTurn(options: {
   }
   session.systemPromptHash = newSystemHash
 
-  // 项目记忆 reminder（W2）：digest 按需注入/重注，恒在 system 之后、先于全部历史；
-  // 被压缩吞掉后下一轮自动重插（参照 dsh session resume 后重新注入语义）。
-  syncNovaiReminder({ view: modelView, session, overview: input.novaiOverview })
-
-  // 大纲切换留痕（W2）：激活大纲变化时追加持久化 user 消息（先于本批用户消息进视图）。
-  const outlinePath = input.outline?.path ?? null
-  const outlineSwitchRecord = buildOutlineSwitchRecord(session.lastOutlinePath, outlinePath)
-  if (outlineSwitchRecord) {
-    appendUserMessage(modelView, outlineSwitchRecord)
+  // 项目记忆 reminder 与大纲（角色声明开关：特化角色如要素管理员不注入这两个提示词家族文件）。
+  // digest 按需注入/重注，恒在 system 之后、先于全部历史；被压缩吞掉后下一轮自动重插。
+  if (role.injectNovaiOverview) {
+    syncNovaiReminder({ view: modelView, session, overview: input.novaiOverview })
   }
-  session.lastOutlinePath = outlinePath
+  if (role.injectOutline) {
+    // 大纲切换留痕：激活大纲变化时追加持久化 user 消息（先于本批用户消息进视图）
+    const outlinePath = input.outline?.path ?? null
+    const outlineSwitchRecord = buildOutlineSwitchRecord(session.lastOutlinePath, outlinePath)
+    if (outlineSwitchRecord) {
+      appendUserMessage(modelView, outlineSwitchRecord)
+    }
+    session.lastOutlinePath = outlinePath
+  }
 
   // 模型视图追加（同批次顺序）：steer 包装为「执行中插话」，followup 走完整用户上下文
   for (const message of batch.steering) {
     appendUserMessage(modelView, buildSteeringContent(message))
   }
   if (batch.followup) {
-    appendUserMessage(modelView, buildAgentUserContext({
+    appendUserMessage(modelView, role.wrapUserContent({
       instruction: batch.followup.text,
       quote: batch.followup.quote,
       project: input.project,
@@ -373,16 +376,13 @@ async function runDriverTurn(options: {
     }
   }
 
-  // 主 Agent 工具面：全量文件工具 + 要素管理员委派工具（运行态 confirm/signal/事件转发闭包注入——
-  // 这些是会话层所有，不进 ToolRuntime）。要素管理员自己的工具面在 elementManager.ts 内独立组装（无委派工具）。
-  const tools = {
-    ...createAgentTools(),
-    DelegateToElementManager: createDelegateToElementManagerTool({
-      confirm: input.confirm,
-      signal,
-      onSubagentEvent: appendToolEventMessage,
-    }),
-  }
+  // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具；要素管理员 = 白名单 + 路径闸。
+  // confirm/signal/事件转发是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
+  const tools = role.createTools({
+    confirm: input.confirm,
+    signal,
+    onSubagentEvent: appendToolEventMessage,
+  })
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false
   // 当前正在流式输出的 assistant 消息 id：delta 事件携带它，最终的 assistant 落盘消息复用它，
@@ -412,8 +412,8 @@ async function runDriverTurn(options: {
       signal,
       confirm: input.confirm,
       webClientId: input.webClientId,
-      // 大纲动态附带（W2）：发送时拼到最新 user 消息尾部，不落持久化历史、不参与压缩
-      outlineReminder: resolveOutlineReminder(input.outline),
+      // 大纲动态附带（角色声明开关）：发送时拼到最新 user 消息尾部，不落持久化历史、不参与压缩
+      outlineReminder: role.injectOutline ? resolveOutlineReminder(input.outline) : undefined,
       // 改动账本只读取口（GetFileChangeHistory 用）：getter 形态，账本不可变重建、读时取最新
       getChangeLedger: () => session.changeLedger ?? [],
       // 插话收件箱访问口：query 在每个 step 边界抽干 next-step（claim 即消费，同步更新会话 inbox）

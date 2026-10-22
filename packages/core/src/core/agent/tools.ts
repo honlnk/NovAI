@@ -579,6 +579,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'
+    || value === 'KnowledgeLookup'
     || value === 'DelegateToElementManager'
 }
 
