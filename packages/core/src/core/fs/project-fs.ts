@@ -339,56 +339,6 @@ export async function writeProjectConfig(
   return nextConfig
 }
 
-/**
- * 要素管理员任务快捷选项（要素整理参数化 W2）：项目级隐藏配置 `.novai/element-manager-presets.json`。
- * 与 novel.config.json 同级受 Agent 工具写保护（file-tools/common.ts 内部路径名单），
- * 仅 app service 层经此读写；默认不预置任何选项，由用户在设置页新建。
- */
-export type ElementManagerPreset = {
-  /** 列表显示名 */
-  label: string
-  /** 勾选后拼进要素管理员任务消息的文本 */
-  prompt: string
-}
-
-const ELEMENT_MANAGER_PRESETS_PATH = '.novai/element-manager-presets.json'
-
-/**
- * 读取快捷选项。文件不存在或内容损坏（非法 JSON / presets 非数组 / 项字段非法）
- * 一律容错为空数组，不抛错——弹窗降级为无快捷选项形态即可用，不该被配置文件炸挂。
- */
-export async function readElementManagerPresets(rootHandle: FileSystemDirectoryHandle): Promise<ElementManagerPreset[]> {
-  let raw: unknown
-  try {
-    raw = await readJson<unknown>(rootHandle, ELEMENT_MANAGER_PRESETS_PATH)
-  } catch {
-    return []
-  }
-  const presets = (raw as { presets?: unknown } | null)?.presets
-  if (!Array.isArray(presets)) {
-    return []
-  }
-  return presets.filter(
-    (preset): preset is ElementManagerPreset =>
-      !!preset &&
-      typeof preset === 'object' &&
-      typeof (preset as ElementManagerPreset).label === 'string' &&
-      typeof (preset as ElementManagerPreset).prompt === 'string' &&
-      (preset as ElementManagerPreset).label.trim() !== '' &&
-      (preset as ElementManagerPreset).prompt.trim() !== '',
-  )
-}
-
-/**
- * 写回快捷选项（整表替换）。`.novai/` 目录不存在时随写自动创建（ensureFileHandle 逐级 create）。
- */
-export async function writeElementManagerPresets(
-  rootHandle: FileSystemDirectoryHandle,
-  presets: ElementManagerPreset[],
-): Promise<void> {
-  await writeJson(rootHandle, ELEMENT_MANAGER_PRESETS_PATH, { presets })
-}
-
 function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
   // 旧字段 activeScenePromptPath（W3 前身）读入后即被新字段取代，写回时不再保留。
   const legacySettings = (config.settings ?? {}) as ProjectConfig['settings'] & {

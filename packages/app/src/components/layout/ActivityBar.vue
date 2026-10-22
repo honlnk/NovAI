@@ -14,10 +14,8 @@ const emit = defineEmits<{
   proofread: []
   organize: []
   version: []
-  /** 管理要素：单击打开任务参数弹窗（新建会话发送） */
+  /** 管理要素：单击触发（入口重构 W2 起父级为无操作占位，W4 接管为直聊会话） */
   'element-manager': []
-  /** 管理要素双击：跳过弹窗直发裸任务（要素整理参数化 W1 D8） */
-  'element-manager-direct': []
   /** 打开向量索引独立管理页（RagIndexModal） */
   rag: []
 }>()
@@ -124,7 +122,6 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
               : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
           ]"
           @click="emitAction(item.key)"
-          @dblclick="item.key === 'element-manager' ? emit('element-manager-direct') : undefined"
         >
           <!-- 校对 -->
           <svg v-if="item.icon === 'check'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

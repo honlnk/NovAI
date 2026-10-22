@@ -78,17 +78,6 @@ export type RerankConfigView = ProjectConfigView['rerank']
 
 export type CompletionConfigView = ProjectConfigView['completion']
 
-/**
- * 要素管理员任务快捷选项（要素整理参数化 W2）：存于项目级 `.novai/element-manager-presets.json`
- * （不走 novel.config.json），设置页编辑、弹窗勾选拼进任务消息。
- */
-export type ElementManagerPresetView = {
-  /** 列表显示名 */
-  label: string
-  /** 勾选后拼进任务消息的文本 */
-  prompt: string
-}
-
 export type SearchConfigView = ProjectConfigView['search']
 
 export type ProjectSettingsView = ProjectConfigView['settings']

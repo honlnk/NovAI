@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isElementManagerShortcut, isImeComposing, resolveSubmitMode, shouldSubmitOnEnter } from './keyboard'
+import { isImeComposing, resolveSubmitMode, shouldSubmitOnEnter } from './keyboard'
 
 function keyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return {
@@ -36,19 +36,5 @@ describe('keyboard helpers', () => {
     expect(resolveSubmitMode(keyEvent({ key: 'Enter', keyCode: 229 }))).toBeNull()
     expect(resolveSubmitMode(keyEvent({ key: 'a' }))).toBeNull()
     expect(resolveSubmitMode(keyEvent({ key: 'Tab' }))).toBeNull()
-  })
-
-  it('isElementManagerShortcut：仅 Ctrl/Cmd+Shift+G 命中，大小写与缺修饰键均不误触（W2）', () => {
-    // Shift 按下时浏览器报大写 'G'，两种形态都要命中
-    expect(isElementManagerShortcut(keyEvent({ key: 'G', metaKey: true, shiftKey: true }))).toBe(true)
-    expect(isElementManagerShortcut(keyEvent({ key: 'g', ctrlKey: true, shiftKey: true }))).toBe(true)
-    expect(isElementManagerShortcut(keyEvent({ key: 'G', ctrlKey: true, shiftKey: true }))).toBe(true)
-    // 缺 Shift / 缺主修饰键 / 其他键位 / 无修饰键，都不触发
-    expect(isElementManagerShortcut(keyEvent({ key: 'g', metaKey: true }))).toBe(false)
-    expect(isElementManagerShortcut(keyEvent({ key: 'G', shiftKey: true }))).toBe(false)
-    expect(isElementManagerShortcut(keyEvent({ key: 'E', metaKey: true, shiftKey: true }))).toBe(false)
-    expect(isElementManagerShortcut(keyEvent({ key: 'g' }))).toBe(false)
-    // Ctrl+Cmd 同按时仍算命中（macOS 上 Cmd 优先，无害）
-    expect(isElementManagerShortcut(keyEvent({ key: 'G', ctrlKey: true, metaKey: true, shiftKey: true }))).toBe(true)
   })
 })

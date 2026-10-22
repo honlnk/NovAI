@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ELEMENT_MANAGER_TASK_PROMPT } from '@novai/core/services/agent-service'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
@@ -13,16 +12,8 @@ import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
-import BaseModal from '../components/ui/BaseModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
-import ElementManagerTaskDialog from '../components/chat/ElementManagerTaskDialog.vue'
-import {
-  buildElementManagerTaskMessage,
-  type ElementManagerTaskParams,
-} from '../components/chat/element-manager-task'
-import { getElementManagerPresets } from '@novai/core/services/settings-service'
-import type { ElementManagerPresetView } from '@novai/core/services/types'
 import type { Category } from '../constants/category'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 
@@ -85,14 +76,6 @@ const activeOutlineName = computed(() => {
   if (!activeOutlinePath.value) return null
   const node = outlineList.value.find((n) => n.path === activeOutlinePath.value)
   return node ? node.name.replace(/\.md$/i, '') : null
-})
-
-/** 章节列表（chapters/*.txt），供要素管理员任务弹窗选择章节范围（要素整理参数化 W1）。.md 不算有效章节，不入列。 */
-const chapterList = computed(() => {
-  const files = projectStore.currentProject?.files ?? []
-  return pickDirectoryChildren(files, 'chapters').filter(
-    (n) => n.kind === 'file' && /\.txt$/i.test(n.name),
-  )
 })
 
 onMounted(async () => {
@@ -194,61 +177,14 @@ function handleNotImplemented(name: string) {
   toast.info(`${name}功能即将推出`)
 }
 
-// ===== 要素管理员任务弹窗（要素整理参数化 W1，target=new 实例：侧栏入口） =====
-
-/** 弹窗是否打开（BaseModal 居中位；确认后先建新会话再发送） */
-const isElementManagerDialogOpen = ref(false)
-/** 快捷选项数据源（打开弹窗时从 .novai/element-manager-presets.json 拉取，失败降级为空） */
-const elementManagerPresets = ref<ElementManagerPresetView[]>([])
-/** 设置页初始 tab（要素管理员弹窗空态「新建快捷选项」跳转用，打开后失效） */
-const settingsInitialTab = ref<'element-manager' | null>(null)
-
-async function loadElementManagerPresets() {
-  try {
-    elementManagerPresets.value = await getElementManagerPresets(projectId.value)
-  } catch {
-    elementManagerPresets.value = []
-  }
-}
+// ===== 要素管理员侧栏入口（入口重构 W2：旧单击弹窗/双击直发已删，单击暂为无操作占位） =====
 
 /**
- * 侧栏按钮单击/双击区分（D8）：单击延时开弹窗，双击在延时窗内取消并直发。
- * 双击时 click 会先于 dblclick 触发两次，定时器在位则第二击直接忽略。
+ * 侧栏「管理要素」单击：无操作占位——入口重构 W4 将接管为「新建要素管理员直聊会话」
+ * （前置依赖《角色注册机制施工计划》落地）。
  */
-let elementManagerClickTimer: number | null = null
-
-/** 侧栏「管理要素」单击：打开参数弹窗（D1：全新会话） */
 function handleElementManagerNewSession() {
-  if (elementManagerClickTimer !== null) return
-  elementManagerClickTimer = window.setTimeout(() => {
-    elementManagerClickTimer = null
-    void loadElementManagerPresets()
-    isElementManagerDialogOpen.value = true
-  }, 220)
-}
-
-/** 侧栏「管理要素」双击：跳过弹窗，直发裸 ELEMENT_MANAGER_TASK_PROMPT（等同旧行为，D8） */
-async function handleElementManagerDirectNewSession() {
-  if (elementManagerClickTimer !== null) {
-    window.clearTimeout(elementManagerClickTimer)
-    elementManagerClickTimer = null
-  }
-  await chatStore.createNewSession(projectId.value)
-  await chatStore.sendMessage(ELEMENT_MANAGER_TASK_PROMPT)
-}
-
-/** 弹窗确认：先建全新会话，再按 D3 拼装消息发送（不污染当前创作会话） */
-async function handleElementManagerNewSessionConfirm(params: ElementManagerTaskParams) {
-  isElementManagerDialogOpen.value = false
-  await chatStore.createNewSession(projectId.value)
-  await chatStore.sendMessage(buildElementManagerTaskMessage(ELEMENT_MANAGER_TASK_PROMPT, params))
-}
-
-/** 两个弹窗实例的空态「新建快捷选项」：关弹窗开设置页并定位到要素管理 tab */
-function handleElementManagerOpenSettings() {
-  isElementManagerDialogOpen.value = false
-  settingsInitialTab.value = 'element-manager'
-  handleOpenSettings()
+  // W4 直聊会话接管，此前保持无操作
 }
 
 async function handleSelectFile(path: string) {
@@ -336,7 +272,6 @@ function handleGoToSettings() {
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
         @elementManager="handleElementManagerNewSession"
-        @element-manager-direct="handleElementManagerDirectNewSession"
         @rag="isRagOpen = true"
       />
 
@@ -367,13 +302,11 @@ function handleGoToSettings() {
         :quote="selectionQuote"
         :outlines="outlineList"
         :active-outline-path="activeOutlinePath"
-        :chapters="chapterList"
         @toggle-sidebar="toggleSidebar"
         @toggle-content-panel="toggleContentPanel"
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
-        @open-elementManager-settings="handleElementManagerOpenSettings"
       >
         <!-- 首次使用引导 -->
         <template #guide>
@@ -409,30 +342,11 @@ function handleGoToSettings() {
       @clear-outline="handleChangeOutline(null)"
     />
 
-    <!-- 要素管理员任务参数弹窗（侧栏入口，要素整理参数化 W1）：模态居中，确认后先建新会话再发送 -->
-    <BaseModal
-      :is-open="isElementManagerDialogOpen"
-      content-class="max-w-lg"
-      aria-labelledby="element-manager-task-title"
-      @close="isElementManagerDialogOpen = false"
-    >
-      <ElementManagerTaskDialog
-        v-if="isElementManagerDialogOpen"
-        target="new"
-        :chapters="chapterList"
-        :presets="elementManagerPresets"
-        @confirm="handleElementManagerNewSessionConfirm"
-        @cancel="isElementManagerDialogOpen = false"
-        @open-settings="handleElementManagerOpenSettings"
-      />
-    </BaseModal>
-
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->
     <SettingsModal
       v-if="isSettingsOpen"
       :project-id="projectId"
-      :initial-tab="settingsInitialTab ?? undefined"
-      @close="isSettingsOpen = false; settingsInitialTab = null"
+      @close="isSettingsOpen = false"
     />
 
     <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->

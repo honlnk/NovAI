@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { ELEMENT_MANAGER_TASK_PROMPT } from '@novai/core/services/agent-service'
-import { getElementManagerPresets } from '@novai/core/services/settings-service'
-import type { ElementManagerPresetView } from '@novai/core/services/types'
 import { useChatStore } from '../../stores/chat'
-import { isElementManagerShortcut, resolveSubmitMode } from '../../composables/keyboard'
+import { resolveSubmitMode } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useComposerBridge } from '../../composables/useComposerBridge'
 import { useProjectStore } from '../../stores/project'
@@ -14,8 +11,6 @@ import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
-import ElementManagerTaskDialog from '../chat/ElementManagerTaskDialog.vue'
-import { buildElementManagerTaskMessage, type ElementManagerTaskParams } from '../chat/element-manager-task'
 import {
   registerTextRefs,
   rescanTextRefs,
@@ -57,8 +52,6 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
-  /** 章节列表（chapters/*.txt），供要素管理员任务弹窗选择章节范围（要素整理参数化 W1） */
-  chapters: ProjectFileNodeView[]
 }>()
 
 const emit = defineEmits<{
@@ -68,8 +61,6 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
-  /** 要素管理员弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
-  openElementManagerSettings: []
 }>()
 
 const chatStore = useChatStore()
@@ -336,14 +327,6 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // 要素管理员任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isElementManagerDialogOpen.value) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      isElementManagerDialogOpen.value = false
-      return
-    }
-  }
   // 斜杠命令菜单打开时：拦截导航键交给菜单
   if (isSlashMenuOpen.value && slashMenuRef.value) {
     if (event.key === 'ArrowDown') {
@@ -418,7 +401,7 @@ function autoResizeEditor() {
  * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isElementManagerDialogOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value) {
     clearSuggestion()
     return
   }
@@ -493,7 +476,6 @@ function detectCommands() {
   if (!composer.isMounted()) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isElementManagerDialogOpen.value = false
     return
   }
   const cursor = composer.caretOffset() ?? draft.value.length
@@ -536,69 +518,11 @@ function handleSlashCommandSelect(id: SlashCommandId) {
 }
 
 /**
- * 一键管理要素（要素管理员 Phase 2 W2 快捷入口）：全局快捷键入口直发裸 ELEMENT_MANAGER_TASK_PROMPT——
- * 快捷键语义是「一键」，不弹参数弹窗；斜杠命令与工具栏按钮已改为参数弹窗（要素整理参数化 W1）。
+ * 一键管理要素快捷入口已删（入口重构 W2：Ctrl/Cmd+Shift+G 退役）；
+ * 输入框上方按钮由 W3 滑入式提醒接管，侧栏单击由 W4 直聊会话接管。
  */
-function triggerElementManager() {
-  followAndScrollToBottom()
-  void chatStore.sendMessage(ELEMENT_MANAGER_TASK_PROMPT)
-}
-
-// ===== 要素管理员任务参数弹窗（要素整理参数化 W1，target=current 实例） =====
-
-/** 弹窗是否打开（锚定输入框上方） */
-const isElementManagerDialogOpen = ref(false)
-/** 快捷选项数据源（打开弹窗时从 .novai/element-manager-presets.json 拉取，失败降级为空） */
-const elementManagerPresets = ref<ElementManagerPresetView[]>([])
-
-async function loadElementManagerPresets() {
-  try {
-    elementManagerPresets.value = await getElementManagerPresets(props.projectId)
-  } catch {
-    elementManagerPresets.value = []
-  }
-}
-
-/** 输入框上方「📚 管理要素」按钮：打开参数弹窗（D1：当前会话；斜杠命令只落文本不开弹窗） */
-function openElementManagerDialog() {
-  void loadElementManagerPresets()
-  isElementManagerDialogOpen.value = true
-}
-
-/** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队）。
- *  输入框里手输/斜杠落的 `/管理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
-async function handleElementManagerConfirm(params: ElementManagerTaskParams) {
-  isElementManagerDialogOpen.value = false
-  const hasCommandResidue = draft.value.trimStart().startsWith('/管理要素')
-  followAndScrollToBottom()
-  const ok = await chatStore.sendMessage(buildElementManagerTaskMessage(ELEMENT_MANAGER_TASK_PROMPT, params))
-  if (ok && hasCommandResidue) {
-    composer.setDraft('')
-  }
-}
-
-function handleElementManagerDialogCancel() {
-  isElementManagerDialogOpen.value = false
-}
-
-/** 弹窗空态「新建快捷选项」：关弹窗并请求打开设置页（W2 起定位到要素管理 tab） */
-function handleElementManagerOpenSettings() {
-  isElementManagerDialogOpen.value = false
-  emit('openElementManagerSettings')
-}
-
-/**
- * 全局快捷键（window 级监听，不限输入框焦点）：Ctrl/Cmd+Shift+G 触发一键管理要素。
- * 模态框（BaseModal 带 role=dialog）打开时不抢键，避免在设置页等弹窗背后触发委派。
- */
-function handleGlobalKeydown(event: KeyboardEvent) {
-  if (!isElementManagerShortcut(event) || document.querySelector('[role="dialog"]')) return
-  event.preventDefault()
-  triggerElementManager()
-}
 
 onMounted(() => {
-  window.addEventListener('keydown', handleGlobalKeydown)
   // 编辑器挂载 + 初始高度（空态两行的 min-height 由 CSS 提供，此处量一次收口）
   if (editorHostRef.value) {
     composer.mount(editorHostRef.value)
@@ -617,7 +541,6 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleGlobalKeydown)
   unregisterTextRefs?.()
   unregisterTextRefs = null
   composer.unmount()
@@ -815,17 +738,6 @@ onBeforeUnmount(() => {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
-          <!-- 要素管理员任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
-          <div v-if="isElementManagerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">
-            <ElementManagerTaskDialog
-              target="current"
-              :chapters="chapters"
-              :presets="elementManagerPresets"
-              @confirm="handleElementManagerConfirm"
-              @cancel="handleElementManagerDialogCancel"
-              @open-settings="handleElementManagerOpenSettings"
-            />
-          </div>
           <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
             <!-- 编辑器 + ghost text 覆盖层（斜杠裸发提示或 FIM 补全建议，二者合流） -->
@@ -862,14 +774,15 @@ onBeforeUnmount(() => {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
-                <!-- 管理要素（参数弹窗入口，要素整理参数化 W1）：与斜杠命令同一入口；全局 Ctrl/Cmd+Shift+G 仍直发裸任务 -->
+                <!-- 管理要素按钮位（入口重构 W2 起无操作占位）：常驻入口职责已退役，
+                     W3 将在本位置改为滑入式整理提醒按钮（阈值触发） -->
                 <button
                   type="button"
-                  class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
-                  title="管理要素库（可配任务参数；子智能体执行）；Agent 运行中自动排队"
-                  @click="openElementManagerDialog"
+                  class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors"
+                  title="入口升级中（整理提醒即将上线）"
+                  disabled
                 >
-                  <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="h-3.5 w-3.5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
                   </svg>
