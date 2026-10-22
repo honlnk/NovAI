@@ -95,6 +95,26 @@ async function handleConfirmDeleteProject() {
     <!-- 顶栏 -->
     <header class="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
       <div class="flex items-center gap-3">
+        <!-- 品牌 mark：翻开的书 + 灯泡（与 assets/logo.svg 同款几何） -->
+        <svg class="h-7 w-7" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="home-mark-acc" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#6366F1" />
+              <stop offset="1" stop-color="#06B6D4" />
+            </linearGradient>
+          </defs>
+          <g stroke="url(#home-mark-acc)" stroke-width="2" stroke-linecap="round">
+            <path d="M 13 10 L 10.5 7.5" />
+            <path d="M 35 10 L 37.5 7.5" />
+          </g>
+          <!-- 竖直光芒用 rect 填充：零宽 bbox 的直线描边吃不到 objectBoundingBox 渐变 -->
+          <rect x="23" y="3" width="2" height="3" rx="1" fill="url(#home-mark-acc)" />
+          <circle cx="24" cy="14.5" r="5" fill="url(#home-mark-acc)" />
+          <rect x="21.5" y="19.5" width="5" height="1.8" rx="0.9" fill="url(#home-mark-acc)" />
+          <rect x="22.2" y="22.4" width="3.6" height="1.6" rx="0.8" fill="url(#home-mark-acc)" />
+          <path fill="#18181B" d="M 22.6 26 C 18 22.4, 10.5 21.4, 5 23.2 L 5 41 C 10.5 39.2, 18 40.2, 22.6 43.8 Z" />
+          <path fill="#18181B" d="M 25.4 26 C 30 22.4, 37.5 21.4, 43 23.2 L 43 41 C 37.5 39.2, 30 40.2, 25.4 43.8 Z" />
+        </svg>
         <h1 class="text-xl font-bold text-gray-900">NovAI（诺艾）</h1>
         <span class="text-sm text-gray-500">AI 小说创作助手</span>
       </div>

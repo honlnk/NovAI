@@ -206,44 +206,6 @@ export type IndexBuildResultView = {
   message: string
 }
 
-export type RetrievalCandidateView = {
-  id: string
-  projectId: string
-  sourcePath: string
-  type: ElementTypeView
-  name: string
-  summary: string
-  retrievalText: string
-  tags: string[]
-  lastUpdatedChapter: string
-  relatedChapters: string[]
-  score?: number
-  rerankScore?: number
-}
-
-export type GenerationContextDraftView = {
-  query: string
-  recentChapters: Array<{
-    path: string
-    title: string
-    content: string
-  }>
-  retrievedCandidates: RetrievalCandidateView[]
-  rerankedCandidates: RetrievalCandidateView[]
-  finalContextItems: RetrievalCandidateView[]
-}
-
-export type RetrievalExplanationView = {
-  id: string
-  name: string
-  type: ElementTypeView
-  summary: string
-  sourcePath: string
-  selectedBy: 'recall' | 'rerank' | 'final-context'
-  reason: string
-  lastUpdatedChapter: string
-}
-
 export type ProjectView = {
   id: string
   name: string
