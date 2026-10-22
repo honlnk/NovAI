@@ -107,13 +107,13 @@ function fileNode(path: string): ProjectSnapshot['tree'][number] {
 }
 
 function elementMd(path: string, name: string, body = '正文内容'): string {
-  return `---\nname: ${name}\ntype: character\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\n\n${body}\n`
+  return `---\nname: ${name}\ntype: plot\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\n\n${body}\n`
 }
 
 function seedDoc(overrides: Partial<IndexedElementDocument> & Pick<IndexedElementDocument, 'id' | 'sourcePath'>): IndexedElementDocument {
   return {
     projectId: PROJECT_ID,
-    type: 'character',
+    type: 'plot',
     name: overrides.id,
     summary: '',
     retrievalText: '',
@@ -147,11 +147,11 @@ afterEach(() => {
 
 describe('buildProjectIndex contentHash 增量短路', () => {
   it('全量重建：所有文件都调 Embedding，不短路', async () => {
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
-    files.set('elements/characters/b.md', { content: elementMd('elements/characters/b.md', '乙'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲'), updatedAt: '' })
+    files.set('elements/plots/b.md', { content: elementMd('elements/plots/b.md', '乙'), updatedAt: '' })
 
     const result = await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md'), fileNode('elements/characters/b.md')]),
+      makeProject([fileNode('elements/plots/a.md'), fileNode('elements/plots/b.md')]),
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
@@ -162,11 +162,11 @@ describe('buildProjectIndex contentHash 增量短路', () => {
 
   it('增量重建：未变文件复用旧向量，不调 Embedding', async () => {
     // 先全量建一次，拿到 contentHash
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
-    files.set('elements/characters/b.md', { content: elementMd('elements/characters/b.md', '乙'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲'), updatedAt: '' })
+    files.set('elements/plots/b.md', { content: elementMd('elements/plots/b.md', '乙'), updatedAt: '' })
 
     await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md'), fileNode('elements/characters/b.md')]),
+      makeProject([fileNode('elements/plots/a.md'), fileNode('elements/plots/b.md')]),
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
@@ -178,7 +178,7 @@ describe('buildProjectIndex contentHash 增量短路', () => {
     // 再次增量：内容完全不变，应全部短路。
     embeddingCalls.length = 0
     const result = await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md'), fileNode('elements/characters/b.md')]),
+      makeProject([fileNode('elements/plots/a.md'), fileNode('elements/plots/b.md')]),
       { projectId: PROJECT_ID, reason: 'incremental-update' },
     )
 
@@ -188,22 +188,22 @@ describe('buildProjectIndex contentHash 增量短路', () => {
   })
 
   it('仅刷新 updatedAt 不触发重算（hash 口径排除 updatedAt 行）', async () => {
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲'), updatedAt: '' })
 
     await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md')]),
+      makeProject([fileNode('elements/plots/a.md')]),
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
     // 改动 updatedAt 行，正文不变。
-    files.set('elements/characters/a.md', {
-      content: `---\nname: 甲\ntype: character\nupdatedAt: 2026-12-31T00:00:00.000Z\n---\n\n正文内容\n`,
+    files.set('elements/plots/a.md', {
+      content: `---\nname: 甲\ntype: plot\nupdatedAt: 2026-12-31T00:00:00.000Z\n---\n\n正文内容\n`,
       updatedAt: '',
     })
 
     embeddingCalls.length = 0
     const result = await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md')]),
+      makeProject([fileNode('elements/plots/a.md')]),
       { projectId: PROJECT_ID, reason: 'incremental-update' },
     )
 
@@ -212,18 +212,18 @@ describe('buildProjectIndex contentHash 增量短路', () => {
   })
 
   it('正文变化时重新 Embedding', async () => {
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲', '旧正文'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲', '旧正文'), updatedAt: '' })
 
     await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md')]),
+      makeProject([fileNode('elements/plots/a.md')]),
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲', '全新的正文'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲', '全新的正文'), updatedAt: '' })
 
     embeddingCalls.length = 0
     const result = await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md')]),
+      makeProject([fileNode('elements/plots/a.md')]),
       { projectId: PROJECT_ID, reason: 'incremental-update' },
     )
 
@@ -233,10 +233,10 @@ describe('buildProjectIndex contentHash 增量短路', () => {
   })
 
   it('embedding 模型变化时即使内容相同也重算', async () => {
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲'), updatedAt: '' })
 
     await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md')]),
+      makeProject([fileNode('elements/plots/a.md')]),
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
@@ -247,7 +247,7 @@ describe('buildProjectIndex contentHash 增量短路', () => {
 
     embeddingCalls.length = 0
     const result = await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md')]),
+      makeProject([fileNode('elements/plots/a.md')]),
       { projectId: PROJECT_ID, reason: 'incremental-update' },
     )
 
@@ -256,28 +256,54 @@ describe('buildProjectIndex contentHash 增量短路', () => {
   })
 
   it('增量清理已删除的要素（旧文档不在新范围）', async () => {
-    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
-    files.set('elements/characters/b.md', { content: elementMd('elements/characters/b.md', '乙'), updatedAt: '' })
+    files.set('elements/plots/a.md', { content: elementMd('elements/plots/a.md', '甲'), updatedAt: '' })
+    files.set('elements/plots/b.md', { content: elementMd('elements/plots/b.md', '乙'), updatedAt: '' })
 
     await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md'), fileNode('elements/characters/b.md')]),
+      makeProject([fileNode('elements/plots/a.md'), fileNode('elements/plots/b.md')]),
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
     // 手动 seed 一个「已被删除的要素」旧文档（文件树里不再有它）。
     storeState.docs.set(
       `${PROJECT_ID}::gone`,
-      seedDoc({ id: 'gone', sourcePath: 'elements/characters/gone.md' }),
+      seedDoc({ id: 'gone', sourcePath: 'elements/plots/gone.md' }),
     )
     expect(storeState.docs.size).toBe(3)
 
     await buildProjectIndex(
-      makeProject([fileNode('elements/characters/a.md'), fileNode('elements/characters/b.md')]),
+      makeProject([fileNode('elements/plots/a.md'), fileNode('elements/plots/b.md')]),
       { projectId: PROJECT_ID, reason: 'incremental-update' },
     )
 
     // gone 文档应被清理。
     expect(storeState.docs.has(`${PROJECT_ID}::gone`)).toBe(false)
     expect(storeState.removeCount).toBe(1)
+  })
+
+  it('索引范围收窄（决策 0007）：四类稳定要素不入索引，只有 plots/timeline 入索引', async () => {
+    files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
+    files.set('elements/locations/b.md', { content: elementMd('elements/locations/b.md', '乙'), updatedAt: '' })
+    files.set('elements/entities/c.md', { content: elementMd('elements/entities/c.md', '丙'), updatedAt: '' })
+    files.set('elements/worldbuilding/d.md', { content: elementMd('elements/worldbuilding/d.md', '丁'), updatedAt: '' })
+    files.set('elements/plots/plot-a.md', { content: elementMd('elements/plots/plot-a.md', '戊'), updatedAt: '' })
+    files.set('elements/timeline/tl-a.md', { content: elementMd('elements/timeline/tl-a.md', '己'), updatedAt: '' })
+
+    const result = await buildProjectIndex(
+      makeProject([
+        fileNode('elements/characters/a.md'),
+        fileNode('elements/locations/b.md'),
+        fileNode('elements/entities/c.md'),
+        fileNode('elements/worldbuilding/d.md'),
+        fileNode('elements/plots/plot-a.md'),
+        fileNode('elements/timeline/tl-a.md'),
+      ]),
+      { projectId: PROJECT_ID, reason: 'manual-rebuild' },
+    )
+
+    expect(embeddingCalls).toHaveLength(2)
+    expect(result.indexedCount).toBe(2)
+    const indexedPaths = Array.from(storeState.docs.values()).map((doc) => doc.sourcePath)
+    expect(indexedPaths).toEqual(['elements/plots/plot-a.md', 'elements/timeline/tl-a.md'])
   })
 })

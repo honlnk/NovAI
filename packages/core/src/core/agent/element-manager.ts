@@ -72,7 +72,7 @@ function buildElementManagerToolRules(): string {
     '- RenameFile 用于重命名或移动单个 .md、.json、.txt 文件；源文件必须存在，目标文件不能存在，父目录会自动创建。重命名要素文件需在汇报中说明理由。',
     '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。探索目录结构时先看目录清单，不要为了探索而批量读取文件。',
     '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、elements/characters/*.md。它不会读取文件正文；找到候选文件后再用 ReadFile 精读。',
-    '- RagSearch 用于从项目要素索引中语义检索人物、地点、实体、剧情、时间线、世界观设定；返回的 sourcePath 可用于后续 ReadFile 精读。',
+    '- RagSearch 用于从情节（plots）和时间线（timeline）索引中语义检索剧情线索与章节事件；人物、地点、实体、世界观设定不在索引内，直接用 FindFiles/ReadFile 查看。',
     '- 可以连续使用多个工具完成任务。完成工具调用后，继续根据工具结果判断是否还需要下一步。',
   ].join('\n')
 }
@@ -85,6 +85,7 @@ function buildElementManagerNotes(): string {
     '- 合并同名/近名要素时保留旧文件全部事实；存疑不合并，列入汇报交用户拍板。',
     '- 你可以重命名 elements/ 下的要素文件，重命名需在汇报中说明理由；不删除任何文件，确需删除的列入汇报交用户处理。',
     '- 从不修改 chapters/ 正文，也不修改 prompts/ 下的任何文件。',
+    '- summary 字段只写稳定身份定义（角色：姓名/身份/核心特征；地点：位置/功能；实体：定义/归属；世界观：规则/设定），不写会随章节变化的状态（当前位置/伤势/关系进展/拥有物等）。summary 会进入全书要素清单，写进变化状态会让清单频繁失效。',
   ].join('\n')
 }
 

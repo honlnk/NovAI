@@ -38,7 +38,7 @@ const statusClass = computed(() =>
 /** 状态说明文案：异常/过期带原因，构建中给进行时提示，其余给常规说明。 */
 const statusMessage = computed(() => {
   if (isBusy.value) {
-    return '正在构建索引，逐个要素文件调用 Embedding，请稍候…'
+    return '正在构建索引，逐个情节/时间线文件调用 Embedding，请稍候…'
   }
   if (!meta.value) {
     return '当前项目还没有索引记录，点击「构建索引」开始首次构建（需先在设置中配置 Embedding）'
@@ -47,10 +47,10 @@ const statusMessage = computed(() => {
     return meta.value.lastError ?? '索引需要重建'
   }
   if (status.value === 'empty') {
-    return '索引构建完成，但当前项目下还没有可索引的要素文件'
+    return '索引构建完成，但当前项目下还没有可索引的情节/时间线文件'
   }
   if (status.value === 'ready') {
-    return '索引可用，Agent 可通过 RagSearch 召回要素作为写作上下文'
+    return '索引可用，Agent 可通过 RagSearch 召回情节与时间线作为写作上下文'
   }
   return ''
 })
@@ -89,7 +89,7 @@ function formatDate(value?: string) {
         <div>
           <h2 class="text-lg font-semibold text-gray-900">向量索引</h2>
           <p class="mt-0.5 text-xs text-gray-500">
-            对项目要素文件做向量化，供写作前语义召回
+            对项目情节（plots）与时间线（timeline）文件做向量化，供写作前语义召回
           </p>
         </div>
         <button
@@ -174,8 +174,8 @@ function formatDate(value?: string) {
 
         <!-- 说明 -->
         <p class="mt-4 text-xs leading-5 text-gray-500">
-          索引对象为要素文件（人物/地点/实体/时间线/剧情/世界观），不含章节正文。全量重建会清空现有向量后逐文件重新调用
-          Embedding（未变更内容不会在增量场景外被跳过）；日常要素写入后索引会自动标记「部分过期」，
+          索引对象为情节与时间线文件（elements/plots、elements/timeline），不含章节正文；人物、地点、实体、世界观四类要素不入索引，由 Agent 通过要素清单与 LoadElements 工具直接召回。全量重建会清空现有向量后逐文件重新调用
+          Embedding（未变更内容不会在增量场景外被跳过）；日常情节/时间线写入后索引会自动标记「部分过期」，
           届时点击重建即可增量刷新。
         </p>
       </div>

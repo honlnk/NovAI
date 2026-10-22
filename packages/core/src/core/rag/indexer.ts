@@ -231,6 +231,13 @@ export async function markProjectIndexStale(
   dispatchIndexChange(projectId, updatedMeta)
 }
 
+/**
+ * 收集进入 RAG 索引的要素路径。范围收窄到 plots/timeline（决策 0007）：
+ * 四类稳定要素（characters/locations/entities/worldbuilding）改走渐进式披露
+ * （目录 reminder + LoadElements），不再入索引；chapters 正文维持不入索引的既有事实。
+ */
+const RAG_INDEXED_ELEMENT_PREFIXES = ['elements/plots/', 'elements/timeline/'] as const
+
 function collectElementPaths(tree: TreeNode[], preferredPaths?: string[]) {
   const source = new Set(preferredPaths ?? [])
   const paths: string[] = []
@@ -243,7 +250,11 @@ function collectElementPaths(tree: TreeNode[], preferredPaths?: string[]) {
       continue
     }
 
-    if (node.kind === 'file' && node.path.startsWith('elements/') && node.name.endsWith('.md')) {
+    if (
+      node.kind === 'file'
+      && node.name.endsWith('.md')
+      && RAG_INDEXED_ELEMENT_PREFIXES.some((prefix) => node.path.startsWith(prefix))
+    ) {
       if (source.size === 0 || source.has(node.path)) {
         paths.push(node.path)
       }
