@@ -33,6 +33,7 @@ export function toProjectConfigView(config: ProjectConfig): ProjectConfigView {
     search: { ...config.search },
     // 可选覆盖块：有则浅拷贝透传，无则不带键（设置页据此显示继承态）
     ...(config.elementManager ? { elementManager: { ...config.elementManager } } : {}),
+    ...(config.elementReminder ? { elementReminder: { ...config.elementReminder } } : {}),
     settings: { ...config.settings },
   }
 }

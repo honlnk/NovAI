@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ELEMENT_MANAGER_TASK_PROMPT } from '@novai/core/services/agent-service'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
@@ -77,14 +76,6 @@ const activeOutlineName = computed(() => {
   if (!activeOutlinePath.value) return null
   const node = outlineList.value.find((n) => n.path === activeOutlinePath.value)
   return node ? node.name.replace(/\.md$/i, '') : null
-})
-
-/** 章节列表（chapters/*.txt），供要素管理员任务弹窗选择章节范围（要素整理参数化 W1）。.md 不算有效章节，不入列。 */
-const chapterList = computed(() => {
-  const files = projectStore.currentProject?.files ?? []
-  return pickDirectoryChildren(files, 'chapters').filter(
-    (n) => n.kind === 'file' && /\.txt$/i.test(n.name),
-  )
 })
 
 onMounted(async () => {
@@ -186,41 +177,14 @@ function handleNotImplemented(name: string) {
   toast.info(`${name}功能即将推出`)
 }
 
-// ===== 要素管理员入口（角色机制 W2：侧栏单击 = 直聊入口） =====
-
-/** 设置页初始 tab（ChatPanel 要素管理员弹窗空态「新建快捷选项」跳转用，打开后失效） */
-const settingsInitialTab = ref<'element-manager' | null>(null)
+// ===== 要素管理员入口（角色机制 W2 提供直聊入口 + 入口重构 W2 删旧弹窗/双击链路） =====
 
 /**
- * 侧栏按钮单击/双击区分（角色机制 W2 起单击 = 直聊入口）：单击延时新建要素管理员
- * 直聊会话，双击在延时窗内取消并直发委派任务（旧链路，入口重构计划后续处理）。
- * 双击时 click 会先于 dblclick 触发两次，定时器在位则第二击直接忽略。
+ * 侧栏「管理要素」单击：新建要素管理员直聊会话并切换。
+ * 旧参数弹窗与双击直发已删（入口重构 W2），单击不再需要延时防双击。
  */
-let elementManagerClickTimer: number | null = null
-
-/** 侧栏「管理要素」单击：新建要素管理员直聊会话并切换（角色机制 W2） */
 function handleElementManagerNewSession() {
-  if (elementManagerClickTimer !== null) return
-  elementManagerClickTimer = window.setTimeout(() => {
-    elementManagerClickTimer = null
-    void chatStore.createNewSession(projectId.value, { agent: 'element-manager' })
-  }, 220)
-}
-
-/** 侧栏「管理要素」双击：跳过弹窗，直发裸 ELEMENT_MANAGER_TASK_PROMPT（旧链路） */
-async function handleElementManagerDirectNewSession() {
-  if (elementManagerClickTimer !== null) {
-    window.clearTimeout(elementManagerClickTimer)
-    elementManagerClickTimer = null
-  }
-  await chatStore.createNewSession(projectId.value)
-  await chatStore.sendMessage(ELEMENT_MANAGER_TASK_PROMPT)
-}
-
-/** ChatPanel 弹窗的空态「新建快捷选项」：开设置页并定位到要素管理 tab */
-function handleElementManagerOpenSettings() {
-  settingsInitialTab.value = 'element-manager'
-  handleOpenSettings()
+  void chatStore.createNewSession(projectId.value, { agent: 'element-manager' })
 }
 
 async function handleSelectFile(path: string) {
@@ -308,7 +272,6 @@ function handleGoToSettings() {
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
         @elementManager="handleElementManagerNewSession"
-        @element-manager-direct="handleElementManagerDirectNewSession"
         @rag="isRagOpen = true"
       />
 
@@ -340,13 +303,11 @@ function handleGoToSettings() {
         :quote="selectionQuote"
         :outlines="outlineList"
         :active-outline-path="activeOutlinePath"
-        :chapters="chapterList"
         @toggle-sidebar="toggleSidebar"
         @toggle-content-panel="toggleContentPanel"
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
-        @open-elementManager-settings="handleElementManagerOpenSettings"
       >
         <!-- 首次使用引导 -->
         <template #guide>
@@ -386,8 +347,7 @@ function handleGoToSettings() {
     <SettingsModal
       v-if="isSettingsOpen"
       :project-id="projectId"
-      :initial-tab="settingsInitialTab ?? undefined"
-      @close="isSettingsOpen = false; settingsInitialTab = null"
+      @close="isSettingsOpen = false"
     />
 
     <!-- 向量索引管理模态框（独立入口，不进设置弹窗；状态与底部状态栏共享 indexStore） -->

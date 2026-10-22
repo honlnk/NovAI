@@ -6,7 +6,8 @@ import { ELEMENT_MANAGER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/serv
  * 斜杠菜单是纯命令补全器：选中命令后把命令文本填入输入框（尾部带空格），
  * 用户可在其后补充参数——命令是纯文本，可编辑可删除，行为与普通文字一致。
  * 发送链路对行首命中的命令做前缀拦截替换（expandSlashCommand）：
- * 裸命令文本本身不构成对主 Agent 的有效指令，替换为驱动 prompt 全文保证工程质量不丢。
+ * 裸命令文本本身不构成对主 Agent 的有效指令，替换为驱动 prompt（入口重构 W1 起
+ * /管理要素 为一句委派指令，主 Agent 自行解读委派；/生成项目记忆 仍为全文）。
  */
 export type SlashCommandId = 'init' | 'element-manager'
 
@@ -19,6 +20,8 @@ export type SlashCommand = {
   description: string
   /** 图标（emoji） */
   icon: string
+  /** 裸发（命令文本后无参数）时光标处的行内浅灰提示；不配置则裸发无提示 */
+  bareHint?: string
 }
 
 /** 当前可用的斜杠命令（/提取要素 已于 2026-10 退役，要素整理参数化 W4） */
@@ -26,8 +29,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'element-manager',
     label: '/管理要素',
-    description: '管理 elements/ 要素库（专用子智能体执行）；选中后填入输入框，可在其后补充参数',
+    description: '管理 elements/ 要素库（要素管理员执行）；可在命令后补范围/目标，留空即全权委托整理整个要素库',
     icon: '📚',
+    bareHint: '← 可在此补充范围/目标，留空则整理整个要素库',
   },
   {
     id: 'init',
@@ -40,6 +44,15 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 /** 落输入框的命令文本（尾部带空格，光标置后可直接补参数） */
 export function slashCommandDraftText(label: string): string {
   return `${label} `
+}
+
+/**
+ * 裸发斜杠命令的行内提示（入口重构 W1）：草稿恰为命令文本（可带尾随空白、无参数）
+ * 且该命令配置了 bareHint 时返回提示文案，否则返回空串。多行/带参数草稿不提示。
+ */
+export function bareSlashCommandHint(draft: string): string {
+  const text = draft.trimEnd()
+  return SLASH_COMMANDS.find((entry) => entry.bareHint && text === entry.label)?.bareHint ?? ''
 }
 
 /** 行首命中即替换的命令 → 驱动 prompt 映射（发送链路前缀拦截，W3 D6） */

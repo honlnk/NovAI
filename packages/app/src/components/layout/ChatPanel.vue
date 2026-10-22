@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { ELEMENT_MANAGER_TASK_PROMPT } from '@novai/core/services/agent-service'
-import { getElementManagerPresets } from '@novai/core/services/settings-service'
-import type { ElementManagerPresetView } from '@novai/core/services/types'
+import { checkElementReminder, markElementReminderShown } from '@novai/core/services/element-reminder-service'
 import { useChatStore } from '../../stores/chat'
-import { isElementManagerShortcut, resolveSubmitMode } from '../../composables/keyboard'
+import { resolveSubmitMode } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useComposerBridge } from '../../composables/useComposerBridge'
 import { useProjectStore } from '../../stores/project'
@@ -14,8 +12,6 @@ import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
-import ElementManagerTaskDialog from '../chat/ElementManagerTaskDialog.vue'
-import { buildElementManagerTaskMessage, type ElementManagerTaskParams } from '../chat/element-manager-task'
 import {
   registerTextRefs,
   rescanTextRefs,
@@ -28,6 +24,7 @@ import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import {
+  bareSlashCommandHint,
   expandSlashCommand,
   SLASH_COMMANDS,
   slashCommandDraftText,
@@ -57,8 +54,6 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
-  /** 章节列表（chapters/*.txt），供要素管理员任务弹窗选择章节范围（要素整理参数化 W1） */
-  chapters: ProjectFileNodeView[]
 }>()
 
 const emit = defineEmits<{
@@ -68,8 +63,6 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
-  /** 要素管理员弹窗空态「新建快捷选项」：请求打开设置页（要素整理参数化 W1） */
-  openElementManagerSettings: []
 }>()
 
 const chatStore = useChatStore()
@@ -173,6 +166,15 @@ const { suggestion: completionSuggestion, scheduleCompletion, acceptNextSegment,
 /** 补全是否处于可显示状态（开启 + 有建议 + 非运行中） */
 const isCompletionVisible = computed(
   () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !chatStore.isRunning,
+)
+
+/**
+ * 行内建议合流（入口重构 W1）：斜杠裸发提示优先于 FIM 补全——命令刚落下、
+ * 参数未补时给确定性引导，用户开始补参数后裸发形态不再匹配，FIM 自然接管。
+ * Tab 采纳 / Esc 丢弃交互仍只属于 FIM（isCompletionVisible），裸发提示纯展示。
+ */
+const inlineSuggestion = computed(
+  () => bareSlashCommandHint(draft.value) || (isCompletionVisible.value ? completionSuggestion.value : ''),
 )
 
 // 自动滚动到底部
@@ -334,14 +336,6 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // 要素管理员任务弹窗打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isElementManagerDialogOpen.value) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      isElementManagerDialogOpen.value = false
-      return
-    }
-  }
   // 斜杠命令菜单打开时：拦截导航键交给菜单
   if (isSlashMenuOpen.value && slashMenuRef.value) {
     if (event.key === 'ArrowDown') {
@@ -416,7 +410,7 @@ function autoResizeEditor() {
  * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isElementManagerDialogOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value) {
     clearSuggestion()
     return
   }
@@ -491,7 +485,6 @@ function detectCommands() {
   if (!composer.isMounted()) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isElementManagerDialogOpen.value = false
     return
   }
   const cursor = composer.caretOffset() ?? draft.value.length
@@ -530,73 +523,70 @@ function handleSlashCommandSelect(id: SlashCommandId) {
   composer.replaceTokenBeforeCaret(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
 
   // 落文本后不自动发送：elementManager / init 用户均可补参数后 Enter；
-  // 发送链路的前缀拦截分别替换为 ELEMENT_MANAGER_TASK_PROMPT / INIT_NOVEL_PROMPT 全文
+  // 发送链路的前缀拦截分别替换为 ELEMENT_MANAGER_TASK_PROMPT（W1 起为一句委派指令）/ INIT_NOVEL_PROMPT
 }
 
 /**
- * 一键管理要素（要素管理员 Phase 2 W2 快捷入口）：全局快捷键入口直发裸 ELEMENT_MANAGER_TASK_PROMPT——
- * 快捷键语义是「一键」，不弹参数弹窗；斜杠命令与工具栏按钮已改为参数弹窗（要素整理参数化 W1）。
+ * 一键管理要素快捷入口已删（入口重构 W2：Ctrl/Cmd+Shift+G 退役）；
+ * 输入框上方按钮位由 W3 滑入式整理提醒接管，侧栏单击由 W4 直聊会话接管。
  */
-function triggerElementManager() {
-  followAndScrollToBottom()
-  void chatStore.sendMessage(ELEMENT_MANAGER_TASK_PROMPT)
-}
 
-// ===== 要素管理员任务参数弹窗（要素整理参数化 W1，target=current 实例） =====
+// ===== 要素整理提醒（入口重构 W3：距上次整理新增 ≥ 2 章时滑入） =====
 
-/** 弹窗是否打开（锚定输入框上方） */
-const isElementManagerDialogOpen = ref(false)
-/** 快捷选项数据源（打开弹窗时从 .novai/element-manager-presets.json 拉取，失败降级为空） */
-const elementManagerPresets = ref<ElementManagerPresetView[]>([])
-
-async function loadElementManagerPresets() {
-  try {
-    elementManagerPresets.value = await getElementManagerPresets(props.projectId)
-  } catch {
-    elementManagerPresets.value = []
-  }
-}
-
-/** 输入框上方「📚 管理要素」按钮：打开参数弹窗（D1：当前会话；斜杠命令只落文本不开弹窗） */
-function openElementManagerDialog() {
-  void loadElementManagerPresets()
-  isElementManagerDialogOpen.value = true
-}
-
-/** 弹窗确认：按 D3 拼装任务消息，发到当前会话（空闲即发，运行中排队）。
- *  输入框里手输/斜杠落的 `/管理要素 …` 命令文本随发送清空——弹窗拼装的消息为准，避免双发。 */
-async function handleElementManagerConfirm(params: ElementManagerTaskParams) {
-  isElementManagerDialogOpen.value = false
-  const hasCommandResidue = draft.value.trimStart().startsWith('/管理要素')
-  followAndScrollToBottom()
-  const ok = await chatStore.sendMessage(buildElementManagerTaskMessage(ELEMENT_MANAGER_TASK_PROMPT, params))
-  if (ok && hasCommandResidue) {
-    composer.setDraft('')
-  }
-}
-
-function handleElementManagerDialogCancel() {
-  isElementManagerDialogOpen.value = false
-}
-
-/** 弹窗空态「新建快捷选项」：关弹窗并请求打开设置页（W2 起定位到要素管理 tab） */
-function handleElementManagerOpenSettings() {
-  isElementManagerDialogOpen.value = false
-  emit('openElementManagerSettings')
-}
+/** 提醒按钮是否滑入显示 */
+const isReminderVisible = ref(false)
+/** 点击提醒落输入框的完整草稿（模板已填充真实章节名） */
+const reminderDraft = ref('')
+let reminderCheckTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
- * 全局快捷键（window 级监听，不限输入框焦点）：Ctrl/Cmd+Shift+G 触发一键管理要素。
- * 模态框（BaseModal 带 role=dialog）打开时不抢键，避免在设置页等弹窗背后触发委派。
+ * 阈值检测（防抖 500ms）：文件树变化或 Agent 运行结束时复查。运行中不弹——
+ * 批量写文件会让 mtime 抖动产生误判，且提醒也打断不了正在跑的任务。
+ * 检测失败静默：提醒是增值功能，不阻塞主链路。
  */
-function handleGlobalKeydown(event: KeyboardEvent) {
-  if (!isElementManagerShortcut(event) || document.querySelector('[role="dialog"]')) return
-  event.preventDefault()
-  triggerElementManager()
+function scheduleReminderCheck() {
+  if (reminderCheckTimer) {
+    clearTimeout(reminderCheckTimer)
+  }
+  reminderCheckTimer = setTimeout(() => {
+    reminderCheckTimer = null
+    void checkElementReminder(props.projectId)
+      .then((check) => {
+        if (check.due && !chatStore.isRunning) {
+          reminderDraft.value = check.draft
+          isReminderVisible.value = true
+        }
+      })
+      .catch(() => {})
+  }, 500)
+}
+
+watch(() => projectStore.currentProject?.files, scheduleReminderCheck)
+watch(
+  () => chatStore.isRunning,
+  (running) => {
+    if (!running) {
+      scheduleReminderCheck()
+    }
+  },
+)
+
+/** 点击提醒：模板落光标处，可继续编辑后发送（发送链路前缀拦截替换为委派指令，W1） */
+function handleReminderApply() {
+  if (reminderDraft.value) {
+    composer.insertAtCaret(reminderDraft.value)
+  }
+  dismissReminder()
+}
+
+/** 收起提醒并落「已提醒」标记：同一批新增不再弹，之后有新章节会再提醒 */
+function dismissReminder() {
+  isReminderVisible.value = false
+  reminderDraft.value = ''
+  void markElementReminderShown(props.projectId)
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', handleGlobalKeydown)
   // 编辑器挂载 + 初始高度（空态两行的 min-height 由 CSS 提供，此处量一次收口）
   if (editorHostRef.value) {
     composer.mount(editorHostRef.value)
@@ -615,7 +605,10 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleGlobalKeydown)
+  if (reminderCheckTimer) {
+    clearTimeout(reminderCheckTimer)
+    reminderCheckTimer = null
+  }
   unregisterTextRefs?.()
   unregisterTextRefs = null
   composer.unmount()
@@ -824,25 +817,14 @@ onBeforeUnmount(() => {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
-          <!-- 要素管理员任务参数弹窗（要素整理参数化 W1）：锚定输入框上方，确认发当前会话 -->
-          <div v-if="isElementManagerDialogOpen" class="absolute bottom-full left-0 right-0 z-50 mb-2">
-            <ElementManagerTaskDialog
-              target="current"
-              :chapters="chapters"
-              :presets="elementManagerPresets"
-              @confirm="handleElementManagerConfirm"
-              @cancel="handleElementManagerDialogCancel"
-              @open-settings="handleElementManagerOpenSettings"
-            />
-          </div>
           <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
-            <!-- 编辑器 + ghost text 覆盖层（补全开启且有建议时） -->
+            <!-- 编辑器 + ghost text 覆盖层（斜杠裸发提示或 FIM 补全建议，二者合流） -->
             <div class="relative">
               <GhostTextOverlay
-                v-if="isCompletionVisible"
+                v-if="inlineSuggestion.length > 0"
                 :input-text="draft"
-                :suggestion="completionSuggestion"
+                :suggestion="inlineSuggestion"
                 :host="editorHostRef"
               />
               <!-- 占位符：空草稿时显示（Lexical 根节点恒有段落元素，CSS :empty 不可用） -->
@@ -872,19 +854,35 @@ onBeforeUnmount(() => {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
-                <!-- 管理要素（参数弹窗入口，要素整理参数化 W1）：与斜杠命令同一入口；全局 Ctrl/Cmd+Shift+G 仍直发裸任务 -->
-                <button
-                  type="button"
-                  class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-800"
-                  title="管理要素库（可配任务参数；子智能体执行）；Agent 运行中自动排队"
-                  @click="openElementManagerDialog"
+                <!-- 整理提醒（入口重构 W3）：阈值触发从左滑入，非常驻；点击落模板退回，
+                     × 忽略（同一批新增不再弹，之后有新章节会再提醒） -->
+                <Transition
+                  enter-active-class="transition duration-300 ease-out"
+                  enter-from-class="-translate-x-3 opacity-0"
+                  enter-to-class="translate-x-0 opacity-100"
+                  leave-active-class="transition duration-200 ease-in"
+                  leave-from-class="translate-x-0 opacity-100"
+                  leave-to-class="-translate-x-3 opacity-0"
                 >
-                  <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
-                  </svg>
-                  <span>管理要素</span>
-                </button>
+                  <button
+                    v-if="isReminderVisible"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                    title="距上次整理已新增多章；点击把整理任务模板落入输入框，可编辑后发送"
+                    @click="handleReminderApply"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    <span>整理提醒</span>
+                    <span
+                      role="button"
+                      aria-label="忽略本次提醒"
+                      class="ml-0.5 cursor-pointer rounded p-0.5 text-amber-400 transition-colors hover:bg-amber-200 hover:text-amber-700"
+                      @click.stop="dismissReminder"
+                    >×</span>
+                  </button>
+                </Transition>
               </div>
               <div class="flex items-center gap-2">
                 <button

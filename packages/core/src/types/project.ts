@@ -126,6 +126,16 @@ export type ProjectConfig = {
     /** 未定义 = 继承 settings.permissionPreset；只接受三档（D3）。 */
     permissionPreset?: ElementManagerPermissionPreset
   }
+  /**
+   * 要素整理提醒（入口重构 W3）：独立于 elementManager 覆盖块（那边是「空=删块回退继承」
+   * 的整组替换语义，混进提醒状态会被设置页误删）。整块可选：无此块 = 默认模板、从未提醒。
+   */
+  elementReminder?: {
+    /** 提醒落输入框的模板文案；{章节名列表} 占位符由代码填充为真实章节名 */
+    template?: string
+    /** 上次展示提醒的时间戳（ms）：其后没有新章节则不再重复提醒（同一批新增只提醒一次） */
+    lastRemindedAt?: number
+  }
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number

@@ -185,14 +185,9 @@ export function mergeElementManagerOverrides(config: ProjectConfig): ProjectConf
   }
 }
 
-/** /管理要素 斜杠命令的驱动 prompt（主 Agent 侧指令，照 INIT_NOVEL_PROMPT 用法）。 */
-export const ELEMENT_MANAGER_TASK_PROMPT = `请立即调用 DelegateToElementManager 工具，把本次要素管理任务委派给要素管理子智能体执行，不要自己直接修改要素文件。
-
-对 task 的要求（子智能体看不到本对话，必须自包含）：
-- 管理整个 elements/ 要素库：核对同名与近名条目合并、frontmatter 规范（tags 去重、relatedChapters 取并集、lastUpdatedChapter 取最新）、正文按模板小节归位、按规范补写素材间链接。
-- 子智能体会自己读写文件并对写入操作请求确认；存疑事项它会列进汇报。
-
-收到汇报后，向用户转述要点：改了哪些文件、合并了什么、哪些存疑事项需要用户拍板、是否有建议删除的文件。`
+/** /管理要素 斜杠命令的驱动 prompt（入口重构 W1 瘦身为一句：「自包含」等约束由
+ *  DelegateToElementManager 工具 description 承载，提示词不重复）。 */
+export const ELEMENT_MANAGER_TASK_PROMPT = `请调用 DelegateToElementManager 委派要素管理员处理以下要素管理需求：`
 
 export type DelegateToElementManagerInput = {
   task: string

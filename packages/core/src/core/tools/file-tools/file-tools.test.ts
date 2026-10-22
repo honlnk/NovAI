@@ -302,14 +302,14 @@ describe('file tools', () => {
       })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
 
-    it('.novai/ 配置目录与 novel.config.json 同级禁写（要素整理参数化 W2：快捷选项仅 app service 层可写）', () => {
+    it('.novai/ 配置目录整体禁写（与 novel.config.json 同级受保护，仅 app service 层可写）', () => {
       expect(() => createFileTool.validateInput({
-        path: '.novai/element-manager-presets.json',
+        path: '.novai/session-state.json',
         content: '{}',
       })).toThrow('不能指向项目内部文件')
 
       expect(() => editFileTool.validateInput({
-        path: '.novai/element-manager-presets.json',
+        path: '.novai/session-state.json',
         oldText: 'a',
         newText: 'b',
       })).toThrow('不能指向项目内部文件')
