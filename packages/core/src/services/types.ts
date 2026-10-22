@@ -592,8 +592,12 @@ export type AgentUiEvent =
   | { type: 'run-error'; sessionId: string; error: NovAiError }
   /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
   | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }
-  /** 服务端新落盘了一个会话（委派会话在主会话运行中创建）：会话列表据此刷新。 */
-  | { type: 'session-created'; sessionId: string; projectId: string }
+  /**
+   * 服务端新落盘了一个会话（委派会话在主会话运行中创建）：载荷自带列表摘要，
+   * 前端直接 upsert 进会话列表——事件后再遍历文件系统会在创建方连发落盘的
+   * 写窗口内漏掉新会话文件，不可靠。
+   */
+  | { type: 'session-created'; sessionId: string; projectId: string; summary: ChatSessionSummaryView }
 
 export type NovAiErrorCode =
   | 'PROJECT_NOT_OPEN'

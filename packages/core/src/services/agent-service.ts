@@ -677,7 +677,22 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
   session.title = deriveSessionTitle(input.task)
   cacheSession(session)
   await saveSession(project, session)
-  broadcastAgentEvent({ type: 'session-created', sessionId: session.sessionId, projectId: project.id })
+  session.updatedAt = new Date().toISOString()
+  broadcastAgentEvent({
+    type: 'session-created',
+    sessionId: session.sessionId,
+    projectId: project.id,
+    // 载荷自带列表摘要：前端 upsert 即刻入列，不依赖再遍历文件系统（写窗口内不可靠）
+    summary: {
+      sessionId: session.sessionId,
+      projectId: project.id,
+      agent: 'element-manager',
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      messageCount: session.messages.length,
+    },
+  })
 
   // 任务入队（收件箱首批）→ 落盘 + 队列快照广播（用户此刻打开委派会话能看到排队中的任务）
   enqueueChatMessage(session, 'next-turn', { text: taskText })

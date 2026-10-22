@@ -157,6 +157,17 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /**
+   * 把事件带来的会话摘要 upsert 进列表（session-created）：
+   * 原地替换同名项或插入新项，保持 updatedAt 降序。
+   */
+  function upsertSessionSummary(summary: ChatSessionSummaryView) {
+    const rest = sessions.value.filter((s) => s.sessionId !== summary.sessionId)
+    rest.unshift(summary)
+    rest.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    sessions.value = rest
+  }
+
   /** 切换到指定历史会话：只装尾部一页消息窗口（长会话分页防线）并设为激活。 */
   async function selectSession(projectId: string, sessionId: string): Promise<ChatSessionView | null> {
     const view = await getAgentSession(projectId, sessionId, { tailMessages: HISTORY_PAGE_SIZE })
@@ -420,7 +431,9 @@ export const useChatStore = defineStore('chat', () => {
     if (event.type === 'session-created') {
       const projectStore = useProjectStore()
       if (projectStore.currentProject?.id === event.projectId) {
-        void loadSessions(event.projectId)
+        // 事件自带会话摘要，直接 upsert 进列表：事件后再遍历文件系统会在
+        // 委派运行器的连发落盘窗口内漏掉刚创建的会话文件（真机复现），不可靠。
+        upsertSessionSummary(event.summary)
       }
       return
     }

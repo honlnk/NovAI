@@ -605,21 +605,50 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(false)
   })
 
-  it('session-created（委派会话落盘，W3）：打开的项目匹配时刷新会话列表', async () => {
+  it('session-created（委派会话落盘，W3/W4）：项目匹配时把事件自带的摘要 upsert 进列表', async () => {
     const store = useChatStore()
     mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
     await store.createNewSession('project-1', { skipReload: true })
     const emit = captureListener()
     mockedListSessions.mockClear()
 
-    // 未打开项目（currentProject 为空）：不刷新
-    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1' })
+    const summary = {
+      sessionId: 'session-em',
+      projectId: 'project-1',
+      agent: 'element-manager',
+      title: '在 elements/ 下新建回归测试',
+      createdAt: '2026-10-22T12:00:00.000Z',
+      updatedAt: '2026-10-22T12:00:01.000Z',
+      messageCount: 0,
+    } as const
+
+    // 未打开项目（currentProject 为空）：不进列表
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
+    expect(store.sessions.some((s) => s.sessionId === 'session-em')).toBe(false)
     expect(mockedListSessions).not.toHaveBeenCalled()
 
-    // 打开的项目与事件匹配：刷新列表（委派会话在主会话运行中创建，列表要能看到）
+    // 打开的项目与事件匹配：摘要直接 upsert（不重新遍历文件系统——创建方连发落盘的
+    // 写窗口内再遍历会漏掉新会话，W4 真机复现）
     const projectStore = useProjectStore()
     projectStore.currentProject = { id: 'project-1' } as never
-    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1' })
-    expect(mockedListSessions).toHaveBeenCalledWith('project-1')
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
+    expect(mockedListSessions).not.toHaveBeenCalled()
+    expect(store.sessions.some((s) => s.sessionId === 'session-em')).toBe(true)
+    const entry = store.sessions.find((s) => s.sessionId === 'session-em')
+    expect(entry?.title).toBe('在 elements/ 下新建回归测试')
+    expect(entry?.agent).toBe('element-manager')
+
+    // 重复事件（同 id）：原地替换不重复插入
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
+    expect(store.sessions.filter((s) => s.sessionId === 'session-em')).toHaveLength(1)
+
+    // 不匹配的项目：忽略
+    emit({
+      type: 'session-created',
+      sessionId: 'session-other',
+      projectId: 'project-2',
+      summary: { ...summary, sessionId: 'session-other', projectId: 'project-2' },
+    })
+    expect(store.sessions.some((s) => s.sessionId === 'session-other')).toBe(false)
   })
 })

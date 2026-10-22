@@ -319,11 +319,20 @@ describe('委派会话化（service 层端到端）', () => {
     expect(toolMessages[0]!.content).toContain('角色甲.md（新建）')
     expect(toolMessages[0]!.content).toContain('完整过程保存在要素管理员会话')
 
-    // 事件流：委派会话创建广播 + 自己的 run-start/run-finish
+    // 事件流：委派会话创建广播（自带列表摘要，W4：前端 upsert 不再遍历文件系统）+ 自己的 run-start/run-finish
     const created = events.find((event) => event.type === 'session-created')
     expect(created).toMatchObject({ projectId: 'proj-delegate' })
     const delegationSessionId = created && created.type === 'session-created' ? created.sessionId : ''
     expect(delegationSessionId).toBeTruthy()
+    if (created?.type === 'session-created') {
+      expect(created.summary).toMatchObject({
+        sessionId: delegationSessionId,
+        projectId: 'proj-delegate',
+        agent: 'element-manager',
+        title: '整理第 12 章新增人物',
+        messageCount: 0,
+      })
+    }
     expect(events.some((event) => event.type === 'run-start' && event.sessionId === delegationSessionId)).toBe(true)
     expect(events.some((event) => event.type === 'run-finish' && event.sessionId === delegationSessionId)).toBe(true)
 
