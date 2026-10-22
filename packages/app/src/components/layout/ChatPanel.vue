@@ -28,6 +28,7 @@ import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import {
+  bareSlashCommandHint,
   expandSlashCommand,
   SLASH_COMMANDS,
   slashCommandDraftText,
@@ -165,6 +166,15 @@ const { suggestion: completionSuggestion, scheduleCompletion, acceptNextSegment,
 /** 补全是否处于可显示状态（开启 + 有建议 + 非运行中） */
 const isCompletionVisible = computed(
   () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !chatStore.isRunning,
+)
+
+/**
+ * 行内建议合流（入口重构 W1）：斜杠裸发提示优先于 FIM 补全——命令刚落下、
+ * 参数未补时给确定性引导，用户开始补参数后裸发形态不再匹配，FIM 自然接管。
+ * Tab 采纳 / Esc 丢弃交互仍只属于 FIM（isCompletionVisible），裸发提示纯展示。
+ */
+const inlineSuggestion = computed(
+  () => bareSlashCommandHint(draft.value) || (isCompletionVisible.value ? completionSuggestion.value : ''),
 )
 
 // 自动滚动到底部
@@ -818,12 +828,12 @@ onBeforeUnmount(() => {
           </div>
           <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
-            <!-- 编辑器 + ghost text 覆盖层（补全开启且有建议时） -->
+            <!-- 编辑器 + ghost text 覆盖层（斜杠裸发提示或 FIM 补全建议，二者合流） -->
             <div class="relative">
               <GhostTextOverlay
-                v-if="isCompletionVisible"
+                v-if="inlineSuggestion.length > 0"
                 :input-text="draft"
-                :suggestion="completionSuggestion"
+                :suggestion="inlineSuggestion"
                 :host="editorHostRef"
               />
               <!-- 占位符：空草稿时显示（Lexical 根节点恒有段落元素，CSS :empty 不可用） -->

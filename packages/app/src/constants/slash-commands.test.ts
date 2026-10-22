@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ELEMENT_MANAGER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 
-import { expandSlashCommand, slashCommandDraftText } from './slash-commands'
+import { bareSlashCommandHint, expandSlashCommand, slashCommandDraftText } from './slash-commands'
 
 describe('expandSlashCommand 发送链路前缀拦截（W3 D6）', () => {
   it('行首裸命令：替换为驱动 prompt 全文', () => {
@@ -58,5 +58,23 @@ describe('expandSlashCommand 发送链路前缀拦截（W3 D6）', () => {
 describe('slashCommandDraftText 落输入框文本', () => {
   it('命令文本尾部带空格，光标置后可直接补参数', () => {
     expect(slashCommandDraftText('/管理要素')).toBe('/管理要素 ')
+  })
+})
+
+describe('bareSlashCommandHint 裸发行内提示（入口重构 W1）', () => {
+  it('裸发形态（命令文本 + 尾随空白）返回配置的提示', () => {
+    expect(bareSlashCommandHint('/管理要素 ')).toBe('← 可在此补充范围/目标，留空则整理整个要素库')
+    expect(bareSlashCommandHint('/管理要素')).toBe('← 可在此补充范围/目标，留空则整理整个要素库')
+  })
+
+  it('带参数 / 多行 / 未配置 bareHint 的命令不提示', () => {
+    expect(bareSlashCommandHint('/管理要素 只整理前两章')).toBe('')
+    expect(bareSlashCommandHint('/管理要素\n补充说明')).toBe('')
+    expect(bareSlashCommandHint('/生成项目记忆 ')).toBe('')
+    expect(bareSlashCommandHint('')).toBe('')
+  })
+
+  it('正文里包含命令文本不提示（须整条草稿恰为命令）', () => {
+    expect(bareSlashCommandHint('帮忙跑一下 /管理要素 ')).toBe('')
   })
 })
