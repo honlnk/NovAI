@@ -206,11 +206,9 @@ export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandl
   // 按真值判断会让已迁移项目的死字段永远留在盘上。
   const hasLegacyOutlineReference =
     (rawConfig.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath !== undefined
-  // 老配置带园丁改名前的 gardener 覆盖块：归一化映射后写回，老键从盘上消失（新键 elementManager）
-  const hasLegacyGardenerBlock = (rawConfig as { gardener?: unknown }).gardener !== undefined
   const config = normalizeProjectConfig(rawConfig)
   // 迁移过或 config 还带旧字段：把归一化结果写回盘（路径前缀已替换、旧字段名被丢弃）
-  if (migrated || hasLegacyOutlineReference || hasLegacyGardenerBlock) {
+  if (migrated || hasLegacyOutlineReference) {
     await writeJson(rootHandle, 'novel.config.json', config)
   }
   const manifest = await readJson<ProjectManifest>(rootHandle, '.novel/manifest.json')
@@ -354,24 +352,17 @@ export type ElementManagerPreset = {
 }
 
 const ELEMENT_MANAGER_PRESETS_PATH = '.novai/element-manager-presets.json'
-/** 改名前（W1 园丁→要素管理员）的快捷选项文件名：读取回退用，写回只写新名、老文件不删。 */
-const LEGACY_GARDENER_PRESETS_PATH = '.novai/gardener-presets.json'
 
 /**
  * 读取快捷选项。文件不存在或内容损坏（非法 JSON / presets 非数组 / 项字段非法）
  * 一律容错为空数组，不抛错——弹窗降级为无快捷选项形态即可用，不该被配置文件炸挂。
- * 老项目文件名回退：新文件不存在时再试老文件名（.novai/gardener-presets.json）。
  */
 export async function readElementManagerPresets(rootHandle: FileSystemDirectoryHandle): Promise<ElementManagerPreset[]> {
   let raw: unknown
   try {
     raw = await readJson<unknown>(rootHandle, ELEMENT_MANAGER_PRESETS_PATH)
   } catch {
-    try {
-      raw = await readJson<unknown>(rootHandle, LEGACY_GARDENER_PRESETS_PATH)
-    } catch {
-      return []
-    }
+    return []
   }
   const presets = (raw as { presets?: unknown } | null)?.presets
   if (!Array.isArray(presets)) {
@@ -404,15 +395,9 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     activeScenePromptPath?: unknown
   }
   const { activeScenePromptPath: legacyScenePromptPath, ...settingsRest } = legacySettings
-  // 改名迁移（园丁→要素管理员）：老 gardener 覆盖块读入映射为 elementManager，
-  // 两者并存时新字段优先；老键随归一化丢弃，写回不再保留。
-  const { gardener: legacyGardenerBlock, ...configRest } = config as ProjectConfig & {
-    gardener?: ProjectConfig['elementManager']
-  }
-  const elementManagerSource = configRest.elementManager ?? legacyGardenerBlock
   return {
     ...DEFAULT_CONFIG,
-    ...configRest,
+    ...config,
     project: {
       ...DEFAULT_CONFIG.project,
       ...config.project,
@@ -450,8 +435,7 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     },
     // 要素管理员覆盖块（Phase 2 计划 D2/D3）：块缺省 → undefined（全继承，零迁移）；
     // llm 残缺/协议非法整组剔除、permissionPreset 非三档值剔除，均回退继承。
-    // 入参优先取新字段，老 gardener 块已在上文映射进来（W1 改名迁移）。
-    elementManager: normalizeElementManagerConfig(elementManagerSource),
+    elementManager: normalizeElementManagerConfig(config.elementManager),
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...settingsRest,

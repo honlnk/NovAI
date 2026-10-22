@@ -375,68 +375,6 @@ describe('elementManager presets（.novai/element-manager-presets.json，要素�
   })
 })
 
-describe('园丁→要素管理员改名迁移（W1）', () => {
-  it('老配置 gardener 覆盖块读取映射为 elementManager；打开项目后写回只留新字段', async () => {
-    const rootHandle = createMemoryDirectory('novel')
-    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-      gardener: {
-        llm: {
-          baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
-          protocol: 'anthropic', reasoningEffort: 'max',
-        },
-        permissionPreset: 'material',
-      },
-    }))
-    writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
-      projectId: 'p1', version: 1, createdAt: '2026-01-01T00:00:00.000Z', lastOpenedAt: '2026-01-01T00:00:00.000Z',
-    }))
-
-    const project = await loadProjectFromHandle(rootHandle)
-    // 模型覆盖、思考档、权限档全量映射不丢
-    expect(project.config.elementManager?.llm).toEqual({
-      baseUrl: 'https://strong.example.com', apiKey: 'k', model: 'claude-x',
-      protocol: 'anthropic', reasoningEffort: 'max',
-    })
-    expect(project.config.elementManager?.permissionPreset).toBe('material')
-
-    // 写回盘上：新字段在，老 gardener 键被丢弃
-    const onDisk = await readProjectText(rootHandle, 'novel.config.json')
-    expect(onDisk).toContain('elementManager')
-    expect(onDisk).not.toContain('gardener')
-  })
-
-  it('新旧字段并存时以新字段为准', async () => {
-    const rootHandle = createMemoryDirectory('novel')
-    writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
-      gardener: { permissionPreset: 'full' },
-      elementManager: { permissionPreset: 'review' },
-    }))
-    const config = await readProjectConfig(rootHandle)
-    expect(config.elementManager?.permissionPreset).toBe('review')
-  })
-
-  it('老 presets 文件名回退读取；写回只写新文件名、老文件不删', async () => {
-    const rootHandle = createMemoryDirectory('novel')
-    writeProjectTextSync(rootHandle, '.novai/gardener-presets.json', JSON.stringify({
-      presets: [{ label: '老选项', prompt: '老提示语' }],
-    }))
-
-    // 新文件不存在 → 回退读老文件
-    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([
-      { label: '老选项', prompt: '老提示语' },
-    ])
-
-    // 写回只写新文件名；老文件内容原样保留（用户数据不删）
-    await writeElementManagerPresets(rootHandle, [{ label: '新选项', prompt: '新提示语' }])
-    await expect(readProjectText(rootHandle, '.novai/element-manager-presets.json')).resolves.toContain('新选项')
-    await expect(readProjectText(rootHandle, '.novai/gardener-presets.json')).resolves.toContain('老选项')
-    // 新文件存在后读取不再回退
-    await expect(readElementManagerPresets(rootHandle)).resolves.toEqual([
-      { label: '新选项', prompt: '新提示语' },
-    ])
-  })
-})
-
 type MemoryFileEntry = {
   kind: 'file'
   name: string
