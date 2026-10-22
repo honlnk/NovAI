@@ -584,9 +584,16 @@ export type AgentUiEvent =
   /** 收件箱任何变化（入队/抽干/编辑/删除）时广播全量快照。 */
   | { type: 'queue-updated'; sessionId: string; queue: QueuedMessageView[] }
   | { type: 'confirmation-required'; sessionId: string; request: FileChangeConfirmationView }
+  /**
+   * 某会话的待确认快照（新增/resolve 后广播）：会话列表据此给非激活会话（如委派中的
+   * 要素管理员会话）打「待确认」徽标；激活会话的确认卡仍以 confirmation-required 为准。
+   */
+  | { type: 'confirmations-updated'; sessionId: string; confirmations: FileChangeConfirmationView[] }
   | { type: 'run-error'; sessionId: string; error: NovAiError }
   /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
   | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }
+  /** 服务端新落盘了一个会话（委派会话在主会话运行中创建）：会话列表据此刷新。 */
+  | { type: 'session-created'; sessionId: string; projectId: string }
 
 export type NovAiErrorCode =
   | 'PROJECT_NOT_OPEN'

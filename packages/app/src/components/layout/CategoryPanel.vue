@@ -15,6 +15,8 @@ defineProps<{
   sessions: ChatSessionSummaryView[]
   /** 当前激活会话 id（对话分类面板高亮用） */
   activeSessionId: string | null
+  /** 有待确认卡片的会话 id 集（会话列表「待确认」徽标；确认链按会话路由） */
+  pendingConfirmationIds?: Set<string>
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -57,6 +59,7 @@ const emit = defineEmits<{
       v-if="activeCategory === 'conversation'"
       :sessions="sessions"
       :active-session-id="activeSessionId"
+      :pending-confirmation-ids="pendingConfirmationIds"
       @select="emit('selectSession', $event)"
       @create="emit('createSession')"
       @rename="(sessionId, title) => emit('renameSession', sessionId, title)"

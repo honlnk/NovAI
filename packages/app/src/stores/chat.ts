@@ -61,8 +61,20 @@ export const useChatStore = defineStore('chat', () => {
   const isRunning = ref(false)
   // 用户已请求停止、正在等待当前工具执行完成
   const isStopping = ref(false)
-  // 当前等待用户确认的写操作；Agent Loop 在此暂停
-  const pendingConfirmation = ref<FileChangeConfirmationView | null>(null)
+  /**
+   * 各会话的待确认快照（confirmation-required / confirmations-updated 事件同步）：
+   * 确认链按会话路由——委派中的要素管理员会话等待确认时，激活的主会话不受影响；
+   * 非激活会话的待确认由会话列表读它点亮「待确认」徽标。
+   */
+  const pendingConfirmationsBySession = ref(new Map<string, FileChangeConfirmationView[]>())
+  // 当前激活会话的待确认卡（一次一张，取最早到达的那条；Agent Loop 在此暂停）
+  const pendingConfirmation = computed<FileChangeConfirmationView | null>(() => {
+    const active = activeSessionId.value
+    if (!active) {
+      return null
+    }
+    return pendingConfirmationsBySession.value.get(active)?.[0] ?? null
+  })
   // 当前正在流式输出的消息 id（供消息气泡显示「生成中」光标）；无流式消息时为 null
   const streamingMessageId = ref<string | null>(null)
 
@@ -84,6 +96,15 @@ export const useChatStore = defineStore('chat', () => {
 
   const hasSessionView = computed(() => sessionView.value !== null)
   const messages = computed<ChatMessageView[]>(() => sessionView.value?.messages ?? [])
+
+  /** 有待确认的会话 id 集（会话列表徽标）：非激活的委派会话等待用户打开确认。 */
+  const sessionsWithPendingConfirmations = computed(() =>
+    new Set(
+      [...pendingConfirmationsBySession.value.entries()]
+        .filter(([, list]) => list.length > 0)
+        .map(([sessionId]) => sessionId),
+    ),
+  )
 
   /**
    * 任务组折叠态：组 id（= 组首 user 消息 id）→ 显式展开/收起，优先级高于默认
@@ -377,7 +398,34 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
-    // 事件总线是全局的：只消费当前激活会话的事件（后台会话的 driver 仍在跑，UI 不跟随）
+    // 全局事件（与会话激活态无关，先于激活会话过滤处理）：
+    // 待确认快照按会话路由，非激活会话（委派中的要素管理员会话）也要记录徽标；
+    // session-created（服务端新建的委派会话落盘）刷新当前项目的会话列表。
+    if (event.type === 'confirmation-required') {
+      const list = pendingConfirmationsBySession.value.get(event.sessionId) ?? []
+      pendingConfirmationsBySession.value = new Map(pendingConfirmationsBySession.value)
+        .set(event.sessionId, [...list, event.request])
+      if (event.sessionId === activeSessionId.value) {
+        setRunStatus('等待确认写入操作…')
+      }
+      return
+    }
+
+    if (event.type === 'confirmations-updated') {
+      pendingConfirmationsBySession.value = new Map(pendingConfirmationsBySession.value)
+        .set(event.sessionId, event.confirmations)
+      return
+    }
+
+    if (event.type === 'session-created') {
+      const projectStore = useProjectStore()
+      if (projectStore.currentProject?.id === event.projectId) {
+        void loadSessions(event.projectId)
+      }
+      return
+    }
+
+    // 其余事件只消费当前激活会话的（后台会话的 driver 仍在跑，UI 不跟随）
     if (!activeSessionId.value || event.sessionId !== activeSessionId.value) {
       return
     }
@@ -474,12 +522,6 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
-    if (event.type === 'confirmation-required') {
-      pendingConfirmation.value = event.request
-      setRunStatus('等待确认写入操作…')
-      return
-    }
-
     if (event.type === 'run-error') {
       // 以 driver 注册表真实状态为准：停止后立刻再发送时，pendingWake 再唤醒的新 run 的
       // run-start 可能先于旧 driver 的 run-error 到达，无条件置 false 会把新 run 的运行态打掉
@@ -525,7 +567,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!confirmation) {
       return
     }
-    pendingConfirmation.value = null
+    // respondConfirmation 内同步广播 confirmations-updated（含本次 resolve），map 随之更新
     respondAgentConfirmation(confirmation.id, true)
     setRunStatus('Agent 正在执行...', 'running')
   }
@@ -536,7 +578,6 @@ export const useChatStore = defineStore('chat', () => {
     if (!confirmation) {
       return
     }
-    pendingConfirmation.value = null
     respondAgentConfirmation(confirmation.id, false)
     setRunStatus('Agent 正在执行...', 'running')
   }
@@ -551,6 +592,8 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     renderItems,
     pendingConfirmation,
+    pendingConfirmationsBySession,
+    sessionsWithPendingConfirmations,
     sessionView,
     sessions,
     activeSessionId,

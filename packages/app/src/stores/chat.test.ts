@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import type { AgentUiEvent, ChatSessionView, RunAgentTurnResult } from '@novai/core/services/types'
+import type {
+  AgentUiEvent,
+  ChatSessionView,
+  FileChangeConfirmationView,
+  RunAgentTurnResult,
+} from '@novai/core/services/types'
 
 import {
   createSession,
@@ -14,6 +19,7 @@ import {
   subscribeAgentEvents,
 } from '@novai/core/services/agent-service'
 import { HISTORY_PAGE_SIZE, useChatStore } from './chat'
+import { useProjectStore } from './project'
 
 vi.mock('@novai/core/services/agent-service', () => ({
   createSession: vi.fn(),
@@ -564,5 +570,56 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.messages[0].id).toBe(`m-${start}`)
     expect(store.messages[HISTORY_PAGE_SIZE]).toMatchObject({ id: 'msg-stream', text: '流式片段' })
     expect(store.historyStart).toBe(start)
+  })
+
+  it('确认链按会话路由（W3）：非激活会话的确认卡只点亮徽标，激活会话的进确认卡位', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const delegationCard: FileChangeConfirmationView = {
+      id: 'conf-em',
+      toolName: 'CreateFile',
+      title: '新建文件：elements/characters/角色甲.md',
+      summary: '将新建 elements/characters/角色甲.md',
+      confirmation: { kind: 'create', path: 'elements/characters/角色甲.md', content: '' },
+      agentLabel: '要素管理员',
+    }
+
+    // 委派会话（非激活）的确认卡：不占当前确认卡位，但点亮徽标集合
+    emit({ type: 'confirmation-required', sessionId: 'session-delegation', request: delegationCard })
+    expect(store.pendingConfirmation).toBeNull()
+    expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(true)
+
+    // 激活会话自己的确认卡：进确认卡位
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-current',
+      request: { ...delegationCard, id: 'conf-main' },
+    })
+    expect(store.pendingConfirmation?.id).toBe('conf-main')
+
+    // 快照广播整体替换：resolve 后清空 → 徽标熄灭
+    emit({ type: 'confirmations-updated', sessionId: 'session-delegation', confirmations: [] })
+    expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(false)
+  })
+
+  it('session-created（委派会话落盘，W3）：打开的项目匹配时刷新会话列表', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+    mockedListSessions.mockClear()
+
+    // 未打开项目（currentProject 为空）：不刷新
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1' })
+    expect(mockedListSessions).not.toHaveBeenCalled()
+
+    // 打开的项目与事件匹配：刷新列表（委派会话在主会话运行中创建，列表要能看到）
+    const projectStore = useProjectStore()
+    projectStore.currentProject = { id: 'project-1' } as never
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1' })
+    expect(mockedListSessions).toHaveBeenCalledWith('project-1')
   })
 })

@@ -2,6 +2,7 @@ import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { ModelView } from '../core/agent/model-view'
 import type { AgentRoleId } from '../core/agent/roles'
+import type { DelegationSessionRunner } from '../core/agent/element-manager'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import type { ChangeDiff, FileChange } from '../core/tools/types'
 
@@ -271,6 +272,11 @@ export type ChatTurnInput = {
   confirm?: ConfirmHandler
   /** 联网搜索匿名身份（app 层 localStorage UUID），透传到工具运行时（托管档绿灯配额键）。 */
   webClientId?: string
+  /**
+   * 委派会话驱动器（service 层实现并注入）：主智能体的 DelegateToElementManager
+   * 工具靠它创建并驱动特化角色真会话。未注入时该工具直接报错（测试/只读场景）。
+   */
+  runDelegationSession?: DelegationSessionRunner
 }
 
 export type ChatTurnResult = {

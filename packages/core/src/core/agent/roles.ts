@@ -6,12 +6,12 @@ import {
   createElementManagerTools,
   createDelegateToElementManagerTool,
   mergeElementManagerOverrides,
+  type DelegationSessionRunner,
 } from './element-manager'
 import { readElementSchema } from '../fs/project-fs'
 import { hashContent } from '../util/hash'
 import { insertAfterSystem, replaceMessage, type ModelView } from './model-view'
 import type { AgentMessage } from './messages'
-import type { ConfirmHandler, TaggedToolExecutionEvent } from './tool-execution'
 import type { ChatSessionState, ChatTargetContext } from '../../types/chat'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
@@ -28,12 +28,11 @@ import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 /** 角色 id：会话 agent 字段的取值；未指定（缺省）即主角色。 */
 export type AgentRoleId = 'main' | 'element-manager'
 
-/** 工具面组装的会话层运行态（confirm/signal/事件转发是会话层闭包，不进 ToolRuntime）。 */
+/** 工具面组装的会话层运行态（signal/委派会话驱动器是会话层闭包，不进 ToolRuntime）。 */
 export type RoleToolContext = {
-  confirm?: ConfirmHandler
   signal?: AbortSignal
-  /** 子代理工具事件外发（主角色委派工具转发内层事件；session 层转聊天消息） */
-  onSubagentEvent?: (event: TaggedToolExecutionEvent) => void
+  /** 委派会话驱动器（service 层实现并注入）：主角色的委派工具靠它创建并驱动特化角色真会话。 */
+  runDelegationSession?: DelegationSessionRunner
 }
 
 /** 角色专属约束文档：以 user-role reminder 恒注入的守则文件（要素管理员的 ELEMENT.md）。 */
@@ -85,7 +84,7 @@ const mainRole: AgentRoleProfile = {
   createTools(context = {}) {
     return {
       ...createAgentTools(),
-      // 委派工具是主角色专属（可把任务委派给其他角色）；confirm/signal/事件转发为会话层闭包
+      // 委派工具是主角色专属（可把任务委派给其他角色）；委派会话驱动器为 service 层注入的闭包
       DelegateToElementManager: createDelegateToElementManagerTool(context),
     }
   },

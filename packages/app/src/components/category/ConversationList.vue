@@ -6,6 +6,8 @@ import { AGENT_ROLE_META } from '../../constants/agent-roles'
 const props = defineProps<{
   sessions: ChatSessionSummaryView[]
   activeSessionId: string | null
+  /** 有待确认卡片的会话 id 集（徽标；委派中的要素管理员会话等用户打开确认） */
+  pendingConfirmationIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -154,7 +156,14 @@ function formatRelativeTime(iso: string): string {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" />
             </svg>
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm">{{ session.title }}</p>
+              <div class="flex items-center gap-1.5">
+                <p class="truncate text-sm">{{ session.title }}</p>
+                <span
+                  v-if="pendingConfirmationIds?.has(session.sessionId)"
+                  class="inline-flex shrink-0 items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] leading-none text-amber-300"
+                  title="该会话有等待确认的写操作，点开处理"
+                >待确认</span>
+              </div>
               <p class="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
                 <span>{{ formatRelativeTime(session.updatedAt) }}</span>
                 <span>·</span>

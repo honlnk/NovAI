@@ -35,7 +35,8 @@ import type {
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
 
-type SessionEvent =
+/** driver 运行中的会话事件（service 层转发为 AgentUiEvent 用；type 随事件携带 sessionId 路由）。 */
+export type SessionEvent =
   | { type: 'message'; message: ChatMessage; session: ChatSessionState }
   /** 模型流式输出的文本增量（瞬态渲染态，不落盘）；同一条 assistant 消息共享稳定 messageId。 */
   | { type: 'message-delta'; messageId: string; text: string }
@@ -329,12 +330,11 @@ async function runDriverTurn(options: {
   }
   const requestMessages = toRequestMessages(modelView)
   /**
-   * 工具事件 → 显示层消息（含改动账本累积）。事件归属：委派工具透传的内层事件
-   * 自带 agent；非主角色会话（直聊/委派）的本体事件归属会话角色。两者都带 agent 时，
-   * 渲染层折叠为嵌套角色任务组。
+   * 工具事件 → 显示层消息（含改动账本累积）。事件归属：非主角色会话（直聊/委派）
+   * 的本体事件归属会话角色，渲染层据此分组；主会话事件无归属（委派过程在委派会话里）。
    */
-  const resolveAgentTag = (event: TaggedToolExecutionEvent): NonNullable<TaggedToolExecutionEvent['agent']> | undefined =>
-    event.agent ?? (session.agent && session.agent !== 'main' ? session.agent : undefined)
+  const sessionAgentTag: NonNullable<TaggedToolExecutionEvent['agent']> | undefined =
+    session.agent && session.agent !== 'main' ? session.agent : undefined
   const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
     if (event.type === 'tool-call') {
       pushMessage(
@@ -346,7 +346,7 @@ async function runDriverTurn(options: {
           toolName: event.call.name,
           inputSummary: event.inputSummary,
           toolCallId: event.call.id,
-          ...(resolveAgentTag(event) ? { agent: resolveAgentTag(event)! } : {}),
+          ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           createdAt: new Date().toISOString(),
         },
         onEvent,
@@ -358,7 +358,6 @@ async function runDriverTurn(options: {
       // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
       // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
       // 非主角色会话（直聊/委派）的写入同 runId 归本轮面板，记录带 agent 归属标记。
-      const agentTag = resolveAgentTag(event)
       if (event.ok && event.fileChange) {
         session.changeLedger = [
           ...(session.changeLedger ?? []),
@@ -368,7 +367,7 @@ async function runDriverTurn(options: {
             at: new Date().toISOString(),
             change: event.fileChange,
             ...(event.diff ? { diff: event.diff } : {}),
-            ...(agentTag ? { agent: agentTag } : {}),
+            ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           },
         ]
       }
@@ -383,7 +382,7 @@ async function runDriverTurn(options: {
           ok: event.ok,
           resultSummary: event.resultSummary,
           toolCallId: event.call.id,
-          ...(agentTag ? { agent: agentTag } : {}),
+          ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           createdAt: new Date().toISOString(),
         },
         onEvent,
@@ -392,11 +391,10 @@ async function runDriverTurn(options: {
   }
 
   // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具；要素管理员 = 白名单 + 路径闸。
-  // confirm/signal/事件转发是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
+  // signal 与委派会话驱动器是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
   const tools = role.createTools({
-    confirm: input.confirm,
     signal,
-    onSubagentEvent: appendToolEventMessage,
+    runDelegationSession: input.runDelegationSession,
   })
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false

@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import {
   buildElementManagerSystemPrompt,
   buildElementSchemaReminder,
+  buildElementManagerTaskText,
   createDelegateToElementManagerTool,
   createElementManagerTools,
   mergeElementManagerOverrides,
@@ -10,47 +11,17 @@ import {
 import { PROJECT_STRUCTURE_SECTION } from './prompt'
 import { isAgentToolName } from './tools'
 import { executeAgentTool } from './tool-execution'
-import type { TaggedToolExecutionEvent, WriteConfirmationRequest } from './tool-execution'
+import type { DelegationSessionResult } from './element-manager'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
 /**
- * 要素管理员子代理（委派式，一次性上下文）测试：
+ * 要素管理员（角色机制 W3 起委派会话化）测试：
  * - system 五段分层（身份含模型名 + 项目结构共用段 + 工具规则 + Notes + 汇报格式，升级 W2）
- * - ELEMENT.md 以 user-role `<system-reminder>` 恒注入（D2/D3），不再拼进 system
+ * - ELEMENT.md 以 user-role `<system-reminder>` 恒注入（D2/D3，机制在 roles.ts 测）
  * - 工具白名单 + elements/ 写路径闸（运行层强制）
- * - 委派端到端（fetch stub）：主 Agent 调 DelegateToElementManager → 要素管理员独立请求 → 汇报回灌
- * 全链只 stub fetch（SSE 编排），query / 工具执行 / 确认链全真实（照 session-driver.test.ts 模式）。
+ * - 委派工具是薄壳：task/scope/project/signal 透传给注入的委派会话驱动器（service 层实现，
+ *   端到端见 agent-service.delegation.test.ts）
  */
-
-/** 假项目句柄：只支持 readElementSchema 的读取路径（prompts/ELEMENT.md）。 */
-function fakeProject(elementSchema: string | null): ProjectSnapshot {
-  return {
-    id: 'proj-elementManager',
-    name: '要素管理员测试项目',
-    config: stubConfig,
-    handle: {
-      async getDirectoryHandle(name: string) {
-        if (name !== 'prompts') {
-          throw new DOMException(`Not found: ${name}`, 'NotFoundError')
-        }
-        return {
-          async getFileHandle(fileName: string) {
-            if (elementSchema === null || fileName !== 'ELEMENT.md') {
-              throw new DOMException(`Not found: ${fileName}`, 'NotFoundError')
-            }
-            return {
-              kind: 'file',
-              name: fileName,
-              async getFile() {
-                return new File([elementSchema], fileName, { type: 'text/markdown' })
-              },
-            }
-          },
-        }
-      },
-    },
-  } as unknown as ProjectSnapshot
-}
 
 const stubConfig = {
   llm: { baseUrl: 'https://example.com', apiKey: 'key', model: 'model' },
@@ -60,6 +31,16 @@ const stubConfig = {
     compressionKeepRecentTurns: 5,
   },
 } as unknown as ProjectConfig
+
+/** 最小项目快照：委派工具只把 project 原样透传给 runner，不读文件。 */
+function fakeProject(): ProjectSnapshot {
+  return {
+    id: 'proj-elementManager',
+    name: '要素管理员测试项目',
+    config: stubConfig,
+    handle: {},
+  } as unknown as ProjectSnapshot
+}
 
 describe('buildElementManagerSystemPrompt', () => {
   it('五段分层：身份（含模型名）+ 项目结构 + 工具规则 + Notes + 汇报格式，依序排列', () => {
@@ -192,208 +173,131 @@ describe('isAgentToolName', () => {
   })
 })
 
-// ---------- 委派端到端（fetch stub） ----------
+// ---------- 委派工具（薄壳：透传给注入的委派会话驱动器） ----------
 
-type FetchCall = {
-  url: string
-  model: string
-  messages: Array<{ role: string; content?: string | null }>
-  toolNames: string[]
-}
-
-let fetchCalls: FetchCall[] = []
-let fetchHandler: (call: FetchCall, index: number) => Response
-
-function sseResponse(lines: string[]): Response {
-  const text = lines.map((line) => `data: ${line}\n\n`).join('\n') + 'data: [DONE]\n\n'
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text))
-      controller.close()
-    },
-  })
-  return new Response(stream, { status: 200 })
-}
-
-function toolCallSse(id: string, name: string, args: Record<string, unknown>): Response {
-  return sseResponse([
-    JSON.stringify({
-      choices: [{
-        delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args) } }] },
-        finish_reason: 'tool_calls',
-      }],
-    }),
-  ])
-}
-
-function textSse(text: string): Response {
-  return sseResponse([
-    JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] }),
-  ])
-}
-
-beforeEach(() => {
-  fetchCalls = []
-  fetchHandler = () => textSse('默认回答')
-  vi.stubGlobal('fetch', vi.fn(async (url: unknown, init?: { body?: string }) => {
-    const body = JSON.parse(init?.body ?? '{}')
-    const call: FetchCall = {
-      url: String(url),
-      model: body.model ?? '',
-      messages: body.messages ?? [],
-      toolNames: (body.tools ?? []).map((tool: { function?: { name?: string } }) => tool.function?.name),
-    }
-    fetchCalls.push(call)
-    return fetchHandler(call, fetchCalls.length - 1)
-  }))
-})
-
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
-describe('DelegateToElementManager 委派端到端', () => {
-  it('主 Agent 调委派 → 要素管理员独立请求（分层 system + ELEMENT.md reminder、白名单工具面）→ 汇报回灌主 Agent', async () => {
-    const schema = '# 我的要素规范\n\n一人一文件。'
-    fetchHandler = (_call, index) => {
-      if (index === 0) {
-        // 要素管理员第一轮：调一个只读工具（在假句柄上会失败回灌，循环照常继续）
-        return toolCallSse('t-elementManager-1', 'ListDirectory', {})
-      }
-      return textSse('## 改动文件清单\n\n- 无改动样例汇报正文')
-    }
-
-    const subagentEvents: TaggedToolExecutionEvent[] = []
-    const outerEvents: TaggedToolExecutionEvent[] = []
-    const delegate = createDelegateToElementManagerTool({
-      onSubagentEvent: (event) => subagentEvents.push(event),
+describe('createDelegateToElementManagerTool', () => {
+  it('run 把 task/scope/project/signal 原样透传给 runner；结果经 formatResult 回灌主 Agent', async () => {
+    const project = fakeProject()
+    const signal = new AbortController().signal
+    let received: Record<string, unknown> | undefined
+    const tool = createDelegateToElementManagerTool({
+      signal,
+      runDelegationSession: async (input) => {
+        received = { ...input }
+        return {
+          sessionId: 'session-em-1',
+          report: '## 改动文件清单\n\n- elements/characters/角色甲.md（新建）',
+          aborted: false,
+          toolCallCount: 3,
+        }
+      },
     })
+
+    // 委派是长任务，串行执行；工具本体不直接写文件
+    expect(tool.isReadOnly).toBe(true)
+    expect(tool.isConcurrencySafe).toBe(false)
 
     const result = await executeAgentTool({
       call: {
         id: 'c-delegate-1',
         name: 'DelegateToElementManager',
-        input: { task: '管理第 12 章涉及的要素' },
+        input: { task: '整理第 12 章新增人物', scope: 'elements/characters/' },
         createdAt: new Date().toISOString(),
       },
-      project: fakeProject(schema),
-      tools: { DelegateToElementManager: delegate },
-      onEvent: (event) => outerEvents.push(event),
+      project,
+      tools: { DelegateToElementManager: tool },
     })
 
-    // 委派结果回灌主 Agent：汇报全文可见
+    expect(received).toMatchObject({
+      task: '整理第 12 章新增人物',
+      scope: 'elements/characters/',
+    })
+    expect((received as { project?: ProjectSnapshot } | undefined)?.project).toBe(project)
+    expect((received as { signal?: AbortSignal } | undefined)?.signal).toBe(signal)
+
+    // 汇报全文 + 会话句柄都回灌给主 Agent
     expect(result.content).toContain('要素管理完成')
-    expect(result.content).toContain('无改动样例汇报正文')
-
-    // 要素管理员的两次模型请求
-    expect(fetchCalls.length).toBe(2)
-
-    // system = 五段分层（身份含模型名 + 项目结构 + 工具规则 + Notes + 汇报格式），
-    // 且不再含 ELEMENT.md 内容（W2 D2：规范改走 user-role reminder）
-    const systemMessage = fetchCalls[0]!.messages.find((message) => message.role === 'system')
-    expect(systemMessage?.content).toContain('你是 NovAI 要素管理员，一个使用 model 模型驱动的子智能体')
-    expect(systemMessage?.content).toContain(PROJECT_STRUCTURE_SECTION)
-    expect(systemMessage?.content).toContain('Notes:')
-    expect(systemMessage?.content).toContain('## 改动文件清单')
-    expect(systemMessage?.content).not.toContain('# 我的要素规范')
-    expect(systemMessage?.content).not.toContain('【本书要素规范')
-
-    // user 第一条是 ELEMENT.md reminder（恒注入，含全文）；最后一条是任务与范围
-    const userMessages = fetchCalls[0]!.messages.filter((message) => message.role === 'user')
-    expect(userMessages[0]?.content).toContain('<system-reminder>')
-    expect(userMessages[0]?.content).toContain('以下是本书要素规范（prompts/ELEMENT.md）')
-    expect(userMessages[0]?.content).toContain('# 我的要素规范')
-    expect(userMessages[userMessages.length - 1]?.content).toContain('管理第 12 章涉及的要素')
-    expect(userMessages[userMessages.length - 1]?.content).toContain('整个 elements/ 要素库')
-
-    // 要素管理员工具面：白名单七工具（W3 起 RenameFile 已放开），无委派工具（不嵌套）、无删除/历史/Web
-    expect(fetchCalls[0]!.toolNames.sort()).toEqual(
-      ['CreateFile', 'EditFile', 'FindFiles', 'ListDirectory', 'RagSearch', 'ReadFile', 'RenameFile'],
-    )
-
-    // 要素管理员内层工具事件带 element-manager 归属标记（session 层据此折叠嵌套任务组）
-    expect(subagentEvents.length).toBeGreaterThanOrEqual(2)
-    expect(subagentEvents.every((event) => event.agent === 'element-manager')).toBe(true)
-    expect(subagentEvents.some((event) => event.type === 'tool-call')).toBe(true)
-    expect(subagentEvents.some((event) => event.type === 'tool-result')).toBe(true)
-
-    // 外层（主 Agent 执行面）只看到委派工具自身的事件，无 agent 标记
-    expect(outerEvents.length).toBeGreaterThanOrEqual(2)
-    expect(outerEvents.every((event) => event.agent === undefined)).toBe(true)
+    expect(result.content).toContain('角色甲.md（新建）')
+    expect(result.content).toContain('session-em-1')
+    expect(result.content).toContain('完整过程保存在要素管理员会话')
   })
 
-  it('ELEMENT.md 缺失：reminder 附缺失提示，不阻塞运行', async () => {
-    fetchHandler = () => textSse('## 改动文件清单\n\n- 无')
-
-    const delegate = createDelegateToElementManagerTool({})
-    await executeAgentTool({
-      call: {
-        id: 'c-delegate-missing', name: 'DelegateToElementManager',
-        input: { task: '管理全库' }, createdAt: new Date().toISOString(),
-      },
-      project: fakeProject(null),
-      tools: { DelegateToElementManager: delegate },
-    })
-
-    expect(fetchCalls.length).toBe(1)
-    const userMessages = fetchCalls[0]!.messages.filter((message) => message.role === 'user')
-    expect(userMessages[0]?.content).toContain('<system-reminder>')
-    expect(userMessages[0]?.content).toContain('ELEMENT.md 缺失')
-  })
-
-  it('要素管理员写确认带「要素管理」标签（与主 Agent 共用确认链，归属可辨）', async () => {
-    const confirmRequests: WriteConfirmationRequest[] = []
-    fetchHandler = (_call, index) => {
-      if (index === 0) {
-        // CreateFile 是结构操作：档位判定 ask → 走确认（写入在假句柄上会失败，确认链已验证）
-        return toolCallSse('t-elementManager-2', 'CreateFile', {
-          path: 'elements/characters/角色甲.md',
-          content: '---\nname: 角色甲\n---\n',
-        })
-      }
-      return textSse('## 改动文件清单\n\n- elements/characters/角色甲.md（新建）')
-    }
-
-    const delegate = createDelegateToElementManagerTool({
-      confirm: async (request) => {
-        confirmRequests.push(request)
-        return { accepted: true }
-      },
-    })
-
+  it('runner 未注入：run 报「委派运行时未注入」（会话层装配缺失的防御）', async () => {
+    const tool = createDelegateToElementManagerTool({})
     const result = await executeAgentTool({
       call: {
-        id: 'c-delegate-2',
+        id: 'c-delegate-missing-runner',
         name: 'DelegateToElementManager',
-        input: { task: '补建角色甲人物卡', scope: 'elements/characters/' },
+        input: { task: '管理全库' },
         createdAt: new Date().toISOString(),
       },
-      project: fakeProject('# 规范'),
-      tools: { DelegateToElementManager: delegate },
+      project: fakeProject(),
+      tools: { DelegateToElementManager: tool },
     })
-
-    expect(confirmRequests.length).toBe(1)
-    expect(confirmRequests[0]!.agentLabel).toBe('要素管理')
-    expect(confirmRequests[0]!.confirmation.kind).toBe('create')
-    // 确认被接受后工具照常执行（假句柄上写入失败回灌，循环继续），最终拿到完整汇报
-    expect(result.content).toContain('角色甲.md（新建）')
+    expect(result.content).toContain('委派运行时未注入')
   })
 
-  it('task 为空字符串被参数校验拒绝', async () => {
-    const delegate = createDelegateToElementManagerTool({})
+  it('aborted 结果：formatResult 带停止提示，summarize 同步降级', async () => {
+    const abortedResult: DelegationSessionResult = {
+      sessionId: 'session-em-2',
+      report: '## 改动文件清单\n\n- 部分完成',
+      aborted: true,
+      toolCallCount: 2,
+    }
+    const tool = createDelegateToElementManagerTool({
+      runDelegationSession: async () => abortedResult,
+    })
     const result = await executeAgentTool({
       call: {
-        id: 'c-delegate-3',
+        id: 'c-delegate-aborted',
+        name: 'DelegateToElementManager',
+        input: { task: '管理全库' },
+        createdAt: new Date().toISOString(),
+      },
+      project: fakeProject(),
+      tools: { DelegateToElementManager: tool },
+    })
+    expect(result.content).toContain('要素管理任务被用户停止')
+    expect(result.content).toContain('部分完成')
+    expect(tool.core.summarizeOutput(abortedResult)).toContain('被停止')
+    expect(tool.core.summarizeInput({ task: '整理人物', scope: 'elements/characters/' }))
+      .toContain('范围：elements/characters/')
+  })
+
+  it('task 为空字符串被参数校验拒绝（不触达 runner）', async () => {
+    let runnerCalled = false
+    const tool = createDelegateToElementManagerTool({
+      runDelegationSession: async () => {
+        runnerCalled = true
+        return { sessionId: 's', report: '', aborted: false, toolCallCount: 0 }
+      },
+    })
+    const result = await executeAgentTool({
+      call: {
+        id: 'c-delegate-empty-task',
         name: 'DelegateToElementManager',
         input: { task: '   ' },
         createdAt: new Date().toISOString(),
       },
-      project: fakeProject('# 规范'),
-      tools: { DelegateToElementManager: delegate },
+      project: fakeProject(),
+      tools: { DelegateToElementManager: tool },
     })
     expect(result.content).toContain('task 不能为空')
-    // 校验失败不发起任何模型请求
-    expect(fetchCalls.length).toBe(0)
+    expect(runnerCalled).toBe(false)
+  })
+})
+
+describe('buildElementManagerTaskText', () => {
+  it('任务 + 显式范围 + 固定收尾句', () => {
+    const text = buildElementManagerTaskText('整理第 12 章新增人物', 'elements/characters/')
+    expect(text).toContain('管理任务：整理第 12 章新增人物')
+    expect(text).toContain('管理范围：elements/characters/')
+    expect(text.endsWith('请按要素规范管理，结束时输出固定结构汇报。')).toBe(true)
+  })
+
+  it('范围缺省为整个 elements/ 要素库', () => {
+    const text = buildElementManagerTaskText('管理全库', undefined)
+    expect(text).toContain('管理范围：整个 elements/ 要素库')
   })
 })
 
@@ -460,177 +364,5 @@ describe('mergeElementManagerOverrides', () => {
     } as ProjectConfig)
     // 只覆盖模型不覆盖档位 → 档位动态继承主值（review）
     expect(inherited.settings.permissionPreset).toBe('review')
-  })
-})
-
-describe('要素管理员独立配置端到端（覆盖生效）', () => {
-  it('要素管理员覆盖模型：请求打到覆盖 baseUrl/model，身份段模型名随覆盖值', async () => {
-    fetchHandler = () => textSse('## 改动文件清单\n\n- 无')
-
-    const config = {
-      ...stubConfig,
-      elementManager: {
-        llm: {
-          baseUrl: 'https://elementManager.example.com/v1',
-          apiKey: 'elementManager-key',
-          model: 'elementManager-model',
-          protocol: 'openai',
-        },
-      },
-    } as ProjectConfig
-    const delegate = createDelegateToElementManagerTool({})
-    await executeAgentTool({
-      call: {
-        id: 'c-delegate-4', name: 'DelegateToElementManager',
-        input: { task: '管理全库' }, createdAt: new Date().toISOString(),
-      },
-      project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToElementManager: delegate },
-    })
-
-    expect(fetchCalls.length).toBe(1)
-    expect(fetchCalls[0]!.url).toBe('https://elementManager.example.com/v1/chat/completions')
-    expect(fetchCalls[0]!.model).toBe('elementManager-model')
-    // 身份段模型名跟随合成后的覆盖模型（W2：与主 Agent 同款句式）
-    const systemMessage = fetchCalls[0]!.messages.find((message) => message.role === 'system')
-    expect(systemMessage?.content).toContain('使用 elementManager-model 模型驱动的子智能体')
-  })
-
-  it('要素管理员档位 material：EditFile 改 elements 正文静默执行，不弹确认卡', async () => {
-    const confirmRequests: WriteConfirmationRequest[] = []
-    fetchHandler = (_call, index) => {
-      if (index === 0) {
-        return toolCallSse('t-w1a', 'EditFile', {
-          path: 'elements/characters/角色甲.md', oldText: '旧', newText: '新',
-        })
-      }
-      return textSse('## 改动文件清单\n\n- 无')
-    }
-
-    const config = {
-      ...stubConfig,
-      settings: { ...stubConfig.settings, permissionPreset: 'review' },
-      elementManager: { permissionPreset: 'material' },
-    } as unknown as ProjectConfig
-    const delegate = createDelegateToElementManagerTool({
-      confirm: (request) => {
-        confirmRequests.push(request)
-        return Promise.resolve({ accepted: true })
-      },
-    })
-    await executeAgentTool({
-      call: {
-        id: 'c-delegate-5', name: 'DelegateToElementManager',
-        input: { task: '管理' }, createdAt: new Date().toISOString(),
-      },
-      project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToElementManager: delegate },
-    })
-
-    // 主档位 review 本会全弹卡；要素管理员覆盖 material 后，elements 内容修改静默放行（收紧→放宽方向）
-    expect(confirmRequests.length).toBe(0)
-  })
-
-  it('要素管理员档位 review 收紧：主档位放行的修改也弹确认卡（双向生效）', async () => {
-    const confirmRequests: WriteConfirmationRequest[] = []
-    fetchHandler = (_call, index) => {
-      if (index === 0) {
-        return toolCallSse('t-w1b', 'EditFile', {
-          path: 'elements/characters/角色甲.md', oldText: '旧', newText: '新',
-        })
-      }
-      return textSse('## 改动文件清单\n\n- 无')
-    }
-
-    const config = {
-      ...stubConfig,
-      settings: { ...stubConfig.settings, permissionPreset: 'chapter-material' },
-      elementManager: { permissionPreset: 'review' },
-    } as unknown as ProjectConfig
-    const delegate = createDelegateToElementManagerTool({
-      confirm: (request) => {
-        confirmRequests.push(request)
-        return Promise.resolve({ accepted: true })
-      },
-    })
-    await executeAgentTool({
-      call: {
-        id: 'c-delegate-6', name: 'DelegateToElementManager',
-        input: { task: '管理' }, createdAt: new Date().toISOString(),
-      },
-      project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToElementManager: delegate },
-    })
-
-    // 主档位 chapter-material 本会静默；要素管理员覆盖 review 后弹卡——confirm 闭包方案做不到的方向（D1）
-    expect(confirmRequests.length).toBe(1)
-    expect(confirmRequests[0]!.agentLabel).toBe('要素管理')
-  })
-
-  it('要素管理员档位 full：结构操作（CreateFile）也静默', async () => {
-    const confirmRequests: WriteConfirmationRequest[] = []
-    fetchHandler = (_call, index) => {
-      if (index === 0) {
-        return toolCallSse('t-w1c', 'CreateFile', {
-          path: 'elements/entities/青霜剑.md', content: '# 青霜剑',
-        })
-      }
-      return textSse('## 改动文件清单\n\n- 无')
-    }
-
-    const config = {
-      ...stubConfig,
-      settings: { ...stubConfig.settings, permissionPreset: 'review' },
-      elementManager: { permissionPreset: 'full' },
-    } as unknown as ProjectConfig
-    const delegate = createDelegateToElementManagerTool({
-      confirm: (request) => {
-        confirmRequests.push(request)
-        return Promise.resolve({ accepted: true })
-      },
-    })
-    await executeAgentTool({
-      call: {
-        id: 'c-delegate-7', name: 'DelegateToElementManager',
-        input: { task: '管理' }, createdAt: new Date().toISOString(),
-      },
-      project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToElementManager: delegate },
-    })
-
-    expect(confirmRequests.length).toBe(0)
-  })
-
-  it('无覆盖块：要素管理员档位跟随主档位（继承基线，主 review → 全弹卡）', async () => {
-    const confirmRequests: WriteConfirmationRequest[] = []
-    fetchHandler = (_call, index) => {
-      if (index === 0) {
-        return toolCallSse('t-w1d', 'EditFile', {
-          path: 'elements/characters/角色甲.md', oldText: '旧', newText: '新',
-        })
-      }
-      return textSse('## 改动文件清单\n\n- 无')
-    }
-
-    const config = {
-      ...stubConfig,
-      settings: { ...stubConfig.settings, permissionPreset: 'review' },
-    } as unknown as ProjectConfig
-    const delegate = createDelegateToElementManagerTool({
-      confirm: (request) => {
-        confirmRequests.push(request)
-        return Promise.resolve({ accepted: true })
-      },
-    })
-    await executeAgentTool({
-      call: {
-        id: 'c-delegate-8', name: 'DelegateToElementManager',
-        input: { task: '管理' }, createdAt: new Date().toISOString(),
-      },
-      project: { ...fakeProject('# 规范'), config },
-      tools: { DelegateToElementManager: delegate },
-    })
-
-    expect(confirmRequests.length).toBe(1)
   })
 })

@@ -320,6 +320,7 @@ function handleGoToSettings() {
         :active-outline-path="activeOutlinePath"
         :sessions="chatStore.sessions"
         :active-session-id="chatStore.activeSessionId"
+        :pending-confirmation-ids="chatStore.sessionsWithPendingConfirmations"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"

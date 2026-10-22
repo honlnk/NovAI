@@ -1,11 +1,13 @@
 import {
   createChatSession,
   enqueueChatMessage,
+  runChatDriver,
   wakeChatDriver,
   stopChatDriver,
   isChatDriverActive,
   DEFAULT_SESSION_TITLE,
   deriveSessionTitle,
+  type SessionEvent,
 } from '../core/chat/session'
 import {
   removeFromInbox,
@@ -25,9 +27,20 @@ import { readNovAiOverview, readOutlinePrompt, readSystemPrompt } from '../core/
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
-import { ELEMENT_MANAGER_TASK_PROMPT } from '../core/agent/element-manager'
+import {
+  ELEMENT_MANAGER_TASK_PROMPT,
+  buildElementManagerTaskText,
+  type DelegationSessionRunner,
+  type DelegationSessionResult,
+} from '../core/agent/element-manager'
 import type { FileChange, WriteConfirmation } from '../core/tools/types'
-import type { ChatMessage, ChatSessionState, ChatTargetContext, FileChangeRecord } from '../types/chat'
+import type {
+  ChatMessage,
+  ChatSessionState,
+  ChatTargetContext,
+  ChatTurnInput,
+  FileChangeRecord,
+} from '../types/chat'
 import type { ProjectSnapshot } from '../types/project'
 
 /**
@@ -77,12 +90,32 @@ const sessionMap = new Map<string, ChatSessionState>()
 const MAX_CACHED_SESSIONS = 16
 
 // 确认注册表：confirmationId -> resolve。UI 调 respondConfirmation 时取出来 resolve，
-// 唤醒在 confirm 回调里 await 的 Agent Loop。
+// 唤醒在 confirm 回调里 await 的 Agent Loop。条目带 sessionId：确认链按会话路由——
+// 委派会话与主会话各自的待确认互不影响（一个会话收敛/出错只清理自己的）。
 type PendingConfirmation = {
   projectId: string
+  sessionId: string
+  /** 确认卡视图快照（confirmations-updated 广播与会话徽标用） */
+  view: FileChangeConfirmationView
   resolve: (decision: { accepted: boolean }) => void
 }
 const confirmationMap = new Map<string, PendingConfirmation>()
+
+/** 某会话当前的待确认快照（按注册顺序）；confirmations-updated 事件的载荷。 */
+function snapshotPendingConfirmations(sessionId: string): FileChangeConfirmationView[] {
+  return [...confirmationMap.values()]
+    .filter((pending) => pending.sessionId === sessionId)
+    .map((pending) => pending.view)
+}
+
+/** 广播某会话的待确认快照（确认卡新增/被 resolve 后调用；会话列表徽标据此更新）。 */
+function broadcastSessionConfirmations(sessionId: string): void {
+  broadcastAgentEvent({
+    type: 'confirmations-updated',
+    sessionId,
+    confirmations: snapshotPendingConfirmations(sessionId),
+  })
+}
 
 /** 每个项目当前激活的会话 id；新建/切换/删除时维护。 */
 const activeSessionByProject = new Map<string, string>()
@@ -130,6 +163,7 @@ export function _clearSessionCacheForTest() {
   activeSessionByProject.clear()
   lastActiveFilePathByProject.clear()
   deletedSessionIds.clear()
+  confirmationMap.clear()
 }
 
 /** 测试专用：读取当前缓存内的 sessionId 列表（按 LRU 顺序，最近使用在末尾）。 */
@@ -433,6 +467,158 @@ type DriverTitleContext = {
 }
 
 /**
+ * 组装某会话一次运行的 turn input（主会话与委派会话共用）：角色配置合成
+ * （要素管理员的模型/权限档覆盖，每次取当时值、运行中定格；合成后的 project 快照让
+ * 权限判定与工具执行同步用该角色档位）+ 提示词家族读取 + 按会话路由的确认链。
+ * 指令走收件箱首批，driver 不直接消费 instruction。
+ */
+async function buildSessionTurnInput(input: {
+  project: ProjectSnapshot
+  session: ChatSessionState
+  /** 覆盖「最近入队时激活文件」回退（委派会话显式传 null：任务自包含，不吃主会话现场）。 */
+  activeFilePath?: string | null
+}): Promise<ChatTurnInput> {
+  const { project, session } = input
+
+  const role = getAgentRole(session.agent)
+  const effectiveConfig = role.mergeConfig?.(project.config) ?? project.config
+  const effectiveProject = effectiveConfig === project.config
+    ? project
+    : { ...project, config: effectiveConfig }
+
+  // 大纲与项目记忆：走 user-role 注入链路，特化角色是否注入由 runDriverTurn 按角色声明取舍
+  // （system 恒定对前缀缓存友好，记忆是背景可被用户当轮指令压过）。
+  const outlinePath = project.config.settings.activeOutlinePath ?? null
+  const outlineContent = await readOutlinePrompt(project.handle, outlinePath)
+  const novaiOverview = await readNovAiOverview(project.handle)
+  // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
+  // 非主角色会话的确认卡带角色标签（「要素管理员」），UI 区分请求方。
+  const confirm: ConfirmHandler = (request) =>
+    requestConfirmation(
+      session.sessionId,
+      project.id,
+      role.id === 'main' ? request : { ...request, agentLabel: role.displayName },
+    )
+
+  return {
+    // 指令走收件箱首批，driver 不直接消费 instruction/quote
+    instruction: '',
+    project: effectiveProject,
+    config: effectiveConfig,
+    systemPrompt: await readSystemPrompt(project.handle),
+    novaiOverview,
+    outline: { path: outlinePath, content: outlineContent },
+    activeFilePath: input.activeFilePath !== undefined
+      ? input.activeFilePath
+      : lastActiveFilePathByProject.get(project.id) ?? null,
+    confirm,
+  }
+}
+
+/**
+ * driver 运行事件转发器（主会话与委派会话共用）：流式 delta 原样广播（携会话 id 供
+ * UI 路由）、收件箱快照广播、账本高水位实时 file-changed、message 事件转 view 广播。
+ */
+function createSessionEventForwarder(session: ChatSessionState, ledgerBaseline: number) {
+  // file-changed 实时广播的高水位：message 事件到达时把账本新增段立即广播出去，
+  // 前端据此在运行中刷新文件树 / 重读打开的文件（旧实现攒到 driver-finish 批量补发）。
+  let emittedLedgerCount = ledgerBaseline
+  return (event: SessionEvent) => {
+    // 流式 delta 原样广播（携会话 id 供 UI 路由），不进 emitMessageEvent
+    if (event.type === 'message-delta') {
+      broadcastAgentEvent({
+        type: 'message-delta',
+        sessionId: session.sessionId,
+        messageId: event.messageId,
+        text: event.text,
+      })
+      return
+    }
+    if (event.type === 'message-reasoning-delta') {
+      broadcastAgentEvent({
+        type: 'message-reasoning-delta',
+        sessionId: session.sessionId,
+        messageId: event.messageId,
+        text: event.text,
+      })
+      return
+    }
+    // 收件箱被抽干（首批 claim / steer 抽干点）→ 全量快照广播
+    if (event.type === 'inbox-updated') {
+      broadcastQueueUpdated(event.session)
+      return
+    }
+    // 账本追加紧排在 tool-result 的 pushMessage 之前（session.ts），故 message 事件
+    // 到达时新记录必已在账本里：按高水位把新增段立即广播，不等整轮收敛。
+    const ledger = event.session.changeLedger ?? []
+    for (; emittedLedgerCount < ledger.length; emittedLedgerCount += 1) {
+      broadcastAgentEvent({
+        type: 'file-changed',
+        sessionId: session.sessionId,
+        file: toFileChangeRecordView(ledger[emittedLedgerCount]),
+      })
+    }
+    emitMessageEvent(event.message, event.session.sessionId, event.session.changeLedger)
+  }
+}
+
+/**
+ * driver 成功收敛的统一收尾（wake 生命周期与委派会话共用）：已删会话静默丢弃 →
+ * 标题派生 → 落盘 → run-finish。file-changed 已在运行中按高水位实时广播过，
+ * 收尾不补发；run-finish 的 session.changedFiles 仍是权威清单，前端收到后整体覆盖。
+ */
+async function finalizeSuccessfulRun(options: {
+  project: ProjectSnapshot
+  session: ChatSessionState
+  ledgerBaseline: number
+  titleContext?: DriverTitleContext
+}): Promise<void> {
+  const { project, session, ledgerBaseline } = options
+
+  // 会话已删（deleteSession 停止 driver 后的优雅收尾）：静默丢弃——
+  // 此时 saveSession 会把刚删的会话文件复活，广播也会指向不存在的会话。
+  if (deletedSessionIds.has(session.sessionId)) {
+    rejectPendingSessionConfirmations(session.sessionId)
+    return
+  }
+
+  // 标题派生（首个含用户消息的 turn）
+  const titleContext = options.titleContext
+  if (titleContext?.hadNoUserMessage && titleContext.titleBeforeRun === DEFAULT_SESSION_TITLE) {
+    session.title = deriveSessionTitle(titleContext.firstUserText)
+  }
+  cacheSession(session)
+  await saveSession(project, session)
+
+  const turnChanges = (session.changeLedger ?? []).slice(ledgerBaseline).map(toFileChangeRecordView)
+  const result: RunAgentTurnResult = {
+    projectId: project.id,
+    sessionId: session.sessionId,
+    targetPath: session.currentTarget?.primaryPath,
+    turnChanges,
+    sessionChangedFileCount: countSessionChangedFiles(session),
+    session: toChatSessionView(session),
+  }
+  broadcastAgentEvent({ type: 'run-finish', sessionId: session.sessionId, result })
+}
+
+/** driver 出错的统一收尾：清理该会话未决确认（避免注册表泄漏/UI 卡等待态）→ 落盘 → run-error。 */
+async function handleFailedRun(options: {
+  project: ProjectSnapshot
+  session: ChatSessionState
+  error: unknown
+}): Promise<void> {
+  const { project, session } = options
+  rejectPendingSessionConfirmations(session.sessionId)
+  // 会话已删：静默丢弃（saveSession 会复活刚删的会话文件，广播也会指向不存在的会话）。
+  if (deletedSessionIds.has(session.sessionId)) {
+    return
+  }
+  await saveSession(project, session)
+  broadcastAgentEvent({ type: 'run-error', sessionId: session.sessionId, error: toNovAiError(options.error) })
+}
+
+/**
  * 唤醒指定会话的 driver（组装本 wake 的 input 后交给 core 的 wakeChatDriver）。
  * 立即返回（fire-and-forget）；driver 生命周期事件经 onLifecycle 转成 run-start/run-finish/run-error 广播。
  */
@@ -443,132 +629,105 @@ async function wakeSessionDriver(options: {
   webClientId?: string
 }): Promise<void> {
   const { project, session, titleContext } = options
-  const projectId = project.id
-
-  // 会话角色：运行配置按角色声明合成（要素管理员的模型/权限档覆盖，每次唤醒取当时值、
-  // 运行中定格）；合成后的 project 快照让权限判定与工具执行同步用该角色档位。
-  const role = getAgentRole(session.agent)
-  const effectiveConfig = role.mergeConfig?.(project.config) ?? project.config
-  const effectiveProject = effectiveConfig === project.config
-    ? project
-    : { ...project, config: effectiveConfig }
-
-  const systemPrompt = await readSystemPrompt(project.handle)
-  // 大纲（prompts/outlines/，W3 起改名+迁移）与项目记忆：走 user-role 注入链路（W2），
-  // 不再拼进 system——system 恒定对前缀缓存友好，记忆是背景可被用户当轮指令压过。
-  // 特化角色的装配（system.md/NovAI/大纲是否注入）由 runDriverTurn 按角色声明取舍。
-  const outlinePath = project.config.settings.activeOutlinePath ?? null
-  const outlineContent = await readOutlinePrompt(project.handle, outlinePath)
-  const novaiOverview = await readNovAiOverview(project.handle)
-  // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
-  // 非主角色会话的确认卡带角色标签（「要素管理员」），UI 区分请求方。
-  const confirm: ConfirmHandler = (request) =>
-    requestConfirmation(
-      session.sessionId,
-      projectId,
-      role.id === 'main' ? request : { ...request, agentLabel: role.displayName },
-    )
 
   // 账本基线：本次连续运行产生的记录 = 收尾时 slice(ledgerBaseline)（喂 turnChanges）
   const ledgerBaseline = session.changeLedger?.length ?? 0
-  // file-changed 实时广播的高水位：message 事件到达时把账本新增段立即广播出去，
-  // 前端据此在运行中刷新文件树 / 重读打开的文件（旧实现攒到 driver-finish 批量补发）。
-  let emittedLedgerCount = ledgerBaseline
+
+  const turnInput = await buildSessionTurnInput({ project, session })
 
   wakeChatDriver({
     session,
     input: {
-      // 指令走收件箱首批，driver 不直接消费 instruction/quote
-      instruction: '',
-      project: effectiveProject,
-      config: effectiveConfig,
-      systemPrompt,
-      novaiOverview,
-      outline: { path: outlinePath, content: outlineContent },
-      activeFilePath: lastActiveFilePathByProject.get(projectId) ?? null,
+      ...turnInput,
       // 匿名联网配额身份：沿 ChatTurnInput → ToolRuntime 链注入 WebSearch/WebFetch
       ...(options.webClientId ? { webClientId: options.webClientId } : {}),
-      confirm,
+      // 委派会话驱动器：主智能体的 DelegateToElementManager 靠它创建并驱动特化角色真会话
+      runDelegationSession: delegationSessionRunner,
     },
-    onEvent(event) {
-      // 流式 delta 原样广播（携会话 id 供 UI 路由），不进 emitMessageEvent
-      if (event.type === 'message-delta') {
-        broadcastAgentEvent({
-          type: 'message-delta',
-          sessionId: session.sessionId,
-          messageId: event.messageId,
-          text: event.text,
-        })
-        return
-      }
-      if (event.type === 'message-reasoning-delta') {
-        broadcastAgentEvent({
-          type: 'message-reasoning-delta',
-          sessionId: session.sessionId,
-          messageId: event.messageId,
-          text: event.text,
-        })
-        return
-      }
-      // 收件箱被抽干（首批 claim / steer 抽干点）→ 全量快照广播
-      if (event.type === 'inbox-updated') {
-        broadcastQueueUpdated(event.session)
-        return
-      }
-      // 账本追加紧排在 tool-result 的 pushMessage 之前（session.ts），故 message 事件
-      // 到达时新记录必已在账本里：按高水位把新增段立即广播，不等整轮收敛。
-      const ledger = event.session.changeLedger ?? []
-      for (; emittedLedgerCount < ledger.length; emittedLedgerCount += 1) {
-        broadcastAgentEvent({
-          type: 'file-changed',
-          sessionId: session.sessionId,
-          file: toFileChangeRecordView(ledger[emittedLedgerCount]),
-        })
-      }
-      emitMessageEvent(event.message, event.session.sessionId, event.session.changeLedger)
-    },
+    onEvent: createSessionEventForwarder(session, ledgerBaseline),
     onLifecycle(event) {
       if (event.type === 'driver-start') {
         broadcastAgentEvent({ type: 'run-start', runId: createRunId(), sessionId: session.sessionId })
         return
       }
       void (async () => {
-        // 会话已删（deleteSession 停止 driver 后的优雅收尾）：静默丢弃——
-        // 此时 saveSession 会把刚删的会话文件复活，广播也会指向不存在的会话。
-        if (deletedSessionIds.has(session.sessionId)) {
-          rejectPendingConfirmations(projectId)
-          return
-        }
         if (event.type === 'driver-error') {
-          // 出错时清理未决确认，避免注册表泄漏 / UI 卡在等待态。
-          rejectPendingConfirmations(projectId)
-          await saveSession(project, session)
-          broadcastAgentEvent({ type: 'run-error', sessionId: session.sessionId, error: toNovAiError(event.error) })
+          await handleFailedRun({ project, session, error: event.error })
           return
         }
-        // driver-finish：标题派生（首个含用户消息的 turn）→ 落盘 → run-finish
-        if (titleContext.hadNoUserMessage && titleContext.titleBeforeRun === DEFAULT_SESSION_TITLE) {
-          session.title = deriveSessionTitle(titleContext.firstUserText)
-        }
-        cacheSession(session)
-        await saveSession(project, session)
-
-        const turnChanges = (session.changeLedger ?? []).slice(ledgerBaseline).map(toFileChangeRecordView)
-        const result: RunAgentTurnResult = {
-          projectId,
-          sessionId: session.sessionId,
-          targetPath: session.currentTarget?.primaryPath,
-          turnChanges,
-          sessionChangedFileCount: countSessionChangedFiles(session),
-          session: toChatSessionView(session),
-        }
-
-        // file-changed 已在运行中按高水位实时广播过，收尾不再补发；run-finish 的
-        // session.changedFiles 仍是权威清单，前端收到后整体覆盖。
-        broadcastAgentEvent({ type: 'run-finish', sessionId: session.sessionId, result })
+        await finalizeSuccessfulRun({ project, session, ledgerBaseline, titleContext })
       })()
     },
   })
+}
+
+/**
+ * 委派会话驱动器（service 层实现，注入主角色的 ChatTurnInput）：委派 = 创建并驱动一个
+ * 要素管理员真会话。创建（落盘 + session-created 广播；不抢项目的激活会话位，用户仍停在
+ * 主会话）→ 任务入队 → runChatDriver 直接驱动到收敛（await；错误走 handleFailedRun）→
+ * finalizeSuccessfulRun 收尾 → 从会话消息里摘出汇报摘要返回给委派工具。
+ * 主 Agent 只拿摘要（不污染主上下文），完整过程留在委派会话里。
+ */
+const delegationSessionRunner: DelegationSessionRunner = async (input) => {
+  const { project, signal } = input
+  const taskText = buildElementManagerTaskText(input.task, input.scope)
+
+  // 创建并落盘委派会话：标题直接取任务首句（不等收尾派生），列表立即可读
+  const session = createChatSession(project.id, { agent: 'element-manager' })
+  session.title = deriveSessionTitle(input.task)
+  cacheSession(session)
+  await saveSession(project, session)
+  broadcastAgentEvent({ type: 'session-created', sessionId: session.sessionId, projectId: project.id })
+
+  // 任务入队（收件箱首批）→ 落盘 + 队列快照广播（用户此刻打开委派会话能看到排队中的任务）
+  enqueueChatMessage(session, 'next-turn', { text: taskText })
+  await saveSession(project, session)
+  broadcastQueueUpdated(session)
+
+  const ledgerBaseline = session.changeLedger?.length ?? 0
+  const turnInput = await buildSessionTurnInput({ project, session, activeFilePath: null })
+  broadcastAgentEvent({ type: 'run-start', runId: createRunId(), sessionId: session.sessionId })
+
+  try {
+    // 主 driver 的停止信号随 input 传入：用户停主会话时，委派会话一并优雅停止
+    await runChatDriver({
+      session,
+      input: { ...turnInput, ...(signal ? { signal } : {}) },
+      onEvent: createSessionEventForwarder(session, ledgerBaseline),
+    })
+  } catch (error) {
+    await handleFailedRun({ project, session, error })
+    return toDelegationResult(session, true)
+  }
+
+  await finalizeSuccessfulRun({ project, session, ledgerBaseline })
+  return toDelegationResult(session)
+}
+
+/** 从委派会话消息摘出运行结果：汇报 = 最后一条非空 assistant 文本，停止以末个 change-summary 为准。 */
+function toDelegationResult(session: ChatSessionState, failed = false): DelegationSessionResult {
+  let report = ''
+  let aborted = false
+  for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+    const message = session.messages[i]
+    if (!report && message.role === 'assistant' && message.kind === 'text' && message.text.trim()) {
+      report = message.text
+    }
+    if (!aborted && message.kind === 'change-summary') {
+      aborted = message.aborted === true
+    }
+    if (report && aborted) {
+      break
+    }
+  }
+  return {
+    sessionId: session.sessionId,
+    report: failed
+      ? `⚠️ 要素管理任务执行失败（详见要素管理员会话）${report ? `\n\n${report}` : ''}`
+      : report,
+    aborted,
+    toolCallCount: session.messages.filter((message) => message.kind === 'tool-call').length,
+  }
 }
 
 /**
@@ -610,10 +769,13 @@ function requestConfirmation(
     ...(request.agentLabel ? { agentLabel: request.agentLabel } : {}),
   }
 
-  broadcastAgentEvent({ type: 'confirmation-required', sessionId, request: view })
-
+  // 先注册后广播：监听方可能在事件回调里立即 respondConfirmation（测试/UI 即时响应），
+  // 注册必须先于 confirmation-required 广播可达。
   return new Promise<{ accepted: boolean }>((resolve) => {
-    confirmationMap.set(confirmationId, { projectId, resolve })
+    confirmationMap.set(confirmationId, { projectId, sessionId, view, resolve })
+    broadcastAgentEvent({ type: 'confirmation-required', sessionId, request: view })
+    // 待确认快照随注册广播：非激活会话（委派中的要素管理员会话）据此点亮列表徽标
+    broadcastSessionConfirmations(sessionId)
   })
 }
 
@@ -625,16 +787,18 @@ export function respondConfirmation(confirmationId: string, accepted: boolean) {
   }
   confirmationMap.delete(confirmationId)
   pending.resolve({ accepted })
+  broadcastSessionConfirmations(pending.sessionId)
 }
 
-/** 清理某项目的全部未决确认，按拒绝 resolve（出错/停止时调用）。 */
-function rejectPendingConfirmations(projectId: string) {
+/** 清理某会话的全部未决确认，按拒绝 resolve（该会话 driver 出错/被删/收敛异常时调用）。 */
+function rejectPendingSessionConfirmations(sessionId: string) {
   for (const [id, pending] of confirmationMap) {
-    if (pending.projectId === projectId) {
+    if (pending.sessionId === sessionId) {
       confirmationMap.delete(id)
       pending.resolve({ accepted: false })
     }
   }
+  broadcastSessionConfirmations(sessionId)
 }
 
 function toWriteConfirmationView(confirmation: WriteConfirmation): WriteConfirmationView {
