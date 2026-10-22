@@ -95,6 +95,8 @@ const elementManagerForm = reactive({
   reasoningEffort: '' as '' | 'off' | 'low' | 'high' | 'max',
   permissionOverride: false,
   permissionPreset: 'material' as 'review' | 'material' | 'full',
+  /** 整理提醒模板（入口重构 W3；'' = 默认模板），落 elementReminder 配置块 */
+  reminderTemplate: '',
 })
 
 const projectForm = reactive({
@@ -168,6 +170,7 @@ onMounted(async () => {
       reasoningEffort: elementManager?.llm?.reasoningEffort ?? '',
       permissionOverride: Boolean(elementManager?.permissionPreset),
       permissionPreset: elementManager?.permissionPreset ?? 'material',
+      reminderTemplate: config.elementReminder?.template ?? '',
     })
     const settings = config.settings
     if (settings) {
@@ -193,7 +196,13 @@ watch(rerankForm, () => scheduleSave({ rerank: { ...rerankForm } }))
 watch(completionForm, () => scheduleSave({ completion: { ...completionForm } }))
 watch(searchForm, () => scheduleSave({ search: { ...searchForm } }))
 watch(projectForm, () => scheduleSave({ settings: { ...projectForm } }))
-watch(elementManagerForm, () => scheduleSave({ elementManager: buildElementManagerPatch() }))
+watch(elementManagerForm, () =>
+  scheduleSave({
+    elementManager: buildElementManagerPatch(),
+    // 整理提醒模板在独立配置块（浅合并组）；'' 经 core normalize 落盘时剔除 = 回退默认模板
+    elementReminder: { template: elementManagerForm.reminderTemplate },
+  }),
+)
 
 watch(activeTab, (tab) => {
   try {

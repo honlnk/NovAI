@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
+import { checkElementReminder, markElementReminderShown } from '@novai/core/services/element-reminder-service'
 import { useChatStore } from '../../stores/chat'
 import { resolveSubmitMode } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
@@ -519,8 +520,63 @@ function handleSlashCommandSelect(id: SlashCommandId) {
 
 /**
  * 一键管理要素快捷入口已删（入口重构 W2：Ctrl/Cmd+Shift+G 退役）；
- * 输入框上方按钮由 W3 滑入式提醒接管，侧栏单击由 W4 直聊会话接管。
+ * 输入框上方按钮位由 W3 滑入式整理提醒接管，侧栏单击由 W4 直聊会话接管。
  */
+
+// ===== 要素整理提醒（入口重构 W3：距上次整理新增 ≥ 2 章时滑入） =====
+
+/** 提醒按钮是否滑入显示 */
+const isReminderVisible = ref(false)
+/** 点击提醒落输入框的完整草稿（模板已填充真实章节名） */
+const reminderDraft = ref('')
+let reminderCheckTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 阈值检测（防抖 500ms）：文件树变化或 Agent 运行结束时复查。运行中不弹——
+ * 批量写文件会让 mtime 抖动产生误判，且提醒也打断不了正在跑的任务。
+ * 检测失败静默：提醒是增值功能，不阻塞主链路。
+ */
+function scheduleReminderCheck() {
+  if (reminderCheckTimer) {
+    clearTimeout(reminderCheckTimer)
+  }
+  reminderCheckTimer = setTimeout(() => {
+    reminderCheckTimer = null
+    void checkElementReminder(props.projectId)
+      .then((check) => {
+        if (check.due && !chatStore.isRunning) {
+          reminderDraft.value = check.draft
+          isReminderVisible.value = true
+        }
+      })
+      .catch(() => {})
+  }, 500)
+}
+
+watch(() => projectStore.currentProject?.files, scheduleReminderCheck)
+watch(
+  () => chatStore.isRunning,
+  (running) => {
+    if (!running) {
+      scheduleReminderCheck()
+    }
+  },
+)
+
+/** 点击提醒：模板落光标处，可继续编辑后发送（发送链路前缀拦截替换为委派指令，W1） */
+function handleReminderApply() {
+  if (reminderDraft.value) {
+    composer.insertAtCaret(reminderDraft.value)
+  }
+  dismissReminder()
+}
+
+/** 收起提醒并落「已提醒」标记：同一批新增不再弹，之后有新章节会再提醒 */
+function dismissReminder() {
+  isReminderVisible.value = false
+  reminderDraft.value = ''
+  void markElementReminderShown(props.projectId)
+}
 
 onMounted(() => {
   // 编辑器挂载 + 初始高度（空态两行的 min-height 由 CSS 提供，此处量一次收口）
@@ -541,6 +597,10 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  if (reminderCheckTimer) {
+    clearTimeout(reminderCheckTimer)
+    reminderCheckTimer = null
+  }
   unregisterTextRefs?.()
   unregisterTextRefs = null
   composer.unmount()
@@ -774,20 +834,35 @@ onBeforeUnmount(() => {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
-                <!-- 管理要素按钮位（入口重构 W2 起无操作占位）：常驻入口职责已退役，
-                     W3 将在本位置改为滑入式整理提醒按钮（阈值触发） -->
-                <button
-                  type="button"
-                  class="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors"
-                  title="入口升级中（整理提醒即将上线）"
-                  disabled
+                <!-- 整理提醒（入口重构 W3）：阈值触发从左滑入，非常驻；点击落模板退回，
+                     × 忽略（同一批新增不再弹，之后有新章节会再提醒） -->
+                <Transition
+                  enter-active-class="transition duration-300 ease-out"
+                  enter-from-class="-translate-x-3 opacity-0"
+                  enter-to-class="translate-x-0 opacity-100"
+                  leave-active-class="transition duration-200 ease-in"
+                  leave-from-class="translate-x-0 opacity-100"
+                  leave-to-class="-translate-x-3 opacity-0"
                 >
-                  <svg class="h-3.5 w-3.5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
-                  </svg>
-                  <span>管理要素</span>
-                </button>
+                  <button
+                    v-if="isReminderVisible"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                    title="距上次整理已新增多章；点击把整理任务模板落入输入框，可编辑后发送"
+                    @click="handleReminderApply"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    <span>整理提醒</span>
+                    <span
+                      role="button"
+                      aria-label="忽略本次提醒"
+                      class="ml-0.5 cursor-pointer rounded p-0.5 text-amber-400 transition-colors hover:bg-amber-200 hover:text-amber-700"
+                      @click.stop="dismissReminder"
+                    >×</span>
+                  </button>
+                </Transition>
               </div>
               <div class="flex items-center gap-2">
                 <button

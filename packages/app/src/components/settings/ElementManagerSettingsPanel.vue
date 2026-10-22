@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { DEFAULT_ELEMENT_REMINDER_TEMPLATE } from '@novai/core/services/element-reminder-service'
 import { ELEMENT_MANAGER_PRESET_OPTIONS } from '../../constants/permission-presets'
 import { reasoningEffortOptions } from '../../constants/reasoning-efforts'
 import ModelEndpointFields from './ModelEndpointFields.vue'
@@ -26,6 +27,8 @@ const props = defineProps<{
     reasoningEffort: '' | 'off' | 'low' | 'high' | 'max'
     permissionOverride: boolean
     permissionPreset: 'review' | 'material' | 'full'
+    /** 整理提醒模板（入口重构 W3）；'' = 默认模板 */
+    reminderTemplate: string
   }
 }>()
 
@@ -124,6 +127,23 @@ const effortOptions = computed(() => [
             {{ ELEMENT_MANAGER_PRESET_OPTIONS.find((option) => option.value === form.permissionPreset)?.hint }}
           </p>
         </div>
+      </div>
+
+      <!-- 整理提醒模板（入口重构 W3）：新增 ≥ 2 章未整理时输入框上方滑入提醒，点击落本模板 -->
+      <div class="border-t border-gray-100 pt-4">
+        <label for="element-reminder-template" class="block text-sm font-medium text-gray-900">整理提醒模板</label>
+        <p class="mt-0.5 text-xs text-gray-500">
+          距上次整理新增 2 章及以上时，输入框上方滑入提醒按钮；点击后模板落入输入框，
+          <code class="rounded bg-gray-100 px-1 py-0.5 text-[11px]">{章节名列表}</code> 由代码替换为新增章节名。留空使用默认模板
+        </p>
+        <textarea
+          id="element-reminder-template"
+          v-model="form.reminderTemplate"
+          rows="2"
+          :placeholder="DEFAULT_ELEMENT_REMINDER_TEMPLATE"
+          class="mt-2 w-full resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+          @update:model-value="emit('save-immediately')"
+        />
       </div>
     </div>
   </section>

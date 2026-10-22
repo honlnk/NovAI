@@ -386,6 +386,8 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
     // 要素管理员覆盖块（Phase 2 计划 D2/D3）：块缺省 → undefined（全继承，零迁移）；
     // llm 残缺/协议非法整组剔除、permissionPreset 非三档值剔除，均回退继承。
     elementManager: normalizeElementManagerConfig(config.elementManager),
+    // 要素整理提醒块（入口重构 W3）：空模板/非法时间戳剔除；全空删块（回退默认模板）。
+    elementReminder: normalizeElementReminderConfig(config.elementReminder),
     settings: {
       ...DEFAULT_CONFIG.settings,
       ...settingsRest,
@@ -451,6 +453,31 @@ function normalizeElementManagerConfig(elementManager: ProjectConfig['elementMan
   return {
     ...(llm ? { llm } : {}),
     ...(permissionPreset ? { permissionPreset } : {}),
+  }
+}
+
+/**
+ * 要素整理提醒块校验（入口重构 W3）：template 空白串剔除（回退默认模板）、
+ * lastRemindedAt 非有限数剔除；两字段皆无 → 删块。
+ */
+function normalizeElementReminderConfig(
+  elementReminder: ProjectConfig['elementReminder'],
+): ProjectConfig['elementReminder'] {
+  if (!elementReminder || typeof elementReminder !== 'object') {
+    return undefined
+  }
+  const template = typeof elementReminder.template === 'string' && elementReminder.template.trim()
+    ? elementReminder.template
+    : undefined
+  const lastRemindedAt = typeof elementReminder.lastRemindedAt === 'number' && Number.isFinite(elementReminder.lastRemindedAt)
+    ? elementReminder.lastRemindedAt
+    : undefined
+  if (!template && lastRemindedAt === undefined) {
+    return undefined
+  }
+  return {
+    ...(template ? { template } : {}),
+    ...(lastRemindedAt !== undefined ? { lastRemindedAt } : {}),
   }
 }
 

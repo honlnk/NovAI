@@ -80,6 +80,11 @@ export async function updateConfig(
           ? patch.elementManager
           : undefined
         : currentConfig.elementManager,
+    // 要素整理提醒块（入口重构 W3）：浅合并（同 settings 组），template 空串经 normalize 落盘时剔除
+    elementReminder: {
+      ...currentConfig.elementReminder,
+      ...patch.elementReminder,
+    },
     settings: {
       ...currentConfig.settings,
       ...patch.settings,

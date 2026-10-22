@@ -54,6 +54,8 @@ export type ProjectConfigView = {
    * 当前配置（每次委派时动态取值）。类型与语义见 types/project.ts。
    */
   elementManager?: ProjectConfig['elementManager']
+  /** 要素整理提醒（入口重构 W3）：模板可配 + 上次提醒时间戳；类型与语义见 types/project.ts。 */
+  elementReminder?: ProjectConfig['elementReminder']
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number
@@ -94,6 +96,8 @@ export type ProjectConfigPatch = Partial<{
    * 覆盖项为空（两项都未覆盖）时写 undefined（删除块、回退全继承）；不带此键 = 保持现状。
    */
   elementManager: ProjectConfig['elementManager']
+  /** 要素整理提醒块为浅合并语义（同 settings 组）：带键字段覆盖、不带保持；空串模板经 normalize 剔除回退默认。 */
+  elementReminder: Partial<NonNullable<ProjectConfig['elementReminder']>>
   settings: Partial<ProjectSettingsView>
 }>
 
