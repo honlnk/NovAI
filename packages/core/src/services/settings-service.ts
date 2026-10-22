@@ -72,6 +72,19 @@ export async function updateConfig(
       ...currentConfig.search,
       ...patch.search,
     },
+    // 要素管理员块整组替换语义：patch 带 elementManager 键即替换（两项覆盖都空 → 删除块回退全继承）；
+    // 不带键保持现状。与其他组的浅合并不同，见 ProjectConfigPatch 注释。
+    elementManager:
+      patch.elementManager !== undefined
+        ? patch.elementManager.llm || patch.elementManager.permissionPreset
+          ? patch.elementManager
+          : undefined
+        : currentConfig.elementManager,
+    // 要素整理提醒块（入口重构 W3）：浅合并（同 settings 组），template 空串经 normalize 落盘时剔除
+    elementReminder: {
+      ...currentConfig.elementReminder,
+      ...patch.elementReminder,
+    },
     settings: {
       ...currentConfig.settings,
       ...patch.settings,

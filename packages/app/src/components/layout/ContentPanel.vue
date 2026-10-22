@@ -193,6 +193,7 @@ function handleContentMouseup() {
             preferred-placement="bottom"
           >
             <button
+              :aria-label="mode.label"
               :class="[
                 'flex items-center justify-center rounded-md p-1.5 transition-colors',
                 viewMode === mode.key
@@ -220,6 +221,7 @@ function handleContentMouseup() {
           </Tooltip>
         </div>
         <button
+          aria-label="关闭内容面板"
           class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 lg:hidden"
           @click="emit('close')"
         >

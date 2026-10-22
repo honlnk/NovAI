@@ -5,6 +5,7 @@ import {
   listFilesInDirectory,
 } from '../fs/project-fs'
 import { createModelView } from '../agent/model-view'
+import type { AgentRoleId } from '../agent/roles'
 import type { AgentMessage } from '../agent/messages'
 import type { ProjectSnapshot } from '../../types/project'
 import type { ChatSessionState } from '../../types/chat'
@@ -96,6 +97,8 @@ export async function listSessionMetas(
 
 export type SessionMeta = {
   sessionId: string
+  /** 会话角色（缺省即主角色）：列表按角色分组的依据 */
+  agent?: AgentRoleId
   title: string
   createdAt: string
   updatedAt: string
@@ -124,6 +127,7 @@ function parseSessionMeta(text: string): SessionMeta | null {
 
   return {
     sessionId: session.sessionId,
+    ...(session.agent ? { agent: session.agent } : {}),
     title: session.title,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

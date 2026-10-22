@@ -5,6 +5,7 @@ import type { ProjectConfigPatch, ProjectConfigView } from '@novai/core/services
 import BaseModal from '../ui/BaseModal.vue'
 import CompletionSettingsPanel from './CompletionSettingsPanel.vue'
 import EmbeddingSettingsPanel from './EmbeddingSettingsPanel.vue'
+import ElementManagerSettingsPanel from './ElementManagerSettingsPanel.vue'
 import LlmSettingsPanel from './LlmSettingsPanel.vue'
 import ProjectSettingsPanel from './ProjectSettingsPanel.vue'
 import RerankSettingsPanel from './RerankSettingsPanel.vue'
@@ -16,6 +17,9 @@ import type { SearchSettingsForm } from '../../utils/search-settings'
 
 const props = defineProps<{
   projectId: string
+  /** 外部指定初始 tab（如要素管理员弹窗空态「新建快捷选项」跳转要素管理 tab，要素整理参数化 W2）；
+   *  仅首次挂载生效，组件 v-if 按需挂载、每次打开重读。 */
+  initialTab?: SettingsTab
 }>()
 
 const emit = defineEmits<{
@@ -26,7 +30,7 @@ const settingsStore = useSettingsStore()
 const projectStore = useProjectStore()
 const toast = useToast()
 
-type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'project'
+type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'element-manager' | 'project'
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'llm', label: 'LLM 配置' },
@@ -34,13 +38,14 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'rerank', label: 'Rerank 配置' },
   { key: 'completion', label: '输入补全' },
   { key: 'search', label: '联网搜索' },
+  { key: 'element-manager', label: '要素管理' },
   { key: 'project', label: '项目设置' },
 ]
 
 const TAB_STORAGE_KEY = 'novai:settings-tab'
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
-const activeTab = ref<SettingsTab>(restoreTab())
+const activeTab = ref<SettingsTab>(props.initialTab ?? restoreTab())
 
 // 表单状态（reactive 引用直接传给面板，字段修改经 watch 触发自动保存）
 const llmForm = reactive({
@@ -78,6 +83,20 @@ const searchForm = reactive<SearchSettingsForm>({
   provider: 'linkseek-hosted',
   baseUrl: '',
   apiKey: '',
+})
+
+/** 要素管理员覆盖表单：开关只控制 UI 展开与覆盖是否写入；'' 思考档 = 跟随主 Agent。 */
+const elementManagerForm = reactive({
+  modelOverride: false,
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  protocol: 'openai' as 'openai' | 'openai-responses' | 'anthropic' | 'gemini',
+  reasoningEffort: '' as '' | 'off' | 'low' | 'high' | 'max',
+  permissionOverride: false,
+  permissionPreset: 'material' as 'review' | 'material' | 'full',
+  /** 整理提醒模板（入口重构 W3；'' = 默认模板），落 elementReminder 配置块 */
+  reminderTemplate: '',
 })
 
 const projectForm = reactive({
@@ -141,6 +160,18 @@ onMounted(async () => {
       baseUrl: config.search?.baseUrl ?? '',
       apiKey: config.search?.apiKey ?? '',
     })
+    const elementManager = config.elementManager
+    Object.assign(elementManagerForm, {
+      modelOverride: Boolean(elementManager?.llm),
+      baseUrl: elementManager?.llm?.baseUrl ?? '',
+      apiKey: elementManager?.llm?.apiKey ?? '',
+      model: elementManager?.llm?.model ?? '',
+      protocol: elementManager?.llm?.protocol ?? 'openai',
+      reasoningEffort: elementManager?.llm?.reasoningEffort ?? '',
+      permissionOverride: Boolean(elementManager?.permissionPreset),
+      permissionPreset: elementManager?.permissionPreset ?? 'material',
+      reminderTemplate: config.elementReminder?.template ?? '',
+    })
     const settings = config.settings
     if (settings) {
       Object.assign(projectForm, {
@@ -165,6 +196,13 @@ watch(rerankForm, () => scheduleSave({ rerank: { ...rerankForm } }))
 watch(completionForm, () => scheduleSave({ completion: { ...completionForm } }))
 watch(searchForm, () => scheduleSave({ search: { ...searchForm } }))
 watch(projectForm, () => scheduleSave({ settings: { ...projectForm } }))
+watch(elementManagerForm, () =>
+  scheduleSave({
+    elementManager: buildElementManagerPatch(),
+    // 整理提醒模板在独立配置块（浅合并组）；'' 经 core normalize 落盘时剔除 = 回退默认模板
+    elementReminder: { template: elementManagerForm.reminderTemplate },
+  }),
+)
 
 watch(activeTab, (tab) => {
   try {
@@ -175,10 +213,34 @@ watch(activeTab, (tab) => {
 })
 
 /**
+ * 要素管理员表单 → 配置覆盖块。开关关闭或模型覆盖残缺（地址/模型未填全）→ 该项不写入
+ * （core normalize 对残缺 llm 块也会整组剔除，此处不写等于直接删覆盖）；两项皆空 →
+ * 写空对象（patch 带 elementManager 键 = 整组替换语义，空对象落盘时删除块、回退全继承）。
+ */
+function buildElementManagerPatch(): ProjectConfigPatch['elementManager'] {
+  const llmComplete = elementManagerForm.modelOverride && elementManagerForm.baseUrl.trim() && elementManagerForm.model.trim()
+  const llm = llmComplete
+    ? {
+      baseUrl: elementManagerForm.baseUrl.trim(),
+      apiKey: elementManagerForm.apiKey,
+      model: elementManagerForm.model.trim(),
+      protocol: elementManagerForm.protocol,
+      ...(elementManagerForm.reasoningEffort ? { reasoningEffort: elementManagerForm.reasoningEffort } : {}),
+    }
+    : undefined
+  const permissionPreset = elementManagerForm.permissionOverride
+    ? elementManagerForm.permissionPreset
+    : undefined
+  return {
+    ...(llm ? { llm } : {}),
+    ...(permissionPreset ? { permissionPreset } : {}),
+  }
+}
+
+/**
  * 表单变化进入自动保存队列：防抖 600ms 后整组落盘。
  * 开关类字段的立即保存由面板 emit('save-immediately') 触发 flushSave。
- */
-function scheduleSave(patch: ProjectConfigPatch) {
+ */function scheduleSave(patch: ProjectConfigPatch) {
   if (isInitializing) {
     return
   }
@@ -354,6 +416,12 @@ function restoreTab(): SettingsTab {
           @save-immediately="handleSaveImmediately"
         />
         <SearchSettingsPanel v-else-if="activeTab === 'search'" :form="searchForm" />
+        <ElementManagerSettingsPanel
+          v-else-if="activeTab === 'element-manager'"
+          :form="elementManagerForm"
+          :project-id="projectId"
+          @save-immediately="handleSaveImmediately"
+        />
         <ProjectSettingsPanel v-else :form="projectForm" />
       </div>
     </div>
@@ -368,6 +436,7 @@ function restoreTab(): SettingsTab {
           'text-green-600': saveState === 'saved',
           'cursor-pointer font-medium text-red-600 hover:text-red-700': saveState === 'error',
         }"
+        :role="saveState === 'error' ? 'button' : undefined"
         @click="retrySave"
       >
         <span v-if="saveState === 'idle'">更改会自动保存</span>

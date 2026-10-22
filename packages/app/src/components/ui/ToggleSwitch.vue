@@ -4,6 +4,8 @@
  */
 const props = defineProps<{
   modelValue: boolean
+  /** 无障碍名称：开关本身没有文字，由调用方传入它控制的选项名 */
+  label?: string
 }>()
 
 const emit = defineEmits<{
@@ -20,6 +22,7 @@ function toggle() {
     type="button"
     role="switch"
     :aria-checked="modelValue"
+    :aria-label="label"
     class="relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors"
     :class="modelValue ? 'bg-gray-900' : 'bg-gray-300'"
     @click="toggle"

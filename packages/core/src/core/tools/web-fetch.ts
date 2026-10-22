@@ -5,12 +5,21 @@ import type {
   WebFetchOutput,
 } from './types'
 
-/** 工具层输出上限（决策 8：50,000 字符，对齐 ReadFile 字节闸量级） */
-const MAX_OUTPUT_CHARS = 50_000
+/** 工具层输出上限（决策 8：50,000 字符，对齐 ReadFile 字节闸量级；WebFetch / KnowledgeLookup 共用） */
+export const MAX_OUTPUT_CHARS = 50_000
 
-/** 第三方（无抓取）后端使用 WebFetch 时的引导文案（决策 11） */
-const NO_FETCH_PROVIDER_MESSAGE =
+/** 第三方（无抓取）后端使用抓取类工具时的引导文案（决策 11） */
+export const NO_FETCH_PROVIDER_MESSAGE =
   '当前搜索来源不支持网页抓取。可在设置的联网搜索中选择「linkseek 直连」并填写 API Key 后使用该能力。'
+
+/** 工具层截断：超限时裁到上限并附提示语（提示语由调用方给出，贴合各自场景） */
+export function truncateOutput(
+  content: string,
+  hint: string,
+): { content: string; truncated: boolean } {
+  if (content.length <= MAX_OUTPUT_CHARS) return { content, truncated: false }
+  return { content: `${content.slice(0, MAX_OUTPUT_CHARS)}\n\n${hint}`, truncated: true }
+}
 
 export const webFetchTool: ToolDefinition<'WebFetch', WebFetchInput, WebFetchOutput> = {
   name: 'WebFetch',
@@ -40,10 +49,10 @@ export const webFetchTool: ToolDefinition<'WebFetch', WebFetchInput, WebFetchOut
     }
 
     const outcome = await provider.fetch(input.url)
-    const truncatedByTool = outcome.content.length > MAX_OUTPUT_CHARS
-    const content = truncatedByTool
-      ? `${outcome.content.slice(0, MAX_OUTPUT_CHARS)}\n\n（内容已截断至 50,000 字符。如需后半部分，请抓取更具体的 URL 或章节锚点。）`
-      : outcome.content
+    const { content, truncated: truncatedByTool } = truncateOutput(
+      outcome.content,
+      '（内容已截断至 50,000 字符。如需后半部分，请抓取更具体的 URL 或章节锚点。）',
+    )
 
     return {
       url: input.url,

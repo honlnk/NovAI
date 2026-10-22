@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import type { AgentUiEvent, ChatSessionView, RunAgentTurnResult } from '@novai/core/services/types'
+import type {
+  AgentUiEvent,
+  ChatSessionView,
+  FileChangeConfirmationView,
+  RunAgentTurnResult,
+} from '@novai/core/services/types'
 
 import {
   createSession,
@@ -14,6 +19,7 @@ import {
   subscribeAgentEvents,
 } from '@novai/core/services/agent-service'
 import { HISTORY_PAGE_SIZE, useChatStore } from './chat'
+import { useProjectStore } from './project'
 
 vi.mock('@novai/core/services/agent-service', () => ({
   createSession: vi.fn(),
@@ -319,8 +325,18 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.lastFileChange).toBeNull()
   })
 
-  it('sendMessage 成功返回 true 并透传 mode/quote；失败返回 false 供草稿恢复', async () => {
+  it('createNewSession 透传角色参数；skipReload 本地插入的摘要带 agent（角色机制 W2）', async () => {
     const store = useChatStore()
+    mockedCreateSession.mockResolvedValue({ ...createSessionView('session-em'), agent: 'element-manager' })
+
+    await store.createNewSession('project-1', { skipReload: true, agent: 'element-manager' })
+
+    expect(mockedCreateSession).toHaveBeenCalledWith('project-1', { agent: 'element-manager' })
+    expect(store.sessions[0]).toMatchObject({ sessionId: 'session-em', agent: 'element-manager' })
+    expect(store.sessionView?.agent).toBe('element-manager')
+  })
+
+  it('sendMessage 成功返回 true 并透传 mode/quote；失败返回 false 供草稿恢复', async () => {    const store = useChatStore()
     const view = createSessionView('session-current')
     mockedCreateSession.mockResolvedValue(view)
     await store.createNewSession('project-1', { skipReload: true })
@@ -554,5 +570,85 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.messages[0].id).toBe(`m-${start}`)
     expect(store.messages[HISTORY_PAGE_SIZE]).toMatchObject({ id: 'msg-stream', text: '流式片段' })
     expect(store.historyStart).toBe(start)
+  })
+
+  it('确认链按会话路由（W3）：非激活会话的确认卡只点亮徽标，激活会话的进确认卡位', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const delegationCard: FileChangeConfirmationView = {
+      id: 'conf-em',
+      toolName: 'CreateFile',
+      title: '新建文件：elements/characters/角色甲.md',
+      summary: '将新建 elements/characters/角色甲.md',
+      confirmation: { kind: 'create', path: 'elements/characters/角色甲.md', content: '' },
+      agentLabel: '要素管理员',
+    }
+
+    // 委派会话（非激活）的确认卡：不占当前确认卡位，但点亮徽标集合
+    emit({ type: 'confirmation-required', sessionId: 'session-delegation', request: delegationCard })
+    expect(store.pendingConfirmation).toBeNull()
+    expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(true)
+
+    // 激活会话自己的确认卡：进确认卡位
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-current',
+      request: { ...delegationCard, id: 'conf-main' },
+    })
+    expect(store.pendingConfirmation?.id).toBe('conf-main')
+
+    // 快照广播整体替换：resolve 后清空 → 徽标熄灭
+    emit({ type: 'confirmations-updated', sessionId: 'session-delegation', confirmations: [] })
+    expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(false)
+  })
+
+  it('session-created（委派会话落盘，W3/W4）：项目匹配时把事件自带的摘要 upsert 进列表', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+    mockedListSessions.mockClear()
+
+    const summary = {
+      sessionId: 'session-em',
+      projectId: 'project-1',
+      agent: 'element-manager',
+      title: '在 elements/ 下新建回归测试',
+      createdAt: '2026-10-22T12:00:00.000Z',
+      updatedAt: '2026-10-22T12:00:01.000Z',
+      messageCount: 0,
+    } as const
+
+    // 未打开项目（currentProject 为空）：不进列表
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
+    expect(store.sessions.some((s) => s.sessionId === 'session-em')).toBe(false)
+    expect(mockedListSessions).not.toHaveBeenCalled()
+
+    // 打开的项目与事件匹配：摘要直接 upsert（不重新遍历文件系统——创建方连发落盘的
+    // 写窗口内再遍历会漏掉新会话，W4 真机复现）
+    const projectStore = useProjectStore()
+    projectStore.currentProject = { id: 'project-1' } as never
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
+    expect(mockedListSessions).not.toHaveBeenCalled()
+    expect(store.sessions.some((s) => s.sessionId === 'session-em')).toBe(true)
+    const entry = store.sessions.find((s) => s.sessionId === 'session-em')
+    expect(entry?.title).toBe('在 elements/ 下新建回归测试')
+    expect(entry?.agent).toBe('element-manager')
+
+    // 重复事件（同 id）：原地替换不重复插入
+    emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
+    expect(store.sessions.filter((s) => s.sessionId === 'session-em')).toHaveLength(1)
+
+    // 不匹配的项目：忽略
+    emit({
+      type: 'session-created',
+      sessionId: 'session-other',
+      projectId: 'project-2',
+      summary: { ...summary, sessionId: 'session-other', projectId: 'project-2' },
+    })
+    expect(store.sessions.some((s) => s.sessionId === 'session-other')).toBe(false)
   })
 })

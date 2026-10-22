@@ -42,10 +42,10 @@ export function isChapterPath(path: string): boolean {
  * 解析失败返回 null（调用方据此决定跳过或报错）。
  *
  * @example
- * parseChapterNumber('第001章-火中拾婴.txt') // 1
+ * parseChapterNumber('第001章-试炼.txt') // 1
  * parseChapterNumber('第1章.txt')            // 1
  * parseChapterNumber('chapter-001.txt')      // null（无中文编号片段）
- * parseChapterNumber('火中拾婴.md')          // null
+ * parseChapterNumber('试炼.md')          // null
  */
 export function parseChapterNumber(filename: string): number | null {
   const match = CHAPTER_NUMBER_PATTERN.exec(filename)
@@ -71,7 +71,7 @@ export function assertChapterNameFormat(path: string): void {
   }
 
   throw new Error(
-    `章节文件名不规范：${filename}；必须形如「第NNN章-标题.txt」（编号至少 3 位补零，标题非空），例如「第001章-火中拾婴.txt」。`,
+    `章节文件名不规范：${filename}；必须形如「第NNN章-标题.txt」（编号至少 3 位补零，标题非空），例如「第001章-试炼.txt」。`,
   )
 }
 

@@ -118,7 +118,7 @@ defineProps<{
               <span class="block text-sm font-medium text-gray-900">开发调试日志</span>
               <p class="mt-0.5 text-xs text-gray-500">记录模型配置、请求摘要和工具调用解析诊断；正式使用建议关闭</p>
             </div>
-            <ToggleSwitch v-model="form.enableDebugLogging" />
+            <ToggleSwitch v-model="form.enableDebugLogging" label="开发调试日志" />
           </div>
         </div>
       </div>

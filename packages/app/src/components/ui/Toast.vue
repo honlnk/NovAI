@@ -74,6 +74,7 @@ onMounted(() => {
 
       <!-- 关闭按钮 -->
       <button
+        aria-label="关闭提示"
         class="ml-2 shrink-0 rounded p-1 transition-colors hover:bg-white/20"
         @click="emit('close')"
       >

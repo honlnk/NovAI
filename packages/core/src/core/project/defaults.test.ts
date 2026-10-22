@@ -13,7 +13,7 @@ describe('DEFAULT_ELEMENT_SCHEMA', () => {
     '## 命名规范',
     '## frontmatter 维护规范',
     '## 链接约定',
-    '## 园丁工作守则',
+    '## 要素管理员工作守则',
     '## 模板结构说明',
   ]
 
@@ -33,11 +33,11 @@ describe('DEFAULT_ELEMENT_SCHEMA', () => {
   })
 
   it('链接约定按决策 5：素材→章节写路径、素材↔素材双方括号、正文不写链接', () => {
-    expect(DEFAULT_ELEMENT_SCHEMA).toContain('[[云溪]]')
+    expect(DEFAULT_ELEMENT_SCHEMA).toContain('[[角色甲]]')
     expect(DEFAULT_ELEMENT_SCHEMA).toContain('章节正文内不写任何链接')
   })
 
-  it('园丁守则含不可让渡边界：不删文件、不动 chapters/ 与 prompts/、存疑不合并', () => {
+  it('要素管理员守则含不可让渡边界：不删文件、不动 chapters/ 与 prompts/、存疑不合并', () => {
     expect(DEFAULT_ELEMENT_SCHEMA).toContain('不删除任何文件')
     expect(DEFAULT_ELEMENT_SCHEMA).toContain('从不修改 chapters/ 正文')
     expect(DEFAULT_ELEMENT_SCHEMA).toContain('存疑不合并')

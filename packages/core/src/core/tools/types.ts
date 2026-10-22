@@ -1,9 +1,11 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { FileChangeRecord } from '../../types/chat'
+import type { ElementType } from '../../types/rag'
+import type { KnowledgePlatformName } from './knowledge-platforms'
 
 /**
  * core 工具注册表（tools/index.ts 的 `Record<CoreToolName, …>` 全键约束）的键集合。
- * DelegateToGardener 不在此列：它是会话层组装的委派工具（需要 confirm/signal/事件转发闭包），
+ * DelegateToElementManager 不在此列：它是会话层组装的委派工具（需要 confirm/signal/事件转发闭包），
  * 不是纯 ToolRuntime 可驱动的 core 工具——其名字进 AgentToolName / ChatToolName / ToolNameView。
  */
 export type CoreToolName =
@@ -15,9 +17,11 @@ export type CoreToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'LoadElements'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
+  | 'KnowledgeLookup'
 
 export type ToolRuntime = {
   project: ProjectSnapshot
@@ -92,7 +96,7 @@ export type WriteConfirmation =
   | { kind: 'delete'; path: string }
 
 /**
- * 工具定义。TName 放宽为 string（不锁 CoreToolName）：会话层组装的工具（如 DelegateToGardener）
+ * 工具定义。TName 放宽为 string（不锁 CoreToolName）：会话层组装的工具（如 DelegateToElementManager）
  * 名字在 AgentToolName 联合里而不进 core 注册表，同样以本形状定义；core 注册表的键约束在
  * tools/index.ts 显式保持。
  */
@@ -269,15 +273,32 @@ export type RagSearchOutput = {
   }>
 }
 
+export type LoadElementsInput = {
+  /** 要加载的要素名数组（来自上下文中的要素清单） */
+  names: string[]
+}
+
+/** 单个要素的加载结果；未找到时只带 name 与 notFound 标记，不抛错。 */
+export type LoadedElement = {
+  name: string
+  type?: ElementType
+  sourcePath?: string
+  content?: string
+  notFound?: true
+}
+
+export type LoadElementsOutput = {
+  elements: LoadedElement[]
+}
+
 export type GetFileChangeHistoryInput = {
   /** 返回条数上限：默认 20，最大 100 */
   limit: number
-  /** 只看某个文件（含改名前后路径） */
+  /** 只看某个文件（含改名前后名称） */
   path?: string
   /** 只看某一轮（runId） */
   runId?: string
 }
-
 export type GetFileChangeHistoryOutput = {
   /** 纯文本清单（新→旧逐条），末尾「共 N 条记录」 */
   content: string
@@ -323,5 +344,28 @@ export type WebFetchOutput = {
   /** 'browser' = 服务端浏览器渲染；缺省视为 http */
   renderedBy?: 'http' | 'browser'
   /** 服务端附带提示（如渲染升级失败的降级说明） */
+  notice?: string
+}
+
+export type KnowledgeLookupInput = {
+  /** 平台名（knowledge-platforms.ts 映射表的键） */
+  platform: KnowledgePlatformName
+  /** 条目名（非自然语言问题；MDN 为斜杠路径） */
+  term: string
+}
+
+export type KnowledgeLookupOutput = {
+  platform: string
+  term: string
+  /** 模板渲染后的实际请求 URL */
+  url: string
+  /** 重定向链终点（维基未命中判定依据：停留在 Special: 页） */
+  finalUrl?: string
+  statusCode?: number
+  /** false = 未命中（HTTP 4xx/5xx 或维基停在搜索页），content 为引导文案 */
+  found: boolean
+  content: string
+  truncated: boolean
+  renderedBy?: 'http' | 'browser'
   notice?: string
 }

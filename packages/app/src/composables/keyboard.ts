@@ -3,7 +3,10 @@ type KeyboardLikeEvent = Pick<
   'key' | 'shiftKey' | 'ctrlKey' | 'metaKey' | 'isComposing' | 'keyCode'
 >
 
-export function isImeComposing(event: KeyboardLikeEvent): boolean {
+/** IME 判定只需要组合态两个字段（更窄的形参让部分事件的调用方也能复用） */
+type CompositionLikeEvent = Pick<KeyboardEvent, 'isComposing' | 'keyCode'>
+
+export function isImeComposing(event: CompositionLikeEvent): boolean {
   return event.isComposing || event.keyCode === 229
 }
 

@@ -58,32 +58,24 @@ watch(contentPanelWidth, (width) => {
   localStorage.setItem(CONTENT_PANEL_WIDTH_KEY, String(width))
 })
 
-/** 从 currentProject 取配置里的激活场景路径（分类面板需读取它做高亮联动） */
-const activeScenePromptPath = computed(() => {
-  return projectStore.currentProject?.config.settings.activeScenePromptPath ?? null
+/** 从 currentProject 取配置里的激活大纲路径（分类面板需读取它做高亮联动） */
+const activeOutlinePath = computed(() => {
+  return projectStore.currentProject?.config.settings.activeOutlinePath ?? null
 })
 
-/** 场景提示词列表（prompts/scenes/*.md，拉平），供 ChatPanel 的 @ 指令选择（R4） */
-const sceneList = computed(() => {
+/** 写作大纲列表（prompts/outlines/*.md，拉平），供 ChatPanel 的 @ 指令选择（R4） */
+const outlineList = computed(() => {
   const files = projectStore.currentProject?.files ?? []
-  return pickDirectoryChildren(files, 'prompts/scenes').filter(
+  return pickDirectoryChildren(files, 'prompts/outlines').filter(
     (n) => n.kind === 'file' && n.path.endsWith('.md'),
   )
 })
 
-/** 当前激活场景的显示名（去 .md 扩展名），ChatPanel 的场景 chip 展示用（R4） */
-const activeSceneName = computed(() => {
-  if (!activeScenePromptPath.value) return null
-  const node = sceneList.value.find((n) => n.path === activeScenePromptPath.value)
+/** 当前激活大纲的显示名（去 .md 扩展名），ChatPanel 的大纲 chip 展示用（R4） */
+const activeOutlineName = computed(() => {
+  if (!activeOutlinePath.value) return null
+  const node = outlineList.value.find((n) => n.path === activeOutlinePath.value)
   return node ? node.name.replace(/\.md$/i, '') : null
-})
-
-/** 章节列表（chapters/*.txt），供 ChatPanel 的 /提取要素 指令多选（R6）。.md 不算有效章节，不入列。 */
-const chapterList = computed(() => {
-  const files = projectStore.currentProject?.files ?? []
-  return pickDirectoryChildren(files, 'chapters').filter(
-    (n) => n.kind === 'file' && /\.txt$/i.test(n.name),
-  )
 })
 
 onMounted(async () => {
@@ -185,6 +177,16 @@ function handleNotImplemented(name: string) {
   toast.info(`${name}功能即将推出`)
 }
 
+// ===== 要素管理员入口（角色机制 W2 提供直聊入口 + 入口重构 W2 删旧弹窗/双击链路） =====
+
+/**
+ * 侧栏「管理要素」单击：新建要素管理员直聊会话并切换。
+ * 旧参数弹窗与双击直发已删（入口重构 W2），单击不再需要延时防双击。
+ */
+function handleElementManagerNewSession() {
+  void chatStore.createNewSession(projectId.value, { agent: 'element-manager' })
+}
+
 async function handleSelectFile(path: string) {
   await projectStore.openFile(path)
   isContentPanelOpen.value = true
@@ -213,12 +215,12 @@ function handleClearQuote() {
   selectionQuote.value = null
 }
 
-async function handleChangeScene(path: string | null) {
-  const saved = await projectStore.changeActiveScenePromptPath(projectId.value, path)
+async function handleChangeOutline(path: string | null) {
+  const saved = await projectStore.changeActiveOutlinePath(projectId.value, path)
   if (saved) {
-    toast.info(path ? '已切换场景提示词，新建会话后生效' : '已关闭场景提示词，新建会话后生效')
+    toast.info(path ? '已切换写作大纲' : '已关闭写作大纲')
   } else {
-    toast.error(projectStore.errorMessage || '切换场景提示词失败')
+    toast.error(projectStore.errorMessage || '切换写作大纲失败')
   }
 }
 
@@ -248,12 +250,6 @@ function handleGoToSettings() {
   showGuide.value = false
   handleOpenSettings()
 }
-
-async function handleElementsWritten() {
-  await projectStore.refreshTree()
-  // 索引过期状态由底部 IndexStatusBar 经事件总线自动反映，无需再弹 toast。
-  toast.success('要素文件已写入')
-}
 </script>
 
 <template>
@@ -275,6 +271,7 @@ async function handleElementsWritten() {
         @proofread="handleNotImplemented('校对')"
         @organize="handleNotImplemented('章节整理')"
         @version="handleNotImplemented('版本管理')"
+        @elementManager="handleElementManagerNewSession"
         @rag="isRagOpen = true"
       />
 
@@ -283,13 +280,14 @@ async function handleElementsWritten() {
         :active-category="activeCategory"
         :files="projectStore.currentProject?.files ?? []"
         :active-file-path="projectStore.activeFile?.path"
-        :active-scene-prompt-path="activeScenePromptPath"
+        :active-outline-path="activeOutlinePath"
         :sessions="chatStore.sessions"
         :active-session-id="chatStore.activeSessionId"
+        :pending-confirmation-ids="chatStore.sessionsWithPendingConfirmations"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"
-        @change-scene="handleChangeScene"
+        @change-outline="handleChangeOutline"
         @close-mobile="isMobileCategoryOpen = false"
         @select-session="(sessionId) => chatStore.selectSession(projectId, sessionId)"
         @create-session="chatStore.createNewSession(projectId)"
@@ -303,15 +301,13 @@ async function handleElementsWritten() {
         :is-sidebar-open="isCategoryOpen"
         :is-content-panel-open="isContentPanelOpen"
         :quote="selectionQuote"
-        :scenes="sceneList"
-        :active-scene-prompt-path="activeScenePromptPath"
-        :chapters="chapterList"
+        :outlines="outlineList"
+        :active-outline-path="activeOutlinePath"
         @toggle-sidebar="toggleSidebar"
         @toggle-content-panel="toggleContentPanel"
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
-        @change-scene="handleChangeScene"
-        @elements-written="handleElementsWritten"
+        @change-outline="handleChangeOutline"
       >
         <!-- 首次使用引导 -->
         <template #guide>
@@ -338,13 +334,13 @@ async function handleElementsWritten() {
       />
     </div>
 
-    <!-- 底部项目状态栏：索引状态 + 当前场景 + 本轮执行状态（常驻，随项目激活） -->
+    <!-- 底部项目状态栏：索引状态 + 当前大纲 + 本轮执行状态（常驻，随项目激活） -->
     <IndexStatusBar
       :project-id="projectId"
-      :active-scene-name="activeSceneName"
+      :active-outline-name="activeOutlineName"
       :run-status="chatStore.runStatus"
       :run-status-type="chatStore.runStatusType"
-      @clear-scene="handleChangeScene(null)"
+      @clear-outline="handleChangeOutline(null)"
     />
 
     <!-- 设置模态框（按需挂载：关闭时销毁，再次打开重新读取磁盘配置） -->

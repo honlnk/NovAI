@@ -1,5 +1,6 @@
 import { streamAgentCompletion, AgentAbortedError } from './llm'
 import { runAgentTools } from './tool-orchestration'
+import { attachOutlineReminder } from './prompt'
 import type { ConfirmHandler, ToolExecutionEvent } from './tool-execution'
 import {
   computeRetainTokens,
@@ -65,6 +66,8 @@ export async function query(input: {
   getChangeLedger?: () => readonly FileChangeRecord[]
   /** 联网搜索匿名身份（localStorage UUID，app 层注入），透传到工具运行时。 */
   webClientId?: string
+  /** 大纲 reminder 文本（session 层已过滤注入条件）；非空时每个请求动态附到最新 user 消息，不落视图。 */
+  outlineReminder?: string
   onEvent?: (event: AgentQueryEvent) => void
 }): Promise<AgentMessage[]> {
   const view = input.view
@@ -124,7 +127,8 @@ export async function query(input: {
       throw error
     }
 
-    let messages = toRequestMessages(view)
+    // 大纲 reminder 是请求级动态拼接：视图不动，每步请求重新附着到当前最新 user 消息
+    let messages = attachOutlineReminder(toRequestMessages(view), input.outlineReminder)
 
     input.onEvent?.({ type: 'query-step-start', step })
     input.onEvent?.({
@@ -203,7 +207,7 @@ export async function query(input: {
           }
           if (compactionResult) {
             input.onEvent?.({ type: 'context-compacted', ...compactionResult })
-            messages = toRequestMessages(view)
+            messages = attachOutlineReminder(toRequestMessages(view), input.outlineReminder)
             continue
           }
         }

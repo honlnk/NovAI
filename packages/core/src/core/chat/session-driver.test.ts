@@ -26,6 +26,8 @@ const stubProject = {
   name: '测试项目',
   // ReadFile 在空调用柄上必抛错 → 工具结果 ok:false 回灌模型，循环照常继续（本测试只关心循环结构）
   handle: {},
+  // 空树：要素目录扫描返回空集，不注入目录 reminder
+  tree: [],
 } as unknown as ProjectSnapshot
 
 const stubConfig = {

@@ -1,8 +1,11 @@
-import type { PermissionPreset, SearchConfig } from '../types/project'
+import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
 import type { ReasoningEffort } from '../types/ai'
+import type { AgentRoleId } from '../core/agent/roles'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
 export { isDeepSeekDialect } from '../core/ai/shared'
+/** 会话角色 id（缺省即主角色）：会话列表分组 / 角色横幅 / 直聊入口用 */
+export type { AgentRoleId } from '../core/agent/roles'
 
 export type ProjectFileNodeView = {
   name: string
@@ -22,7 +25,7 @@ export type ProjectConfigView = {
     baseUrl: string
     apiKey: string
     model: string
-    /** LLM 服务的 API 协议；生成链路当前仅实现 openai（Chat Completions 兼容）。 */
+    /** LLM 服务的 API 协议；四协议生成链路均已接入（适配层 core/llm/protocol/）。 */
     protocol: 'openai' | 'openai-responses' | 'anthropic' | 'gemini'
     /** 思考强度档位（输入框选择器写回，四档）；未配置 = 请求层按 off 解析（默认关闭）。 */
     reasoningEffort?: ReasoningEffort
@@ -49,6 +52,13 @@ export type ProjectConfigView = {
     maxTokens: number
   }
   search: SearchConfig
+  /**
+   * 要素管理员子代理覆盖配置（Phase 2 计划 D2-D5）：可选块，无值 = 全继承主 Agent
+   * 当前配置（每次委派时动态取值）。类型与语义见 types/project.ts。
+   */
+  elementManager?: ProjectConfig['elementManager']
+  /** 要素整理提醒（入口重构 W3）：模板可配 + 上次提醒时间戳；类型与语义见 types/project.ts。 */
+  elementReminder?: ProjectConfig['elementReminder']
   settings: {
     ragCandidateLimit: number
     ragContextMaxItems: number
@@ -59,7 +69,7 @@ export type ProjectConfigView = {
     permissionPreset: PermissionPreset
     embeddingTextVersion: number
     enableDebugLogging: boolean
-    activeScenePromptPath: string | null
+    activeOutlinePath: string | null
   }
 }
 
@@ -84,6 +94,13 @@ export type ProjectConfigPatch = Partial<{
   rerank: Partial<RerankConfigView>
   completion: Partial<CompletionConfigView>
   search: Partial<SearchConfigView>
+  /**
+   * 要素管理员块为整组替换语义（与其他组的浅合并不同）：带此键即替换整块——
+   * 覆盖项为空（两项都未覆盖）时写 undefined（删除块、回退全继承）；不带此键 = 保持现状。
+   */
+  elementManager: ProjectConfig['elementManager']
+  /** 要素整理提醒块为浅合并语义（同 settings 组）：带键字段覆盖、不带保持；空串模板经 normalize 剔除回退默认。 */
+  elementReminder: Partial<NonNullable<ProjectConfig['elementReminder']>>
   settings: Partial<ProjectSettingsView>
 }>
 
@@ -116,7 +133,7 @@ export type ChatTargetView = {
     | 'project'
     | 'chapter'
     | 'prompt-system'
-    | 'prompt-scene'
+    | 'prompt-outline'
     | 'element'
   primaryPath?: string
   groupName?: string
@@ -227,32 +244,6 @@ export type RetrievalExplanationView = {
   lastUpdatedChapter: string
 }
 
-export type ElementExtractionItemView = {
-  type: ElementTypeView
-  name: string
-  summary: string
-  tags: string[]
-  lastUpdatedChapter: string
-  relatedChapters: string[]
-  body: string
-}
-
-export type ElementExtractionResultView = {
-  characters: ElementExtractionItemView[]
-  locations: ElementExtractionItemView[]
-  entities: ElementExtractionItemView[]
-  timeline: ElementExtractionItemView[]
-  plots: ElementExtractionItemView[]
-  worldbuilding: ElementExtractionItemView[]
-}
-
-export type ElementWriteResultView = {
-  created: string[]
-  updated: string[]
-  skipped: string[]
-  staleIndex: boolean
-}
-
 export type ProjectView = {
   id: string
   name: string
@@ -292,7 +283,7 @@ export type ProjectIssueView =
   | 'missing-manifest'
   | 'invalid-manifest'
   | 'missing-prompts-system'
-  | 'missing-prompts-scenes'
+  | 'missing-prompts-outlines'
   | 'missing-chapters'
   | 'missing-elements'
   | 'missing-internal-directory'
@@ -306,10 +297,12 @@ export type ToolNameView =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'LoadElements'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
-  | 'DelegateToGardener'
+  | 'KnowledgeLookup'
+  | 'DelegateToElementManager'
 
 export type ToolCallView = {
   id: string
@@ -366,8 +359,8 @@ export type FileChangeRecordView = {
     linesAdded: number
     linesRemoved: number
   }
-  /** 改动归属：园丁子代理的记录带 gardener（写回面板归属标记）；主 Agent 记录无此字段 */
-  agent?: 'gardener'
+  /** 改动归属：要素管理员子代理的记录带 elementManager（写回面板归属标记）；主 Agent 记录无此字段 */
+  agent?: 'element-manager'
 }
 
 /**
@@ -434,8 +427,8 @@ export type ChatMessageView =
       toolName: ToolNameView
       /** 与 tool-result 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
       toolCallId?: string
-      /** 事件归属：园丁子代理的工具行带 gardener，渲染层折叠为嵌套园丁任务组 */
-      agent?: 'gardener'
+      /** 事件归属：要素管理员子代理的工具行带 elementManager，渲染层折叠为嵌套要素管理员任务组 */
+      agent?: 'element-manager'
       createdAt: string
     }
   | {
@@ -447,8 +440,8 @@ export type ChatMessageView =
       toolName: ToolNameView
       /** 与 tool-call 配对的调用 id；旧会话消息无此字段，UI 各自独立成行不报错 */
       toolCallId?: string
-      /** 事件归属：园丁子代理的工具行带 gardener，渲染层折叠为嵌套园丁任务组 */
-      agent?: 'gardener'
+      /** 事件归属：要素管理员子代理的工具行带 elementManager，渲染层折叠为嵌套要素管理员任务组 */
+      agent?: 'element-manager'
       createdAt: string
     }
   | {
@@ -462,6 +455,8 @@ export type ChatMessageView =
 export type ChatSessionView = {
   sessionId: string
   projectId: string
+  /** 会话角色（缺省即主角色）：驱动该会话的智能体声明（角色横幅 / 输入框文案用） */
+  agent?: AgentRoleId
   status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   messages: ChatMessageView[]
   /**
@@ -499,6 +494,8 @@ export type ChatHistoryPageView = {
 export type ChatSessionSummaryView = {
   sessionId: string
   projectId: string
+  /** 会话角色（缺省即主角色）：会话列表按角色分组的依据 */
+  agent?: AgentRoleId
   title: string
   createdAt: string
   updatedAt: string
@@ -561,7 +558,7 @@ export type FileChangeConfirmationView = {
   summary: string
   /** 写工具执行前的预览数据，用于 UI 展示 diff。 */
   confirmation: WriteConfirmationView
-  /** 归属标签（如「园丁」）：园丁子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
+  /** 归属标签（如「要素管理员」）：要素管理员子代理触发的确认卡与主 Agent 共用同一张卡，标签区分请求方 */
   agentLabel?: string
 }
 
@@ -581,9 +578,20 @@ export type AgentUiEvent =
   /** 收件箱任何变化（入队/抽干/编辑/删除）时广播全量快照。 */
   | { type: 'queue-updated'; sessionId: string; queue: QueuedMessageView[] }
   | { type: 'confirmation-required'; sessionId: string; request: FileChangeConfirmationView }
+  /**
+   * 某会话的待确认快照（新增/resolve 后广播）：会话列表据此给非激活会话（如委派中的
+   * 要素管理员会话）打「待确认」徽标；激活会话的确认卡仍以 confirmation-required 为准。
+   */
+  | { type: 'confirmations-updated'; sessionId: string; confirmations: FileChangeConfirmationView[] }
   | { type: 'run-error'; sessionId: string; error: NovAiError }
   /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
   | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }
+  /**
+   * 服务端新落盘了一个会话（委派会话在主会话运行中创建）：载荷自带列表摘要，
+   * 前端直接 upsert 进会话列表——事件后再遍历文件系统会在创建方连发落盘的
+   * 写窗口内漏掉新会话文件，不可靠。
+   */
+  | { type: 'session-created'; sessionId: string; projectId: string; summary: ChatSessionSummaryView }
 
 export type NovAiErrorCode =
   | 'PROJECT_NOT_OPEN'

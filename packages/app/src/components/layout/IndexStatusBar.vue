@@ -11,7 +11,7 @@ import type { IndexStatusView } from '@novai/core/services/types'
  *
  * 三段式布局（h-7 矮栏，与 VS Code 风格一致）：
  * - 左：RAG 索引状态（项目层，慢变）。未初始化/空/过期/异常可点击触发全量构建。
- * - 左：当前激活场景提示词（项目层）。无壳内联样式，点 × 关闭。
+ * - 左：当前激活写作大纲（项目层）。无壳内联样式，点 × 关闭。
  * - 右：本轮 Agent 执行状态（会话层，瞬时）。按 type 上色（idle/running/error）。
  *
  * - 随项目激活时由 ProjectView 注入 projectId 并触发 init
@@ -19,8 +19,8 @@ import type { IndexStatusView } from '@novai/core/services/types'
  */
 const props = defineProps<{
   projectId: string
-  /** 当前激活场景的显示名（已去扩展名），null 表示未激活 */
-  activeSceneName: string | null
+  /** 当前激活大纲的显示名（已去扩展名），null 表示未激活 **/
+  activeOutlineName: string | null
   /** 本轮执行状态文案（来自 chatStore.runStatus） */
   runStatus: string
   /** runStatus 的语义类型，用于上色 */
@@ -28,8 +28,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 关闭当前激活场景（走 changeScene(null)） */
-  clearScene: []
+  /** 关闭当前激活大纲（走 changeOutline(null)） **/
+  clearOutline: []
 }>()
 
 const indexStore = useIndexStore()
@@ -104,8 +104,8 @@ function handleIndexClick() {
   indexStore.rebuild(props.projectId)
 }
 
-function handleClearScene() {
-  emit('clearScene')
+function handleClearOutline() {
+  emit('clearOutline')
 }
 
 function formatTime(iso: string) {
@@ -121,7 +121,7 @@ function formatTime(iso: string) {
   <div
     class="flex h-7 shrink-0 items-center gap-3 border-t border-gray-200 bg-gray-50 px-3 text-xs text-gray-600"
   >
-    <!-- 左侧：项目层状态（索引 + 场景） -->
+    <!-- 左侧：项目层状态（索引 + 大纲） -->
     <div class="flex min-w-0 items-center gap-3">
       <!-- 索引状态 -->
       <Tooltip
@@ -141,19 +141,19 @@ function formatTime(iso: string) {
         </button>
       </Tooltip>
 
-      <!-- 当前激活场景（紧凑内联，无壳）：📍 名称 × -->
+      <!-- 当前激活大纲（紧凑内联，无壳）：📍 名称 × -->
       <div
-        v-if="activeSceneName"
+        v-if="activeOutlineName"
         class="flex min-w-0 items-center gap-1 text-green-600"
-        title="当前场景提示词"
+        title="当前写作大纲"
       >
         <span class="shrink-0">📍</span>
-        <span class="truncate font-medium">{{ activeSceneName }}</span>
+        <span class="truncate font-medium">{{ activeOutlineName }}</span>
         <button
           type="button"
           class="shrink-0 rounded p-0.5 text-green-500 transition-colors hover:bg-green-200 hover:text-green-800"
-          title="关闭场景"
-          @click="handleClearScene"
+          title="关闭大纲"
+          @click="handleClearOutline"
         >
           <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />

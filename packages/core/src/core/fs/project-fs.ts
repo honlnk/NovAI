@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_NOVAI_OVERVIEW, DEFAULT_SCENE_PROMPT, DEFAULT_SYSTEM_PROMPT, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, isElementManagerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -22,10 +22,13 @@ const REQUIRED_DIRECTORY_PATHS = [
   'elements/plots',
   'elements/worldbuilding',
   'prompts',
-  'prompts/scenes',
+  'prompts/outlines',
   '.novel',
   '.novel/logs',
 ] as const
+
+const OUTLINES_DIRECTORY = 'prompts/outlines'
+const LEGACY_SCENES_DIRECTORY = 'prompts/scenes'
 
 /**
  * 判断当前运行环境是否支持浏览器目录读写能力。
@@ -51,8 +54,10 @@ export async function createProject(projectName: string): Promise<ProjectSnapsho
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
-  await writeText(rootHandle, 'prompts/scenes/scene-001.md', DEFAULT_SCENE_PROMPT)
-  await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+  await writeText(rootHandle, 'prompts/outlines/outline-001.md', DEFAULT_OUTLINE_TEMPLATE)
+  // 项目记忆无默认模板（W2 起非空即注入为 user-role reminder）：新项目留空占位，
+  // 内容交给 /生成项目记忆 或用户手写，避免「待补充」骨架每轮灌进上下文。
+  await writeText(rootHandle, 'prompts/NovAI.md', '')
   await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
 
   return loadProjectFromHandle(rootHandle)
@@ -102,8 +107,13 @@ export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Pro
     issues.push('missing-prompts-system')
   }
 
-  if (!(await pathExists(rootHandle, 'prompts/scenes', 'directory'))) {
-    issues.push('missing-prompts-scenes')
+  // 兼容旧目录：未迁移的旧项目仍是 prompts/scenes/（loadProjectFromHandle 会自动迁移），
+  // 不能因此判损坏——两目录任一存在即通过。
+  if (
+    !(await pathExists(rootHandle, OUTLINES_DIRECTORY, 'directory'))
+    && !(await pathExists(rootHandle, LEGACY_SCENES_DIRECTORY, 'directory'))
+  ) {
+    issues.push('missing-prompts-outlines')
   }
 
   if (!(await pathExists(rootHandle, 'chapters', 'directory'))) {
@@ -166,13 +176,14 @@ export async function repairProject(
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   }
 
-  // 项目总览 NovAI.md 缺失时补空骨架。它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），
-  // 因此不纳入 inspectProject 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
+  // 项目总览 NovAI.md 缺失时补空占位（同新项目：无默认模板，非空即注入）。
+  // 它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），因此不纳入 inspectProject
+  // 的强制检测项，只在这里温和补齐，避免给所有旧项目报“缺失”。
   if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
-    await writeText(rootHandle, 'prompts/NovAI.md', DEFAULT_NOVAI_OVERVIEW)
+    await writeText(rootHandle, 'prompts/NovAI.md', '')
   }
 
-  // 要素库规范 ELEMENT.md 缺失时补默认内容（园丁子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
+  // 要素库规范 ELEMENT.md 缺失时补默认内容（要素管理员子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
   // 与 NovAI.md 同策略：温和补齐、不覆盖用户已修改的版本、不纳入强制检测项。
   if (!(await pathExists(rootHandle, 'prompts/ELEMENT.md', 'file'))) {
     await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
@@ -184,9 +195,22 @@ export async function repairProject(
 /**
  * 从一个已知合法的目录句柄中读取配置、清单和文件树，并组装成项目快照。
  * 这是测试页后续所有项目级操作的基础输入。
+ *
+ * W3 起打开旧项目时先做 scenes→outlines 迁移（幂等），config 的大纲路径前缀与
+ * 旧字段名随迁移/归一化自动映射，用户文件只改名不动内容。
  */
 export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandle): Promise<ProjectSnapshot> {
-  const config = normalizeProjectConfig(await readJson<ProjectConfig>(rootHandle, 'novel.config.json'))
+  const migrated = await migrateScenesToOutlines(rootHandle)
+  const rawConfig = await readJson<ProjectConfig>(rootHandle, 'novel.config.json')
+  // 旧字段只要存在（哪怕值为 null）就触发写回——null 是合法的「未选大纲」，
+  // 按真值判断会让已迁移项目的死字段永远留在盘上。
+  const hasLegacyOutlineReference =
+    (rawConfig.settings as { activeScenePromptPath?: unknown } | undefined)?.activeScenePromptPath !== undefined
+  const config = normalizeProjectConfig(rawConfig)
+  // 迁移过或 config 还带旧字段：把归一化结果写回盘（路径前缀已替换、旧字段名被丢弃）
+  if (migrated || hasLegacyOutlineReference) {
+    await writeJson(rootHandle, 'novel.config.json', config)
+  }
   const manifest = await readJson<ProjectManifest>(rootHandle, '.novel/manifest.json')
   const tree = await scanDirectory(rootHandle)
 
@@ -200,6 +224,36 @@ export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandl
     tree,
     metadata: summarizeProject(tree, config, manifest),
   }
+}
+
+/**
+ * 旧项目迁移（W3，幂等）：`prompts/scenes/` → `prompts/outlines/`。
+ * 文件逐个搬移（内容不动）；目标同名冲突的文件留在原处不覆盖；scenes 目录搬空后删除，
+ * 仍有残留（同名冲突）则保留。返回是否发生了搬移。
+ */
+async function migrateScenesToOutlines(rootHandle: FileSystemDirectoryHandle): Promise<boolean> {
+  if (!(await pathExists(rootHandle, LEGACY_SCENES_DIRECTORY, 'directory'))) {
+    return false
+  }
+
+  await ensureDirectory(rootHandle, OUTLINES_DIRECTORY)
+  const legacyFiles = await listFilesInDirectory(rootHandle, LEGACY_SCENES_DIRECTORY)
+  let movedAny = false
+  for (const filePath of legacyFiles) {
+    const targetPath = `${OUTLINES_DIRECTORY}/${filePath.slice(LEGACY_SCENES_DIRECTORY.length + 1)}`
+    if (await pathExists(rootHandle, targetPath, 'file')) {
+      continue
+    }
+    await moveProjectTextFile(rootHandle, filePath, targetPath)
+    movedAny = true
+  }
+
+  // 搬空才删目录；仍有文件（同名冲突未搬）则保留，等用户处理
+  const remaining = await listFilesInDirectory(rootHandle, LEGACY_SCENES_DIRECTORY)
+  if (remaining.length === 0) {
+    await removeFile(rootHandle, LEGACY_SCENES_DIRECTORY)
+  }
+  return movedAny
 }
 
 /**
@@ -286,6 +340,11 @@ export async function writeProjectConfig(
 }
 
 function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
+  // 旧字段 activeScenePromptPath（W3 前身）读入后即被新字段取代，写回时不再保留。
+  const legacySettings = (config.settings ?? {}) as ProjectConfig['settings'] & {
+    activeScenePromptPath?: unknown
+  }
+  const { activeScenePromptPath: legacyScenePromptPath, ...settingsRest } = legacySettings
   return {
     ...DEFAULT_CONFIG,
     ...config,
@@ -324,9 +383,14 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
         ? config.search.provider
         : DEFAULT_CONFIG.search.provider,
     },
+    // 要素管理员覆盖块（Phase 2 计划 D2/D3）：块缺省 → undefined（全继承，零迁移）；
+    // llm 残缺/协议非法整组剔除、permissionPreset 非三档值剔除，均回退继承。
+    elementManager: normalizeElementManagerConfig(config.elementManager),
+    // 要素整理提醒块（入口重构 W3）：空模板/非法时间戳剔除；全空删块（回退默认模板）。
+    elementReminder: normalizeElementReminderConfig(config.elementReminder),
     settings: {
       ...DEFAULT_CONFIG.settings,
-      ...config.settings,
+      ...settingsRest,
       ragCandidateLimit: clampInt(config.settings?.ragCandidateLimit, 1, 100, DEFAULT_CONFIG.settings.ragCandidateLimit),
       ragContextMaxItems: clampInt(config.settings?.ragContextMaxItems, 1, 50, DEFAULT_CONFIG.settings.ragContextMaxItems),
       conversationTokenLimit: clampInt(config.settings?.conversationTokenLimit, 1000, 200000, DEFAULT_CONFIG.settings.conversationTokenLimit),
@@ -338,8 +402,25 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       // agentMaxTurns：0=不限（现行默认）。恰为 8 是旧版出厂默认，视为需要迁移的旧值按 0 处理
       // （用户显式选过其他值如 5 的尊重保留）；缺字段/非法值回退 0。下次保存设置自然落盘为 0。
       agentMaxTurns: normalizeAgentMaxTurns(config.settings?.agentMaxTurns),
+      // 大纲路径（W3 改名）：新字段优先，旧字段 activeScenePromptPath 读入映射；
+      // prompts/scenes/ 前缀随归一化替换为 outlines/（幂等，旧值随读随映射不丢用户选择）
+      activeOutlinePath: remapOutlinePath(
+        settingsRest.activeOutlinePath
+          ?? legacyScenePromptPath,
+      ),
     },
   }
+}
+
+
+/** prompts/scenes/ 路径前缀 → prompts/outlines/；空/非法值归一为 null。 */
+function remapOutlinePath(path: unknown): string | null {
+  if (typeof path !== 'string' || !path.trim()) {
+    return null
+  }
+  return path.startsWith(LEGACY_SCENES_DIRECTORY)
+    ? `${OUTLINES_DIRECTORY}${path.slice(LEGACY_SCENES_DIRECTORY.length)}`
+    : path
 }
 
 /** agentMaxTurns 迁移 + 钳制：非有限数 → 0（默认）；8（旧版出厂默认）→ 0；其余钳到 0-50。 */
@@ -352,6 +433,78 @@ function normalizeAgentMaxTurns(value: unknown): number {
     return 0
   }
   return Math.min(50, Math.max(0, rounded))
+}
+
+/**
+ * 要素管理员覆盖块归一化：块缺省/两覆盖项全被剔除 → undefined（全继承主 Agent）；
+ * 否则只保留合法覆盖项。不主动写入默认值（零迁移，D2）。
+ */
+function normalizeElementManagerConfig(elementManager: ProjectConfig['elementManager']): ProjectConfig['elementManager'] {
+  if (!elementManager || typeof elementManager !== 'object') {
+    return undefined
+  }
+  const llm = normalizeElementManagerLlm(elementManager.llm)
+  const permissionPreset = isElementManagerPermissionPreset(elementManager.permissionPreset)
+    ? elementManager.permissionPreset
+    : undefined
+  if (!llm && !permissionPreset) {
+    return undefined
+  }
+  return {
+    ...(llm ? { llm } : {}),
+    ...(permissionPreset ? { permissionPreset } : {}),
+  }
+}
+
+/**
+ * 要素整理提醒块校验（入口重构 W3）：template 空白串剔除（回退默认模板）、
+ * lastRemindedAt 非有限数剔除；两字段皆无 → 删块。
+ */
+function normalizeElementReminderConfig(
+  elementReminder: ProjectConfig['elementReminder'],
+): ProjectConfig['elementReminder'] {
+  if (!elementReminder || typeof elementReminder !== 'object') {
+    return undefined
+  }
+  const template = typeof elementReminder.template === 'string' && elementReminder.template.trim()
+    ? elementReminder.template
+    : undefined
+  const lastRemindedAt = typeof elementReminder.lastRemindedAt === 'number' && Number.isFinite(elementReminder.lastRemindedAt)
+    ? elementReminder.lastRemindedAt
+    : undefined
+  if (!template && lastRemindedAt === undefined) {
+    return undefined
+  }
+  return {
+    ...(template ? { template } : {}),
+    ...(lastRemindedAt !== undefined ? { lastRemindedAt } : {}),
+  }
+}
+
+/**
+ * 要素管理员 llm 覆盖块校验：四必填（baseUrl/apiKey/model/protocol）任一缺失或协议非法 →
+ * 整组剔除回退继承（防半覆盖拼出无效组合，D2）。reasoningEffort 合法才带键——
+ * 刻意不用显式 undefined：合成时展开覆盖，undefined 键会遮蔽主配置的思考档。
+ */
+function normalizeElementManagerLlm(
+  llm: NonNullable<ProjectConfig['elementManager']>['llm'],
+): NonNullable<ProjectConfig['elementManager']>['llm'] {
+  if (!llm || typeof llm !== 'object') {
+    return undefined
+  }
+  const baseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim() : ''
+  const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey : ''
+  const model = typeof llm.model === 'string' ? llm.model.trim() : ''
+  if (!baseUrl || !model || !isModelProtocol(llm.protocol)) {
+    return undefined
+  }
+  return {
+    baseUrl,
+    apiKey,
+    model,
+    protocol: llm.protocol,
+    ...(isReasoningEffort(llm.reasoningEffort) ? { reasoningEffort: llm.reasoningEffort } : {}),
+  }
 }
 
 /**
@@ -426,21 +579,21 @@ export async function readSystemPrompt(rootHandle: FileSystemDirectoryHandle) {
 }
 
 /**
- * 读取当前激活的场景级提示词。
- * path 为空、不是 prompts/scenes/ 下文件或文件缺失时，返回空字符串，不抛错。
+ * 读取当前激活的写作大纲（`prompts/outlines/` 下文件）。
+ * path 为空、不是 outlines/ 下文件或文件缺失时，返回空字符串，不抛错。
  */
-export async function readScenePrompt(
+export async function readOutlinePrompt(
   rootHandle: FileSystemDirectoryHandle,
   path?: string | null,
 ): Promise<string> {
-  const scenePath = path?.trim()
+  const outlinePath = path?.trim()
 
-  if (!scenePath || !scenePath.startsWith('prompts/scenes/')) {
+  if (!outlinePath || !outlinePath.startsWith(`${OUTLINES_DIRECTORY}/`)) {
     return ''
   }
 
   try {
-    return await readText(rootHandle, scenePath)
+    return await readText(rootHandle, outlinePath)
   } catch {
     return ''
   }
@@ -462,10 +615,10 @@ export async function readNovAiOverview(rootHandle: FileSystemDirectoryHandle): 
 }
 
 /**
- * 读取要素库规范 `prompts/ELEMENT.md`（园丁子代理的唯一注入文件）。
+ * 读取要素库规范 `prompts/ELEMENT.md`（要素管理员子代理的唯一注入文件）。
  *
- * 只注入园丁、不注入主 Agent（《要素园丁子代理设计》§7.4）；
- * 文件缺失时返回空字符串，不抛错——园丁 prompt 组装层会附「规范缺失」兜底提示。
+ * 只注入要素管理员、不注入主 Agent（《要素园丁子代理设计》§7.4）；
+ * 文件缺失时返回空字符串，不抛错——要素管理员 prompt 组装层会附「规范缺失」兜底提示。
  */
 export async function readElementSchema(rootHandle: FileSystemDirectoryHandle): Promise<string> {
   try {

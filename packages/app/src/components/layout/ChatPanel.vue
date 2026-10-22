@@ -1,26 +1,38 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
-import { GARDENER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import { checkElementReminder, markElementReminderShown } from '@novai/core/services/element-reminder-service'
 import { useChatStore } from '../../stores/chat'
-import { isImeComposing, resolveSubmitMode } from '../../composables/keyboard'
-import { useElementExtraction, type ChapterPick } from '../../composables/useElementExtraction'
+import { resolveSubmitMode } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
+import { useComposerBridge } from '../../composables/useComposerBridge'
 import { useProjectStore } from '../../stores/project'
 import MessageItem from '../chat/MessageItem.vue'
 import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
-import SceneCommandPopover from '../chat/SceneCommandPopover.vue'
-import ChapterPicker from '../chat/ChapterPicker.vue'
-import ExtractionFlowPanel from '../chat/ExtractionFlowPanel.vue'
+import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
+import {
+  registerTextRefs,
+  rescanTextRefs,
+  TextRefNode,
+  type TextRefLexicon,
+} from '../chat/text-ref'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
-import type { SlashCommandId } from '../../constants/slash-commands'
+import {
+  bareSlashCommandHint,
+  expandSlashCommand,
+  SLASH_COMMANDS,
+  slashCommandDraftText,
+  type SlashCommandId,
+} from '../../constants/slash-commands'
 import type { ChatRenderItem } from '../../stores/chat-render'
+import { AGENT_ROLE_META } from '../../constants/agent-roles'
+import { REPO_URL } from '../../constants/repo'
 import type { PermissionPreset } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
 
@@ -39,12 +51,10 @@ const props = defineProps<{
   isSidebarOpen: boolean
   isContentPanelOpen: boolean
   quote: SelectionQuote | null
-  /** 场景提示词列表（prompts/scenes/*.md），供 @ 指令选择 */
-  scenes: ProjectFileNodeView[]
-  /** 当前激活的场景路径，null 表示未激活 */
-  activeScenePromptPath: string | null
-  /** 章节列表（chapters/*.txt|.md），供 /提取要素 选择（R6） */
-  chapters: ProjectFileNodeView[]
+  /** 写作大纲列表（prompts/outlines/*.md），供 @ 指令选择 **/
+  outlines: ProjectFileNodeView[]
+  /** 当前激活的大纲路径，null 表示未激活 **/
+  activeOutlinePath: string | null
 }>()
 
 const emit = defineEmits<{
@@ -52,17 +62,42 @@ const emit = defineEmits<{
   toggleContentPanel: []
   toggleMobileSidebar: []
   clearQuote: []
-  /** 切换激活场景，path 为 null 表示关闭 */
-  changeScene: [path: string | null]
-  /** 要素写入完成，通知 ProjectView 刷新文件树（R6） */
-  elementsWritten: []
+  /** 切换激活大纲，path 为 null 表示关闭 **/
+  changeOutline: [path: string | null]
 }>()
 
 const chatStore = useChatStore()
 const projectStore = useProjectStore()
-const inputText = ref('')
 const messagesContainer = ref<HTMLDivElement | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+/** 会话角色展示元数据（直聊横幅 + 输入框 placeholder 用；主角色无特化展示） */
+const roleMeta = computed(() =>
+  chatStore.sessionView?.agent && chatStore.sessionView.agent !== 'main'
+    ? AGENT_ROLE_META[chatStore.sessionView.agent]
+    : null,
+)
+/** Lexical 编辑器宿主（contenteditable 根元素；富文本化 W1 起 textarea 退役） */
+const editorHostRef = ref<HTMLDivElement | null>(null)
+
+// 编辑器桥：Lexical 是草稿唯一真值，draft 是纯文本投影（onTextChange 等价旧 @input 回调：
+// 自适应高度 + 指令检测 + 补全调度；selection-only 更新不触发，与旧 textarea 行为一致）
+const composer = useComposerBridge({
+  nodes: [TextRefNode],
+  onTextChange: () => {
+    autoResizeEditor()
+    detectCommands()
+    scheduleInlineCompletion()
+  },
+})
+const { draft } = composer
+
+// token 高亮词表（W3）：斜杠命令取 labels（含 '/' 前缀），大纲取 '@' + 展示名（与弹层查询口径一致）
+const textRefLexicon = computed<TextRefLexicon>(() => ({
+  slash: SLASH_COMMANDS.map((entry) => entry.label),
+  outline: props.outlines.map((node) => `@${node.name.replace(/\.md$/i, '')}`),
+}))
+/** registerTextRefs 注销句柄（onMounted 注册，onBeforeUnmount 注销） */
+let unregisterTextRefs: (() => void) | null = null
 
 // 用户已请求停止、正在等待当前工具完成
 const isStopping = computed(() => chatStore.isStopping)
@@ -117,9 +152,6 @@ function renderItemKey(item: ChatRenderItem): string {
   if (item.kind === 'process-group') {
     return `group-${item.id}`
   }
-  if (item.kind === 'subagent-group') {
-    return `subagent-${item.id}`
-  }
   if (item.kind === 'tool-row') {
     return `tool-${item.id}`
   }
@@ -132,6 +164,15 @@ const { suggestion: completionSuggestion, scheduleCompletion, acceptNextSegment,
 /** 补全是否处于可显示状态（开启 + 有建议 + 非运行中） */
 const isCompletionVisible = computed(
   () => !!completionConfig.value?.enabled && completionSuggestion.value.length > 0 && !chatStore.isRunning,
+)
+
+/**
+ * 行内建议合流（入口重构 W1）：斜杠裸发提示优先于 FIM 补全——命令刚落下、
+ * 参数未补时给确定性引导，用户开始补参数后裸发形态不再匹配，FIM 自然接管。
+ * Tab 采纳 / Esc 丢弃交互仍只属于 FIM（isCompletionVisible），裸发提示纯展示。
+ */
+const inlineSuggestion = computed(
+  () => bareSlashCommandHint(draft.value) || (isCompletionVisible.value ? completionSuggestion.value : ''),
 )
 
 // 自动滚动到底部
@@ -245,18 +286,17 @@ watch(
  * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
  */
 async function handleSend(mode: 'queue' | 'steer' = 'queue') {
-  if (!inputText.value.trim()) return
+  const draftText = draft.value.trim()
+  if (!draftText) return
 
   clearSuggestion()
-  const message = inputText.value.trim()
+  // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
+  // 其后参数原样保留；不在行首的命令文本视作正文，不替换
+  const message = expandSlashCommand(draftText)
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
-  inputText.value = ''
-
-  // 重置 textarea 高度
-  if (textareaRef.value) {
-    textareaRef.value.style.height = 'auto'
-  }
+  // 清空走桥（onTextChange 会顺带重置高度与指令状态）
+  composer.setDraft('')
 
   // 自己发消息恒吸底：发送即「要看最新输出」的显式意图
   followAndScrollToBottom()
@@ -265,8 +305,9 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     // 发送成功后清除引用 chip
     emit('clearQuote')
   } else {
-    // 发送失败草稿恢复：把文本填回输入框（dsh restoreFailedDrafts 简单版）
-    inputText.value = message
+    // 发送失败草稿恢复：把原草稿文本填回输入框（dsh restoreFailedDrafts 简化版；
+    // 填回的是用户输入的草稿而非替换后的 prompt 全文）
+    composer.setDraft(draftText)
   }
 }
 
@@ -275,11 +316,13 @@ function handleStop() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // IME 组字期（含 Safari compositionend 后 10ms 尾窗，dsh keymap 三条件）一切按键
+  // 放行给输入法/浏览器——补全采纳、菜单导航、发送均不抢键
+  if (composer.isComposing(event)) return
   // 输入框 AI 补全交互（最高优先级，贴近光标）：
-  // - IME 组合态放行，避免在中文选词时误触 Tab/Esc
   // - Tab 接受建议的首个分词单位；Esc 丢弃剩余建议
   // - 仅当 ghost text 可见时拦截，避免吞掉其他场景的 Tab/Esc
-  if (!isImeComposing(event) && isCompletionVisible.value) {
+  if (isCompletionVisible.value) {
     if (event.key === 'Tab') {
       event.preventDefault()
       acceptCompletionSegment()
@@ -288,14 +331,6 @@ function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault()
       clearSuggestion()
-      return
-    }
-  }
-  // /提取要素 章节选择打开时：仅拦截 Esc（选择走鼠标点击）
-  if (isChapterPickerOpen.value) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      isChapterPickerOpen.value = false
       return
     }
   }
@@ -322,84 +357,73 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
-  // @场景 弹层打开时：拦截导航键交给弹层
-  if (isSceneCommandOpen.value && scenePopoverRef.value) {
+  // @大纲 弹层打开时：拦截导航键交给弹层
+  if (isOutlineCommandOpen.value && outlinePopoverRef.value) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      scenePopoverRef.value.moveDown()
+      outlinePopoverRef.value.moveDown()
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      scenePopoverRef.value.moveUp()
+      outlinePopoverRef.value.moveUp()
       return
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      scenePopoverRef.value.confirm()
+      outlinePopoverRef.value.confirm()
       return
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      handleCloseSceneCommand()
+      handleCloseOutlineCommand()
       return
     }
   }
   // 发送模式（dsh resolveSubmitMode）：Enter = 发送/排队，Ctrl/Cmd+Enter = 插话，
-  // Shift+Enter 换行；空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
+  // Shift+Enter 换行（contenteditable 的默认行为是产生段落，交给 Lexical）；
+  // 空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
   const submitMode = resolveSubmitMode(event)
   if (submitMode) {
     event.preventDefault()
-    if (submitMode === 'steer' && !inputText.value.trim()) {
+    if (submitMode === 'steer' && !draft.value.trim()) {
       void steerAllQueued()
       return
     }
     handleSend(submitMode === 'steer' ? 'steer' : 'queue')
+    return
   }
+  // Shift+Enter 换行：默认行为即可（Lexical insertParagraph），无需处理
 }
 
-function autoResize(event: Event) {
-  const textarea = event.target as HTMLTextAreaElement
-  textarea.style.height = 'auto'
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
-}
-
-/** textarea input 统一入口：自适应高度 + 指令检测（R4 @场景 / R6 /提取要素）+ 输入补全调度 */
-function onTextareaInput(event: Event) {
-  autoResize(event)
-  detectCommands()
-  scheduleInlineCompletion()
+/** 编辑区自适应高度：与旧 textarea 同语义（auto → scrollHeight，上限 200px） */
+function autoResizeEditor() {
+  const host = editorHostRef.value
+  if (!host) return
+  host.style.height = 'auto'
+  host.style.height = `${Math.min(host.scrollHeight, 200)}px`
 }
 
 /**
- * 调度输入补全。命令菜单 / @场景 / 章节选择打开时不调度，避免与这些交互冲突。
+ * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isSceneCommandOpen.value || isChapterPickerOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value) {
     clearSuggestion()
     return
   }
-  const cursor = textareaRef.value?.selectionStart ?? 0
-  scheduleCompletion(inputText.value, cursor, completionConfig.value)
+  const cursor = composer.caretOffset() ?? draft.value.length
+  scheduleCompletion(draft.value, cursor, completionConfig.value)
 }
 
 /**
- * 接受建议的首个分词单位：拼到 inputText 末尾，吃光后清空状态并重置高度。
+ * 接受建议的首个分词单位：在光标处插入（ghost 场景光标恒在末尾），
+ * 光标随插入后移；插入触发 onTextChange → 高度重置 + 补全重调度由桥接管。
  */
 function acceptCompletionSegment() {
   const { accepted, hasMore } = acceptNextSegment()
   if (accepted) {
-    inputText.value += accepted
-    // 同步光标到末尾，让后续补全基于新光标位置
-    nextTick(() => {
-      if (textareaRef.value) {
-        const end = inputText.value.length
-        textareaRef.value.selectionStart = end
-        textareaRef.value.selectionEnd = end
-        textareaRef.value.style.height = 'auto'
-        textareaRef.value.style.height = `${Math.min(textareaRef.value.scrollHeight, 200)}px`
-      }
-    })
+    composer.insertAtCaret(accepted)
   }
   if (!hasMore) {
     // 建议已吃完，基于新内容重新调度一次（可能续出下一段）
@@ -407,58 +431,38 @@ function acceptCompletionSegment() {
   }
 }
 
-// ===== R4：@场景 指令检测 =====
+// ===== R4：@大纲 指令检测 =====
 
-/** @场景 弹层是否打开 */
-const isSceneCommandOpen = ref(false)
+/** @大纲 弹层是否打开 */
+const isOutlineCommandOpen = ref(false)
 /** @ 后的筛选词 */
-const sceneQuery = ref('')
+const outlineQuery = ref('')
 /** 弹层组件引用（键盘导航用） */
-const scenePopoverRef = ref<InstanceType<typeof SceneCommandPopover> | null>(null)
+const outlinePopoverRef = ref<InstanceType<typeof OutlineCommandPopover> | null>(null)
 
 /**
  * 匹配光标前最近的 @ 指令。
  * 规则：@ 前是行首或空白，@ 后到光标间不含空格/换行/@。
  * 捕获组即筛选词（可能为空字符串）。
  */
-const SCENE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
+const OUTLINE_COMMAND_RE = /(?:^|\s)@([^\s@]*)$/
 
 /**
- * 清除光标处匹配指定正则的 token（@场景、/命令 共用）。
- * 清除后光标回位并重新聚焦 textarea。
+ * 选中大纲后：清除输入框里的 @token（含筛选词），激活大纲，关闭弹层。
+ * token 清除走桥的 replaceTokenBeforeCaret（边界空白保留、光标落替换处并聚焦）。
  */
-function clearTokenAtCursor(re: RegExp) {
-  const textarea = textareaRef.value
-  if (!textarea) return
-  const cursor = textarea.selectionStart ?? 0
-  const beforeCursor = inputText.value.slice(0, cursor)
-  const afterCursor = inputText.value.slice(cursor)
-  const cleaned = beforeCursor.replace(re, '')
-  inputText.value = cleaned + afterCursor
-  nextTick(() => {
-    if (textareaRef.value) {
-      textareaRef.value.selectionStart = cleaned.length
-      textareaRef.value.selectionEnd = cleaned.length
-      textareaRef.value.focus()
-    }
-  })
+function handleSelectOutline(path: string) {
+  composer.replaceTokenBeforeCaret(OUTLINE_COMMAND_RE)
+  isOutlineCommandOpen.value = false
+  outlineQuery.value = ''
+  emit('changeOutline', path)
 }
 
-/**
- * 选中场景后：清除输入框里的 @token（含筛选词），激活场景，关闭弹层。
- */
-function handleSelectScene(path: string) {
-  clearTokenAtCursor(SCENE_COMMAND_RE)
-  isSceneCommandOpen.value = false
-  sceneQuery.value = ''
-  emit('changeScene', path)
+function handleCloseOutlineCommand() {
+  isOutlineCommandOpen.value = false
 }
 
-function handleCloseSceneCommand() {
-  isSceneCommandOpen.value = false
-}
-
-// ===== R6：斜杠命令菜单 / 提取要素 =====
+// ===== 斜杠命令菜单 =====
 
 /** 斜杠命令菜单是否打开（输入 / 后弹出命令列表） */
 const isSlashMenuOpen = ref(false)
@@ -466,104 +470,147 @@ const isSlashMenuOpen = ref(false)
 const slashQuery = ref('')
 /** 斜杠命令菜单组件引用（键盘导航用） */
 const slashMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null)
-/** /提取要素 章节多选弹层是否打开（选中命令后展开） */
-const isChapterPickerOpen = ref(false)
-/** 提取流程状态（composable 单例） */
-const extraction = useElementExtraction()
 
 /**
  * 匹配光标前最近的 / 命令前缀。
- * 规则与 @场景 同构：/ 前是行首或空白，/ 后到光标间不含空格/换行/。
+ * 规则与 @大纲 同构：/ 前是行首或空白，/ 后到光标间不含空格/换行/。
  * 捕获组即筛选词（可能为空）。
  */
 const SLASH_COMMAND_RE = /(?:^|\s)\/([^\s/]*)$/
 
-/** 指令检测入口：input 回调统一调用 */
+/** 指令检测入口：编辑器文本变化回调统一调用 */
 function detectCommands() {
-  const textarea = textareaRef.value
-  if (!textarea) {
-    isSceneCommandOpen.value = false
+  if (!composer.isMounted()) {
+    isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
     return
   }
-  const cursor = textarea.selectionStart ?? 0
-  const beforeCursor = inputText.value.slice(0, cursor)
+  const cursor = composer.caretOffset() ?? draft.value.length
+  const beforeCursor = draft.value.slice(0, cursor)
 
-  // @场景、/ 命令、章节选择三层互斥，同一时刻只开一个
-  const sceneMatch = SCENE_COMMAND_RE.exec(beforeCursor)
+  // @大纲、/ 命令两层互斥，同一时刻只开一个
+  const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
   const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
 
   if (slashMatch) {
     slashQuery.value = slashMatch[1]
     isSlashMenuOpen.value = true
-    isSceneCommandOpen.value = false
-    isChapterPickerOpen.value = false
-  } else if (sceneMatch) {
-    sceneQuery.value = sceneMatch[1]
-    isSceneCommandOpen.value = props.scenes.length > 0
+    isOutlineCommandOpen.value = false
+  } else if (outlineMatch) {
+    outlineQuery.value = outlineMatch[1]
+    isOutlineCommandOpen.value = props.outlines.length > 0
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
   } else {
-    isSceneCommandOpen.value = false
+    isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
-    isChapterPickerOpen.value = false
   }
 }
 
 /**
- * 选中斜杠命令后：清除 / token，按命令类型展开二级界面。
+ * 选中斜杠命令后（W3 新范式）：清除 / token，把命令文本落进输入框（尾部带空格、
+ * 光标置后），命令是纯文本——用户可在其后补参数、可编辑可删除。所有命令一视同仁，
+ * 不开任何弹窗；参数弹窗只属于工具栏按钮入口（发送链路的前缀拦截负责替换为驱动
+ * prompt 全文，裸命令文本不构成有效指令）。
  */
 function handleSlashCommandSelect(id: SlashCommandId) {
-  // 清除输入框里的 / token（含筛选词）
-  clearTokenAtCursor(SLASH_COMMAND_RE)
   isSlashMenuOpen.value = false
   slashQuery.value = ''
 
-  if (id === 'extract') {
-    // 选中「提取要素」后展开章节多选
-    isChapterPickerOpen.value = props.chapters.length > 0
-    return
-  }
+  const command = SLASH_COMMANDS.find((entry) => entry.id === id)
+  if (!command) return
+  composer.replaceTokenBeforeCaret(SLASH_COMMAND_RE, slashCommandDraftText(command.label))
 
-  if (id === 'gardener') {
-    // 选中「整理要素」后，把驱动 prompt 直接作为用户意图发送：主 Agent 调用 DelegateToGardener
-    // 委派园丁子代理整理要素库，园丁的工具行在聊天区折叠为嵌套任务组。无二级交互界面。
-    followAndScrollToBottom()
-    void chatStore.sendMessage(GARDENER_TASK_PROMPT)
-    return
-  }
-
-  if (id === 'init') {
-    // 选中「生成项目记忆」后，把驱动 prompt 直接作为用户意图发送，由 Agent 扫描项目并生成/更新 prompts/NovAI.md。
-    // 不需要二级交互界面，复用普通对话发送链路。
-    followAndScrollToBottom()
-    void chatStore.sendMessage(INIT_NOVEL_PROMPT)
-  }
+  // 落文本后不自动发送：elementManager / init 用户均可补参数后 Enter；
+  // 发送链路的前缀拦截分别替换为 ELEMENT_MANAGER_TASK_PROMPT（W1 起为一句委派指令）/ INIT_NOVEL_PROMPT
 }
 
 /**
- * ChapterPicker 确认：启动提取流程。
+ * 一键管理要素快捷入口已删（入口重构 W2：Ctrl/Cmd+Shift+G 退役）；
+ * 输入框上方按钮位由 W3 滑入式整理提醒接管，侧栏单击由 W4 直聊会话接管。
  */
-function handleChapterPickerConfirm(chapters: ChapterPick[]) {
-  isChapterPickerOpen.value = false
-  extraction.startExtraction(props.projectId, chapters)
-}
 
-function handleChapterPickerCancel() {
-  isChapterPickerOpen.value = false
-}
+// ===== 要素整理提醒（入口重构 W3：距上次整理新增 ≥ 2 章时滑入） =====
+
+/** 提醒按钮是否滑入显示 */
+const isReminderVisible = ref(false)
+/** 点击提醒落输入框的完整草稿（模板已填充真实章节名） */
+const reminderDraft = ref('')
+let reminderCheckTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
- * 提取流程：确认写入。
+ * 阈值检测（防抖 500ms）：文件树变化或 Agent 运行结束时复查。运行中不弹——
+ * 批量写文件会让 mtime 抖动产生误判，且提醒也打断不了正在跑的任务。
+ * 检测失败静默：提醒是增值功能，不阻塞主链路。
  */
-async function handleExtractionConfirm() {
-  const result = await extraction.confirmWrite()
-  if (result) {
-    // 写入成功，通知 ProjectView 刷新文件树
-    emit('elementsWritten')
+function scheduleReminderCheck() {
+  if (reminderCheckTimer) {
+    clearTimeout(reminderCheckTimer)
   }
+  reminderCheckTimer = setTimeout(() => {
+    reminderCheckTimer = null
+    void checkElementReminder(props.projectId)
+      .then((check) => {
+        if (check.due && !chatStore.isRunning) {
+          reminderDraft.value = check.draft
+          isReminderVisible.value = true
+        }
+      })
+      .catch(() => {})
+  }, 500)
 }
+
+watch(() => projectStore.currentProject?.files, scheduleReminderCheck)
+watch(
+  () => chatStore.isRunning,
+  (running) => {
+    if (!running) {
+      scheduleReminderCheck()
+    }
+  },
+)
+
+/** 点击提醒：模板落光标处，可继续编辑后发送（发送链路前缀拦截替换为委派指令，W1） */
+function handleReminderApply() {
+  if (reminderDraft.value) {
+    composer.insertAtCaret(reminderDraft.value)
+  }
+  dismissReminder()
+}
+
+/** 收起提醒并落「已提醒」标记：同一批新增不再弹，之后有新章节会再提醒 */
+function dismissReminder() {
+  isReminderVisible.value = false
+  reminderDraft.value = ''
+  void markElementReminderShown(props.projectId)
+}
+
+onMounted(() => {
+  // 编辑器挂载 + 初始高度（空态两行的 min-height 由 CSS 提供，此处量一次收口）
+  if (editorHostRef.value) {
+    composer.mount(editorHostRef.value)
+    autoResizeEditor()
+  }
+  // token 高亮注册（挂载后编辑器实例就绪；词表经 getter 每次取最新）
+  unregisterTextRefs = registerTextRefs(composer.editor, () => textRefLexicon.value)
+})
+
+// 大纲列表变化（增删/改名）时全量重扫：已输入的 @token 命中/失效都要跟着变
+watch(
+  () => props.outlines,
+  () => {
+    if (composer.isMounted()) rescanTextRefs(composer.editor)
+  },
+)
+
+onBeforeUnmount(() => {
+  if (reminderCheckTimer) {
+    clearTimeout(reminderCheckTimer)
+    reminderCheckTimer = null
+  }
+  unregisterTextRefs?.()
+  unregisterTextRefs = null
+  composer.unmount()
+})
 </script>
 
 <template>
@@ -572,6 +619,7 @@ async function handleExtractionConfirm() {
     <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex items-center gap-2">
         <button
+          aria-label="打开分类面板"
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
           @click="emit('toggleMobileSidebar')"
         >
@@ -580,6 +628,7 @@ async function handleExtractionConfirm() {
           </svg>
         </button>
         <button
+          :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
           class="hidden rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:block"
           @click="emit('toggleSidebar')"
         >
@@ -595,7 +644,20 @@ async function handleExtractionConfirm() {
         <h1 class="text-base font-semibold text-gray-800">AI 对话</h1>
       </div>
       <div class="flex items-center gap-1">
+        <a
+          :href="REPO_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="GitHub 仓库"
+          title="GitHub 仓库"
+          class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+          </svg>
+        </a>
         <button
+          :aria-label="isContentPanelOpen ? '收起内容面板' : '展开内容面板'"
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
           @click="emit('toggleContentPanel')"
         >
@@ -609,6 +671,17 @@ async function handleExtractionConfirm() {
         </button>
       </div>
     </header>
+
+    <!-- 直聊会话角色横幅：非主角色会话显示（与谁对话、边界是什么） -->
+    <div
+      v-if="roleMeta"
+      class="flex items-center justify-center gap-1.5 border-b border-amber-200/60 bg-amber-50 px-4 py-1 text-xs text-amber-700"
+    >
+      <svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
+      </svg>
+      <span>正在与{{ roleMeta.label }}对话{{ roleMeta.scopeNote ? ` · ${roleMeta.scopeNote}` : '' }}</span>
+    </div>
 
     <!-- 消息列表区（relative 包裹：「回到底部」浮钮的定位父级；浮钮放进滚动容器会随内容滚走） -->
     <div class="relative flex min-h-0 flex-1 flex-col">
@@ -654,18 +727,7 @@ async function handleExtractionConfirm() {
                 @toggle="chatStore.toggleProcessGroup"
               >
                 <template v-for="child in item.items" :key="renderItemKey(child)">
-                  <!-- 园丁子代理嵌套任务组：组头带标签、嵌套缩进，子项为其工具行 -->
-                  <TurnProcessGroup
-                    v-if="child.kind === 'subagent-group'"
-                    :group="child"
-                    nested
-                    @toggle="chatStore.toggleProcessGroup"
-                  >
-                    <template v-for="grandchild in child.items" :key="renderItemKey(grandchild)">
-                      <ToolCallRow v-if="grandchild.kind === 'tool-row'" :item="grandchild" />
-                    </template>
-                  </TurnProcessGroup>
-                  <ToolCallRow v-else-if="child.kind === 'tool-row'" :item="child" />
+                  <ToolCallRow v-if="child.kind === 'tool-row'" :item="child" />
                   <MessageItem
                     v-else-if="child.kind === 'message'"
                     :message="child.message"
@@ -703,21 +765,6 @@ async function handleExtractionConfirm() {
       </button>
     </div>
 
-    <!-- 要素提取流程面板（R6） -->
-    <ExtractionFlowPanel
-      v-if="extraction.phase.value !== 'idle'"
-      :phase="extraction.phase.value"
-      :extraction-result="extraction.extractionResult.value"
-      :write-result="extraction.writeResult.value"
-      :progress-current="extraction.progressCurrent.value"
-      :progress-total="extraction.progressTotal.value"
-      :progress-chapter-name="extraction.progressChapterName.value"
-      :error-message="extraction.errorMessage.value"
-      @confirm="handleExtractionConfirm"
-      @cancel="extraction.cancel()"
-      @dismiss="extraction.dismiss()"
-    />
-
     <!-- 写工具确认卡片（Agent Step 2/3） -->
     <WriteConfirmationCard
       v-if="chatStore.pendingConfirmation"
@@ -741,7 +788,7 @@ async function handleExtractionConfirm() {
           @remove="chatStore.removeQueuedMessage"
           @steer="chatStore.steerQueuedMessage"
         />
-        <!-- chip 区：引用 chip（场景 chip 已移至底部状态栏） -->
+        <!-- chip 区：引用 chip（大纲 chip 已移至底部状态栏） -->
         <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
           <SelectionChip
             v-if="quote"
@@ -751,15 +798,15 @@ async function handleExtractionConfirm() {
           />
         </div>
         <div class="relative">
-          <!-- @场景 指令弹层（R4） -->
-          <SceneCommandPopover
-            v-if="isSceneCommandOpen"
-            ref="scenePopoverRef"
-            :scenes="scenes"
-            :active-scene-path="activeScenePromptPath"
-            :query="sceneQuery"
-            @select="handleSelectScene"
-            @close="handleCloseSceneCommand"
+          <!-- @大纲 指令弹层（R4） -->
+          <OutlineCommandPopover
+            v-if="isOutlineCommandOpen"
+            ref="outlinePopoverRef"
+            :outlines="outlines"
+            :active-outline-path="activeOutlinePath"
+            :query="outlineQuery"
+            @select="handleSelectOutline"
+            @close="handleCloseOutlineCommand"
           />
           <!-- 斜杠命令菜单（R6） -->
           <SlashCommandMenu
@@ -769,32 +816,33 @@ async function handleExtractionConfirm() {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
-          <!-- /提取要素 章节多选弹层（R6） -->
-          <ChapterPicker
-            v-if="isChapterPickerOpen"
-            :chapters="chapters"
-            @confirm="handleChapterPickerConfirm"
-            @cancel="handleChapterPickerCancel"
-          />
-          <!-- 卡片式输入框：textarea + ghost text 覆盖层 + 工具行（发送按钮） -->
+          <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
           <div class="chat-input-card">
-            <!-- textarea + ghost text 覆盖层（补全开启且有建议时） -->
+            <!-- 编辑器 + ghost text 覆盖层（斜杠裸发提示或 FIM 补全建议，二者合流） -->
             <div class="relative">
               <GhostTextOverlay
-                v-if="isCompletionVisible"
-                :input-text="inputText"
-                :suggestion="completionSuggestion"
+                v-if="inlineSuggestion.length > 0"
+                :input-text="draft"
+                :suggestion="inlineSuggestion"
+                :host="editorHostRef"
               />
-              <textarea
-                ref="textareaRef"
-                v-model="inputText"
-                class="chat-input-base resize-none bg-transparent text-gray-800 outline-none placeholder:text-gray-400"
-                :placeholder="chatStore.isRunning
-                  ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
-                  : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换场景)'"
-                rows="2"
+              <!-- 占位符：空草稿时显示（Lexical 根节点恒有段落元素，CSS :empty 不可用） -->
+              <div
+                v-if="draft === ''"
+                class="chat-input-base pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-gray-400"
+                aria-hidden="true"
+              >{{ chatStore.isRunning
+                ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
+                : (roleMeta?.inputPlaceholder
+                  ?? '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)') }}</div>
+              <!-- Lexical 编辑器宿主：contenteditable 由 setRootElement 接管，键入与选区归编辑器管 -->
+              <div
+                ref="editorHostRef"
+                class="chat-input-base chat-input-editable text-gray-800 outline-none"
+                role="textbox"
+                aria-multiline="true"
+                aria-label="聊天输入框"
                 @keydown="handleKeydown"
-                @input="onTextareaInput"
               />
             </div>
             <!-- 工具行：左侧权限档位，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示）。
@@ -805,6 +853,35 @@ async function handleExtractionConfirm() {
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
                 />
+                <!-- 整理提醒（入口重构 W3）：阈值触发从左滑入，非常驻；点击落模板退回，
+                     × 忽略（同一批新增不再弹，之后有新章节会再提醒） -->
+                <Transition
+                  enter-active-class="transition duration-300 ease-out"
+                  enter-from-class="-translate-x-3 opacity-0"
+                  enter-to-class="translate-x-0 opacity-100"
+                  leave-active-class="transition duration-200 ease-in"
+                  leave-from-class="translate-x-0 opacity-100"
+                  leave-to-class="-translate-x-3 opacity-0"
+                >
+                  <button
+                    v-if="isReminderVisible"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                    title="距上次整理已新增多章；点击把整理任务模板落入输入框，可编辑后发送"
+                    @click="handleReminderApply"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    <span>整理提醒</span>
+                    <span
+                      role="button"
+                      aria-label="忽略本次提醒"
+                      class="ml-0.5 cursor-pointer rounded p-0.5 text-amber-400 transition-colors hover:bg-amber-200 hover:text-amber-700"
+                      @click.stop="dismissReminder"
+                    >×</span>
+                  </button>
+                </Transition>
               </div>
               <div class="flex items-center gap-2">
                 <button
@@ -832,7 +909,7 @@ async function handleExtractionConfirm() {
                 <button
                   v-if="chatStore.isRunning"
                   class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
-                  :disabled="!inputText.trim()"
+                  :disabled="!draft.trim()"
                   title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
                   @click="handleSend('steer')"
                 >
@@ -846,7 +923,7 @@ async function handleExtractionConfirm() {
                 />
                 <button
                   class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
-                  :disabled="!inputText.trim()"
+                  :disabled="!draft.trim()"
                   :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
                   @click="handleSend('queue')"
                 >

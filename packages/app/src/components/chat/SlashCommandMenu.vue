@@ -5,9 +5,9 @@ import { SLASH_COMMANDS, type SlashCommandId } from '../../constants/slash-comma
 /**
  * 斜杠命令菜单（R6）。
  *
- * 输入框输入 / 后弹出，列出可用斜杠命令（如 /提取要素）。
+ * 输入框输入 / 后弹出，列出可用斜杠命令（如 /管理要素）；选中后命令文本落输入框。
  * 选中后由父组件根据命令 id 展开对应的二级界面。
- * 与 @场景 弹层同构：单选 + 键盘导航（defineExpose moveUp/moveDown/confirm）。
+ * 与 @大纲 弹层同构：单选 + 键盘导航（defineExpose moveUp/moveDown/confirm）。
  */
 const props = defineProps<{
   /** 筛选词（/ 后用户输入的文字） */

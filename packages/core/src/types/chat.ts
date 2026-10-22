@@ -1,6 +1,8 @@
 import type { ProjectConfig, ProjectSnapshot } from './project'
 import type { RetrievalResult } from './rag'
 import type { ModelView } from '../core/agent/model-view'
+import type { AgentRoleId } from '../core/agent/roles'
+import type { DelegationSessionRunner } from '../core/agent/element-manager'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
 import type { ChangeDiff, FileChange } from '../core/tools/types'
 
@@ -13,10 +15,12 @@ export type ChatToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'LoadElements'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
-  | 'DelegateToGardener'
+  | 'KnowledgeLookup'
+  | 'DelegateToElementManager'
 
 export type UserTextMessage = {
   id: string
@@ -67,8 +71,8 @@ export type ToolCallMessage = {
   inputSummary: string
   /** 与 tool-result 配对的调用 id（event.call.id）；旧会话消息无此字段，UI 各自独立成行 */
   toolCallId?: string
-  /** 事件归属：园丁子代理的工具行带 gardener，渲染层据此折叠为嵌套园丁任务组 */
-  agent?: 'gardener'
+  /** 事件归属：要素管理员子代理的工具行带 elementManager，渲染层据此折叠为嵌套要素管理员任务组 */
+  agent?: 'element-manager'
   createdAt: string
 }
 
@@ -81,8 +85,8 @@ export type ToolResultMessage = {
   resultSummary: string
   /** 与 tool-call 配对的调用 id（event.call.id）；旧会话消息无此字段，UI 各自独立成行 */
   toolCallId?: string
-  /** 事件归属：园丁子代理的工具行带 gardener，渲染层据此折叠为嵌套园丁任务组 */
-  agent?: 'gardener'
+  /** 事件归属：要素管理员子代理的工具行带 elementManager，渲染层据此折叠为嵌套要素管理员任务组 */
+  agent?: 'element-manager'
   createdAt: string
 }
 
@@ -143,7 +147,7 @@ export type ChatMessage =
   | ChangeSummaryMessage
 
 export type ChatTargetContext = {
-  type: 'chapter' | 'prompt-system' | 'prompt-scene' | 'element' | 'project'
+  type: 'chapter' | 'prompt-system' | 'prompt-outline' | 'element' | 'project'
   primaryPath?: string
   groupName?: string
   displayName: string
@@ -191,13 +195,15 @@ export type FileChangeRecord = {
   at: string
   change: FileChange
   diff?: ChangeDiff
-  /** 改动归属：园丁子代理的写入带 gardener（轮次归属标记，写回面板展示用）；主 Agent 记录无此字段 */
-  agent?: 'gardener'
+  /** 改动归属：要素管理员子代理的写入带 elementManager（轮次归属标记，写回面板展示用）；主 Agent 记录无此字段 */
+  agent?: 'element-manager'
 }
 
 export type ChatSessionState = {
   sessionId: string
   projectId: string
+  /** 会话角色（roles.ts 注册表的键）：驱动该会话的智能体声明；缺省即主角色。 */
+  agent?: AgentRoleId
   messages: ChatMessage[]
   /**
    * 双队列收件箱。可选字段：旧会话 JSON 无此字段，视为空队列，无需迁移。
@@ -217,8 +223,16 @@ export type ChatSessionState = {
   status: ChatSessionStatus
   currentTarget: ChatTargetContext | null
   lastRagResult: RetrievalResult | null
-  /** 当前会话已注入的 system message（systemPrompt + scenePrompt 拼接结果）hash，用于检测同会话内提示词变化并刷新。 */
+  /** 当前会话已注入的 system message（身份 + 结构 + 工具规则 + 已修改的 system.md）hash，用于检测同会话内 system 变化并刷新。 */
   systemPromptHash?: string
+  /** 项目记忆 reminder 的内容 hash：digest 按需注入（首轮或内容变化时注入/重注，被压缩吞掉后重插）。 */
+  novaiOverviewDigest?: string
+  /** 角色约束文档（ELEMENT.md 类）reminder 的内容 hash：首轮注入、内容变化重注、被压缩吞掉后重插。 */
+  constraintDocDigest?: string
+  /** 要素目录 reminder 的 digest（name+summary 集，决策 0007）：要素集变化时原位替换、被压缩吞掉后重插。 */
+  elementCatalogDigest?: string
+  /** 最近一轮生效的大纲路径（null=未选择）；变化时向持久化历史追加切换留痕。 */
+  lastOutlinePath?: string | null
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
   title: string
   /** 会话创建时间（ISO），落盘与列表排序用 */
@@ -250,9 +264,10 @@ export type ChatTurnInput = {
   project: ProjectSnapshot
   config: ProjectConfig
   systemPrompt: string
-  scenePrompt?: string
-  /** 项目总览（prompts/NovAI.md），每轮注入到 system prompt 的项目级累积记忆。 */
+  /** 项目总览（prompts/NovAI.md）原文；非空且非未动骨架时以 user-role reminder 注入（digest 按需）。 */
   novaiOverview?: string
+  /** 当前激活大纲（prompts/outlines/ 下文件）；path 为空 = 未选择/关闭。 */
+  outline?: { path: string | null; content: string }
   activeFilePath?: string | null
   /** 用户停止信号，透传到 Agent Loop。 */
   signal?: AbortSignal
@@ -260,6 +275,11 @@ export type ChatTurnInput = {
   confirm?: ConfirmHandler
   /** 联网搜索匿名身份（app 层 localStorage UUID），透传到工具运行时（托管档绿灯配额键）。 */
   webClientId?: string
+  /**
+   * 委派会话驱动器（service 层实现并注入）：主智能体的 DelegateToElementManager
+   * 工具靠它创建并驱动特化角色真会话。未注入时该工具直接报错（测试/只读场景）。
+   */
+  runDelegationSession?: DelegationSessionRunner
 }
 
 export type ChatTurnResult = {

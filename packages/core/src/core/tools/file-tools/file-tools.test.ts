@@ -288,18 +288,37 @@ describe('file tools', () => {
       await expect(createFileTool.run({
         path: '.novel/spill/abc.txt',
         content: '写入内部目录',
-      }, runtime)).rejects.toThrow('不能指向项目配置或 .novel 内部文件')
+      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       await expect(createFileTool.run({
         path: '.novel/logs/today.json',
         content: '{}',
-      }, runtime)).rejects.toThrow('不能指向项目配置或 .novel 内部文件')
+      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       // validateInput 层同样拦（第一道闸）
       expect(() => createFileTool.validateInput({
         path: '.novel/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+    })
+
+    it('.novai/ 配置目录整体禁写（与 novel.config.json 同级受保护，仅 app service 层可写）', () => {
+      expect(() => createFileTool.validateInput({
+        path: '.novai/session-state.json',
+        content: '{}',
+      })).toThrow('不能指向项目内部文件')
+
+      expect(() => editFileTool.validateInput({
+        path: '.novai/session-state.json',
+        oldText: 'a',
+        newText: 'b',
+      })).toThrow('不能指向项目内部文件')
+
+      // 大小写变体同样被拒（APFS 大小写不敏感）
+      expect(() => createFileTool.validateInput({
+        path: '.NOVAI/other.json',
+        content: 'x',
+      })).toThrow('不能指向项目内部文件')
     })
 
     it('EditFile 禁止改 .novel/ 与 novel.config.json（validateInput 层拦截）', () => {
@@ -307,39 +326,39 @@ describe('file tools', () => {
         path: 'novel.config.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       expect(() => editFileTool.validateInput({
         path: '.novel/sessions/s1.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
 
     it('大小写变体同样被拒（APFS 大小写不敏感，Novel.Config.JSON 命中真实配置）', () => {
       expect(() => createFileTool.validateInput({
         path: '.NOVEL/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       expect(() => editFileTool.validateInput({
         path: 'Novel.Config.JSON',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
 
       expect(() => editFileTool.validateInput({
         path: '.Novel/Spill/abc.txt',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目配置或 .novel 内部文件')
+      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
 
     it('spill 文件仍禁写/删/改名（只放行读）', () => {
       expect(() => deleteFileTool.validateInput({ path: '.novel/spill/abc.txt' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
       expect(() => renameFileTool.validateInput({ fromPath: 'a.md', toPath: '.novel/spill/b.txt' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
     })
   })
 
@@ -406,14 +425,14 @@ describe('file tools', () => {
       expect(output.content).toBe('spill 完整内容')
 
       expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
       expect(() => readFileTool.validateInput({ path: '.novel/sessions/s1.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
       expect(() => readFileTool.validateInput({ path: 'novel.config.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
       // 大小写变体同规则
       expect(() => readFileTool.validateInput({ path: '.NOVEL/logs/today.json' }))
-        .toThrow('不能指向项目配置或 .novel 内部文件')
+        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
     })
   })
 
@@ -428,27 +447,27 @@ describe('file tools', () => {
       }, runtime)).rejects.toThrow('章节文件名不规范')
       // 补零不足
       await expect(createFileTool.run({
-        path: 'chapters/第1章-火中拾婴.txt',
+        path: 'chapters/第1章-试炼.txt',
         content: '内容',
       }, runtime)).rejects.toThrow('章节文件名不规范')
       // 错扩展名（先撞扩展名约束）
       await expect(createFileTool.run({
-        path: 'chapters/第001章-火中拾婴.md',
+        path: 'chapters/第001章-试炼.md',
         content: '内容',
       }, runtime)).rejects.toThrow('章节正文必须写入 chapters/*.txt')
     })
 
     it('CreateFile allows a fresh chapter number and blocks a duplicated one', async () => {
       const runtime = createRuntime({
-        'chapters/第001章-火中拾婴.txt': '已有',
+        'chapters/第001章-试炼.txt': '已有',
       })
 
       // 不同编号正常创建
       await createFileTool.run({
-        path: 'chapters/第002章-留他一命.txt',
+        path: 'chapters/第002章-抉择.txt',
         content: '新章节',
       }, runtime)
-      await expect(readProjectText(runtime.project.handle, 'chapters/第002章-留他一命.txt')).resolves.toBe('新章节')
+      await expect(readProjectText(runtime.project.handle, 'chapters/第002章-抉择.txt')).resolves.toBe('新章节')
 
       // 同编号不同标题，被重号检测拦下
       await expect(createFileTool.run({

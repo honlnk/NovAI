@@ -1,5 +1,4 @@
 export * as agentService from './agent-service'
-export * as elementService from './element-service'
 export * as fileService from './file-service'
 export * as projectService from './project-service'
 export * as ragService from './rag-service'

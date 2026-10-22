@@ -18,7 +18,7 @@ defineProps<{
   <section aria-labelledby="embedding-settings-title">
     <h3 id="embedding-settings-title" class="text-base font-semibold text-gray-900">Embedding 配置</h3>
     <p class="mt-1 text-sm leading-relaxed text-gray-500">
-      向量化模型，用于构建要素的 RAG 索引。协议为 OpenAI 兼容（阿里百炼填 compatible-mode 地址即可）。更改会自动保存。
+      向量化模型，用于构建情节（plots）与时间线（timeline）的 RAG 索引。协议为 OpenAI 兼容（阿里百炼填 compatible-mode 地址即可）。更改会自动保存。
     </p>
     <div class="mt-4">
       <ModelEndpointFields :form="form" purpose="embedding" model-placeholder="text-embedding-v4" />

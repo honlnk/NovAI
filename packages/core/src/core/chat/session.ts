@@ -1,7 +1,12 @@
-import { buildAgentSystemPrompt, buildAgentUserContext } from '../agent/prompt'
+import {
+  buildOutlineSwitchRecord,
+  resolveOutlineReminder,
+  syncNovaiReminder,
+} from '../agent/prompt'
+import { syncElementCatalogReminder } from '../agent/element-catalog-reminder'
+import { scanElementCatalog } from '../elements/catalog'
 import { buildSteeringContent, query } from '../agent/query'
-import { createAgentTools } from '../agent/tools'
-import { createDelegateToGardenerTool } from '../agent/gardener'
+import { getAgentRole, syncConstraintDocReminder, type AgentRoleId } from '../agent/roles'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
   appendUserMessage,
@@ -32,7 +37,8 @@ import type {
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
 
-type SessionEvent =
+/** driver 运行中的会话事件（service 层转发为 AgentUiEvent 用；type 随事件携带 sessionId 路由）。 */
+export type SessionEvent =
   | { type: 'message'; message: ChatMessage; session: ChatSessionState }
   /** 模型流式输出的文本增量（瞬态渲染态，不落盘）；同一条 assistant 消息共享稳定 messageId。 */
   | { type: 'message-delta'; messageId: string; text: string }
@@ -54,11 +60,15 @@ type RunChatDriverOptions = {
   onLifecycle?: (event: ChatDriverLifecycleEvent) => void
 }
 
-export function createChatSession(projectId: string): ChatSessionState {
+export function createChatSession(
+  projectId: string,
+  options?: { agent?: AgentRoleId },
+): ChatSessionState {
   const now = new Date().toISOString()
   return {
     sessionId: createId('session'),
     projectId,
+    agent: options?.agent ?? 'main',
     messages: [],
     modelView: createModelView(),
     status: 'idle',
@@ -271,11 +281,14 @@ async function runDriverTurn(options: {
   const modelView = createModelView(session.modelView?.messages ?? [])
   session.modelView = modelView
 
-  // 同会话内 system.md 或场景提示词变化时，刷新视图里的 system message（恒在 index 0）。
-  const newSystemContent = buildAgentSystemPrompt({
+  // 会话角色：装配的唯一来源是角色声明（roles.ts 注册表），运行时核心不认识具体角色
+  const role = getAgentRole(session.agent)
+
+  // 同会话内 system.md 变化或模型切换时，刷新视图里的 system message（恒在 index 0）。
+  // 身份行含模型名：换 LLM → 身份变化 → hash 变化 → system 重建一次（前缀缓存本就随换模型作废）。
+  const newSystemContent = role.buildSystemPrompt({
+    model: input.config.llm.model,
     systemPrompt: input.systemPrompt,
-    scenePrompt: input.scenePrompt,
-    novaiOverview: input.novaiOverview,
   })
   const newSystemHash = hashContent(newSystemContent)
   if (modelView.messages.length === 0 || session.systemPromptHash !== newSystemHash) {
@@ -283,12 +296,42 @@ async function runDriverTurn(options: {
   }
   session.systemPromptHash = newSystemHash
 
+  // 角色约束文档（特化角色专属守则，如要素管理员的 ELEMENT.md）：user-role reminder
+  // 恒注入——首轮注入（system 之后）、内容变化原地替换、被压缩吞掉后自动重插。
+  if (role.constraintDoc) {
+    const docContent = await role.constraintDoc.read(input.project.handle)
+    syncConstraintDocReminder({ view: modelView, session, doc: role.constraintDoc, content: docContent })
+  }
+
+  // 项目记忆 reminder 与大纲（角色声明开关：特化角色如要素管理员不注入这两个提示词家族文件）。
+  // digest 按需注入/重注，恒在 system 之后、先于全部历史；被压缩吞掉后下一轮自动重插。
+  if (role.injectNovaiOverview) {
+    syncNovaiReminder({ view: modelView, session, overview: input.novaiOverview })
+  }
+
+  // 要素目录 reminder（渐进式披露 L1，决策 0007）：四类稳定要素的目录恒可见——
+  // 首轮注入、要素集变化原地替换、被压缩吞掉后自动重插。每 turn 重扫（本地文件读取）。
+  if (role.injectElementCatalog) {
+    const catalogEntries = await scanElementCatalog(input.project)
+    syncElementCatalogReminder({ view: modelView, session, entries: catalogEntries })
+  }
+
+  if (role.injectOutline) {
+    // 大纲切换留痕：激活大纲变化时追加持久化 user 消息（先于本批用户消息进视图）
+    const outlinePath = input.outline?.path ?? null
+    const outlineSwitchRecord = buildOutlineSwitchRecord(session.lastOutlinePath, outlinePath)
+    if (outlineSwitchRecord) {
+      appendUserMessage(modelView, outlineSwitchRecord)
+    }
+    session.lastOutlinePath = outlinePath
+  }
+
   // 模型视图追加（同批次顺序）：steer 包装为「执行中插话」，followup 走完整用户上下文
   for (const message of batch.steering) {
     appendUserMessage(modelView, buildSteeringContent(message))
   }
   if (batch.followup) {
-    appendUserMessage(modelView, buildAgentUserContext({
+    appendUserMessage(modelView, role.wrapUserContent({
       instruction: batch.followup.text,
       quote: batch.followup.quote,
       project: input.project,
@@ -297,9 +340,11 @@ async function runDriverTurn(options: {
   }
   const requestMessages = toRequestMessages(modelView)
   /**
-   * 工具事件 → 显示层消息（含改动账本累积）。主 Agent 事件无 agent 字段；
-   * 园丁子代理的事件带 gardener（委派工具透传），渲染层据此折叠为嵌套园丁任务组。
+   * 工具事件 → 显示层消息（含改动账本累积）。事件归属：非主角色会话（直聊/委派）
+   * 的本体事件归属会话角色，渲染层据此分组；主会话事件无归属（委派过程在委派会话里）。
    */
+  const sessionAgentTag: NonNullable<TaggedToolExecutionEvent['agent']> | undefined =
+    session.agent && session.agent !== 'main' ? session.agent : undefined
   const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
     if (event.type === 'tool-call') {
       pushMessage(
@@ -311,7 +356,7 @@ async function runDriverTurn(options: {
           toolName: event.call.name,
           inputSummary: event.inputSummary,
           toolCallId: event.call.id,
-          ...(event.agent ? { agent: event.agent } : {}),
+          ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           createdAt: new Date().toISOString(),
         },
         onEvent,
@@ -322,7 +367,7 @@ async function runDriverTurn(options: {
     if (event.type === 'tool-result') {
       // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
       // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
-      // 园丁的写入同 runId 归本轮面板，记录带 agent 归属标记。
+      // 非主角色会话（直聊/委派）的写入同 runId 归本轮面板，记录带 agent 归属标记。
       if (event.ok && event.fileChange) {
         session.changeLedger = [
           ...(session.changeLedger ?? []),
@@ -332,7 +377,7 @@ async function runDriverTurn(options: {
             at: new Date().toISOString(),
             change: event.fileChange,
             ...(event.diff ? { diff: event.diff } : {}),
-            ...(event.agent ? { agent: event.agent } : {}),
+            ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           },
         ]
       }
@@ -347,7 +392,7 @@ async function runDriverTurn(options: {
           ok: event.ok,
           resultSummary: event.resultSummary,
           toolCallId: event.call.id,
-          ...(event.agent ? { agent: event.agent } : {}),
+          ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           createdAt: new Date().toISOString(),
         },
         onEvent,
@@ -355,16 +400,12 @@ async function runDriverTurn(options: {
     }
   }
 
-  // 主 Agent 工具面：全量文件工具 + 园丁委派工具（运行态 confirm/signal/事件转发闭包注入——
-  // 这些是会话层所有，不进 ToolRuntime）。园丁自己的工具面在 gardener.ts 内独立组装（无委派工具）。
-  const tools = {
-    ...createAgentTools(),
-    DelegateToGardener: createDelegateToGardenerTool({
-      confirm: input.confirm,
-      signal,
-      onSubagentEvent: appendToolEventMessage,
-    }),
-  }
+  // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具；要素管理员 = 白名单 + 路径闸。
+  // signal 与委派会话驱动器是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
+  const tools = role.createTools({
+    signal,
+    runDelegationSession: input.runDelegationSession,
+  })
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false
   // 当前正在流式输出的 assistant 消息 id：delta 事件携带它，最终的 assistant 落盘消息复用它，
@@ -394,6 +435,8 @@ async function runDriverTurn(options: {
       signal,
       confirm: input.confirm,
       webClientId: input.webClientId,
+      // 大纲动态附带（角色声明开关）：发送时拼到最新 user 消息尾部，不落持久化历史、不参与压缩
+      outlineReminder: role.injectOutline ? resolveOutlineReminder(input.outline) : undefined,
       // 改动账本只读取口（GetFileChangeHistory 用）：getter 形态，账本不可变重建、读时取最新
       getChangeLedger: () => session.changeLedger ?? [],
       // 插话收件箱访问口：query 在每个 step 边界抽干 next-step（claim 即消费，同步更新会话 inbox）

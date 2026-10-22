@@ -9,10 +9,12 @@ export type AgentToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'LoadElements'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
-  | 'DelegateToGardener'
+  | 'KnowledgeLookup'
+  | 'DelegateToElementManager'
 
 export type AgentToolCall = {
   id: string

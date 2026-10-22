@@ -13,7 +13,7 @@ import type { ChangedFileView, ProjectFileNodeView } from '@novai/core/services/
  * 在嵌套树里找到路径精确匹配 prefix 的目录节点，返回它的直接子节点（保持目录层级）。
  *
  * 用于章节页：取 chapters/ 目录的直接子项（可能含子目录「卷/部」+ 章节文件）。
- * 用于提示词页：取 prompts/ 目录的直接子项（system.md + scenes/ 子目录）。
+ * 用于提示词页：取 prompts/ 目录的直接子项（system.md + outlines/ 子目录）。
  *
  * @param files 全量嵌套树
  * @param prefix 目录路径，如 'chapters' 或 'prompts'

@@ -10,11 +10,13 @@ defineProps<{
   activeCategory: Category
   files: ProjectFileNodeView[]
   activeFilePath?: string
-  activeScenePromptPath: string | null
+  activeOutlinePath: string | null
   /** 历史会话列表（对话分类面板用） */
   sessions: ChatSessionSummaryView[]
   /** 当前激活会话 id（对话分类面板高亮用） */
   activeSessionId: string | null
+  /** 有待确认卡片的会话 id 集（会话列表「待确认」徽标；确认链按会话路由） */
+  pendingConfirmationIds?: Set<string>
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -23,7 +25,7 @@ defineProps<{
 
 const emit = defineEmits<{
   selectFile: [path: string]
-  changeScene: [path: string | null]
+  changeOutline: [path: string | null]
   closeMobile: []
   selectSession: [sessionId: string]
   createSession: []
@@ -43,6 +45,7 @@ const emit = defineEmits<{
   >
     <!-- 移动端关闭按钮 -->
     <button
+      aria-label="关闭分类面板"
       class="absolute right-2 top-2 z-10 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
       @click="emit('closeMobile')"
     >
@@ -56,6 +59,7 @@ const emit = defineEmits<{
       v-if="activeCategory === 'conversation'"
       :sessions="sessions"
       :active-session-id="activeSessionId"
+      :pending-confirmation-ids="pendingConfirmationIds"
       @select="emit('selectSession', $event)"
       @create="emit('createSession')"
       @rename="(sessionId, title) => emit('renameSession', sessionId, title)"
@@ -77,9 +81,9 @@ const emit = defineEmits<{
       v-else-if="activeCategory === 'prompt'"
       :files="files"
       :active-file-path="activeFilePath"
-      :active-scene-prompt-path="activeScenePromptPath"
+      :active-outline-path="activeOutlinePath"
       @select-file="emit('selectFile', $event)"
-      @change-scene="emit('changeScene', $event)"
+      @change-outline="emit('changeOutline', $event)"
     />
   </aside>
 </template>

@@ -62,7 +62,7 @@ function createProjectView(files: ProjectView['files']): ProjectView {
         permissionPreset: 'chapter-material',
         embeddingTextVersion: 1,
         enableDebugLogging: false,
-        activeScenePromptPath: null,
+        activeOutlinePath: null,
       },
     },
   }
@@ -76,8 +76,8 @@ function createTreeWithTwoChapters(): ProjectView['files'] {
       path: 'chapters',
       kind: 'directory',
       children: [
-        { name: '第001章-火中拾婴.txt', path: 'chapters/第001章-火中拾婴.txt', kind: 'file' },
-        { name: '第002章-留他一命.txt', path: 'chapters/第002章-留他一命.txt', kind: 'file' },
+        { name: '第001章-试炼.txt', path: 'chapters/第001章-试炼.txt', kind: 'file' },
+        { name: '第002章-抉择.txt', path: 'chapters/第002章-抉择.txt', kind: 'file' },
         { name: '旧笔记.md', path: 'chapters/旧笔记.md', kind: 'file' },
       ],
     },
@@ -86,7 +86,7 @@ function createTreeWithTwoChapters(): ProjectView['files'] {
       path: 'elements',
       kind: 'directory',
       children: [
-        { name: '云溪.md', path: 'elements/characters/云溪.md', kind: 'file' },
+        { name: '角色甲.md', path: 'elements/characters/角色甲.md', kind: 'file' },
       ],
     },
     { name: 'system.md', path: 'prompts/system.md', kind: 'file' },
