@@ -28,11 +28,11 @@
       <path d="M 6 12 L 6 108"/>
       <path d="M 6 12 L 44 108"/>
       <path d="M 44 12 L 44 108"/>
-      <circle cx="82" cy="72" r="24"/>
-      <path d="M 124 42 L 143 108 L 162 42"/>
+      <circle cx="82" cy="73" r="25"/>
+      <path d="M 113 42 L 132 108 L 151 42"/>
     </g>
-    <path d="M 187 108 L 210 12 L 233 108" stroke="url(#acc)"/>
-    <rect x="195" y="78" width="30" height="9" rx="4.5" fill="url(#acc)"/>
-    <rect x="253.5" y="12" width="9" height="96" rx="4.5" fill="url(#acc)"/>
+    <path d="M 169 108 L 192 10 L 215 108" stroke="url(#acc)"/>
+    <rect x="177" y="78" width="30" height="9" rx="4.5" fill="url(#acc)"/>
+    <rect x="238.5" y="12" width="9" height="96" rx="4.5" fill="url(#acc)"/>
   </g>
 </svg>

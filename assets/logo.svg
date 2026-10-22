@@ -23,17 +23,21 @@
     </g>
   </g>
 
-  <!-- 字标：Nov 墨色 · AI 渐变 -->
+  <!-- 字标：光学字距（视觉等距，非机械等距）——o-v 收紧补开口、A-I 拉开、o/A overshoot -->
   <g transform="translate(184,26)" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="9">
     <g stroke="#18181B">
       <path d="M 6 12 L 6 108"/>
       <path d="M 6 12 L 44 108"/>
       <path d="M 44 12 L 44 108"/>
-      <circle cx="82" cy="72" r="24"/>
-      <path d="M 124 42 L 143 108 L 162 42"/>
+      <!-- o overshoot：半径略大，视觉与其他字母同高 -->
+      <circle cx="82" cy="73" r="25"/>
+      <!-- v 左移收紧 o-v（光学字距，比基准再近） -->
+      <path d="M 113 42 L 132 108 L 151 42"/>
     </g>
-    <path d="M 187 108 L 210 12 L 233 108" stroke="url(#acc)"/>
-    <rect x="195" y="78" width="30" height="9" rx="4.5" fill="url(#acc)"/>
-    <rect x="253.5" y="12" width="9" height="96" rx="4.5" fill="url(#acc)"/>
+    <!-- A 左移收紧 v-A、尖顶 overshoot（上超 2px） -->
+    <path d="M 169 108 L 192 10 L 215 108" stroke="url(#acc)"/>
+    <rect x="177" y="78" width="30" height="9" rx="4.5" fill="url(#acc)"/>
+    <!-- I 略右移：两直线间空白需更松 -->
+    <rect x="238.5" y="12" width="9" height="96" rx="4.5" fill="url(#acc)"/>
   </g>
 </svg>
