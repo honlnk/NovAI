@@ -7,6 +7,7 @@ import {
 } from '../tools/file-tools'
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 import { ragSearchTool } from '../tools/rag-search'
+import { loadElementsTool, renderElementContent } from '../tools/load-elements'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
 import { webSearchTool } from '../tools/web-search'
 import { webFetchTool } from '../tools/web-fetch'
@@ -28,6 +29,7 @@ import type {
   GetFileChangeHistoryOutput,
   KnowledgeLookupOutput,
   ListDirectoryOutput,
+  LoadElementsOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -320,36 +322,36 @@ export function createAgentTools(): AgentRunnableToolMap {
       schema: {
         type: 'function',
         function: {
-          name: 'RagSearch',
-          description: '从当前小说项目的要素索引中语义检索人物、地点、实体、剧情、时间线、世界观设定。',
-          parameters: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: '检索问题或关键词，例如“角色乙 角色甲 门派甲 第一章需要用到的设定”。',
-              },
-              topK: {
-                type: 'integer',
-                minimum: 1,
-                description: '可选，向量召回候选数量；不传则使用项目配置 ragCandidateLimit。',
-              },
-              finalLimit: {
-                type: 'integer',
-                minimum: 1,
-                description: '可选，最终返回给上下文的条数；不传则使用项目配置 ragContextMaxItems。',
-              },
-              filters: {
-                type: 'object',
-                properties: {
-                  type: {
-                    type: 'array',
-                    items: {
-                      type: 'string',
-                      enum: ['character', 'location', 'entity', 'timeline', 'plot', 'worldbuilding'],
-                    },
-                    description: '可选，只检索指定类型的要素。',
+        name: 'RagSearch',
+        description: '从当前小说项目的情节（plots）与时间线（timeline）索引中语义检索剧情线索与章节事件。人物、地点、实体、世界观设定不在本索引内，请用 LoadElements 加载。',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: '检索问题或关键词，例如“主角上次失恋是哪一章”“两人初遇之后发生了什么”。',
+            },
+            topK: {
+              type: 'integer',
+              minimum: 1,
+              description: '可选，向量召回候选数量；不传则使用项目配置 ragCandidateLimit。',
+            },
+            finalLimit: {
+              type: 'integer',
+              minimum: 1,
+              description: '可选，最终返回给上下文的条数；不传则使用项目配置 ragContextMaxItems。',
+            },
+            filters: {
+              type: 'object',
+              properties: {
+                type: {
+                  type: 'array',
+                  items: {
+                    type: 'string',
+                    enum: ['timeline', 'plot'],
                   },
+                  description: '可选，只检索指定类型（plot=剧情事件，timeline=时间线阶段）。',
+                },
                   tags: {
                     type: 'array',
                     items: { type: 'string' },
@@ -391,8 +393,37 @@ export function createAgentTools(): AgentRunnableToolMap {
           ragSearchTool.summarizeOutput(output),
           `query: ${output.query}`,
           '',
-          lines.join('\n\n') || '暂无匹配结果。若项目已有要素，请先在设置中重建 RAG 索引。',
+          lines.join('\n\n') || '暂无匹配结果。本索引只覆盖情节（elements/plots）与时间线（elements/timeline），需先在设置中构建向量索引。',
         ].join('\n')
+      },
+    },
+    LoadElements: {
+      name: 'LoadElements',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'LoadElements',
+          description: '批量加载角色/地点/实体/世界观要素的完整定义（frontmatter + 正文）。上下文要素清单中出现与当前任务相关的要素时，先用本工具加载再写作。',
+          parameters: {
+            type: 'object',
+            properties: {
+              names: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 1,
+                description: '要加载的要素名数组，取自上下文要素清单中各条目的名称。',
+              },
+            },
+            required: ['names'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: loadElementsTool,
+      formatResult(output: LoadElementsOutput) {
+        return renderElementContent(output)
       },
     },
     GetFileChangeHistory: {
@@ -576,6 +607,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'ListDirectory'
     || value === 'FindFiles'
     || value === 'RagSearch'
+    || value === 'LoadElements'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'

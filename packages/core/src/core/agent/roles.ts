@@ -68,6 +68,11 @@ export type AgentRoleProfile = {
   injectNovaiOverview: boolean
   /** 是否注入写作大纲（reminder 动态附带 + 切换留痕） */
   injectOutline: boolean
+  /**
+   * 是否注入要素目录 reminder（渐进式披露 L1，决策 0007）：主智能体靠目录 + LoadElements
+   * 确定性召回四类稳定要素；要素管理员直接用 FindFiles/ReadFile 管理文件，不需要目录。
+   */
+  injectElementCatalog: boolean
   /** 专属约束文档（user-role reminder 恒注入）；主角色无（其守则走 system.md 链路） */
   constraintDoc?: RoleConstraintDoc
   /** 可否被主智能体委派（主角色是委派发起方，自身不可被委派） */
@@ -91,6 +96,7 @@ const mainRole: AgentRoleProfile = {
   wrapUserContent: buildAgentUserContext,
   injectNovaiOverview: true,
   injectOutline: true,
+  injectElementCatalog: true,
   delegatable: false,
 }
 
@@ -109,6 +115,7 @@ const elementManagerRole: AgentRoleProfile = {
   },
   injectNovaiOverview: false,
   injectOutline: false,
+  injectElementCatalog: false,
   constraintDoc: {
     path: 'prompts/ELEMENT.md',
     read: readElementSchema,

@@ -297,6 +297,7 @@ export type ToolNameView =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'LoadElements'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'

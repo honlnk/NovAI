@@ -26,6 +26,8 @@ const stubProject = {
   id: 'proj-test',
   name: '测试项目',
   handle: {},
+  // 空树：要素目录扫描返回空集，不注入目录 reminder
+  tree: [],
 } as unknown as ProjectSnapshot
 
 const stubConfig = {

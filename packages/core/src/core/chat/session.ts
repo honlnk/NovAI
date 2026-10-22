@@ -3,6 +3,8 @@ import {
   resolveOutlineReminder,
   syncNovaiReminder,
 } from '../agent/prompt'
+import { syncElementCatalogReminder } from '../agent/element-catalog-reminder'
+import { scanElementCatalog } from '../elements/catalog'
 import { buildSteeringContent, query } from '../agent/query'
 import { getAgentRole, syncConstraintDocReminder, type AgentRoleId } from '../agent/roles'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
@@ -306,6 +308,14 @@ async function runDriverTurn(options: {
   if (role.injectNovaiOverview) {
     syncNovaiReminder({ view: modelView, session, overview: input.novaiOverview })
   }
+
+  // 要素目录 reminder（渐进式披露 L1，决策 0007）：四类稳定要素的目录恒可见——
+  // 首轮注入、要素集变化原地替换、被压缩吞掉后自动重插。每 turn 重扫（本地文件读取）。
+  if (role.injectElementCatalog) {
+    const catalogEntries = await scanElementCatalog(input.project)
+    syncElementCatalogReminder({ view: modelView, session, entries: catalogEntries })
+  }
+
   if (role.injectOutline) {
     // 大纲切换留痕：激活大纲变化时追加持久化 user 消息（先于本批用户消息进视图）
     const outlinePath = input.outline?.path ?? null

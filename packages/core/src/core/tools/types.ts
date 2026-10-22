@@ -1,5 +1,6 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { FileChangeRecord } from '../../types/chat'
+import type { ElementType } from '../../types/rag'
 import type { KnowledgePlatformName } from './knowledge-platforms'
 
 /**
@@ -16,6 +17,7 @@ export type CoreToolName =
   | 'ListDirectory'
   | 'FindFiles'
   | 'RagSearch'
+  | 'LoadElements'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -271,15 +273,32 @@ export type RagSearchOutput = {
   }>
 }
 
+export type LoadElementsInput = {
+  /** 要加载的要素名数组（来自上下文中的要素清单） */
+  names: string[]
+}
+
+/** 单个要素的加载结果；未找到时只带 name 与 notFound 标记，不抛错。 */
+export type LoadedElement = {
+  name: string
+  type?: ElementType
+  sourcePath?: string
+  content?: string
+  notFound?: true
+}
+
+export type LoadElementsOutput = {
+  elements: LoadedElement[]
+}
+
 export type GetFileChangeHistoryInput = {
   /** 返回条数上限：默认 20，最大 100 */
   limit: number
-  /** 只看某个文件（含改名前后路径） */
+  /** 只看某个文件（含改名前后名称） */
   path?: string
   /** 只看某一轮（runId） */
   runId?: string
 }
-
 export type GetFileChangeHistoryOutput = {
   /** 纯文本清单（新→旧逐条），末尾「共 N 条记录」 */
   content: string
