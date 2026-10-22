@@ -94,18 +94,6 @@ export type RerankResult = {
   model?: string
 }
 
-export type GenerationContextDraft = {
-  query: string
-  recentChapters: Array<{
-    path: string
-    title: string
-    content: string
-  }>
-  retrievedCandidates: RetrievalCandidate[]
-  rerankedCandidates: RetrievalCandidate[]
-  finalContextItems: RetrievalCandidate[]
-}
-
 export type IndexBuildReason =
   | 'initial-build'
   | 'incremental-update'
@@ -127,15 +115,4 @@ export type IndexBuildResult = {
   skippedCount: number
   failedCount: number
   message: string
-}
-
-export type RetrievalExplanation = {
-  id: string
-  name: string
-  type: ElementType
-  summary: string
-  sourcePath: string
-  selectedBy: 'recall' | 'rerank' | 'final-context'
-  reason: string
-  lastUpdatedChapter: string
 }
