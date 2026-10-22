@@ -6,6 +6,7 @@
 # 以 # 开头或空行忽略。路径相对源项目根。
 
 novel.config.json
+.novel/manifest.json
 prompts/*
 elements/*
 chapters/*
