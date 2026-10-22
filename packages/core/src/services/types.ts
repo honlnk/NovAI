@@ -1,8 +1,11 @@
 import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
 import type { ReasoningEffort } from '../types/ai'
+import type { AgentRoleId } from '../core/agent/roles'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
 export { isDeepSeekDialect } from '../core/ai/shared'
+/** 会话角色 id（缺省即主角色）：会话列表分组 / 角色横幅 / 直聊入口用 */
+export type { AgentRoleId } from '../core/agent/roles'
 
 export type ProjectFileNodeView = {
   name: string
@@ -458,6 +461,8 @@ export type ChatMessageView =
 export type ChatSessionView = {
   sessionId: string
   projectId: string
+  /** 会话角色（缺省即主角色）：驱动该会话的智能体声明（角色横幅 / 输入框文案用） */
+  agent?: AgentRoleId
   status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   messages: ChatMessageView[]
   /**
@@ -495,6 +500,8 @@ export type ChatHistoryPageView = {
 export type ChatSessionSummaryView = {
   sessionId: string
   projectId: string
+  /** 会话角色（缺省即主角色）：会话列表按角色分组的依据 */
+  agent?: AgentRoleId
   title: string
   createdAt: string
   updatedAt: string

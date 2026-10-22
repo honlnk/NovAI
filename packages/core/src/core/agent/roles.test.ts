@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { AGENT_ROLES, getAgentRole, listAgentRoles } from './roles'
+import { AGENT_ROLES, getAgentRole, listAgentRoles, syncConstraintDocReminder } from './roles'
 import { buildAgentSystemPrompt, buildAgentUserContext } from './prompt'
 import { buildElementManagerSystemPrompt, mergeElementManagerOverrides } from './element-manager'
 import { isAgentToolName } from './tools'
+import { createModelView, insertAfterSystem } from './model-view'
+import type { ChatSessionState } from '../../types/chat'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
 /**
@@ -143,5 +145,71 @@ describe('要素管理员角色声明', () => {
     const merged = AGENT_ROLES['element-manager'].mergeConfig!(withOverride)
     expect(merged.llm.model).toBe('em-model')
     expect(merged.settings.permissionPreset).toBe('readonly')
+  })
+})
+
+describe('约束文档 reminder 同步（syncConstraintDocReminder）', () => {
+  const doc = AGENT_ROLES['element-manager'].constraintDoc!
+
+  function buildSession(): ChatSessionState {
+    return { modelView: createModelView() } as ChatSessionState
+  }
+
+  function userContents(view: ReturnType<typeof createModelView>): string[] {
+    return view.messages.filter((message) => message.role === 'user').map((message) => message.content)
+  }
+
+  it('首轮注入：system 之后、先于既有用户消息，digest 记入会话', () => {
+    const session = buildSession()
+    const view = session.modelView!
+    view.messages = [{ role: 'system', content: 'system' }]
+    insertAfterSystem(view, { role: 'user', content: '任务' })
+
+    syncConstraintDocReminder({ view, session, doc, content: '# 规范' })
+
+    expect(userContents(view)).toEqual([doc.buildReminder('# 规范'), '任务'])
+    expect(session.constraintDocDigest).toBeTruthy()
+  })
+
+  it('内容不变不重复注入；内容变化原地替换（新旧不共存）', () => {
+    const session = buildSession()
+    const view = session.modelView!
+
+    syncConstraintDocReminder({ view, session, doc, content: '# 规范 v1' })
+    const afterFirst = view.messages.length
+    syncConstraintDocReminder({ view, session, doc, content: '# 规范 v1' })
+    expect(view.messages).toHaveLength(afterFirst)
+
+    syncConstraintDocReminder({ view, session, doc, content: '# 规范 v2' })
+    const contents = userContents(view)
+    expect(contents).toHaveLength(1)
+    expect(contents[0]).toContain('规范 v2')
+    expect(contents[0]).not.toContain('规范 v1')
+  })
+
+  it('被压缩吞掉后（视图中无 reminder）自动重插', () => {
+    const session = buildSession()
+    const view = session.modelView!
+
+    syncConstraintDocReminder({ view, session, doc, content: '# 规范' })
+    expect(userContents(view)).toHaveLength(1)
+
+    // 模拟压缩吞掉 reminder（只留 system 与任务）
+    view.messages = view.messages.filter((message) => !message.content.includes(doc.path))
+    syncConstraintDocReminder({ view, session, doc, content: '# 规范' })
+    expect(userContents(view)).toHaveLength(1)
+    expect(userContents(view)[0]).toContain('# 规范')
+  })
+
+  it('文件缺失时注入 missingNote 兜底（不阻塞运行）', () => {
+    const session = buildSession()
+    const view = session.modelView!
+
+    syncConstraintDocReminder({ view, session, doc, content: null })
+    syncConstraintDocReminder({ view, session, doc, content: '' })
+
+    const contents = userContents(view)
+    expect(contents).toHaveLength(1)
+    expect(contents[0]).toContain(doc.missingNote)
   })
 })

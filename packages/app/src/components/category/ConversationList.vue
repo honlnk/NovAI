@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { ChatSessionSummaryView } from '@novai/core/services/types'
+import { AGENT_ROLE_META } from '../../constants/agent-roles'
 
-defineProps<{
+const props = defineProps<{
   sessions: ChatSessionSummaryView[]
   activeSessionId: string | null
 }>()
@@ -13,6 +14,23 @@ const emit = defineEmits<{
   rename: [sessionId: string, title: string]
   remove: [sessionId: string]
 }>()
+
+/**
+ * 按角色分组的会话列表（角色机制 W2）：主智能体组在前、特化角色组在后；
+ * 只渲染有会话的组，组头带角色图标与角色名。
+ */
+const sessionGroups = computed(() => {
+  const groups = new Map<string, { key: string; label: string; icon: string; sessions: ChatSessionSummaryView[] }>()
+  for (const session of props.sessions) {
+    const key = session.agent ?? 'main'
+    const meta = AGENT_ROLE_META[key] ?? AGENT_ROLE_META.main
+    if (!groups.has(key)) {
+      groups.set(key, { key, label: meta.label, icon: meta.icon, sessions: [] })
+    }
+    groups.get(key)!.sessions.push(session)
+  }
+  return [...groups.values()]
+})
 
 /** 当前正在内联重命名的 sessionId；null 表示无 */
 const renamingId = ref<string | null>(null)
@@ -90,9 +108,22 @@ function formatRelativeTime(iso: string): string {
         <p class="text-xs text-gray-500">点击「新对话」开始创作</p>
       </div>
 
-      <!-- 会话列表 -->
+      <!-- 会话列表（按角色分组；只渲染有会话的组） -->
       <ul v-else class="space-y-0.5">
-        <li v-for="session in sessions" :key="session.sessionId" class="group relative">
+        <li v-for="group in sessionGroups" :key="group.key" class="mb-2">
+          <!-- 角色分组头：图标 + 角色名 -->
+          <div class="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+            <svg v-if="group.icon === 'library'" class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
+            </svg>
+            <svg v-else class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+            <span>{{ group.label }}</span>
+          </div>
+
+          <ul class="space-y-0.5">
+            <li v-for="session in group.sessions" :key="session.sessionId" class="group relative">
           <!-- 重命名态：内联输入框 -->
           <div
             v-if="renamingId === session.sessionId"
@@ -156,6 +187,8 @@ function formatRelativeTime(iso: string): string {
               </svg>
             </button>
           </div>
+            </li>
+          </ul>
         </li>
       </ul>
     </div>

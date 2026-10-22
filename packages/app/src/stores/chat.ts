@@ -17,6 +17,7 @@ import {
 } from '@novai/core/services/agent-service'
 
 import type {
+  AgentRoleId,
   AgentUiEvent,
   ChangedFileView,
   ChatMessageView,
@@ -197,14 +198,18 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 新建会话：创建 + 激活 + 刷新列表。
-   * skipReload=true 时跳过内部全量刷新（调用方已确知列表状态，如 initSessions 走过 loadSessions、
-   * 或 deleteSession 清空后），改为本地插入新会话摘要到列表头部。
+   * - agent：指定驱动角色（缺省主角色）；'element-manager' 新建要素管理员直聊会话。
+   * - skipReload=true 时跳过内部全量刷新（调用方已确知列表状态，如 initSessions 走过 loadSessions、
+   *   或 deleteSession 清空后），改为本地插入新会话摘要到列表头部。
    */
   async function createNewSession(
     projectId: string,
-    options: { skipReload?: boolean } = {},
+    options: { skipReload?: boolean; agent?: AgentRoleId } = {},
   ): Promise<ChatSessionView> {
-    const view = await createAgentSession(projectId)
+    const view = await createAgentSession(
+      projectId,
+      options.agent !== undefined ? { agent: options.agent } : undefined,
+    )
     sessionView.value = view
     activeSessionId.value = view.sessionId
     changedFiles.value = []
@@ -219,6 +224,7 @@ export const useChatStore = defineStore('chat', () => {
       sessions.value = [{
         sessionId: view.sessionId,
         projectId,
+        ...(view.agent ? { agent: view.agent } : {}),
         title: view.title ?? '新对话',
         createdAt: view.createdAt ?? new Date().toISOString(),
         updatedAt: view.updatedAt ?? new Date().toISOString(),

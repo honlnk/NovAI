@@ -8,8 +8,11 @@ import {
   mergeElementManagerOverrides,
 } from './element-manager'
 import { readElementSchema } from '../fs/project-fs'
+import { hashContent } from '../util/hash'
+import { insertAfterSystem, replaceMessage, type ModelView } from './model-view'
+import type { AgentMessage } from './messages'
 import type { ConfirmHandler, TaggedToolExecutionEvent } from './tool-execution'
-import type { ChatTargetContext } from '../../types/chat'
+import type { ChatSessionState, ChatTargetContext } from '../../types/chat'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
 
 /**
@@ -135,4 +138,38 @@ export function getAgentRole(agent: AgentRoleId | undefined | null): AgentRolePr
 /** 列出全部注册角色（会话列表分组、委派目标枚举用）。 */
 export function listAgentRoles(): AgentRoleProfile[] {
   return Object.values(AGENT_ROLES)
+}
+
+/**
+ * 角色约束文档 reminder 同步（持久会话版，机制对齐 syncNovaiReminder）：
+ * 恒为视图中唯一一条——首轮注入（system 之后、先于全部历史）、内容变化原地替换、
+ * 被压缩吞掉后自动重插；digest 存会话（constraintDocDigest）。文件缺失时注入 missingNote
+ * 兜底（防御性不阻塞运行）。content 为已读好的全文（读取由调用方完成）。
+ */
+export function syncConstraintDocReminder(input: {
+  view: ModelView
+  session: ChatSessionState
+  doc: RoleConstraintDoc
+  content: string | null
+}): void {
+  const body = input.content?.trim() ? input.content : null
+  const reminderBody = body ?? input.doc.missingNote
+  const digest = hashContent(reminderBody)
+  const existingIndex = input.view.messages.findIndex(
+    (message) => message.role === 'user' && message.content.includes(input.doc.path),
+  )
+  if (existingIndex >= 0 && digest === input.session.constraintDocDigest) {
+    return
+  }
+
+  const reminder: AgentMessage = {
+    role: 'user',
+    content: input.doc.buildReminder(reminderBody),
+  }
+  if (existingIndex >= 0) {
+    replaceMessage(input.view, existingIndex, reminder)
+  } else {
+    insertAfterSystem(input.view, reminder)
+  }
+  input.session.constraintDocDigest = digest
 }

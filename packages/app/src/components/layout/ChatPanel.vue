@@ -34,6 +34,7 @@ import {
   type SlashCommandId,
 } from '../../constants/slash-commands'
 import type { ChatRenderItem } from '../../stores/chat-render'
+import { AGENT_ROLE_META } from '../../constants/agent-roles'
 import type { PermissionPreset } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
 
@@ -74,6 +75,13 @@ const emit = defineEmits<{
 const chatStore = useChatStore()
 const projectStore = useProjectStore()
 const messagesContainer = ref<HTMLDivElement | null>(null)
+
+/** 会话角色展示元数据（直聊横幅 + 输入框 placeholder 用；主角色无特化展示） */
+const roleMeta = computed(() =>
+  chatStore.sessionView?.agent && chatStore.sessionView.agent !== 'main'
+    ? AGENT_ROLE_META[chatStore.sessionView.agent]
+    : null,
+)
 /** Lexical 编辑器宿主（contenteditable 根元素；富文本化 W1 起 textarea 退役） */
 const editorHostRef = ref<HTMLDivElement | null>(null)
 
@@ -661,6 +669,17 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <!-- 直聊会话角色横幅：非主角色会话显示（与谁对话、边界是什么） -->
+    <div
+      v-if="roleMeta"
+      class="flex items-center justify-center gap-1.5 border-b border-amber-200/60 bg-amber-50 px-4 py-1 text-xs text-amber-700"
+    >
+      <svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
+      </svg>
+      <span>正在与{{ roleMeta.label }}对话{{ roleMeta.scopeNote ? ` · ${roleMeta.scopeNote}` : '' }}</span>
+    </div>
+
     <!-- 消息列表区（relative 包裹：「回到底部」浮钮的定位父级；浮钮放进滚动容器会随内容滚走） -->
     <div class="relative flex min-h-0 flex-1 flex-col">
       <div
@@ -833,7 +852,8 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
               >{{ chatStore.isRunning
                 ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
-                : '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)' }}</div>
+                : (roleMeta?.inputPlaceholder
+                  ?? '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)') }}</div>
               <!-- Lexical 编辑器宿主：contenteditable 由 setRootElement 接管，键入与选区归编辑器管 -->
               <div
                 ref="editorHostRef"

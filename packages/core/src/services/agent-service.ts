@@ -18,6 +18,8 @@ import {
   deleteSessionFile,
   listSessionMetas,
 } from '../core/chat/session-store'
+import { getAgentRole } from '../core/agent/roles'
+import type { AgentRoleId } from '../core/agent/roles'
 import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readNovAiOverview, readOutlinePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
@@ -139,10 +141,14 @@ export function deriveTargetFromPath(path?: string | null): ChatTargetView | nul
   return toChatTargetView(deriveChatTargetFromPath(path))
 }
 
-export async function createSession(projectId: string): Promise<ChatSessionView> {
+/** 新建会话；agent 指定驱动角色（缺省主角色）——直聊入口用 'element-manager' 新建要素管理员会话。 */
+export async function createSession(
+  projectId: string,
+  options?: { agent?: AgentRoleId },
+): Promise<ChatSessionView> {
   const project = requireRuntimeProject(projectId)
 
-  const session = createChatSession(projectId)
+  const session = createChatSession(projectId, options)
   cacheSession(session)
   activeSessionByProject.set(projectId, session.sessionId)
 
@@ -216,6 +222,7 @@ export async function listSessions(
   return metas.map((meta) => ({
     sessionId: meta.sessionId,
     projectId,
+    ...(meta.agent ? { agent: meta.agent } : {}),
     title: meta.title,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
@@ -438,14 +445,29 @@ async function wakeSessionDriver(options: {
   const { project, session, titleContext } = options
   const projectId = project.id
 
+  // 会话角色：运行配置按角色声明合成（要素管理员的模型/权限档覆盖，每次唤醒取当时值、
+  // 运行中定格）；合成后的 project 快照让权限判定与工具执行同步用该角色档位。
+  const role = getAgentRole(session.agent)
+  const effectiveConfig = role.mergeConfig?.(project.config) ?? project.config
+  const effectiveProject = effectiveConfig === project.config
+    ? project
+    : { ...project, config: effectiveConfig }
+
   const systemPrompt = await readSystemPrompt(project.handle)
   // 大纲（prompts/outlines/，W3 起改名+迁移）与项目记忆：走 user-role 注入链路（W2），
   // 不再拼进 system——system 恒定对前缀缓存友好，记忆是背景可被用户当轮指令压过。
+  // 特化角色的装配（system.md/NovAI/大纲是否注入）由 runDriverTurn 按角色声明取舍。
   const outlinePath = project.config.settings.activeOutlinePath ?? null
   const outlineContent = await readOutlinePrompt(project.handle, outlinePath)
   const novaiOverview = await readNovAiOverview(project.handle)
   // 写工具确认回调：构造预览 → 广播 confirmation-required → 等 UI 调 respondConfirmation。
-  const confirm: ConfirmHandler = (request) => requestConfirmation(session.sessionId, projectId, request)
+  // 非主角色会话的确认卡带角色标签（「要素管理员」），UI 区分请求方。
+  const confirm: ConfirmHandler = (request) =>
+    requestConfirmation(
+      session.sessionId,
+      projectId,
+      role.id === 'main' ? request : { ...request, agentLabel: role.displayName },
+    )
 
   // 账本基线：本次连续运行产生的记录 = 收尾时 slice(ledgerBaseline)（喂 turnChanges）
   const ledgerBaseline = session.changeLedger?.length ?? 0
@@ -458,8 +480,8 @@ async function wakeSessionDriver(options: {
     input: {
       // 指令走收件箱首批，driver 不直接消费 instruction/quote
       instruction: '',
-      project,
-      config: project.config,
+      project: effectiveProject,
+      config: effectiveConfig,
       systemPrompt,
       novaiOverview,
       outline: { path: outlinePath, content: outlineContent },
@@ -704,6 +726,7 @@ function toChatSessionView(session: ChatSessionState, options?: { tailMessages?:
   return {
     sessionId: session.sessionId,
     projectId: session.projectId,
+    ...(session.agent ? { agent: session.agent } : {}),
     status: session.status,
     messages: session.messages.slice(start).map((message) => toChatMessageView(message, session.changeLedger)),
     ...(start > 0 ? { historyStart: start } : {}),

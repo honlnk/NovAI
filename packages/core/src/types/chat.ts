@@ -225,6 +225,8 @@ export type ChatSessionState = {
   systemPromptHash?: string
   /** 项目记忆 reminder 的内容 hash：digest 按需注入（首轮或内容变化时注入/重注，被压缩吞掉后重插）。 */
   novaiOverviewDigest?: string
+  /** 角色约束文档（ELEMENT.md 类）reminder 的内容 hash：首轮注入、内容变化重注、被压缩吞掉后重插。 */
+  constraintDocDigest?: string
   /** 最近一轮生效的大纲路径（null=未选择）；变化时向持久化历史追加切换留痕。 */
   lastOutlinePath?: string | null
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */

@@ -68,10 +68,15 @@ export function setSystemMessage(view: ModelView, content: string): void {
 }
 
 /**
- * 在 system（index 0）之后插入一条消息。项目记忆 reminder 的专用位置：
+ * 在 system（index 0）之后插入一条消息。项目记忆/约束文档 reminder 的专用位置：
  * 紧跟 system、先于全部历史；压缩选区从 index 1 起，reminder 被吞后由 digest 机制重插。
+ * 视图尚无 system（空视图）时直接作为首条插入，不塞入 undefined 占位。
  */
 export function insertAfterSystem(view: ModelView, message: AgentMessage): void {
+  if (!view.messages[0]) {
+    view.messages = [message]
+    return
+  }
   view.messages = [view.messages[0], message, ...view.messages.slice(1)]
 }
 

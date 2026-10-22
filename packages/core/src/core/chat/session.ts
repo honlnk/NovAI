@@ -4,7 +4,7 @@ import {
   syncNovaiReminder,
 } from '../agent/prompt'
 import { buildSteeringContent, query } from '../agent/query'
-import { getAgentRole } from '../agent/roles'
+import { getAgentRole, syncConstraintDocReminder, type AgentRoleId } from '../agent/roles'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
   appendUserMessage,
@@ -57,11 +57,15 @@ type RunChatDriverOptions = {
   onLifecycle?: (event: ChatDriverLifecycleEvent) => void
 }
 
-export function createChatSession(projectId: string): ChatSessionState {
+export function createChatSession(
+  projectId: string,
+  options?: { agent?: AgentRoleId },
+): ChatSessionState {
   const now = new Date().toISOString()
   return {
     sessionId: createId('session'),
     projectId,
+    agent: options?.agent ?? 'main',
     messages: [],
     modelView: createModelView(),
     status: 'idle',
@@ -289,6 +293,13 @@ async function runDriverTurn(options: {
   }
   session.systemPromptHash = newSystemHash
 
+  // 角色约束文档（特化角色专属守则，如要素管理员的 ELEMENT.md）：user-role reminder
+  // 恒注入——首轮注入（system 之后）、内容变化原地替换、被压缩吞掉后自动重插。
+  if (role.constraintDoc) {
+    const docContent = await role.constraintDoc.read(input.project.handle)
+    syncConstraintDocReminder({ view: modelView, session, doc: role.constraintDoc, content: docContent })
+  }
+
   // 项目记忆 reminder 与大纲（角色声明开关：特化角色如要素管理员不注入这两个提示词家族文件）。
   // digest 按需注入/重注，恒在 system 之后、先于全部历史；被压缩吞掉后下一轮自动重插。
   if (role.injectNovaiOverview) {
@@ -318,9 +329,12 @@ async function runDriverTurn(options: {
   }
   const requestMessages = toRequestMessages(modelView)
   /**
-   * 工具事件 → 显示层消息（含改动账本累积）。主 Agent 事件无 agent 字段；
-   * 要素管理员子代理的事件带 elementManager（委派工具透传），渲染层据此折叠为嵌套要素管理员任务组。
+   * 工具事件 → 显示层消息（含改动账本累积）。事件归属：委派工具透传的内层事件
+   * 自带 agent；非主角色会话（直聊/委派）的本体事件归属会话角色。两者都带 agent 时，
+   * 渲染层折叠为嵌套角色任务组。
    */
+  const resolveAgentTag = (event: TaggedToolExecutionEvent): NonNullable<TaggedToolExecutionEvent['agent']> | undefined =>
+    event.agent ?? (session.agent && session.agent !== 'main' ? session.agent : undefined)
   const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
     if (event.type === 'tool-call') {
       pushMessage(
@@ -332,7 +346,7 @@ async function runDriverTurn(options: {
           toolName: event.call.name,
           inputSummary: event.inputSummary,
           toolCallId: event.call.id,
-          ...(event.agent ? { agent: event.agent } : {}),
+          ...(resolveAgentTag(event) ? { agent: resolveAgentTag(event)! } : {}),
           createdAt: new Date().toISOString(),
         },
         onEvent,
@@ -343,7 +357,8 @@ async function runDriverTurn(options: {
     if (event.type === 'tool-result') {
       // 改动账本累积点：事件驱动 append-only（与 modelView 无关 → 免疫压缩）。
       // 不可变重建数组，不污染入参数组；diff 仅写工具成功且有 extractChangeDiff 时存在。
-      // 要素管理员的写入同 runId 归本轮面板，记录带 agent 归属标记。
+      // 非主角色会话（直聊/委派）的写入同 runId 归本轮面板，记录带 agent 归属标记。
+      const agentTag = resolveAgentTag(event)
       if (event.ok && event.fileChange) {
         session.changeLedger = [
           ...(session.changeLedger ?? []),
@@ -353,7 +368,7 @@ async function runDriverTurn(options: {
             at: new Date().toISOString(),
             change: event.fileChange,
             ...(event.diff ? { diff: event.diff } : {}),
-            ...(event.agent ? { agent: event.agent } : {}),
+            ...(agentTag ? { agent: agentTag } : {}),
           },
         ]
       }
@@ -368,7 +383,7 @@ async function runDriverTurn(options: {
           ok: event.ok,
           resultSummary: event.resultSummary,
           toolCallId: event.call.id,
-          ...(event.agent ? { agent: event.agent } : {}),
+          ...(agentTag ? { agent: agentTag } : {}),
           createdAt: new Date().toISOString(),
         },
         onEvent,

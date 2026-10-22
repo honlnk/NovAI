@@ -319,8 +319,18 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.lastFileChange).toBeNull()
   })
 
-  it('sendMessage 成功返回 true 并透传 mode/quote；失败返回 false 供草稿恢复', async () => {
+  it('createNewSession 透传角色参数；skipReload 本地插入的摘要带 agent（角色机制 W2）', async () => {
     const store = useChatStore()
+    mockedCreateSession.mockResolvedValue({ ...createSessionView('session-em'), agent: 'element-manager' })
+
+    await store.createNewSession('project-1', { skipReload: true, agent: 'element-manager' })
+
+    expect(mockedCreateSession).toHaveBeenCalledWith('project-1', { agent: 'element-manager' })
+    expect(store.sessions[0]).toMatchObject({ sessionId: 'session-em', agent: 'element-manager' })
+    expect(store.sessionView?.agent).toBe('element-manager')
+  })
+
+  it('sendMessage 成功返回 true 并透传 mode/quote；失败返回 false 供草稿恢复', async () => {    const store = useChatStore()
     const view = createSessionView('session-current')
     mockedCreateSession.mockResolvedValue(view)
     await store.createNewSession('project-1', { skipReload: true })
