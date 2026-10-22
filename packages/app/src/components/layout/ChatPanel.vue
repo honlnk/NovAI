@@ -151,9 +151,6 @@ function renderItemKey(item: ChatRenderItem): string {
   if (item.kind === 'process-group') {
     return `group-${item.id}`
   }
-  if (item.kind === 'subagent-group') {
-    return `subagent-${item.id}`
-  }
   if (item.kind === 'tool-row') {
     return `tool-${item.id}`
   }
@@ -717,18 +714,7 @@ onBeforeUnmount(() => {
                 @toggle="chatStore.toggleProcessGroup"
               >
                 <template v-for="child in item.items" :key="renderItemKey(child)">
-                  <!-- 要素管理员子代理嵌套任务组：组头带标签、嵌套缩进，子项为其工具行 -->
-                  <TurnProcessGroup
-                    v-if="child.kind === 'subagent-group'"
-                    :group="child"
-                    nested
-                    @toggle="chatStore.toggleProcessGroup"
-                  >
-                    <template v-for="grandchild in child.items" :key="renderItemKey(grandchild)">
-                      <ToolCallRow v-if="grandchild.kind === 'tool-row'" :item="grandchild" />
-                    </template>
-                  </TurnProcessGroup>
-                  <ToolCallRow v-else-if="child.kind === 'tool-row'" :item="child" />
+                  <ToolCallRow v-if="child.kind === 'tool-row'" :item="child" />
                   <MessageItem
                     v-else-if="child.kind === 'message'"
                     :message="child.message"
