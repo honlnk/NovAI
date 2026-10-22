@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 160" role="img" aria-label="NovAI">
+  <defs>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 图标瓦片：翻开的书 + 灯泡光芒（Vibe Writing） -->
+  <g transform="translate(0,8)">
+    <rect width="144" height="144" rx="35" fill="#18181B"/>
+    <g transform="translate(22,30.5) scale(2.08)">
+      <g stroke="url(#acc)" stroke-width="2.4" stroke-linecap="round">
+        <path d="M 11.5 1.5 L 8.5 -1.5"/>
+        <path d="M 36.5 1.5 L 39.5 -1.5"/>
+      </g>
+      <rect x="22.8" y="-8" width="2.4" height="4" rx="1.2" fill="url(#acc)"/>
+      <circle cx="24" cy="8.5" r="7.5" fill="url(#acc)"/>
+      <rect x="20.5" y="15.5" width="7" height="2.2" rx="1.1" fill="url(#acc)"/>
+      <rect x="21.5" y="19" width="5" height="2" rx="1" fill="url(#acc)"/>
+      <path fill="#FAFAF9" d="M 22.6 26 C 18 22.4, 10.5 21.4, 5 23.2 L 5 41 C 10.5 39.2, 18 40.2, 22.6 43.8 Z"/>
+      <path fill="#FAFAF9" d="M 25.4 26 C 30 22.4, 37.5 21.4, 43 23.2 L 43 41 C 37.5 39.2, 30 40.2, 25.4 43.8 Z"/>
+    </g>
+  </g>
+
+  <!-- 字标：Nov 墨色 · AI 渐变 -->
+  <g transform="translate(184,26)" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="9">
+    <g stroke="#18181B">
+      <path d="M 6 12 L 6 108"/>
+      <path d="M 6 12 L 44 108"/>
+      <path d="M 44 12 L 44 108"/>
+      <circle cx="82" cy="72" r="24"/>
+      <path d="M 124 42 L 143 108 L 162 42"/>
+    </g>
+    <path d="M 187 108 L 210 12 L 233 108" stroke="url(#acc)"/>
+    <rect x="195" y="78" width="30" height="9" rx="4.5" fill="url(#acc)"/>
+    <rect x="253.5" y="12" width="9" height="96" rx="4.5" fill="url(#acc)"/>
+  </g>
+</svg>

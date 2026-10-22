@@ -1,4 +1,9 @@
-# NovAI
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" width="380" alt="NovAI">
+  </picture>
+</p>
 
 [![Release](https://img.shields.io/github/v/release/honlnk/NovAI?include_prereleases&label=release)](https://github.com/honlnk/NovAI/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
