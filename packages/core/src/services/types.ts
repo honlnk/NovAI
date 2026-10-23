@@ -575,3 +575,24 @@ export type NovAiError = {
   recoverable: boolean
   detail?: unknown
 }
+
+/**
+ * 浏览器环境自检的阻塞原因；检测优先级见 environment-service 的 detectBlocker。
+ */
+export type EnvironmentBlockerReason =
+  | 'embedded-webview'
+  | 'insecure-context'
+  | 'file-system-access-missing'
+  | 'css-engine-outdated'
+
+/**
+ * 浏览器环境自检报告（同步快照，页面生命周期内不会变化）。
+ * usable=false 时 UI 应整页提示不可用，blockerMessage 为可直接展示的中文说明；
+ * userAgent 仅供排障留档，不参与判定。
+ */
+export type EnvironmentReportView = {
+  usable: boolean
+  blocker: EnvironmentBlockerReason | null
+  blockerMessage: string
+  userAgent: string
+}
