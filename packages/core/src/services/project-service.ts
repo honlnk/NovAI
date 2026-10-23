@@ -2,12 +2,12 @@ import {
   createProject as createCoreProject,
   findFirstReadableFile,
   inspectProject as inspectCoreProject,
-  isFileSystemAccessSupported,
   loadProjectFromHandle,
   pickProjectDirectory,
   repairProject,
   rescanProject,
 } from '../core/fs/project-fs'
+import { inspectBrowserEnvironment } from './environment-service'
 import { writeAgentLog } from '../core/logging/agent-log'
 import { sweepExpiredSpillFiles } from '../core/agent/spill'
 import {
@@ -38,11 +38,11 @@ import type { LastProjectSummaryView, ProjectStatusView, ProjectView } from './t
 export { updateRecentProjectCounts }
 
 export function isProjectAccessSupported(): boolean {
-  return isFileSystemAccessSupported()
+  return inspectBrowserEnvironment().usable
 }
 
 export async function createProject(name: string): Promise<ProjectView> {
-  assertFileSystemAccessSupported()
+  assertBrowserEnvironmentSupported()
 
   const project = await createCoreProject(name)
   await activateProject(project, 'project_created', `创建项目「${project.name}」`)
@@ -52,7 +52,7 @@ export async function createProject(name: string): Promise<ProjectView> {
 }
 
 export async function openProject(): Promise<ProjectView> {
-  assertFileSystemAccessSupported()
+  assertBrowserEnvironmentSupported()
 
   const handle = await pickProjectDirectory()
   const inspection = await inspectCoreProject(handle)
@@ -70,7 +70,7 @@ export async function openProject(): Promise<ProjectView> {
 }
 
 export async function restoreLastProject(): Promise<ProjectView | null> {
-  assertFileSystemAccessSupported()
+  assertBrowserEnvironmentSupported()
 
   const record = await readLastProject()
 
@@ -96,7 +96,7 @@ export async function restoreLastProject(): Promise<ProjectView | null> {
 }
 
 export async function restoreRecentProject(projectId: string): Promise<ProjectView | null> {
-  assertFileSystemAccessSupported()
+  assertBrowserEnvironmentSupported()
 
   const record = await readRecentProject(projectId)
 
@@ -190,7 +190,7 @@ export async function deleteRecentProject(
   }
 
   if (options.deleteDirectory) {
-    assertFileSystemAccessSupported()
+    assertBrowserEnvironmentSupported()
 
     const hasPermission = await hasProjectPermission(record.handle)
       || await requestProjectPermission(record.handle)
@@ -293,9 +293,10 @@ async function activateProject(
   })
 }
 
-function assertFileSystemAccessSupported() {
-  if (!isFileSystemAccessSupported()) {
-    throw new Error('当前浏览器不支持 File System Access API，请使用 Chromium 内核浏览器。')
+function assertBrowserEnvironmentSupported() {
+  const report = inspectBrowserEnvironment()
+  if (!report.usable) {
+    throw new Error(report.blockerMessage)
   }
 }
 

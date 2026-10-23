@@ -3,10 +3,13 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { REPO_URL } from '../constants/repo'
+import { useEnvironmentCheck } from '../composables/useEnvironmentCheck'
+import BrowserUnsupportedView from './BrowserUnsupportedView.vue'
 import type { RecentProject } from '@novai/core/types/project'
 
 const router = useRouter()
 const projectStore = useProjectStore()
+const { report: environmentReport } = useEnvironmentCheck()
 const showCreateDialog = ref(false)
 const projectPendingDelete = ref<RecentProject | null>(null)
 const newProjectName = ref('')
@@ -15,6 +18,8 @@ const isDeleting = ref(false)
 const shouldDeleteDirectory = ref(false)
 
 onMounted(async () => {
+  // 环境不达标时首页整页替换为不可用提示，最近项目等数据没有加载的必要。
+  if (!environmentReport.usable) return
   await projectStore.loadLastProjectSummary()
   await projectStore.loadRecentProjects()
 })
@@ -91,7 +96,8 @@ async function handleConfirmDeleteProject() {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col bg-gray-50">
+  <BrowserUnsupportedView v-if="!environmentReport.usable" :report="environmentReport" />
+  <div v-else class="flex h-screen flex-col bg-gray-50">
     <!-- 顶栏 -->
     <header class="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
       <div class="flex items-center gap-3">

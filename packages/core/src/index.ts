@@ -6,6 +6,7 @@ export type * from './types/rag'
 
 export * as agentService from './services/agent-service'
 export * as completionService from './services/completion-service'
+export * as environmentService from './services/environment-service'
 export * as fileService from './services/file-service'
 export * as projectService from './services/project-service'
 export * as ragService from './services/rag-service'

@@ -12,7 +12,7 @@
 > 你用自然语言指挥，AI 智能体直接读写本地项目里的章节、大纲与设定文件。
 > 聊天只是协作界面——作品的唯一真值，始终是你磁盘上的那个文件夹。
 
-**[在线使用](https://novai.honlnk.com)** · 需要 Chromium 内核浏览器（Chrome / Edge）
+**[在线使用](https://novai.honlnk.com)** · 需要桌面端 Chromium 内核浏览器，推荐 **Chrome / Edge / 360 浏览器**最新版（内核 111+）；Firefox、Safari、iOS 与微信等内嵌浏览器暂不支持
 
 ---
 
