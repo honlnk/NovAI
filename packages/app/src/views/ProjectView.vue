@@ -284,6 +284,7 @@ function handleGoToSettings() {
         :sessions="chatStore.sessions"
         :active-session-id="chatStore.activeSessionId"
         :pending-confirmation-ids="chatStore.sessionsWithPendingConfirmations"
+        :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"

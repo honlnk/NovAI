@@ -4,6 +4,8 @@ import { defineStore } from 'pinia'
 import {
   createSession as createAgentSession,
   respondConfirmation as respondAgentConfirmation,
+  respondQuestion as respondAgentQuestion,
+  skipQuestion as skipAgentQuestion,
   enqueueMessage as enqueueAgentMessage,
   updateQueuedMessage as updateAgentQueuedMessage,
   loadOlderMessages as loadOlderAgentMessages,
@@ -19,6 +21,7 @@ import {
 import type {
   AgentRoleId,
   AgentUiEvent,
+  AskUserQuestionRequestView,
   ChangedFileView,
   ChatMessageView,
   ChatSessionSummaryView,
@@ -75,6 +78,28 @@ export const useChatStore = defineStore('chat', () => {
     }
     return pendingConfirmationsBySession.value.get(active)?.[0] ?? null
   })
+  /**
+   * 各会话的待回答提问快照（question-required / questions-updated 事件同步，仿确认链）：
+   * Agent 任务中途的 AskUserQuestion 挂起在这里。切换会话后回来仍能恢复等待态；
+   * 刷新后为空（core 不重放事件），无 answer 的卡片据此标记「等待已中断」。
+   */
+  const pendingQuestionsBySession = ref(new Map<string, AskUserQuestionRequestView[]>())
+  // 当前激活会话的待回答提问（一次只处理一个，取最早到达的那条）
+  const pendingQuestion = computed<AskUserQuestionRequestView | null>(() => {
+    const active = activeSessionId.value
+    if (!active) {
+      return null
+    }
+    return pendingQuestionsBySession.value.get(active)?.[0] ?? null
+  })
+  /**
+   * 当前提问的作答草稿（卡片与输入框改道共用）：候选项选择集合 + 补充文本。
+   * pendingQuestion 变化（新问题到达 / 已作答清空）时重置。
+   */
+  const questionSelection = ref<string[]>([])
+  const questionText = ref('')
+  /** 提问作答在途（提交按钮防重复点击；respondQuestion 同步收敛，通常只闪一瞬） */
+  const isSubmittingAnswer = ref(false)
   // 当前正在流式输出的消息 id（供消息气泡显示「生成中」光标）；无流式消息时为 null
   const streamingMessageId = ref<string | null>(null)
 
@@ -101,6 +126,15 @@ export const useChatStore = defineStore('chat', () => {
   const sessionsWithPendingConfirmations = computed(() =>
     new Set(
       [...pendingConfirmationsBySession.value.entries()]
+        .filter(([, list]) => list.length > 0)
+        .map(([sessionId]) => sessionId),
+    ),
+  )
+
+  /** 有待回答提问的会话 id 集（会话列表「待回答」徽标）。 */
+  const sessionsWithPendingQuestions = computed(() =>
+    new Set(
+      [...pendingQuestionsBySession.value.entries()]
         .filter(([, list]) => list.length > 0)
         .map(([sessionId]) => sessionId),
     ),
@@ -428,6 +462,23 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    if (event.type === 'question-required') {
+      const list = pendingQuestionsBySession.value.get(event.sessionId) ?? []
+      pendingQuestionsBySession.value = new Map(pendingQuestionsBySession.value)
+        .set(event.sessionId, [...list, event.request])
+      if (event.sessionId === activeSessionId.value) {
+        resetQuestionDraft()
+        setRunStatus('Agent 正在等待你的回答…')
+      }
+      return
+    }
+
+    if (event.type === 'questions-updated') {
+      pendingQuestionsBySession.value = new Map(pendingQuestionsBySession.value)
+        .set(event.sessionId, event.questions)
+      return
+    }
+
     if (event.type === 'session-created') {
       const projectStore = useProjectStore()
       if (projectStore.currentProject?.id === event.projectId) {
@@ -595,6 +646,79 @@ export const useChatStore = defineStore('chat', () => {
     setRunStatus('Agent 正在执行...', 'running')
   }
 
+  // ---------- 主动提问作答（卡片与输入框改道共用） ----------
+
+  /** 重置当前提问的作答草稿（新问题到达 / 已作答时调用）。 */
+  function resetQuestionDraft() {
+    questionSelection.value = []
+    questionText.value = ''
+  }
+
+  /**
+   * 卡片候选项选择：单选替换、多选切换（保持候选项顺序，与提交校验一致）。
+   * 未知标签静默忽略（候选项由问题定义，UI 不产生越界值）。
+   */
+  function toggleQuestionOption(label: string) {
+    const question = pendingQuestion.value
+    if (!question) {
+      return
+    }
+    if (!question.multiSelect) {
+      questionSelection.value = questionSelection.value.includes(label) ? [] : [label]
+      return
+    }
+    const exists = questionSelection.value.includes(label)
+    const next = exists
+      ? questionSelection.value.filter((item) => item !== label)
+      : [...questionSelection.value, label]
+    // 按候选项原始顺序排序：多选完整集合的展示与提交顺序稳定
+    const order = new Map((question.options ?? []).map((option, index) => [option.label, index]))
+    questionSelection.value = next.sort(
+      (left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0),
+    )
+  }
+
+  /**
+   * 提交当前提问的回答（卡片提交 / 输入框改道共用）。
+   * 校验失败（空回答等）不改等待态，错误文案进状态栏由用户补填。
+   * respondQuestion 内同步广播 questions-updated 与补全 answer 的卡片消息。
+   */
+  function submitQuestionAnswer(input?: { text?: string }): boolean {
+    const question = pendingQuestion.value
+    if (!question || isSubmittingAnswer.value) {
+      return false
+    }
+    const text = (input?.text ?? questionText.value).trim()
+    isSubmittingAnswer.value = true
+    try {
+      respondAgentQuestion({
+        questionId: question.questionId,
+        selectedLabels: [...questionSelection.value],
+        text,
+      })
+      // 同步收敛：作答草稿由 questions-updated/questionId 变化路径重置，此处兜底再清
+      resetQuestionDraft()
+      setRunStatus('Agent 正在执行...', 'running')
+      return true
+    } catch (error) {
+      setRunStatus(error instanceof Error ? error.message : '回答提交失败', 'error')
+      return false
+    } finally {
+      isSubmittingAnswer.value = false
+    }
+  }
+
+  /** 跳过当前提问：返回明确取消结局，Agent 在不获得答案的情况下调整后续处理。 */
+  function skipCurrentQuestion() {
+    const question = pendingQuestion.value
+    if (!question) {
+      return
+    }
+    skipAgentQuestion(question.questionId)
+    resetQuestionDraft()
+    setRunStatus('Agent 正在执行...', 'running')
+  }
+
   return {
     changedFiles,
     lastFileChange,
@@ -607,6 +731,12 @@ export const useChatStore = defineStore('chat', () => {
     pendingConfirmation,
     pendingConfirmationsBySession,
     sessionsWithPendingConfirmations,
+    pendingQuestion,
+    pendingQuestionsBySession,
+    sessionsWithPendingQuestions,
+    questionSelection,
+    questionText,
+    isSubmittingAnswer,
     sessionView,
     sessions,
     activeSessionId,
@@ -631,7 +761,10 @@ export const useChatStore = defineStore('chat', () => {
     selectSession,
     sendMessage,
     setRunStatus,
+    skipCurrentQuestion,
     steerQueuedMessage,
+    submitQuestionAnswer,
+    toggleQuestionOption,
     toggleProcessGroup,
   }
 })

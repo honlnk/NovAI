@@ -8,6 +8,8 @@ const props = defineProps<{
   activeSessionId: string | null
   /** 有待确认卡片的会话 id 集（徽标；委派中的要素管理员会话等用户打开确认） */
   pendingConfirmationIds?: Set<string>
+  /** 有待回答提问卡的会话 id 集（徽标；蓝色中性样式，与 amber 待确认区分） */
+  pendingQuestionIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -163,6 +165,11 @@ function formatRelativeTime(iso: string): string {
                   class="inline-flex shrink-0 items-center rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] leading-none text-amber-300"
                   title="该会话有等待确认的写操作，点开处理"
                 >待确认</span>
+                <span
+                  v-if="pendingQuestionIds?.has(session.sessionId)"
+                  class="inline-flex shrink-0 items-center rounded-full bg-blue-500/15 px-1.5 py-0.5 text-[10px] leading-none text-blue-300"
+                  title="该会话有等待回答的提问，点开处理"
+                >待回答</span>
               </div>
               <p class="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
                 <span>{{ formatRelativeTime(session.updatedAt) }}</span>

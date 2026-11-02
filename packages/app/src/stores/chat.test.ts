@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import type {
   AgentUiEvent,
+  AskUserQuestionRequestView,
   ChatSessionView,
   FileChangeConfirmationView,
   RunAgentTurnResult,
@@ -15,6 +16,8 @@ import {
   isAgentRunActive,
   listSessions,
   loadOlderMessages,
+  respondQuestion,
+  skipQuestion,
   stopAgentRun,
   subscribeAgentEvents,
 } from '@novai/core/services/agent-service'
@@ -34,6 +37,8 @@ vi.mock('@novai/core/services/agent-service', () => ({
   isAgentRunActive: vi.fn(() => false),
   subscribeAgentEvents: vi.fn(() => () => {}),
   respondConfirmation: vi.fn(),
+  respondQuestion: vi.fn(),
+  skipQuestion: vi.fn(),
 }))
 
 const mockedCreateSession = vi.mocked(createSession)
@@ -44,6 +49,8 @@ const mockedLoadOlderMessages = vi.mocked(loadOlderMessages)
 const mockedStopAgentRun = vi.mocked(stopAgentRun)
 const mockedIsAgentRunActive = vi.mocked(isAgentRunActive)
 const mockedSubscribeAgentEvents = vi.mocked(subscribeAgentEvents)
+const mockedRespondQuestion = vi.mocked(respondQuestion)
+const mockedSkipQuestion = vi.mocked(skipQuestion)
 
 function createSessionView(sessionId: string): ChatSessionView {
   return {
@@ -603,6 +610,157 @@ describe('chat store（W4 事件总线版）', () => {
     // 快照广播整体替换：resolve 后清空 → 徽标熄灭
     emit({ type: 'confirmations-updated', sessionId: 'session-delegation', confirmations: [] })
     expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(false)
+  })
+
+  it('提问按会话路由（主动提问 W2）：非激活会话只点亮徽标，激活会话进提问位并重置草稿', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const question: AskUserQuestionRequestView = {
+      questionId: 'q-1',
+      question: '第三章的冲突往哪个方向推进？',
+      header: '剧情方向',
+      options: [
+        { label: '正面对峙', description: '节奏更快' },
+        { label: '暗流涌动', description: '铺垫更足' },
+      ],
+      createdAt: '2026-11-03T00:00:00.000Z',
+    }
+
+    // 非激活会话的提问：不占当前提问位，但点亮徽标集合（切回该会话可继续回答）
+    emit({ type: 'question-required', sessionId: 'session-other', request: question })
+    expect(store.pendingQuestion).toBeNull()
+    expect(store.sessionsWithPendingQuestions.has('session-other')).toBe(true)
+
+    // 激活会话自己的提问：进提问位，旧作答草稿被重置，状态栏提示等待回答
+    store.questionText = '上一次没提交的草稿'
+    emit({ type: 'question-required', sessionId: 'session-current', request: { ...question, questionId: 'q-2' } })
+    expect(store.pendingQuestion?.questionId).toBe('q-2')
+    expect(store.questionText).toBe('')
+    expect(store.questionSelection).toEqual([])
+    expect(store.runStatus).toBe('Agent 正在等待你的回答…')
+
+    // 快照广播整体替换：作答收敛后清空 → 徽标熄灭、提问位腾空
+    emit({ type: 'questions-updated', sessionId: 'session-current', questions: [] })
+    expect(store.pendingQuestion).toBeNull()
+    expect(store.sessionsWithPendingQuestions.has('session-current')).toBe(false)
+  })
+
+  it('候选项选择：单选替换、多选按候选项顺序保持完整集合', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    // 多选：乱序点选后按候选项原始顺序稳定排序
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-multi',
+        question: '哪些角色要进第三章？',
+        multiSelect: true,
+        options: [{ label: '沈砚' }, { label: '林晚照' }, { label: '阿禾' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('阿禾')
+    store.toggleQuestionOption('沈砚')
+    expect(store.questionSelection).toEqual(['沈砚', '阿禾'])
+    store.toggleQuestionOption('沈砚')
+    expect(store.questionSelection).toEqual(['阿禾'])
+
+    // 真实 service 在问题收敛时会广播快照；mock 下手动补发以腾出提问位
+    emit({ type: 'questions-updated', sessionId: 'session-current', questions: [] })
+
+    // 单选：再次点同项取消；点不同项整体替换
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-single',
+        question: '开篇视角用谁？',
+        options: [{ label: '第一人称' }, { label: '第三人称' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('第三人称')
+    expect(store.questionSelection).toEqual(['第三人称'])
+    store.toggleQuestionOption('第一人称')
+    expect(store.questionSelection).toEqual(['第一人称'])
+    store.toggleQuestionOption('第一人称')
+    expect(store.questionSelection).toEqual([])
+  })
+
+  it('提交回答：卡片所选与输入框文本合并提交；校验失败不改等待态', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-3',
+        question: '结尾停在哪一拍？',
+        options: [{ label: '留白' }, { label: '点题' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('留白')
+
+    // 成功路径：输入框改道文本与卡片所选合并（ChatPanel 的普通输入作答链路）
+    mockedRespondQuestion.mockImplementationOnce(() => {})
+    const ok = store.submitQuestionAnswer({ text: ' 留白但埋一句伏笔 ' })
+    expect(ok).toBe(true)
+    expect(mockedRespondQuestion).toHaveBeenCalledWith({
+      questionId: 'q-3',
+      selectedLabels: ['留白'],
+      text: '留白但埋一句伏笔',
+    })
+    expect(store.questionSelection).toEqual([])
+    expect(store.questionText).toBe('')
+
+    // 成功后 service 广播空快照腾出提问位（mock 下手动补发），再注入下一个问题
+    emit({ type: 'questions-updated', sessionId: 'session-current', questions: [] })
+
+    // 失败路径（service 抛错，如候选项外标签）：返回 false，等待态保持，错误进状态栏
+    emit({ type: 'question-required', sessionId: 'session-current', request: { questionId: 'q-4', question: '再问一个？', createdAt: '2026-11-03T00:00:00.000Z' } })
+    store.questionText = '自由文本回答'
+    mockedRespondQuestion.mockImplementationOnce(() => {
+      throw new Error('回答包含问题候选项之外的标签')
+    })
+    const failed = store.submitQuestionAnswer()
+    expect(failed).toBe(false)
+    expect(store.pendingQuestion?.questionId).toBe('q-4')
+    expect(store.runStatus).toBe('回答包含问题候选项之外的标签')
+    expect(store.runStatusType).toBe('error')
+  })
+
+  it('跳过问题：按当前 questionId 调 skipQuestion 并清空草稿', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-skip',
+        question: '这个问题不重要',
+        options: [{ label: '甲' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('甲')
+
+    store.skipCurrentQuestion()
+    expect(mockedSkipQuestion).toHaveBeenCalledWith('q-skip')
+    expect(store.questionSelection).toEqual([])
   })
 
   it('session-created（委派会话落盘，W3/W4）：项目匹配时把事件自带的摘要 upsert 进列表', async () => {
