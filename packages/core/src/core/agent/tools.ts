@@ -613,6 +613,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'WebFetch'
     || value === 'KnowledgeLookup'
     || value === 'DelegateToElementManager'
+    || value === 'AskUserQuestion'
 }
 
 function formatScore(value: number | undefined) {

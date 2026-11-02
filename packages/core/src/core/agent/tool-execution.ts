@@ -150,6 +150,7 @@ export async function executeAgentTool(input: {
       readFileStates: input.readFileStates,
       getChangeLedger: input.getChangeLedger,
       webClientId: input.webClientId,
+      toolCallId: input.call.id,
     })
     const resultSummary = tool.core.summarizeOutput(output)
     // 写工具成功执行后提取结构化文件变更与片段级 diff，供改动账本累积

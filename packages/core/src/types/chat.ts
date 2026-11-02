@@ -4,6 +4,7 @@ import type { ModelView } from '../core/agent/model-view'
 import type { AgentRoleId } from '../core/agent/roles'
 import type { DelegationSessionRunner } from '../core/agent/element-manager'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type { AskUserQuestionHandler } from '../core/agent/ask-user-question'
 import type { ChangeDiff, FileChange } from '../core/tools/types'
 
 export type ChatToolName =
@@ -21,6 +22,7 @@ export type ChatToolName =
   | 'WebFetch'
   | 'KnowledgeLookup'
   | 'DelegateToElementManager'
+  | 'AskUserQuestion'
 
 export type UserTextMessage = {
   id: string
@@ -135,6 +137,33 @@ export type ChangeSummaryMessage = {
   createdAt: string
 }
 
+/**
+ * 主动提问卡（《Agent 主动提问工具计划》）：AskUserQuestion 工具调用在消息流里的
+ * 独立卡片位。问题提出时 push（answer 缺省 = 待回答），用户作答/跳过后原位补全
+ * answer 字段（历史重读仍可见问题、答案与结局）。卡片不折叠进普通工具过程组
+ * ——它是用户可见的交互主体，不是过程噪音。旧会话无此消息类型，按普通历史读取。
+ */
+export type AskUserQuestionMessage = {
+  id: string
+  role: 'system'
+  kind: 'ask-user-question'
+  /** 提问请求 id（questionMap 的键；与 tool-call 消息的 toolCallId 同值） */
+  questionId: string
+  question: string
+  header?: string
+  options?: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+  /** 用户回答（补全后卡片只读）：所选候选项标签（多选完整保留）+ 自由文本 + 结局 */
+  answer?: {
+    selectedLabels: string[]
+    text: string
+    outcome: 'answered' | 'cancelled'
+    /** ISO 时间 */
+    answeredAt: string
+  }
+  createdAt: string
+}
+
 export type ChatMessage =
   | UserTextMessage
   | AssistantTextMessage
@@ -145,6 +174,7 @@ export type ChatMessage =
   | ContextSummaryMessage
   | TurnLimitMessage
   | ChangeSummaryMessage
+  | AskUserQuestionMessage
 
 export type ChatTargetContext = {
   type: 'chapter' | 'prompt-system' | 'prompt-outline' | 'element' | 'project'
@@ -280,6 +310,11 @@ export type ChatTurnInput = {
    * 工具靠它创建并驱动特化角色真会话。未注入时该工具直接报错（测试/只读场景）。
    */
   runDelegationSession?: DelegationSessionRunner
+  /**
+   * 主动提问回调（service 层实现并注入）：主智能体的 AskUserQuestion 工具靠它
+   * 向用户提问并等待回答。未注入时该工具直接报错（测试/只读/非主角色场景）。
+   */
+  askUser?: AskUserQuestionHandler
 }
 
 export type ChatTurnResult = {
