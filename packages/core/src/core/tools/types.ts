@@ -1,6 +1,7 @@
 import type { ProjectSnapshot } from '../../types/project'
 import type { FileChangeRecord } from '../../types/chat'
 import type { ElementType } from '../../types/rag'
+import type { PlanStatus } from '../../types/plans'
 import type { KnowledgePlatformName } from './knowledge-platforms'
 
 /**
@@ -18,6 +19,11 @@ export type CoreToolName =
   | 'FindFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'ListPlans'
+  | 'ReadPlan'
+  | 'CreatePlan'
+  | 'UpdatePlan'
+  | 'DeletePlan'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -289,6 +295,95 @@ export type LoadedElement = {
 
 export type LoadElementsOutput = {
   elements: LoadedElement[]
+}
+
+/** ===== 创作计划板工具（计划 §AI 工具） ===== */
+
+export type ListPlansInput = {
+  status?: PlanStatus
+}
+
+export type ListPlansOutput = {
+  plans: Array<{
+    id: string
+    title: string
+    status: PlanStatus
+    order: number
+    updatedAt: string
+    summary: string
+  }>
+  totalCount: number
+}
+
+export type ReadPlanInput = {
+  id: string
+}
+
+export type ReadPlanOutput =
+  | {
+      id: string
+      notFound: true
+    }
+  | {
+      id: string
+      status: PlanStatus
+      order: number
+      title: string
+      body: string
+      sourcePath: string
+      contentHash: string
+      updatedAt: string
+    }
+
+export type CreatePlanInput = {
+  body: string
+  status?: PlanStatus
+}
+
+export type CreatePlanOutput = {
+  id: string
+  title: string
+  status: PlanStatus
+  order: number
+  sourcePath: string
+  /** 完整文件内容（frontmatter + 正文）；改动账本 diff 用 */
+  content: string
+  contentLength: number
+  linesAdded: number
+  created: true
+}
+
+export type UpdatePlanInput = {
+  id: string
+  body?: string
+  status?: PlanStatus
+  /** 移动到目标列某卡片之后；null = 列末尾；undefined = 不动位置 */
+  afterId?: string | null
+  /** 上次 ReadPlan 返回的 contentHash；正文替换必传（防覆盖外部修改） */
+  expectedContentHash?: string
+}
+
+export type UpdatePlanOutput = {
+  id: string
+  title: string
+  status: PlanStatus
+  order: number
+  sourcePath: string
+  /** 更新后的完整文件内容 */
+  content: string
+  contentLength: number
+}
+
+export type DeletePlanInput = {
+  id: string
+}
+
+export type DeletePlanOutput = {
+  id: string
+  sourcePath: string
+  trashPath: string
+  contentLength: number
+  linesRemoved: number
 }
 
 export type GetFileChangeHistoryInput = {

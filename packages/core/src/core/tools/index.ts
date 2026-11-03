@@ -8,6 +8,13 @@ import {
 import { findFilesTool, listDirectoryTool } from './directory-tools'
 import { ragSearchTool } from './rag-search'
 import { loadElementsTool } from './load-elements'
+import {
+  createPlanTool,
+  deletePlanTool,
+  listPlansTool,
+  readPlanTool,
+  updatePlanTool,
+} from './plan-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
@@ -31,6 +38,16 @@ import type {
   LoadElementsInput,
   LoadElementsOutput,
   LoadedElement,
+  ListPlansInput,
+  ListPlansOutput,
+  ReadPlanInput,
+  ReadPlanOutput,
+  CreatePlanInput,
+  CreatePlanOutput,
+  UpdatePlanInput,
+  UpdatePlanOutput,
+  DeletePlanInput,
+  DeletePlanOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -68,6 +85,16 @@ export type {
   LoadElementsInput,
   LoadElementsOutput,
   LoadedElement,
+  ListPlansInput,
+  ListPlansOutput,
+  ReadPlanInput,
+  ReadPlanOutput,
+  CreatePlanInput,
+  CreatePlanOutput,
+  UpdatePlanInput,
+  UpdatePlanOutput,
+  DeletePlanInput,
+  DeletePlanOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -95,6 +122,11 @@ type ToolOutputMap = {
   FindFiles: FindFilesOutput
   RagSearch: RagSearchOutput
   LoadElements: LoadElementsOutput
+  ListPlans: ListPlansOutput
+  ReadPlan: ReadPlanOutput
+  CreatePlan: CreatePlanOutput
+  UpdatePlan: UpdatePlanOutput
+  DeletePlan: DeletePlanOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -111,6 +143,11 @@ const tools = {
   FindFiles: findFilesTool,
   RagSearch: ragSearchTool,
   LoadElements: loadElementsTool,
+  ListPlans: listPlansTool,
+  ReadPlan: readPlanTool,
+  CreatePlan: createPlanTool,
+  UpdatePlan: updatePlanTool,
+  DeletePlan: deletePlanTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

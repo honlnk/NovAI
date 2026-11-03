@@ -8,6 +8,13 @@ import {
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 import { ragSearchTool } from '../tools/rag-search'
 import { loadElementsTool, renderElementContent } from '../tools/load-elements'
+import {
+  createPlanTool,
+  deletePlanTool,
+  listPlansTool,
+  readPlanTool,
+  updatePlanTool,
+} from '../tools/plan-tools'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
 import { webSearchTool } from '../tools/web-search'
 import { webFetchTool } from '../tools/web-fetch'
@@ -30,6 +37,11 @@ import type {
   KnowledgeLookupOutput,
   ListDirectoryOutput,
   LoadElementsOutput,
+  ListPlansOutput,
+  ReadPlanOutput,
+  CreatePlanOutput,
+  UpdatePlanOutput,
+  DeletePlanOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -426,6 +438,185 @@ export function createAgentTools(): AgentRunnableToolMap {
         return renderElementContent(output)
       },
     },
+    ListPlans: {
+      name: 'ListPlans',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ListPlans',
+          description: '查询创作计划板的卡片摘要（标题、状态、顺序、更新时间、正文摘要），可按状态筛选。写作涉及已有计划时先查摘要。不返回全部正文。',
+          parameters: {
+            type: 'object',
+            properties: {
+              status: {
+                type: 'string',
+                enum: ['inbox', 'planned', 'in-progress', 'done', 'on-hold'],
+                description: '可选，按状态筛选：inbox=收集箱、planned=计划中、in-progress=进行中、done=已完成、on-hold=已搁置。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: listPlansTool,
+      formatResult(output: ListPlansOutput) {
+        if (output.plans.length === 0) {
+          return '计划板为空（或该状态下没有卡片）。'
+        }
+        const lines = output.plans.map((plan, index) => [
+          `#${index + 1} ${plan.title || '（无标题）'}`,
+          `id: ${plan.id}`,
+          `status: ${plan.status}`,
+          `updatedAt: ${plan.updatedAt || '未知'}`,
+          `summary: ${plan.summary || '无'}`,
+        ].join('\n'))
+        return [`共 ${output.totalCount} 张计划卡片：`, '', lines.join('\n\n')].join('\n')
+      },
+    },
+    ReadPlan: {
+      name: 'ReadPlan',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ReadPlan',
+          description: '按稳定标识读取一张计划的完整正文与元数据。返回的 contentHash 在更新正文时必须作为 expectedContentHash 回传，防止覆盖外部修改。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '计划卡片的稳定标识（来自 ListPlans 返回的 id）。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: readPlanTool,
+      formatResult(output: ReadPlanOutput) {
+        if ('notFound' in output) {
+          return `计划 ${output.id} 不存在。请用 ListPlans 重新查询。`
+        }
+        return [
+          `「${output.title || '（无标题）'}」`,
+          `id: ${output.id}`,
+          `status: ${output.status}`,
+          `sourcePath: ${output.sourcePath}`,
+          `contentHash: ${output.contentHash}`,
+          `updatedAt: ${output.updatedAt || '未知'}`,
+          '',
+          output.body || '（正文为空）',
+        ].join('\n')
+      },
+    },
+    CreatePlan: {
+      name: 'CreatePlan',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'CreatePlan',
+          description: '新建一张创作计划卡片（记录剧情安排、伏笔、灵感或待补设定）。必须提供正文，第一行会成为标题；默认进入收集箱。用户明确要求记录、或对话中形成明确的后续创作意图时使用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              body: {
+                type: 'string',
+                description: '计划正文（自由 Markdown，首行为标题）。写清意图本身，不要求格式。',
+              },
+              status: {
+                type: 'string',
+                enum: ['inbox', 'planned', 'in-progress', 'done', 'on-hold'],
+                description: '可选，初始状态；默认收集箱（inbox）。',
+              },
+            },
+            required: ['body'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: createPlanTool,
+      formatResult(output: CreatePlanOutput) {
+        return `已新建计划「${output.title || output.id}」（id: ${output.id}，status: ${output.status}，文件：${output.sourcePath}）`
+      },
+    },
+    UpdatePlan: {
+      name: 'UpdatePlan',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'UpdatePlan',
+          description: '修改一张计划：正文、状态、列内位置分别可选。更新正文前必须先 ReadPlan 并回传 contentHash（expectedContentHash）；只改状态或位置时不传正文，原正文保持不变。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '计划卡片的稳定标识。',
+              },
+              body: {
+                type: 'string',
+                description: '替换后的完整正文（不是片段追加；首行为标题）。',
+              },
+              status: {
+                type: 'string',
+                enum: ['inbox', 'planned', 'in-progress', 'done', 'on-hold'],
+                description: '可选，目标状态（列）。',
+              },
+              afterId: {
+                type: 'string',
+                description: '可选，移动到目标列中某张卡片之后；不传默认列末尾。',
+              },
+              expectedContentHash: {
+                type: 'string',
+                description: '上次 ReadPlan 返回的 contentHash；更新正文时必传。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: updatePlanTool,
+      formatResult(output: UpdatePlanOutput) {
+        return `已修改计划「${output.title || output.id}」（id: ${output.id}，status: ${output.status}，文件：${output.sourcePath}）`
+      },
+    },
+    DeletePlan: {
+      name: 'DeletePlan',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'DeletePlan',
+          description: '按稳定标识删除一张计划（移入项目回收站）。只在用户明确要求删除某张计划时使用；计划失效或剧情变化本身不构成删除理由。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '计划卡片的稳定标识。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: deletePlanTool,
+      formatResult(output: DeletePlanOutput) {
+        return `已将计划 ${output.sourcePath} 移入回收站 ${output.trashPath}`
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -608,6 +799,11 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'FindFiles'
     || value === 'RagSearch'
     || value === 'LoadElements'
+    || value === 'ListPlans'
+    || value === 'ReadPlan'
+    || value === 'CreatePlan'
+    || value === 'UpdatePlan'
+    || value === 'DeletePlan'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'

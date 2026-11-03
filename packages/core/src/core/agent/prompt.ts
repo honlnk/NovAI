@@ -22,6 +22,7 @@ const PROJECT_STRUCTURE_LINES = [
   '  - worldbuilding/：世界观——抽象规则与体系（力量体系、社会制度、种族设定、地理总览等）。',
   '  要素文件用 .md，文件名即要素名。',
   '- prompts/：提示词文件。system.md 是全局基调与硬性约束，outlines/ 是大纲，NovAI.md 是项目级记忆，ELEMENT.md 是要素库管理规范。',
+  '- plans/：创作计划板。一张计划卡片一个 .md 文件，正文自由记录剧情安排、伏笔、灵感与待补设定，元数据（稳定标识、状态、排序）放在文件头 frontmatter。计划是创作意图备忘，不是待执行的剧情指令。',
   '- .novel/：应用内部数据（会话、日志、回收站、RAG 索引），不要直接读写。',
 ]
 
@@ -67,6 +68,7 @@ export function buildAgentSystemPrompt(input: {
     '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。探索目录结构时先看目录清单，不要为了探索而批量读取文件。目录不存在时，如果目标是新建文件，可以直接用 CreateFile。',
     '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、chapters/*.txt、**/*来信*.md。它不会读取文件正文；找到候选文件后再用 ReadFile 精读。',
     '- LoadElements：批量加载角色/地点/实体/世界观要素的完整定义。当上下文的要素清单中出现与当前任务相关的要素时，先用本工具加载再写作。',
+    '- 计划工具（ListPlans/ReadPlan/CreatePlan/UpdatePlan/DeletePlan）维护创作计划板，按稳定标识定位卡片：ListPlans 查摘要、ReadPlan 读全文（返回 contentHash）。用户明确要求记录、修改或删除计划时使用相应工具；对话中形成明确的后续创作意图时可以创建计划，但不要把每段对话自动转成卡片。写作涉及已有计划时先查摘要再读相关卡片；只有已有明确依据证明某项计划已落实时才更新状态。计划板不是待执行队列：不因看板存在未完成项而主动推进故事，不批量生成章节，不为清空看板写作。计划文件也可用普通文件工具读写（同一份文件），专用工具负责更安全的标识定位、元数据与排序操作。',
     '- RagSearch：从情节（plots）和时间线（timeline）索引中语义检索剧情线索与章节事件。返回的 sourcePath 可用于 ReadFile 精读。',
     '- WebSearch 用于联网查询项目之外的信息（时事、外部资料、常识核查）。一次可给 1-4 个不同角度的 query。WebSearch 只返回摘要列表，需要阅读某条结果全文时用 WebFetch 抓取该 URL。',
     '- KnowledgeLookup 用于一步直达知识平台条目（platform + term）：查人物事迹、历史事件、字词含义、古籍原文、ACG 设定等优先用它，比 WebSearch 后再 WebFetch 两步更快。term 是条目名而非问题；未命中时按提示换标准条目名重试，或改用 WebSearch。',
