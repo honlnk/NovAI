@@ -37,7 +37,7 @@ pnpm monorepo（`packageManager` 固定为 pnpm@10.21.0，workspace glob 为 `pa
 
 在仓库根目录运行：
 
-- `pnpm dev` —— `@novai/app` 的 Vite 开发服务器（用户自己常驻一个在 http://localhost:5173；永远不要再起一个 —— 见「本地开发环境」）。
+- `pnpm dev` —— `@novai/app` 的 Vite 开发服务器（用户自己常驻一个在 http://localhost:5173；没在跑时可以临时起一个、用完关掉 —— 见「本地开发环境」）。
 - `pnpm test` —— 全 workspace 跑 `vitest run`。测试以 `*.test.ts` 形式与源码同目录，位于 `packages/**/src/**` 下（include 规则见根目录 `vitest.config.ts`）。
 - `pnpm typecheck` —— 全项目 `tsc --build`。按包单独跑：`pnpm --filter @novai/app typecheck`（vue-tsc）、`pnpm --filter @novai/core typecheck`。
 - `pnpm build` —— app 的 vue-tsc + vite build。
@@ -77,8 +77,9 @@ pnpm monorepo（`packageManager` 固定为 pnpm@10.21.0，workspace glob 为 `pa
 
 本机开发环境的既有事实。启动任何服务器或做浏览器/UI 验证之前，先查这里：
 
-- 用户常驻一个开发服务器在 **http://localhost:5173**（他们自己的 `pnpm dev`）。做浏览器/UI 验证时直接打开这个 URL。**永远不要再起一个开发服务器或编造别的端口** —— 浏览器标签页指向一个死端口（例如旧会话残留的 5199）时只会显示空白页，那不是应用坏了的证据。
+- 用户常驻一个开发服务器在 **http://localhost:5173**（他们自己的 `pnpm dev`）。做浏览器/UI 验证时直接打开这个 URL。**永远使用 5173 这个端口，不编造别的端口** —— 浏览器标签页指向一个死端口（例如旧会话残留的 5199）时只会显示空白页，那不是应用坏了的证据。
 - 如果页面看起来空白或异常，先检查预期端口上有没有服务在监听（例如 `curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/`），再动其他东西。
+- 5173 已在监听就直接使用，**不要再起第二个**；5173 没有服务时，可以临时起一个 `pnpm dev`（绑定同一端口）用于验证，**用完关掉**，不留常驻进程。
 - 常驻测试项目位于 **`~/note/test-novel`**，其 `novel.config.json` 里已配置好模型。真机/UI 验证用它（通过「打开项目」或「恢复项目」打开）。它的 API key 只在运行时读取，绝不能复制进本仓库的任何文件。
 
 ## 工作准则
