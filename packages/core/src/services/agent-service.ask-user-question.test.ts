@@ -5,6 +5,7 @@ import {
   enqueueMessage,
   getSession,
   listSessions,
+  respondConfirmation,
   respondQuestion,
   skipQuestion,
   stopAgentRun,
@@ -547,6 +548,55 @@ describe('主动提问工具（service 层端到端）', () => {
     expect(sawQuestion).toBe(true)
     // 清理挂起的提问与驱动（按取消 resolve，避免泄漏到后续用例）
     stopAgentRun(mainSessionId)
+  })
+
+  it('提问与写确认并存（角色边界回归）：提问不进确认链、不进改动账本；写确认照常', async () => {
+    // 出招编排：第 1 拍提问，作答回灌后第 2 拍写文件（走确认链），第 3 拍收尾
+    let postAnswerCall = 0
+    mainSecondResponse = () => {
+      postAnswerCall += 1
+      if (postAnswerCall === 1) {
+        return toolCallSse('t-write-1', 'CreateFile', {
+          path: 'chapters/第013章-雨停.txt',
+          content: '第013章 雨停\n\n雨停了。\n',
+        })
+      }
+      return textSse('已按你的选择写完第 13 章。')
+    }
+
+    let answered = false
+    const { result, events } = await runMainTurn((event) => {
+      if (event.type === 'question-required' && event.sessionId === mainSessionId && !answered) {
+        answered = true
+        queueMicrotask(() => {
+          respondQuestion({ questionId: event.request.questionId, selectedLabels: ['北上寻师'], text: '' })
+        })
+      }
+      if (event.type === 'confirmation-required') {
+        queueMicrotask(() => respondConfirmation(event.request.id, true))
+      }
+    })
+
+    // 主智能体工具面同时有提问工具与写工具（边界：提问的加入不改变写工具面）
+    expect(fetchCalls[0]!.toolNames).toContain('AskUserQuestion')
+    expect(fetchCalls[0]!.toolNames).toContain('CreateFile')
+
+    // 确认链只被写工具触发一次：提问工具从不产生确认卡
+    const confirmations = events.filter((event) => event.type === 'confirmation-required')
+    expect(confirmations).toHaveLength(1)
+    expect(confirmations[0]!.type === 'confirmation-required' ? confirmations[0].request.toolName : '').toBe('CreateFile')
+
+    // 改动账本只含这次文件写入：提问是只读交互，不产生任何文件变更记录
+    const paths = result.turnChanges.map((record) => record.change.path)
+    expect(paths).toEqual(['chapters/第013章-雨停.txt'])
+    expect(result.session.changedFiles.some((file) => 'path' in file && file.path === 'chapters/第013章-雨停.txt')).toBe(true)
+
+    // 提问卡答案保留（问题环节完整走完，未被写确认干扰）
+    const card = result.session.messages.find((m) => m.kind === 'ask-user-question')
+    expect(card).toMatchObject({
+      kind: 'ask-user-question',
+      answer: { selectedLabels: ['北上寻师'], outcome: 'answered' },
+    })
   })
 })
 
