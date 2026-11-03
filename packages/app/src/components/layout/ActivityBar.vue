@@ -22,13 +22,14 @@ const emit = defineEmits<{
 
 /**
  * 顶部分类项（设置走单独的 openSettings，不在此列）。
- * 顺序按产品决策：对话 → 章节 → 要素 → 提示词。
+ * 顺序按产品决策：对话 → 章节 → 要素 → 提示词 → 计划（提示词之后、设置之前）。
  */
 const categoryItems: { key: Category; label: string; icon: string }[] = [
   { key: 'conversation', label: '对话', icon: 'chat' },
   { key: 'chapter', label: '章节', icon: 'book' },
   { key: 'element', label: '要素', icon: 'tag' },
   { key: 'prompt', label: '提示词', icon: 'note' },
+  { key: 'plan', label: '计划', icon: 'clipboard' },
 ]
 
 /**
@@ -96,8 +97,12 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
           </svg>
           <!-- 提示词 -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg v-else-if="item.icon === 'note'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          <!-- 计划（剪贴板清单） -->
+          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m3 7l-2-2-2 2m-5 4l-2-2 2-2" />
           </svg>
         </button>
       </Tooltip>

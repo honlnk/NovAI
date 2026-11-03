@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { ChatSessionSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
+import type { ChatSessionSummaryView, PlanCardSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
 import type { Category } from '../../constants/category'
 import ChapterList from '../category/ChapterList.vue'
 import ElementList from '../category/ElementList.vue'
 import PromptList from '../category/PromptList.vue'
 import ConversationList from '../category/ConversationList.vue'
+import PlanList from '../category/PlanList.vue'
 
 defineProps<{
   activeCategory: Category
@@ -17,6 +18,10 @@ defineProps<{
   activeSessionId: string | null
   /** 有待确认卡片的会话 id 集（会话列表「待确认」徽标；确认链按会话路由） */
   pendingConfirmationIds?: Set<string>
+  /** 计划卡片摘要（计划分类面板计数与最近列表用） */
+  planCards: PlanCardSummaryView[]
+  /** 计划板读取中 */
+  isPlanLoading: boolean
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -31,6 +36,12 @@ const emit = defineEmits<{
   createSession: []
   renameSession: [sessionId: string, title: string]
   deleteSession: [sessionId: string]
+  /** 打开主内容区计划看板 */
+  openPlanBoard: []
+  /** 新建计划（在主内容区看板新建输入） */
+  createPlan: []
+  /** 打开某张计划卡片详情 */
+  openPlanCard: [id: string]
 }>()
 </script>
 
@@ -84,6 +95,14 @@ const emit = defineEmits<{
       :active-outline-path="activeOutlinePath"
       @select-file="emit('selectFile', $event)"
       @change-outline="emit('changeOutline', $event)"
+    />
+    <PlanList
+      v-else-if="activeCategory === 'plan'"
+      :cards="planCards"
+      :is-loading="isPlanLoading"
+      @open-board="emit('openPlanBoard')"
+      @create="emit('createPlan')"
+      @open-card="emit('openPlanCard', $event)"
     />
   </aside>
 </template>

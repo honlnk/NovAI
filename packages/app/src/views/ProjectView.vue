@@ -4,17 +4,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
+import { usePlanStore } from '../stores/plan'
 import { useToast } from '../composables/useToast'
 import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
+import PlanBoardPanel from '../components/plan/PlanBoardPanel.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
+import type { ChangedFileView, PlanStatusView } from '@novai/core/services/types'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 
 const route = useRoute()
@@ -22,6 +25,7 @@ const router = useRouter()
 const projectStore = useProjectStore()
 const chatStore = useChatStore()
 const indexStore = useIndexStore()
+const planStore = usePlanStore()
 const toast = useToast()
 
 const projectId = computed(() => route.params.id as string)
@@ -224,6 +228,117 @@ async function handleChangeOutline(path: string | null) {
   }
 }
 
+// ===== 创作计划板（计划分类：看板占据主内容区，替换对话面板） =====
+
+/** 计划分类侧栏用的卡片摘要（按更新时间倒序取最近） */
+const planRecentCards = computed(() => {
+  if (!planStore.board) {
+    return []
+  }
+  return [...(Object.values(planStore.board.columns) as import('@novai/core/services/types').PlanCardSummaryView[][])
+    .flat()]
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+})
+
+/** 进入计划分类时加载看板；切回其他分类恢复原对话与文件面板状态（面板状态都在本组件 ref，天然保留） */
+watch(activeCategory, async (category) => {
+  if (category === 'plan' && projectStore.currentProject) {
+    await planStore.loadBoard(projectId.value)
+  }
+})
+
+/** 切换/关闭项目时清理上一个项目的计划板状态 */
+watch(() => projectStore.currentProject?.id, () => {
+  planStore.reset()
+})
+
+/** AI 或外部写入计划文件后：看板可见时自动刷新（文件变更账本事件驱动） */
+watch(
+  () => chatStore.changedFiles.length,
+  async (newLength, oldLength) => {
+    if (
+      newLength > oldLength
+      && activeCategory.value === 'plan'
+      && projectStore.currentProject
+      && chatStore.changedFiles.some((file) => resolvePlanPathFromChange(file) !== null)
+    ) {
+      await planStore.refreshBoard(projectId.value)
+    }
+  },
+)
+
+/** 详情打开且不在编辑时，外部修改到达：重新读取最新内容（不覆盖用户草稿） */
+watch(
+  () => chatStore.lastFileChange?.change,
+  async (change) => {
+    if (
+      activeCategory.value !== 'plan'
+      || !change
+      || !planStore.activeCard
+      || planStore.hasUnsavedChanges
+    ) {
+      return
+    }
+    if (resolvePlanPathFromChange(change) === planStore.activeCard.sourcePath) {
+      await planStore.openCard(projectId.value, planStore.activeCard.id)
+    }
+  },
+)
+
+/** change.path / fromPath→toPath 统一取计划路径（renamed 的 toPath 落在 plans/ 才算） */
+function resolvePlanPathFromChange(change: ChangedFileView): string | null {
+  if (change.type === 'renamed') {
+    return change.toPath.startsWith('plans/') ? change.toPath : null
+  }
+  return change.path.startsWith('plans/') ? change.path : null
+}
+
+async function handlePlanCreate(body: string) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const card = await planStore.createCard(projectId.value, body)
+  if (card) {
+    toast.success('已创建计划')
+  } else {
+    toast.error(planStore.actionError || '新建计划失败')
+  }
+}
+
+async function handlePlanMove(id: string, status: PlanStatusView, afterId: string | null) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const ok = await planStore.moveCard(projectId.value, id, status, afterId)
+  if (!ok) {
+    toast.error(planStore.actionError || '移动计划失败')
+  }
+}
+
+async function handlePlanRemove(id: string) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const ok = await planStore.removeCard(projectId.value, id)
+  if (ok) {
+    toast.success('已移入回收站')
+  } else {
+    toast.error(planStore.actionError || '删除计划失败')
+  }
+}
+
+async function handlePlanSaveDraft() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const ok = await planStore.saveDraft(projectId.value)
+  if (ok) {
+    toast.success('已保存')
+  } else if (!planStore.conflictNotice) {
+    toast.error(planStore.actionError || '保存失败')
+  }
+}
+
 function selectCategory(category: Category) {
   activeCategory.value = category
   // 切换分类时确保面板展开
@@ -284,6 +399,8 @@ function handleGoToSettings() {
         :sessions="chatStore.sessions"
         :active-session-id="chatStore.activeSessionId"
         :pending-confirmation-ids="chatStore.sessionsWithPendingConfirmations"
+        :plan-cards="planRecentCards"
+        :is-plan-loading="planStore.isLoading"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"
@@ -293,10 +410,40 @@ function handleGoToSettings() {
         @create-session="chatStore.createNewSession(projectId)"
         @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
         @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
+        @open-plan-board="selectCategory('plan')"
+        @create-plan="selectCategory('plan')"
+        @open-plan-card="(id) => { selectCategory('plan'); void planStore.openCard(projectId, id) }"
       />
 
-      <!-- 中间对话面板 -->
+      <!-- 中间主内容区：计划分类显示看板（替换对话面板），其余分类为对话 -->
+      <PlanBoardPanel
+        v-if="activeCategory === 'plan'"
+        :project-id="projectId"
+        :board="planStore.board"
+        :is-loading="planStore.isLoading"
+        :error-message="planStore.errorMessage"
+        :selected-card-id="planStore.selectedCardId"
+        :show-on-hold="planStore.showOnHold"
+        :active-card="planStore.activeCard"
+        :draft-body="planStore.draftBody"
+        :is-saving="planStore.isSaving"
+        :conflict-notice="planStore.conflictNotice"
+        :action-error="planStore.actionError"
+        :has-unsaved-changes="planStore.hasUnsavedChanges"
+        @refresh="planStore.refreshBoard(projectId)"
+        @create="handlePlanCreate"
+        @open-card="(id) => planStore.openCard(projectId, id)"
+        @close-card="planStore.closeCard()"
+        @update-draft="planStore.updateDraft"
+        @save-draft="handlePlanSaveDraft"
+        @reload-from-conflict="planStore.reloadFromConflict(projectId)"
+        @keep-draft="planStore.keepDraft()"
+        @move-card="handlePlanMove"
+        @remove-card="handlePlanRemove"
+        @toggle-on-hold="planStore.showOnHold = !planStore.showOnHold"
+      />
       <ChatPanel
+        v-else
         :project-id="projectId"
         :is-sidebar-open="isCategoryOpen"
         :is-content-panel-open="isContentPanelOpen"
