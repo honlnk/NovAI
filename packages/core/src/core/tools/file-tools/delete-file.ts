@@ -3,6 +3,7 @@ import {
   removeProjectFile,
   writeProjectTextFile,
 } from '../../fs/project-fs'
+import { createTrashPath } from '../../fs/trash'
 import { normalizeProjectPath } from '../path'
 import type { DeleteFileInput, DeleteFileOutput, ToolDefinition } from '../types'
 import {
@@ -51,19 +52,4 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
   buildConfirmation(input) {
     return { kind: 'delete', path: input.path }
   },
-}
-
-function createTrashPath(path: string) {
-  const now = new Date()
-  const stamp = [
-    now.getFullYear(),
-    `${now.getMonth() + 1}`.padStart(2, '0'),
-    `${now.getDate()}`.padStart(2, '0'),
-    `${now.getHours()}`.padStart(2, '0'),
-    `${now.getMinutes()}`.padStart(2, '0'),
-    `${now.getSeconds()}`.padStart(2, '0'),
-    Math.random().toString(36).slice(2, 8),
-  ].join('-')
-
-  return `.novel/trash/${stamp}/${path}`
 }

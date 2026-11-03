@@ -11,7 +11,7 @@ import type {
 } from '../../types/project'
 
 const TEXT_FILE_EXTENSIONS = ['.md', '.json', '.txt']
-const ROOT_DIRECTORY_ORDER = ['chapters', 'elements', 'prompts', '.novel']
+const ROOT_DIRECTORY_ORDER = ['chapters', 'elements', 'prompts', 'plans', '.novel']
 const REQUIRED_DIRECTORY_PATHS = [
   'chapters',
   'elements',
@@ -23,6 +23,7 @@ const REQUIRED_DIRECTORY_PATHS = [
   'elements/worldbuilding',
   'prompts',
   'prompts/outlines',
+  'plans',
   '.novel',
   '.novel/logs',
 ] as const

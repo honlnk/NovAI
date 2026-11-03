@@ -1,6 +1,7 @@
 export * as agentService from './agent-service'
 export * as environmentService from './environment-service'
 export * as fileService from './file-service'
+export * as planService from './plan-service'
 export * as projectService from './project-service'
 export * as ragService from './rag-service'
 export * as settingsService from './settings-service'

@@ -1,6 +1,7 @@
 import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
 import type { ReasoningEffort } from '../types/ai'
 import type { AgentRoleId } from '../core/agent/roles'
+import type { PlanScanIssue } from '../types/plans'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
 export { isDeepSeekDialect } from '../core/ai/shared'
@@ -239,6 +240,36 @@ export type FileContentView = {
   updatedAt: string
 }
 
+/** 计划卡片状态（与核心域 PlanStatus 同值域；View 层显式声明避免 app 导入核心内部实现）。 */
+export type PlanStatusView = 'inbox' | 'planned' | 'in-progress' | 'done' | 'on-hold'
+
+/** 计划卡片摘要：列表、看板列与 AI ListPlans 使用，不携带全部正文。 */
+export type PlanCardSummaryView = {
+  id: string
+  status: PlanStatusView
+  order: number
+  createdAt: string
+  updatedAt: string
+  title: string
+  summary: string
+  sourcePath: string
+}
+
+/** 完整计划卡片（详情编辑与 AI ReadPlan 使用）。 */
+export type PlanCardView = PlanCardSummaryView & {
+  body: string
+  /** 读取时文件全文 hash：保存时回传做冲突检测（外部修改守卫）。 */
+  contentHash: string
+}
+
+/** 看板视图：常驻四栏 + on-hold（由调用方决定是否展示）与目录扫描异常报告。 */
+export type PlanBoardView = {
+  columns: Readonly<Record<PlanStatusView, readonly PlanCardSummaryView[]>>
+  issues: readonly PlanScanIssueView[]
+}
+
+export type PlanScanIssueView = PlanScanIssue
+
 export type ProjectIssueView =
   | 'missing-config'
   | 'invalid-config'
@@ -260,6 +291,11 @@ export type ToolNameView =
   | 'FindFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'ListPlans'
+  | 'ReadPlan'
+  | 'CreatePlan'
+  | 'UpdatePlan'
+  | 'DeletePlan'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
