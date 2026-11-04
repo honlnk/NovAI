@@ -26,6 +26,11 @@ import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readNovAiOverview, readOutlinePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type {
+  AskUserQuestionHandler,
+  AskUserQuestionInput,
+  AskUserQuestionOutput,
+} from '../core/agent/ask-user-question'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
 import {
   ELEMENT_MANAGER_TASK_PROMPT,
@@ -56,10 +61,13 @@ export { INIT_NOVEL_PROMPT }
 export { ELEMENT_MANAGER_TASK_PROMPT }
 
 import {
+  getRuntimeProject,
   requireRuntimeProject,
 } from './project-runtime'
 import type {
   AgentUiEvent,
+  AskUserQuestionAnswerView,
+  AskUserQuestionRequestView,
   ChangedFileView,
   FileChangeRecordView,
   ChatHistoryPageView,
@@ -117,6 +125,37 @@ function broadcastSessionConfirmations(sessionId: string): void {
   })
 }
 
+// 提问注册表（仿确认链）：questionId -> resolve。AskUserQuestion 工具在 run 内
+// await 提问回调挂起，UI 调 respondQuestion/skipQuestion 时 resolve，Agent Loop
+// 以工具结果继续。与确认链同构的关键差异：resolve 前先原位补全提问卡消息的
+// answer 字段（会话对象共享，session.messages 里的卡随之只读化）。
+type PendingQuestion = {
+  /** 提问请求 id（= 工具调用 id = 提问卡消息的 questionId） */
+  questionId: string
+  projectId: string
+  sessionId: string
+  /** 提问请求视图快照（questions-updated 广播与会话徽标用） */
+  view: AskUserQuestionRequestView
+  resolve: (output: AskUserQuestionOutput) => void
+}
+const questionMap = new Map<string, PendingQuestion>()
+
+/** 某会话当前的待回答提问快照（按注册顺序）；questions-updated 事件的载荷。 */
+function snapshotPendingQuestions(sessionId: string): AskUserQuestionRequestView[] {
+  return [...questionMap.values()]
+    .filter((pending) => pending.sessionId === sessionId)
+    .map((pending) => pending.view)
+}
+
+/** 广播某会话的待回答快照（提问注册/resolve 后调用；会话列表徽标据此更新）。 */
+function broadcastSessionQuestions(sessionId: string): void {
+  broadcastAgentEvent({
+    type: 'questions-updated',
+    sessionId,
+    questions: snapshotPendingQuestions(sessionId),
+  })
+}
+
 /** 每个项目当前激活的会话 id；新建/切换/删除时维护。 */
 const activeSessionByProject = new Map<string, string>()
 
@@ -164,6 +203,7 @@ export function _clearSessionCacheForTest() {
   lastActiveFilePathByProject.clear()
   deletedSessionIds.clear()
   confirmationMap.clear()
+  questionMap.clear()
 }
 
 /** 测试专用：读取当前缓存内的 sessionId 列表（按 LRU 顺序，最近使用在末尾）。 */
@@ -291,6 +331,8 @@ export async function deleteSession(projectId: string, sessionId: string): Promi
 
   stopChatDriver(sessionId)
   deletedSessionIds.set(sessionId, projectId)
+  // 挂起的提问一并取消（resolve 为 cancelled）：注册表不能遗留指向已删会话的条目
+  cancelPendingSessionQuestions(sessionId)
   await deleteSessionFile(project, sessionId)
   sessionMap.delete(sessionId)
 
@@ -450,9 +492,10 @@ export async function updateQueuedMessage(input: {
   broadcastQueueUpdated(session)
 }
 
-/** 停止指定会话的运行：abort 当前 turn + 清闩锁；队列保留不自动续跑。 */
+/** 停止指定会话的运行：abort 当前 turn + 清闩锁；队列保留不自动续跑。挂起提问按取消 resolve（停止不留下永久等待）。 */
 export function stopAgentRun(sessionId: string): void {
   stopChatDriver(sessionId)
+  cancelPendingSessionQuestions(sessionId)
 }
 
 /** 指定会话的 driver 是否活着（store 切换会话时恢复 isRunning 用）。 */
@@ -500,6 +543,12 @@ async function buildSessionTurnInput(input: {
       role.id === 'main' ? request : { ...request, agentLabel: role.displayName },
     )
 
+  // 主动提问回调：仅主智能体（要素管理员直聊/委派不问用户，工具面里也没装该工具）。
+  // 构造 → 广播 question-required → 等 UI 调 respondQuestion/skipQuestion → resolve 回灌。
+  const askUser: AskUserQuestionHandler | undefined = role.id === 'main'
+    ? (input) => requestQuestion(session.sessionId, project.id, input)
+    : undefined
+
   return {
     // 指令走收件箱首批，driver 不直接消费 instruction/quote
     instruction: '',
@@ -512,6 +561,7 @@ async function buildSessionTurnInput(input: {
       ? input.activeFilePath
       : lastActiveFilePathByProject.get(project.id) ?? null,
     confirm,
+    ...(askUser ? { askUser } : {}),
   }
 }
 
@@ -579,6 +629,7 @@ async function finalizeSuccessfulRun(options: {
   // 此时 saveSession 会把刚删的会话文件复活，广播也会指向不存在的会话。
   if (deletedSessionIds.has(session.sessionId)) {
     rejectPendingSessionConfirmations(session.sessionId)
+    cancelPendingSessionQuestions(session.sessionId)
     return
   }
 
@@ -602,7 +653,7 @@ async function finalizeSuccessfulRun(options: {
   broadcastAgentEvent({ type: 'run-finish', sessionId: session.sessionId, result })
 }
 
-/** driver 出错的统一收尾：清理该会话未决确认（避免注册表泄漏/UI 卡等待态）→ 落盘 → run-error。 */
+/** driver 出错的统一收尾：清理该会话未决确认与提问（避免注册表泄漏/UI 卡等待态）→ 落盘 → run-error。 */
 async function handleFailedRun(options: {
   project: ProjectSnapshot
   session: ChatSessionState
@@ -610,6 +661,7 @@ async function handleFailedRun(options: {
 }): Promise<void> {
   const { project, session } = options
   rejectPendingSessionConfirmations(session.sessionId)
+  cancelPendingSessionQuestions(session.sessionId)
   // 会话已删：静默丢弃（saveSession 会复活刚删的会话文件，广播也会指向不存在的会话）。
   if (deletedSessionIds.has(session.sessionId)) {
     return
@@ -814,6 +866,183 @@ function rejectPendingSessionConfirmations(sessionId: string) {
     }
   }
   broadcastSessionConfirmations(sessionId)
+}
+
+/**
+ * 构造一次主动提问（仿确认链）：注册挂起 Promise → 广播 question-required →
+ * Agent Loop 在 askUser 回调里 await 它，直到 UI 调 respondQuestion/skipQuestion。
+ * questionId 由调用方（AskUserQuestion 工具 run）生成并透传，与工具调用 id 同值——
+ * 提问卡消息据此关联。
+ */
+function requestQuestion(
+  sessionId: string,
+  projectId: string,
+  input: { question: AskUserQuestionInput; toolCallId: string },
+): Promise<AskUserQuestionOutput> {
+  const questionId = input.toolCallId || createRunId()
+  const view: AskUserQuestionRequestView = {
+    questionId,
+    question: input.question.question,
+    ...(input.question.header ? { header: input.question.header } : {}),
+    ...(input.question.options ? { options: input.question.options.map((option) => ({ ...option })) } : {}),
+    ...(input.question.multiSelect ? { multiSelect: true } : {}),
+    createdAt: new Date().toISOString(),
+  }
+
+  // 先注册后广播：监听方可能在事件回调里立即 respondQuestion（测试/UI 即时响应），
+  // 注册必须先于 question-required 广播可达（与确认链同款次序约定）。
+  return new Promise<AskUserQuestionOutput>((resolve) => {
+    questionMap.set(questionId, { questionId, projectId, sessionId, view, resolve })
+
+    // 提问卡消息：在校验已过、挂起已注册的点成卡（session 层只留普通工具行）。
+    // 位置在提问工具行之后（工具行由 session.ts 先推）、工具结果之前——卡片即
+    // 用户交互主体，答案由 finalizeQuestion 据 questionId 原位补全。
+    // 会话被 LRU 淘汰时不推卡（罕见；question-required 事件本身带全部渲染数据）。
+    const session = sessionMap.get(sessionId)
+    if (session) {
+      const card: ChatMessage = {
+        id: createMessageId(),
+        role: 'system',
+        kind: 'ask-user-question',
+        questionId,
+        question: view.question,
+        ...(view.header ? { header: view.header } : {}),
+        ...(view.options ? { options: view.options.map((option) => ({ ...option })) } : {}),
+        ...(view.multiSelect ? { multiSelect: true } : {}),
+        createdAt: view.createdAt,
+      }
+      session.messages = [...session.messages, card]
+      session.updatedAt = new Date().toISOString()
+      broadcastAgentEvent({
+        type: 'message',
+        sessionId,
+        message: toChatMessageView(card, session.changeLedger),
+      })
+      // 问题提出即落盘（不等回答/收尾）：等待期间刷新页面后，历史中的问题保持可见
+      // （计划「停止、异常与刷新」——未回答卡片标记等待已中断，靠的就是这份持久化）
+      const project = getRuntimeProject(projectId)
+      if (project) {
+        void saveSession(project, session).catch(() => {})
+      }
+    }
+
+    broadcastAgentEvent({ type: 'question-required', sessionId, request: view })
+    // 待回答快照随注册广播：非激活会话据此点亮列表徽标（与 confirmations-updated 同构）
+    broadcastSessionQuestions(sessionId)
+  })
+}
+
+/**
+ * UI 调用：提交对某次提问的回答（所选标签 + 自由文本）。校验规则（计划「输入校验」）：
+ * 至少一个所选标签或非空文本；标签必须在原问题的候选项内；多选完整保留。
+ * 回答先原位补全提问卡消息（卡片只读化 + 广播），再 resolve 唤醒等待中的 Agent Loop。
+ */
+export function respondQuestion(input: {
+  questionId: string
+  selectedLabels: string[]
+  text: string
+}): void {
+  const pending = questionMap.get(input.questionId)
+  if (!pending) {
+    return
+  }
+
+  const selected = input.selectedLabels.map((label) => label.trim()).filter(Boolean)
+  const unknown = selected.filter(
+    (label) => !(pending.view.options ?? []).some((option) => option.label === label),
+  )
+  if (unknown.length > 0) {
+    throw new Error(`回答包含问题候选项之外的标签：${unknown.join('、')}`)
+  }
+  const text = input.text.trim()
+  if (selected.length === 0 && !text) {
+    throw new Error('回答不能为空：请至少选择一个候选项或填写补充说明')
+  }
+
+  finalizeQuestion(pending, {
+    selectedLabels: selected,
+    text,
+    outcome: 'answered',
+  })
+}
+
+/** UI 调用：跳过某次提问。返回明确取消结局，Agent 在不获得答案的情况下自行调整。 */
+export function skipQuestion(questionId: string): void {
+  const pending = questionMap.get(questionId)
+  if (!pending) {
+    return
+  }
+  finalizeQuestion(pending, { selectedLabels: [], text: '', outcome: 'cancelled' })
+}
+
+/**
+ * 回答收尾：出注册表 → 原位补全提问卡消息的 answer 字段（历史可见；卡片只读化）
+ * → 广播更新后的消息与徽标 → resolve 唤醒 Agent Loop。
+ * 会话可能已被 LRU 淘汰出缓存（读不到对象时跳过补全，只 resolve——工具结果仍正确回灌）。
+ */
+function finalizeQuestion(
+  pending: PendingQuestion,
+  answer: { selectedLabels: string[]; text: string; outcome: 'answered' | 'cancelled' },
+): void {
+  questionMap.delete(pending.questionId)
+
+  const session = sessionMap.get(pending.sessionId)
+  if (session) {
+    const card = session.messages.find(
+      (message) => message.kind === 'ask-user-question' && message.questionId === pending.questionId,
+    )
+    if (card && card.kind === 'ask-user-question') {
+      const answerView: AskUserQuestionAnswerView = {
+        selectedLabels: answer.selectedLabels,
+        text: answer.text,
+        outcome: answer.outcome,
+        answeredAt: new Date().toISOString(),
+      }
+      session.messages = session.messages.map((message) =>
+        message === card
+          ? { ...message, answer: answerView }
+          : message,
+      )
+      // 补全后的卡片消息即时广播（在位卡片翻只读态），再随收尾落盘
+      broadcastAgentEvent({
+        type: 'message',
+        sessionId: pending.sessionId,
+        message: toChatMessageView(
+          session.messages.find(
+            (m) => m.kind === 'ask-user-question' && m.questionId === pending.questionId,
+          )!,
+          session.changeLedger,
+        ),
+      })
+    }
+    // 回答落盘（不等 driver 收尾：停止/异常路径下答案也已在卡上）
+    const project = getRuntimeProject(pending.projectId)
+    if (project) {
+      void saveSession(project, session).catch(() => {})
+    }
+  }
+
+  pending.resolve({
+    selectedLabels: answer.selectedLabels,
+    text: answer.text,
+    outcome: answer.outcome,
+  })
+  broadcastSessionQuestions(pending.sessionId)
+}
+
+/**
+ * 清理某会话的全部未决提问，按取消 resolve（停止/删除/出错时调用）。
+ * 卡片消息保持无 answer 状态——旧等待请求不能再提交；刷新/重开后 UI 把无 answer
+ * 且不在待回答快照里的卡片标记为「等待已中断」（计划「停止、异常与刷新」）。
+ */
+function cancelPendingSessionQuestions(sessionId: string) {
+  for (const [id, pending] of questionMap) {
+    if (pending.sessionId === sessionId) {
+      questionMap.delete(id)
+      pending.resolve({ selectedLabels: [], text: '', outcome: 'cancelled' })
+    }
+  }
+  broadcastSessionQuestions(sessionId)
 }
 
 function toWriteConfirmationView(confirmation: WriteConfirmation): WriteConfirmationView {
@@ -1057,6 +1286,21 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
     }
   }
 
+  if (message.kind === 'ask-user-question') {
+    return {
+      id: message.id,
+      role: 'system',
+      kind: 'ask-user-question',
+      questionId: message.questionId,
+      question: message.question,
+      ...(message.header ? { header: message.header } : {}),
+      ...(message.options ? { options: message.options.map((option) => ({ ...option })) } : {}),
+      ...(message.multiSelect ? { multiSelect: true } : {}),
+      ...(message.answer ? { answer: { ...message.answer } } : {}),
+      createdAt: message.createdAt,
+    }
+  }
+
   if (message.kind === 'tool-call') {
     return {
       id: message.id,
@@ -1166,6 +1410,11 @@ function toNovAiError(error: unknown): NovAiError {
 
 function createRunId() {
   return `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 提问卡消息 id（与 core 的 createId('message') 同款形态，service 层独立生成）。 */
+function createMessageId() {
+  return `message-${Math.random().toString(36).slice(2, 10)}`
 }
 
 function toChatTargetView(target: ChatTargetContext | null): ChatTargetView | null {

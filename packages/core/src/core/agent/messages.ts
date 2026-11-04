@@ -20,6 +20,7 @@ export type AgentToolName =
   | 'WebFetch'
   | 'KnowledgeLookup'
   | 'DelegateToElementManager'
+  | 'AskUserQuestion'
 
 export type AgentToolCall = {
   id: string

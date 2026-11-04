@@ -347,6 +347,8 @@ async function runDriverTurn(options: {
     session.agent && session.agent !== 'main' ? session.agent : undefined
   const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
     if (event.type === 'tool-call') {
+      // AskUserQuestion 的提问卡由 service 层在 requestQuestion 里推送（校验已过、
+      // 挂起已注册才成卡）：校验失败的提问调用也走这里，不该留卡。
       pushMessage(
         session,
         {
@@ -400,11 +402,12 @@ async function runDriverTurn(options: {
     }
   }
 
-  // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具；要素管理员 = 白名单 + 路径闸。
-  // signal 与委派会话驱动器是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
+  // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具 + 主动提问工具；要素管理员 = 白名单 + 路径闸。
+  // signal、委派会话驱动器与提问回调是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
   const tools = role.createTools({
     signal,
     runDelegationSession: input.runDelegationSession,
+    askUser: input.askUser,
   })
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false

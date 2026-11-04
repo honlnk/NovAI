@@ -290,6 +290,18 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
   if (!draftText) return
 
   clearSuggestion()
+  // 等待提问期间：普通输入（排队/插话语义 alike）改道为对当前问题的自由文本回答——
+  // 不创建新的用户轮次、不进收件箱；若卡片上已选候选项，与文本合并提交（计划「等待期间的操作」）
+  if (chatStore.pendingQuestion) {
+    composer.setDraft('')
+    followAndScrollToBottom()
+    const ok = chatStore.submitQuestionAnswer({ text: draftText })
+    if (!ok) {
+      // 提交失败（如被校验拒绝）：草稿填回，等待态不变
+      composer.setDraft(draftText)
+    }
+    return
+  }
   // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
   // 其后参数原样保留；不在行首的命令文本视作正文，不替换
   const message = expandSlashCommand(draftText)
@@ -831,10 +843,12 @@ onBeforeUnmount(() => {
                 v-if="draft === ''"
                 class="chat-input-base pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-gray-400"
                 aria-hidden="true"
-              >{{ chatStore.isRunning
-                ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
-                : (roleMeta?.inputPlaceholder
-                  ?? '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)') }}</div>
+              >{{ chatStore.pendingQuestion
+                ? 'Agent 提问等待回答：Enter 把输入内容作为回答提交（与卡片所选合并），也可在上方卡片作答'
+                : chatStore.isRunning
+                  ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
+                  : (roleMeta?.inputPlaceholder
+                    ?? '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)') }}</div>
               <!-- Lexical 编辑器宿主：contenteditable 由 setRootElement 接管，键入与选区归编辑器管 -->
               <div
                 ref="editorHostRef"
@@ -905,9 +919,10 @@ onBeforeUnmount(() => {
                     <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
                   </svg>
                 </button>
-                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示 -->
+                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示；
+                     等待提问期间隐藏——此时 Enter 语义已是「提交回答」，不再有插话分支 -->
                 <button
-                  v-if="chatStore.isRunning"
+                  v-if="chatStore.isRunning && !chatStore.pendingQuestion"
                   class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
                   :disabled="!draft.trim()"
                   title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
@@ -924,10 +939,14 @@ onBeforeUnmount(() => {
                 <button
                   class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
                   :disabled="!draft.trim()"
-                  :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
+                  :title="chatStore.pendingQuestion
+                    ? '提交回答：输入内容作为当前问题的自由文本回答（与卡片所选合并）'
+                    : chatStore.isRunning
+                      ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）'
+                      : '发送'"
                   @click="handleSend('queue')"
                 >
-                  {{ chatStore.isRunning ? '排队发送' : '发送' }}
+                  {{ chatStore.pendingQuestion ? '提交回答' : chatStore.isRunning ? '排队发送' : '发送' }}
                 </button>
               </div>
             </div>

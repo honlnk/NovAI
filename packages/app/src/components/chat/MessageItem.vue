@@ -2,6 +2,7 @@
 import type { ChatMessageView } from '@novai/core/services/types'
 
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
+import AskUserQuestionCard from './AskUserQuestionCard.vue'
 import ReasoningCollapse from './ReasoningCollapse.vue'
 import TurnChangesPanel from './TurnChangesPanel.vue'
 
@@ -76,6 +77,12 @@ function formatTime(dateStr: string) {
     v-else-if="message.role === 'system' && message.kind === 'change-summary'"
     :message="message"
     :newest="newestChangeSummary"
+  />
+
+  <!-- 主动提问卡（AskUserQuestion 的交互主体，永不折叠进过程组；三态：待回答/已作答/等待已中断） -->
+  <AskUserQuestionCard
+    v-else-if="message.role === 'system' && message.kind === 'ask-user-question'"
+    :message="message"
   />
 
   <!-- 轮次安全阀提示（turn-limit：达到 agentMaxTurns 上限，永不折叠进过程组） -->

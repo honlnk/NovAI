@@ -22,6 +22,8 @@ defineProps<{
   planCards: PlanCardSummaryView[]
   /** 计划板读取中 */
   isPlanLoading: boolean
+  /** 有待回答提问卡的会话 id 集（会话列表「待回答」徽标；提问按会话路由） */
+  pendingQuestionIds?: Set<string>
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -71,6 +73,7 @@ const emit = defineEmits<{
       :sessions="sessions"
       :active-session-id="activeSessionId"
       :pending-confirmation-ids="pendingConfirmationIds"
+      :pending-question-ids="pendingQuestionIds"
       @select="emit('selectSession', $event)"
       @create="emit('createSession')"
       @rename="(sessionId, title) => emit('renameSession', sessionId, title)"

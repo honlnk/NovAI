@@ -42,6 +42,11 @@ export type ToolRuntime = {
    * linkseek 托管档绿灯用它认配额（X-NovAI-Client-Id）；缺失时服务端按 IP 计。
    */
   webClientId?: string
+  /**
+   * 当前工具调用的 id（执行层注入）：会话层组装的工具（如 AskUserQuestion）用它把
+   * 自己的挂起请求与模型侧 tool-call 关联。纯 core 工具不消费。
+   */
+  toolCallId?: string
 }
 
 export type ToolCall<TName extends CoreToolName = CoreToolName, TInput = unknown> = {

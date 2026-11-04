@@ -301,6 +301,7 @@ export type ToolNameView =
   | 'WebFetch'
   | 'KnowledgeLookup'
   | 'DelegateToElementManager'
+  | 'AskUserQuestion'
 
 export type ToolCallView = {
   id: string
@@ -405,6 +406,19 @@ export type ChatMessageView =
       thinkingSignature?: string
       targetPath?: string
       relatedPaths?: string[]
+      createdAt: string
+    }
+  | {
+      id: string
+      role: 'system'
+      kind: 'ask-user-question'
+      questionId: string
+      question: string
+      header?: string
+      options?: Array<{ label: string; description?: string }>
+      multiSelect?: boolean
+      /** 用户回答（存在则卡片只读展示；缺省 = 待回答） */
+      answer?: AskUserQuestionAnswerView
       createdAt: string
     }
   | {
@@ -549,6 +563,25 @@ export type WriteConfirmationView =
   | { kind: 'rename'; fromPath: string; toPath: string }
   | { kind: 'delete'; path: string }
 
+/** 提问卡的用户回答视图（answer 存在则卡片只读）。 */
+export type AskUserQuestionAnswerView = {
+  selectedLabels: string[]
+  text: string
+  outcome: 'answered' | 'cancelled'
+  answeredAt: string
+}
+
+/** 待回答请求视图（question-required 事件载荷与会话快照共用）。 */
+export type AskUserQuestionRequestView = {
+  /** 提问请求 id（= 工具调用 id = 提问卡消息的 questionId） */
+  questionId: string
+  question: string
+  header?: string
+  options?: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+  createdAt: string
+}
+
 export type FileChangeConfirmationView = {
   id: string
   toolName: ToolNameView
@@ -581,6 +614,16 @@ export type AgentUiEvent =
    * 要素管理员会话）打「待确认」徽标；激活会话的确认卡仍以 confirmation-required 为准。
    */
   | { type: 'confirmations-updated'; sessionId: string; confirmations: FileChangeConfirmationView[] }
+  /**
+   * 主动提问到达：Agent 在任务中途向用户提了一个问题，等待回答（questionMap 挂起）。
+   * UI 据此渲染提问卡可交互态并等待期间改道普通输入；回答经 respondQuestion 提交。
+   */
+  | { type: 'question-required'; sessionId: string; request: AskUserQuestionRequestView }
+  /**
+   * 某会话的待回答快照（提问注册/resolve 后广播）：会话列表据此打「待回答」徽标，
+   * 切换会话后仍能恢复等待态（与 confirmations-updated 同构）。
+   */
+  | { type: 'questions-updated'; sessionId: string; questions: AskUserQuestionRequestView[] }
   | { type: 'run-error'; sessionId: string; error: NovAiError }
   /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
   | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }

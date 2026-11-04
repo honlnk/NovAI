@@ -401,6 +401,7 @@ function handleGoToSettings() {
         :pending-confirmation-ids="chatStore.sessionsWithPendingConfirmations"
         :plan-cards="planRecentCards"
         :is-plan-loading="planStore.isLoading"
+        :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"
