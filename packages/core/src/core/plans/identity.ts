@@ -21,15 +21,29 @@ export function createPlanSlug(content: string): string {
   return hashContent(content).slice(1, 9)
 }
 
-/** 组装卡片文件名：计划-<序号>-<短标识>.md。 */
+/** 组装卡片文件名：创建时采用可读名称 计划-<序号>-<清理后计划名>-<短标识>.md。 */
 export function createPlanFileName(sequence: number, content: string): string {
   const slug = createPlanSlug(content)
-  return `计划-${sequence}-${slug}.md`
+  const title = deriveTitleFromContent(content)
+  return createTitledPlanFileName(sequence, title, slug)
 }
 
 /** 组装卡片项目内相对路径。 */
 export function createPlanPath(sequence: number, content: string): string {
   return `${PLANS_DIRECTORY}/${createPlanFileName(sequence, content)}`
+}
+
+/**
+ * 从待写入正文中提取可读计划名：取首个非空行，去掉 Markdown 标题标记
+ * （与展示标题同规则，创建时把计划名同步进文件名）。
+ */
+function deriveTitleFromContent(content: string): string {
+  const firstLine = content
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? ''
+
+  return firstLine.replace(/^#{1,6}\s*/, '')
 }
 
 /**
@@ -79,7 +93,8 @@ export function extractPlanSlug(sourcePath: string): string | null {
   return match ? match[1] : null
 }
 
-const PLAN_FILE_PATTERN = /^计划-(\d+)-[0-9a-z]+\.md$/
+// 旧格式（计划-<序号>-<短标识>.md）与新格式（计划-<序号>-<计划名>-<短标识>.md）都算应用标准命名。
+const PLAN_FILE_PATTERN = /^计划-(?:\d+-)?(?:.*-)?[0-9a-z]+\.md$/
 
 /** 是否为应用自己命名规则下的计划文件（用于区分外部手建文件与标准文件）。 */
 export function isStandardPlanFileName(sourcePath: string): boolean {

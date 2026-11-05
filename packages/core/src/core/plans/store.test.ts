@@ -247,7 +247,8 @@ describe('createPlanCard', () => {
 
     expect(card.status).toBe('inbox')
     expect(card.order).toBe(0)
-    expect(card.sourcePath).toMatch(/^plans\/计划-1-[0-9a-z]+\.md$/)
+    // 创建即带可读计划名（标题标记剥除）：计划-1-新灵感-<短标识>.md
+    expect(card.sourcePath).toMatch(/^plans\/计划-1-新灵感-[0-9a-z]+\.md$/)
     expect(card.id).toMatch(/^plan-\d+-[0-9a-z]+$/)
 
     const raw = await readRaw(card.sourcePath)

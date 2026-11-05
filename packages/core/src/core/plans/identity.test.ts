@@ -37,11 +37,18 @@ describe('稳定标识与文件名', () => {
     expect(a).not.toBe(b)
   })
 
-  it('文件名形如 计划-<序号>-<短标识>.md，路径在 plans/ 直接子级', () => {
-    const path = createPlanPath(3, '正文内容')
-    expect(path).toMatch(/^plans\/计划-3-[0-9a-z]+\.md$/)
-    const name = createPlanFileName(1, '内容')
-    expect(name).toMatch(/^计划-1-[0-9a-z]+\.md$/)
+  it('创建文件名带可读计划名：计划-<序号>-<计划名>-<短标识>.md，路径在 plans/ 直接子级', () => {
+    const path = createPlanPath(3, '# 正文标题\n\n内容')
+    expect(path).toMatch(/^plans\/计划-3-正文标题-[0-9a-z]+\.md$/)
+    // 首行非标题：原样进文件名
+    const name = createPlanFileName(1, '一条灵感')
+    expect(name).toMatch(/^计划-1-一条灵感-[0-9a-z]+\.md$/)
+  })
+
+  it('创建正文无有效名称（纯符号首行）时回退旧格式，仍唯一', () => {
+    const name = createPlanFileName(2, '///\n\n正文')
+    expect(name).toMatch(/^计划-2-[0-9a-z]+\.md$/)
+    expect(name).not.toBe(createPlanFileName(2, '///\n\n另一正文'))
   })
 
   it('提取创建时序号；外部手建文件返回 null', () => {
@@ -49,9 +56,10 @@ describe('稳定标识与文件名', () => {
     expect(extractPlanSequence('plans/随便写的.md')).toBeNull()
   })
 
-  it('标准文件名判定', () => {
+  it('标准文件名判定：旧格式与新格式（带计划名）都算应用标准命名', () => {
     expect(isStandardPlanFileName('plans/计划-1-ab12cd34.md')).toBe(true)
     expect(isStandardPlanFileName('plans/计划-12-ab12cd34.md')).toBe(true)
+    expect(isStandardPlanFileName('plans/计划-3-龙脉觉醒-ab12cd34.md')).toBe(true)
     expect(isStandardPlanFileName('plans/notes.md')).toBe(false)
   })
 
