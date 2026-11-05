@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
+import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 /**
- * 计划看板主面板：占据中间主内容区（替换对话面板），四列看板 + 右侧详情编辑。
+ * 计划看板主面板：占据中间主内容区（替换对话面板），四列看板 + 右侧抽屉。
  *
- * 交互约定（计划 §看板与交互）：
- * - 卡片默认展示摘要/更新时间/状态；点击打开右侧详情（非弹窗）；
- * - 拖拽改变栏目与同列顺序（HTML5 DnD，中点 order），状态控件是不依赖拖拽的操作方式；
- * - 删除进回收站，手动删除有确认提示；
- * - 空状态直接给新建入口，不预填内容；
- * - 窄屏看板区域横向滚动。
+ * 交互约定（交互优化计划 §交互设计）：
+ * - 新建走右侧抽屉（顶部 / 空状态 / 侧栏入口共用），不再在看板上方展开输入区；
+ *   提交等待真实保存结果，失败保留全部输入。
+ * - 详情默认渲染 Markdown 预览，双击正文或点击「编辑」进入 textarea；只有
+ *   预览 / 编辑两种状态，预览显示当前草稿，切视图不清草稿。
+ * - 分组按钮高亮读取 moveCard 同步后的 activeCard.status（与看板同源）。
+ * - 删除进回收站，两步确认；保存与删除同在底部操作行。
+ * - 正文区撑满抽屉剩余高度并内部滚动；窄屏看板横向滚动。
  */
 
 const props = defineProps<{
@@ -39,12 +42,19 @@ const props = defineProps<{
   conflictNotice: { currentCard: { body: string } } | null
   actionError: string
   hasUnsavedChanges: boolean
+  /** 新建抽屉（三个入口共用） */
+  isCreateOpen: boolean
+  newCardTitle: string
+  newCardBody: string
+  isCreating: boolean
 }>()
 
 const emit = defineEmits<{
   refresh: []
-  /** 提交新建（正文） */
-  create: [body: string]
+  openCreate: []
+  closeCreate: [discard: boolean]
+  updateCreateDraft: [title: string, body: string]
+  submitCreate: []
   openCard: [id: string]
   closeCard: []
   updateDraft: [body: string]
@@ -56,10 +66,18 @@ const emit = defineEmits<{
   toggleOnHold: []
 }>()
 
-/** 新建输入（空态与列头 + 都用同一状态，最多一个入口在用） */
-const newCardBody = ref('')
-const isNewCardInputOpen = ref(false)
+/** 本地视图状态（随卡片切换重置；草稿真值在 store） */
+const detailMode = ref<'preview' | 'edit'>('preview')
 const isDeleteConfirmOpen = ref<string | null>(null)
+
+watch(
+  () => props.activeCard?.id,
+  () => {
+    // 切换卡片回到预览，并清掉上一张卡片的删除确认残留
+    detailMode.value = 'preview'
+    isDeleteConfirmOpen.value = null
+  },
+)
 
 const columns = computed(() => {
   if (!props.board) {
@@ -79,6 +97,9 @@ const totalCards = computed(() => {
   return (Object.values(props.board.columns) as PlanCardSummaryView[][])
     .reduce((total, cards) => total + cards.length, 0)
 })
+
+/** 抽屉是否展示（新建或详情二选一；新建打开时详情已被 store 关闭） */
+const isDrawerOpen = computed(() => props.isCreateOpen || props.activeCard !== null)
 
 /* ---------- 拖拽（HTML5 DnD：卡片 → 列 / 卡片之间） ---------- */
 
@@ -119,22 +140,6 @@ function onCardDrop(status: PlanStatusView, afterCard: PlanCardSummaryView) {
   }
   emit('moveCard', id, status, afterCard.id)
   onCardDragEnd()
-}
-
-/* ---------- 新建 ---------- */
-
-async function submitNewCard() {
-  const body = newCardBody.value.trim()
-  if (!body) {
-    return
-  }
-  emit('create', body)
-  newCardBody.value = ''
-  isNewCardInputOpen.value = false
-}
-
-function openCreate() {
-  isNewCardInputOpen.value = true
 }
 
 /* ---------- 详情操作 ---------- */
@@ -195,46 +200,20 @@ function formatTime(iso: string): string {
         <button
           class="rounded-md bg-blue-600/80 px-2.5 py-1.5 text-xs text-white transition-colors hover:bg-blue-600"
           aria-label="新建计划"
-          @click="openCreate"
+          data-testid="plan-new-card-button"
+          @click="emit('openCreate')"
         >
           + 新建计划
         </button>
       </div>
     </header>
 
-    <!-- 错误横幅 -->
+    <!-- 错误横幅（看板级错误） -->
     <p v-if="errorMessage" class="shrink-0 bg-red-500/10 px-4 py-2 text-xs text-red-300">
       {{ errorMessage }}
     </p>
 
-    <!-- 新建输入条（展开时出现在看板上方） -->
-    <div v-if="isNewCardInputOpen" class="shrink-0 border-b border-white/10 px-4 py-3">
-      <textarea
-        v-model="newCardBody"
-        class="w-full resize-none rounded-md bg-white/5 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 outline-none focus:bg-white/10"
-        rows="3"
-        placeholder="写下想法——第一行会成为标题。保存后默认进入收集箱。"
-        data-testid="plan-new-card-input"
-      />
-      <div class="mt-2 flex items-center gap-2">
-        <button
-          class="rounded-md bg-blue-600/80 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-600 disabled:opacity-50"
-          :disabled="!newCardBody.trim()"
-          data-testid="plan-new-card-submit"
-          @click="submitNewCard"
-        >
-          创建
-        </button>
-        <button
-          class="rounded-md bg-white/10 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/15"
-          @click="isNewCardInputOpen = false; newCardBody = ''"
-        >
-          取消
-        </button>
-      </div>
-    </div>
-
-    <!-- 主体：横向滚动看板 + 右侧详情 -->
+    <!-- 主体：横向滚动看板 + 右侧抽屉（新建 / 详情） -->
     <div class="flex min-h-0 min-w-0 flex-1">
       <!-- 看板列区 -->
       <div
@@ -251,7 +230,7 @@ function formatTime(iso: string): string {
         <button
           class="rounded-md bg-blue-600/80 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-600"
           data-testid="plan-empty-create"
-          @click="openCreate"
+          @click="emit('openCreate')"
         >
           新建一条计划
         </button>
@@ -302,14 +281,94 @@ function formatTime(iso: string): string {
         </section>
       </div>
 
-      <!-- 右侧详情编辑区 -->
+      <!-- 右侧抽屉：新建模式 -->
       <aside
-        v-if="activeCard"
+        v-if="isCreateOpen"
+        class="flex w-80 shrink-0 flex-col border-l border-white/10 bg-[#232323]"
+        data-testid="plan-create-drawer"
+      >
+        <header class="flex shrink-0 items-center gap-2 px-4 py-3">
+          <h2 class="flex-1 text-sm font-semibold text-white">新建计划</h2>
+          <button
+            class="rounded-md p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
+            aria-label="关闭新建计划"
+            @click="emit('closeCreate', false)"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4">
+          <input
+            type="text"
+            class="w-full rounded-md bg-white/5 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 outline-none focus:bg-white/10"
+            placeholder="计划名（保存后默认进入收集箱）"
+            data-testid="plan-new-card-title"
+            :value="newCardTitle"
+            @input="emit('updateCreateDraft', ($event.target as HTMLInputElement).value, newCardBody)"
+          >
+          <textarea
+            class="min-h-0 w-full flex-1 resize-none rounded-md bg-white/5 px-3 py-2 text-sm leading-relaxed text-gray-100 placeholder-gray-600 outline-none focus:bg-white/10"
+            placeholder="正文（Markdown，可留空）"
+            data-testid="plan-new-card-input"
+            :value="newCardBody"
+            @input="emit('updateCreateDraft', newCardTitle, ($event.target as HTMLTextAreaElement).value)"
+          />
+
+          <p v-if="actionError" class="shrink-0 text-xs text-red-300">{{ actionError }}</p>
+
+          <div class="flex shrink-0 items-center gap-2">
+            <button
+              class="rounded-md bg-blue-600/80 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-600 disabled:opacity-50"
+              :disabled="isCreating || (!newCardTitle.trim() && !newCardBody.trim())"
+              data-testid="plan-new-card-submit"
+              @click="emit('submitCreate')"
+            >
+              {{ isCreating ? '创建中…' : '创建' }}
+            </button>
+            <button
+              class="rounded-md bg-white/10 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-white/15"
+              @click="emit('closeCreate', false)"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 右侧抽屉：详情模式 -->
+      <aside
+        v-else-if="activeCard"
         class="flex w-80 shrink-0 flex-col border-l border-white/10 bg-[#232323]"
         data-testid="plan-detail"
       >
-        <header class="flex items-center gap-2 px-4 py-3">
-          <h2 class="flex-1 truncate text-sm font-semibold text-white">{{ activeCard.title || '（无标题）' }}</h2>
+        <header class="flex shrink-0 items-center gap-2 px-4 py-3">
+          <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-white">{{ activeCard.title || '（无标题）' }}</h2>
+          <div class="flex shrink-0 items-center rounded-md bg-white/5 p-0.5">
+            <button
+              :class="[
+                'rounded px-2 py-0.5 text-[11px] transition-colors',
+                detailMode === 'preview' ? 'bg-white/20 text-white' : 'text-gray-400 hover:text-gray-200',
+              ]"
+              aria-label="预览正文"
+              @click="detailMode = 'preview'"
+            >
+              预览
+            </button>
+            <button
+              :class="[
+                'rounded px-2 py-0.5 text-[11px] transition-colors',
+                detailMode === 'edit' ? 'bg-white/20 text-white' : 'text-gray-400 hover:text-gray-200',
+              ]"
+              aria-label="编辑正文"
+              data-testid="plan-detail-edit"
+              @click="detailMode = 'edit'"
+            >
+              编辑
+            </button>
+          </div>
           <button
             class="rounded-md p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
             aria-label="关闭详情"
@@ -321,26 +380,27 @@ function formatTime(iso: string): string {
           </button>
         </header>
 
-        <div class="flex flex-col gap-3 overflow-y-auto px-4 pb-4">
-          <!-- 状态控件（不依赖拖拽的移动方式） -->
-          <div class="flex flex-wrap gap-1.5">
-            <button
-              v-for="(label, value) in PLAN_COLUMN_LABELS"
-              :key="value"
-              :class="[
-                'rounded-md px-2 py-1 text-xs transition-colors',
-                activeCard.status === value
-                  ? 'bg-blue-600/80 text-white'
-                  : 'bg-white/10 text-gray-300 hover:bg-white/20',
-              ]"
-              @click="emit('moveCard', activeCard.id, value as PlanStatusView, null)"
-            >
-              {{ label }}
-            </button>
-          </div>
+        <!-- 状态控件（固定区，不随正文滚动） -->
+        <div class="flex shrink-0 flex-wrap gap-1.5 px-4 pb-2">
+          <button
+            v-for="(label, value) in PLAN_COLUMN_LABELS"
+            :key="value"
+            :class="[
+              'rounded-md px-2 py-1 text-xs transition-colors',
+              activeCard.status === value
+                ? 'bg-blue-600/80 text-white'
+                : 'bg-white/10 text-gray-300 hover:bg-white/20',
+            ]"
+            @click="emit('moveCard', activeCard.id, value as PlanStatusView, null)"
+          >
+            {{ label }}
+          </button>
+        </div>
 
+        <!-- 正文区：撑满剩余高度、内部滚动 -->
+        <div class="flex min-h-0 flex-1 flex-col px-4">
           <!-- 外部修改提醒：用户选择重新读取或保留草稿 -->
-          <div v-if="conflictNotice" class="rounded-md bg-amber-500/10 p-3 text-xs text-amber-200">
+          <div v-if="conflictNotice" class="shrink-0 rounded-md bg-amber-500/10 p-3 text-xs text-amber-200">
             <p>这个计划文件已被外部修改（AI 或编辑器）。当前草稿不会覆盖它。</p>
             <div class="mt-2 flex gap-2">
               <button class="rounded bg-amber-500/20 px-2 py-1 hover:bg-amber-500/30" @click="emit('reloadFromConflict')">
@@ -352,16 +412,31 @@ function formatTime(iso: string): string {
             </div>
           </div>
 
-          <!-- 正文编辑（保存按钮，未保存标记） -->
+          <!-- 预览态：渲染 Markdown（显示当前草稿），双击进入编辑 -->
+          <div
+            v-if="detailMode === 'preview'"
+            class="markdown-body markdown-body--dark min-h-0 flex-1 overflow-y-auto rounded-md bg-white/5 px-3 py-2 text-sm"
+            data-testid="plan-detail-preview"
+            @dblclick="detailMode = 'edit'"
+          >
+            <MarkdownRenderer v-if="draftValue" :content="draftValue" />
+            <p v-else class="text-gray-600">双击或点击「编辑」开始书写正文。</p>
+          </div>
+
+          <!-- 编辑态：多行文本框（不做实时渲染） -->
           <textarea
+            v-else
             :value="draftValue"
-            class="min-h-64 flex-1 resize-none rounded-md bg-white/5 px-3 py-2 text-sm leading-relaxed text-gray-100 placeholder-gray-600 outline-none focus:bg-white/10"
-            placeholder="自由记录正文；第一行会成为标题。"
+            class="min-h-0 w-full flex-1 resize-none rounded-md bg-white/5 px-3 py-2 text-sm leading-relaxed text-gray-100 placeholder-gray-600 outline-none focus:bg-white/10"
+            placeholder="自由记录正文；支持 Markdown。"
             data-testid="plan-detail-body"
             @input="onDraftInput"
           />
 
-          <div class="flex items-center gap-2">
+          <p v-if="actionError" class="shrink-0 py-1 text-xs text-red-300">{{ actionError }}</p>
+
+          <!-- 底部操作行：保存 + 未保存标记 + 删除（同一行） -->
+          <div class="flex shrink-0 flex-wrap items-center gap-2 py-3">
             <button
               class="rounded-md bg-blue-600/80 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-600 disabled:opacity-50"
               :disabled="!hasUnsavedChanges || isSaving"
@@ -371,27 +446,24 @@ function formatTime(iso: string): string {
               {{ isSaving ? '保存中…' : '保存' }}
             </button>
             <span v-if="hasUnsavedChanges" class="text-xs text-amber-300">未保存</span>
-            <span v-if="activeCard.updatedAt" class="ml-auto text-[10px] text-gray-600">
+            <span v-if="activeCard.updatedAt" class="text-[10px] text-gray-600">
               更新于 {{ formatTime(activeCard.updatedAt) }}
             </span>
-          </div>
 
-          <p v-if="actionError" class="text-xs text-red-300">{{ actionError }}</p>
-
-          <!-- 删除（确认提示 → 回收站） -->
-          <div class="mt-2 border-t border-white/10 pt-3">
-            <button
-              v-if="isDeleteConfirmOpen !== activeCard.id"
-              class="rounded-md bg-white/5 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/10"
-              @click="confirmDelete(activeCard.id)"
-            >
-              删除（移入回收站）
-            </button>
-            <div v-else class="flex items-center gap-2 text-xs text-gray-400">
-              <span>移入回收站？可从 .novel/trash/ 找回。</span>
-              <button class="rounded bg-red-500/20 px-2 py-1 text-red-200 hover:bg-red-500/30" @click="doDelete(activeCard.id)">删除</button>
-              <button class="rounded bg-white/10 px-2 py-1 hover:bg-white/20" @click="isDeleteConfirmOpen = null">取消</button>
-            </div>
+            <span class="ml-auto">
+              <button
+                v-if="isDeleteConfirmOpen !== activeCard.id"
+                class="rounded-md bg-white/5 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/10"
+                @click="confirmDelete(activeCard.id)"
+              >
+                删除（移入回收站）
+              </button>
+              <span v-else class="flex items-center gap-1.5 text-xs text-gray-400">
+                <span>移入回收站？</span>
+                <button class="rounded bg-red-500/20 px-2 py-1 text-red-200 hover:bg-red-500/30" @click="doDelete(activeCard.id)">删除</button>
+                <button class="rounded bg-white/10 px-2 py-1 hover:bg-white/20" @click="isDeleteConfirmOpen = null">取消</button>
+              </span>
+            </span>
           </div>
         </div>
       </aside>

@@ -305,6 +305,22 @@ async function handlePlanCreate(body: string) {
   }
 }
 
+/** 新建抽屉提交（三个入口共用）：失败保留输入，成功由 store 转入详情预览 */
+async function handlePlanSubmitCreate() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const card = await planStore.submitCreate(projectId.value)
+  if (card) {
+    toast.success('已创建计划')
+  } else if (!planStore.isCreateOpen) {
+    // 抽屉已被关闭（如离开保护流程中的异常路径），不再重复报错
+    return
+  } else {
+    toast.error(planStore.actionError || '新建计划失败')
+  }
+}
+
 async function handlePlanMove(id: string, status: PlanStatusView, afterId: string | null) {
   if (!projectStore.currentProject) {
     return
@@ -412,7 +428,7 @@ function handleGoToSettings() {
         @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
         @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
         @open-plan-board="selectCategory('plan')"
-        @create-plan="selectCategory('plan')"
+        @create-plan="() => { selectCategory('plan'); planStore.openCreate() }"
         @open-plan-card="(id) => { selectCategory('plan'); void planStore.openCard(projectId, id) }"
       />
 
@@ -431,9 +447,17 @@ function handleGoToSettings() {
         :conflict-notice="planStore.conflictNotice"
         :action-error="planStore.actionError"
         :has-unsaved-changes="planStore.hasUnsavedChanges"
+        :is-create-open="planStore.isCreateOpen"
+        :new-card-title="planStore.newCardTitle"
+        :new-card-body="planStore.newCardBody"
+        :is-creating="planStore.isCreating"
         @refresh="planStore.refreshBoard(projectId)"
         @create="handlePlanCreate"
-        @open-card="(id) => planStore.openCard(projectId, id)"
+        @open-create="planStore.openCreate()"
+        @close-create="(discard) => planStore.closeCreate(discard)"
+        @update-create-draft="(title, body) => planStore.updateCreateDraft(title, body)"
+        @submit-create="handlePlanSubmitCreate"
+        @open-card="(id) => { planStore.closeCreate(); void planStore.openCard(projectId, id) }"
         @close-card="planStore.closeCard()"
         @update-draft="planStore.updateDraft"
         @save-draft="handlePlanSaveDraft"

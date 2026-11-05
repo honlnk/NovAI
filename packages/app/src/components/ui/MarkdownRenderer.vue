@@ -31,6 +31,50 @@ const blocks = computed(() => parseMarkdownBlocks(props.content))
   color: #1f2937;
 }
 
+/* 深色变体（计划板抽屉等深色容器）：只覆盖配色，排版与浅色主题共用 */
+.markdown-body--dark {
+  color: #d1d5db;
+}
+
+.markdown-body--dark h1,
+.markdown-body--dark h2 {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+.markdown-body--dark a {
+  color: #60a5fa;
+}
+
+.markdown-body--dark code {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.markdown-body--dark pre {
+  background-color: #111827;
+}
+
+.markdown-body--dark blockquote {
+  border-left-color: #4b5563;
+  color: #9ca3af;
+}
+
+.markdown-body--dark hr {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.markdown-body--dark th,
+.markdown-body--dark td {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.markdown-body--dark th {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.markdown-body--dark del {
+  color: #6b7280;
+}
+
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,

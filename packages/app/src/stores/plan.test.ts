@@ -250,6 +250,54 @@ describe('plan store 拖拽与状态移动', () => {
     expect(store.actionError).toBe('移动失败')
     expect(mockedGetPlanBoard.mock.calls.length).toBeGreaterThanOrEqual(3)
   })
+
+  it('moveCard 同步当前抽屉：状态高亮、contentHash 更新，未保存草稿保留', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '原始正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('未保存草稿')
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '原始正文', { status: 'done', order: 0, contentHash: 'hash-a2' }))
+    await store.moveCard(PROJECT, 'a', 'done', null)
+
+    // 修复点：抽屉读取移动后的新状态与新哈希，看板与按钮高亮同源
+    expect(store.activeCard?.status).toBe('done')
+    expect(store.activeCard?.contentHash).toBe('hash-a2')
+    // 草稿不被状态切换清空
+    expect(store.draftBody).toBe('未保存草稿')
+
+    // 移动后继续保存正文：携带的是移动后的新哈希（不是打开时的旧哈希）
+    mockedUpdatePlan.mockResolvedValue(detail('a', '未保存草稿'))
+    await store.saveDraft(PROJECT)
+
+    expect(mockedUpdatePlan).toHaveBeenLastCalledWith(PROJECT, {
+      id: 'a',
+      body: '未保存草稿',
+      expectedContentHash: 'hash-a2',
+    })
+  })
+
+  it('moveCard 异步期间用户已切到其他卡片：不回写旧卡片详情', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', 'A 正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    let resolveMove: (value: PlanCardView) => void = () => {}
+    mockedUpdatePlan.mockReturnValue(new Promise<PlanCardView>((resolve) => { resolveMove = resolve }))
+    const moving = store.moveCard(PROJECT, 'a', 'done', null)
+
+    // 移动进行中用户打开了另一张卡片
+    mockedReadPlan.mockResolvedValue(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+
+    resolveMove(detail('a', 'A 正文', { status: 'done' }))
+    await moving
+
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.activeCard?.body).toBe('B 正文')
+  })
 })
 
 describe('plan store 新建与删除', () => {
@@ -292,6 +340,118 @@ describe('plan store 新建与删除', () => {
     expect(ok).toBe(true)
     expect(store.activeCard).toBeNull()
     expect(store.selectedCardId).toBeNull()
+  })
+})
+
+describe('plan store 新建抽屉（三入口共用）', () => {
+  it('openCreate 打开抽屉并关闭已有详情；closeCreate(discard) 清理输入', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    store.openCreate()
+
+    expect(store.isCreateOpen).toBe(true)
+    expect(store.activeCard).toBeNull()
+
+    store.updateCreateDraft('新计划', '正文内容')
+    expect(store.hasCreateDraft).toBe(true)
+
+    store.closeCreate(false)
+    expect(store.isCreateOpen).toBe(false)
+    // 非放弃关闭：输入保留（再打开仍可继续编辑）
+    expect(store.newCardTitle).toBe('新计划')
+
+    store.openCreate()
+    store.closeCreate(true)
+    expect(store.newCardTitle).toBe('')
+    expect(store.newCardBody).toBe('')
+    expect(store.hasCreateDraft).toBe(false)
+  })
+
+  it('submitCreate：计划名 + 正文合成首个非空行结构，成功后清空并打开详情', async () => {
+    const store = usePlanStore()
+    mockedCreatePlan.mockResolvedValue(detail('new-1', '# 新计划\n\n正文内容'))
+    mockedReadPlan.mockResolvedValue(detail('new-1', '# 新计划\n\n正文内容'))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+
+    store.updateCreateDraft('新计划', '正文内容')
+    const card = await store.submitCreate(PROJECT)
+
+    expect(card?.id).toBe('new-1')
+    expect(mockedCreatePlan).toHaveBeenCalledWith(PROJECT, { body: '新计划\n\n正文内容', status: undefined })
+    expect(store.isCreateOpen).toBe(false)
+    expect(store.newCardTitle).toBe('')
+    expect(store.newCardBody).toBe('')
+    expect(store.selectedCardId).toBe('new-1')
+    expect(store.activeCard?.body).toBe('# 新计划\n\n正文内容')
+  })
+
+  it('submitCreate 只有正文没有名称：直接以正文创建', async () => {
+    const store = usePlanStore()
+    mockedCreatePlan.mockResolvedValue(detail('new-2', '纯正文计划'))
+    mockedReadPlan.mockResolvedValue(detail('new-2', '纯正文计划'))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+
+    store.updateCreateDraft('', '纯正文计划')
+    const card = await store.submitCreate(PROJECT)
+
+    expect(card?.id).toBe('new-2')
+    expect(mockedCreatePlan).toHaveBeenCalledWith(PROJECT, { body: '纯正文计划', status: undefined })
+  })
+
+  it('submitCreate 失败：抽屉保持打开、输入与错误保留', async () => {
+    const store = usePlanStore()
+    store.openCreate()
+    mockedCreatePlan.mockRejectedValue(new Error('磁盘写入失败'))
+
+    store.updateCreateDraft('失败的计划', '还没落盘的正文')
+    const card = await store.submitCreate(PROJECT)
+
+    expect(card).toBeNull()
+    expect(store.isCreateOpen).toBe(true)
+    expect(store.newCardTitle).toBe('失败的计划')
+    expect(store.newCardBody).toBe('还没落盘的正文')
+    expect(store.actionError).toBe('磁盘写入失败')
+  })
+
+  it('submitCreate 空表单直接返回 null，不发起创建', async () => {
+    const store = usePlanStore()
+    store.updateCreateDraft('  ', '')
+
+    const card = await store.submitCreate(PROJECT)
+
+    expect(card).toBeNull()
+    expect(mockedCreatePlan).not.toHaveBeenCalled()
+  })
+
+  it('isCreating 期间不重复提交', async () => {
+    const store = usePlanStore()
+    let resolveCreate: (value: PlanCardView) => void = () => {}
+    mockedCreatePlan.mockReturnValue(new Promise<PlanCardView>((resolve) => { resolveCreate = resolve }))
+
+    store.updateCreateDraft('A', 'B')
+    const first = store.submitCreate(PROJECT)
+    const second = await store.submitCreate(PROJECT)
+
+    expect(second).toBeNull()
+
+    resolveCreate(detail('new-3', 'A\n\nB'))
+    expect((await first)?.id).toBe('new-3')
+  })
+
+  it('reset：新建抽屉状态一并清理', () => {
+    const store = usePlanStore()
+    store.openCreate()
+    store.updateCreateDraft('x', 'y')
+
+    store.reset()
+
+    expect(store.isCreateOpen).toBe(false)
+    expect(store.newCardTitle).toBe('')
+    expect(store.newCardBody).toBe('')
+    expect(store.hasCreateDraft).toBe(false)
   })
 })
 

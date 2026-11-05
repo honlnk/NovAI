@@ -50,6 +50,20 @@ export const usePlanStore = defineStore('plan', () => {
   /** 已搁置筛选：默认只看四列常驻栏目，可单独查看已搁置 */
   const showOnHold = ref(false)
 
+  /* ---------- 新建抽屉（顶部 / 空状态 / 侧栏三个入口共用） ---------- */
+
+  /** 新建抽屉是否打开 */
+  const isCreateOpen = ref(false)
+  /** 新建计划名（独立输入；创建时作为正文首个非空行） */
+  const newCardTitle = ref('')
+  /** 新建正文（首个非空行之后的 Markdown 内容） */
+  const newCardBody = ref('')
+  /** 创建中（禁用重复提交） */
+  const isCreating = ref(false)
+
+  /** 新建抽屉是否有未提交内容（离开保护用） */
+  const hasCreateDraft = computed(() => newCardTitle.value.trim() !== '' || newCardBody.value.trim() !== '')
+
   const totalCardCount = computed(() => {
     if (!board.value) {
       return 0
@@ -194,12 +208,78 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  /** 状态切换 / 拖拽排序的统一入口（立即保存）。afterId 为目标位置前一卡片。 */
+  /** 打开新建抽屉（顶部 / 空状态 / 侧栏入口共用；已有详情时先关详情） */
+  function openCreate() {
+    closeCard()
+    isCreateOpen.value = true
+  }
+
+  /** 关闭新建抽屉；discard=true 时丢弃未提交内容（用户已在离开确认中选择放弃） */
+  function closeCreate(discard = false) {
+    if (discard) {
+      newCardTitle.value = ''
+      newCardBody.value = ''
+      actionError.value = ''
+    }
+    isCreateOpen.value = false
+  }
+
+  /** 新建抽屉草稿输入 */
+  function updateCreateDraft(title: string, body: string) {
+    newCardTitle.value = title
+    newCardBody.value = body
+  }
+
+  /**
+   * 从新建抽屉提交：计划名作为正文首个非空行。等待真实保存结果——
+   * 成功才清空输入并关闭抽屉（转入详情预览）；失败保留全部输入与抽屉。
+   */
+  async function submitCreate(projectId: string) {
+    if (isCreating.value) {
+      return null
+    }
+
+    const title = newCardTitle.value.trim()
+    const body = newCardBody.value.trim()
+    if (!title && !body) {
+      return null
+    }
+
+    isCreating.value = true
+    actionError.value = ''
+
+    try {
+      const fullBody = title && body ? `${title}\n\n${body}` : (title || body)
+      const card = await createPlan(projectId, { body: fullBody })
+      await refreshBoard(projectId)
+
+      newCardTitle.value = ''
+      newCardBody.value = ''
+      isCreateOpen.value = false
+
+      await openCard(projectId, card.id)
+      return card
+    } catch (error) {
+      actionError.value = toMessage(error, '新建计划失败')
+      return null
+    } finally {
+      isCreating.value = false
+    }
+  }
+
+  /**
+   * 状态切换 / 拖拽排序的统一入口（立即保存）。afterId 为目标位置前一卡片。
+   * 成功后按 ID 同步当前抽屉详情（状态高亮 + 最新 contentHash），
+   * 不动正文草稿；异步期间用户已切到其他卡片时不回写旧详情。
+   */
   async function moveCard(projectId: string, id: string, status: PlanStatusView, afterId: string | null) {
     actionError.value = ''
 
     try {
-      await updatePlan(projectId, { id, status, afterId })
+      const updated = await updatePlan(projectId, { id, status, afterId })
+      if (activeCard.value?.id === id) {
+        activeCard.value = updated
+      }
       await refreshBoard(projectId)
       return true
     } catch (error) {
@@ -236,6 +316,10 @@ export const usePlanStore = defineStore('plan', () => {
     errorMessage.value = ''
     selectedCardId.value = null
     showOnHold.value = false
+    isCreateOpen.value = false
+    newCardTitle.value = ''
+    newCardBody.value = ''
+    isCreating.value = false
   }
 
   return {
@@ -249,6 +333,11 @@ export const usePlanStore = defineStore('plan', () => {
     actionError,
     selectedCardId,
     showOnHold,
+    isCreateOpen,
+    newCardTitle,
+    newCardBody,
+    isCreating,
+    hasCreateDraft,
     totalCardCount,
     visibleColumns,
     hasUnsavedChanges,
@@ -261,6 +350,10 @@ export const usePlanStore = defineStore('plan', () => {
     reloadFromConflict,
     keepDraft,
     createCard,
+    openCreate,
+    closeCreate,
+    updateCreateDraft,
+    submitCreate,
     moveCard,
     removeCard,
     reset,
