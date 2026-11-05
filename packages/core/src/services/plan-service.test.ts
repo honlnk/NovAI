@@ -295,6 +295,57 @@ describe('readPlan / createPlan / updatePlan / deletePlan', () => {
     expect(updated.body).toBe('正文保持')
   })
 
+  it('updatePlan 传 title：返回新名称、新路径与新哈希；旧文件消失，原 ID 可读', async () => {
+    const created = await createPlan(PROJECT_A, { body: '# 原始名称\n\n正文保持不变' })
+    const oldHash = created.contentHash
+    const oldPath = created.sourcePath
+
+    const saved = await updatePlan(PROJECT_A, {
+      id: created.id,
+      title: '龙脉觉醒',
+      expectedContentHash: oldHash,
+    })
+
+    // 视图层需要的完整信息一次返回：新标题、新路径、供下次保存的新哈希
+    expect(saved.title).toBe('龙脉觉醒')
+    expect(saved.body).toBe('# 龙脉觉醒\n\n正文保持不变')
+    expect(saved.sourcePath).toMatch(/^plans\/计划-1-龙脉觉醒-[0-9a-z]+\.md$/)
+    expect(saved.sourcePath).not.toBe(oldPath)
+    expect(saved.contentHash).not.toBe(oldHash)
+    expect(saved.id).toBe(created.id)
+    expect(saved.status).toBe(created.status)
+    expect(saved.order).toBe(created.order)
+    expect(saved.createdAt).toBe(created.createdAt)
+
+    // 按 ID 重读（改名后定位不丢）；旧路径文件已被移除
+    const reread = await readPlan(PROJECT_A, created.id)
+    expect(reread?.sourcePath).toBe(saved.sourcePath)
+    expect(reread?.contentHash).toBe(saved.contentHash)
+
+    // 改名后的新哈希可以继续保存（后续保存不回归）
+    const again = await updatePlan(PROJECT_A, {
+      id: created.id,
+      body: '# 龙脉觉醒\n\n第二版正文',
+      expectedContentHash: saved.contentHash,
+    })
+    expect(again.body).toBe('# 龙脉觉醒\n\n第二版正文')
+    expect(again.sourcePath).toBe(saved.sourcePath)
+  })
+
+  it('updatePlan 改名后项目隔离不回归；B 项目同名计划互不影响', async () => {
+    const cardA = await createPlan(PROJECT_A, { body: '# 重名计划\n\nA 项目' })
+    const cardB = await createPlan(PROJECT_B, { body: '# 重名计划\n\nB 项目' })
+
+    const renamedA = await updatePlan(PROJECT_A, { id: cardA.id, title: '新名称A' })
+    const renamedB = await updatePlan(PROJECT_B, { id: cardB.id, title: '新名称A' })
+
+    // 序号独立：两个项目各自的计划-1-，互不冲突，也互不可见
+    expect(renamedA.sourcePath).not.toBe(renamedB.sourcePath)
+    expect((await listPlanCards(PROJECT_A)).map((card) => card.id)).toEqual([cardA.id])
+    expect((await listPlanCards(PROJECT_B)).map((card) => card.id)).toEqual([cardB.id])
+    expect((await listPlanCards(PROJECT_A)).every((card) => card.title === '新名称A')).toBe(true)
+  })
+
   it('deletePlan：移入回收站并从看板消失', async () => {
     const created = await createPlan(PROJECT_A, { body: '将被删除' })
 

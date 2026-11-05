@@ -4,8 +4,18 @@ import {
   writeProjectTextFile,
 } from '../fs/project-fs'
 import { createTrashPath } from '../fs/trash'
-import { parsePlanFile, serializePlanCard } from './parser'
-import { createPlanId, createPlanPath, extractPlanSequence, nextOrderInColumn, orderAfter, sortPlanCards } from './identity'
+import { parsePlanFile, replacePlanTitleLine, serializePlanCard } from './parser'
+import {
+  createPlanId,
+  createPlanPath,
+  createPlanSlug,
+  createTitledPlanFileName,
+  extractPlanSequence,
+  extractPlanSlug,
+  nextOrderInColumn,
+  orderAfter,
+  sortPlanCards,
+} from './identity'
 import { scanPlanCards, type ProjectSnapshotLike } from './catalog'
 import { hashContent } from '../util/hash'
 import { PlanConflictError, PlanError } from '../../types/plans'
@@ -33,6 +43,12 @@ export type UpdatePlanOptions = {
   id: string
   /** 替换后的完整正文；不传则保持原正文。 */
   body?: string
+  /**
+   * 新计划名（映射正文首个非空行）。与 body 同时提供时以 body 为准（调用方自行
+   * 组合好正文）；单独提供时保留原 `#` 层级只替换标题文本。
+   * 名称变化时文件名同步改为 计划-<原序号>-<清理后名称>-<原短标识>.md。
+   */
+  title?: string
   status?: PlanStatus
   /** 移动到目标列某个卡片之后；null = 列末尾。仅与 status 同传时有意义。 */
   afterId?: string | null
@@ -103,10 +119,22 @@ export async function updatePlanCard(project: ProjectSnapshotLike, options: Upda
   const now = (options.now ?? new Date()).toISOString()
   const allCards = await scanPlanCards(project)
   const bodyChanged = options.body !== undefined
-  const nextBody = (bodyChanged ? options.body ?? '' : current.card.body).trim()
+  const titleChanged = options.title !== undefined
+  let nextBody = (bodyChanged ? options.body ?? '' : current.card.body).trim()
 
   if (bodyChanged && !nextBody) {
     throw new PlanError('计划正文不能为空')
+  }
+
+  if (titleChanged) {
+    const title = options.title?.trim() ?? ''
+    if (!title) {
+      throw new PlanError('计划名不能为空')
+    }
+    // title 与 body 同传以 body 为准（调用方已组合）；否则替换首个非空行
+    if (!bodyChanged) {
+      nextBody = replacePlanTitleLine(current.card.body, title).trim()
+    }
   }
 
   const statusChanged = options.status !== undefined && options.status !== current.card.status
@@ -130,9 +158,78 @@ export async function updatePlanCard(project: ProjectSnapshotLike, options: Upda
     body: nextBody,
   }
 
-  await writeProjectTextFile(project.handle, found.path, serializePlanCard(card))
+  const nextContent = serializePlanCard(card)
+  const nextPath = resolveRenamedPath(found.path, card, titleChanged ? options.title : undefined, allCards.cards)
 
-  return { ...card, sourcePath: found.path }
+  if (nextPath === found.path) {
+    // 名称未变化 / 清理后等价：只更新内容，不重命名
+    await writeProjectTextFile(project.handle, found.path, nextContent)
+    return { ...card, sourcePath: found.path }
+  }
+
+  // 目标占用检查（同路径 no-op 已排除）：改名不得覆盖任何已有文件
+  if (allCards.cards.some((existing) => existing.sourcePath === nextPath)) {
+    throw new PlanError(`目标文件已存在：${nextPath}；请换一个计划名`)
+  }
+  if (await fileExists(project, nextPath)) {
+    throw new PlanError(`目标文件已存在：${nextPath}；请换一个计划名`)
+  }
+
+  // 无原子重命名原语（浏览器 FSA）：写完整新文件 → 删旧文件；
+  // 删旧失败时清理刚写入的新文件再报错，避免留下同 ID 双卡。
+  await writeProjectTextFile(project.handle, nextPath, nextContent)
+
+  try {
+    await removeProjectFile(project.handle, found.path)
+  } catch (error) {
+    await removeProjectFile(project.handle, nextPath).catch(() => {})
+    const reason = error instanceof Error ? `：${error.message}` : ''
+    throw new PlanError(`重命名失败，旧文件删除出错，已回滚：${found.path} → ${nextPath}${reason}`)
+  }
+
+  return { ...card, sourcePath: nextPath }
+}
+
+/**
+ * 计算改名后的目标路径：保留原序号与原短标识，只更新可读名称部分。
+ * 名称未提供或清理后与现文件名等价时返回原路径（no-op）。
+ */
+function resolveRenamedPath(
+  currentPath: string,
+  card: Omit<PlanCard, 'sourcePath'>,
+  title: string | undefined,
+  allCards: readonly PlanCard[],
+): string {
+  if (title === undefined) {
+    return currentPath
+  }
+
+  const trimmed = title.trim()
+  if (!trimmed) {
+    return currentPath
+  }
+
+  const sequence = extractPlanSequence(currentPath)
+  // 短标识优先沿用原文件名的；外部手建文件没有时按当前正文计算一个
+  const slug = extractPlanSlug(currentPath) ?? createPlanSlug(card.body)
+  const nextName = createTitledPlanFileName(sequence, trimmed, slug)
+
+  if (nextName === currentPath.split('/').pop()) {
+    return currentPath
+  }
+
+  // 同 ID 卡片不算占用（目标与现路径不同说明名称确实变了）
+  void allCards
+  return `plans/${nextName}`
+}
+
+async function fileExists(project: ProjectSnapshotLike, path: string): Promise<boolean> {
+  try {
+    await readProjectTextFile(project.handle, path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export async function deletePlanCard(project: ProjectSnapshotLike, id: string): Promise<{ card: PlanCard; trashPath: string }> {

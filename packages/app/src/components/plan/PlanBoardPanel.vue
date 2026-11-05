@@ -38,6 +38,8 @@ const props = defineProps<{
     sourcePath: string
   } | null
   draftBody: string | null
+  /** 计划名草稿（详情头部输入框） */
+  draftTitle: string | null
   isSaving: boolean
   conflictNotice: { currentCard: { body: string } } | null
   actionError: string
@@ -58,6 +60,7 @@ const emit = defineEmits<{
   openCard: [id: string]
   closeCard: []
   updateDraft: [body: string]
+  updateDraftTitle: [title: string]
   saveDraft: []
   reloadFromConflict: []
   keepDraft: []
@@ -145,9 +148,15 @@ function onCardDrop(status: PlanStatusView, afterCard: PlanCardSummaryView) {
 /* ---------- 详情操作 ---------- */
 
 const draftValue = computed(() => props.draftBody ?? props.activeCard?.body ?? '')
+/** 计划名输入框值：有草稿用草稿，否则用当前标题 */
+const draftTitleValue = computed(() => props.draftTitle ?? props.activeCard?.title ?? '')
 
 function onDraftInput(event: Event) {
   emit('updateDraft', (event.target as HTMLTextAreaElement).value)
+}
+
+function onTitleInput(event: Event) {
+  emit('updateDraftTitle', (event.target as HTMLInputElement).value)
 }
 
 function confirmDelete(id: string) {
@@ -345,7 +354,14 @@ function formatTime(iso: string): string {
         data-testid="plan-detail"
       >
         <header class="flex shrink-0 items-center gap-2 px-4 py-3">
-          <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-white">{{ activeCard.title || '（无标题）' }}</h2>
+          <input
+            type="text"
+            class="min-w-0 flex-1 rounded-md bg-transparent px-1.5 py-0.5 text-sm font-semibold text-white placeholder-gray-600 outline-none transition-colors hover:bg-white/5 focus:bg-white/10"
+            placeholder="计划名"
+            data-testid="plan-detail-title"
+            :value="draftTitleValue"
+            @input="onTitleInput"
+          >
           <div class="flex shrink-0 items-center rounded-md bg-white/5 p-0.5">
             <button
               :class="[

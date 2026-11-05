@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { scanPlanCards } from './catalog'
-import { parsePlanFile } from './parser'
+import { derivePlanTitle, parsePlanFile } from './parser'
 import { createPlanCard, deletePlanCard, readPlanCard, updatePlanCard } from './store'
 import { hashContent } from '../util/hash'
 import { PlanConflictError, PlanError } from '../../types/plans'
@@ -399,6 +399,152 @@ describe('updatePlanCard', () => {
 
     await expect(updatePlanCard(project(), { id: a.id, body: '  ' })).rejects.toThrow('计划正文不能为空')
     expect(await readRaw(a.sourcePath)).toBe(rawBefore)
+  })
+})
+
+/* ---------- 改名与文件重命名 ---------- */
+
+describe('updatePlanCard 改名与文件重命名', () => {
+  const META = { id: 'plan-a', status: 'inbox', order: 0, createdAt: '2026-11-01T08:00:00.000Z', updatedAt: '2026-11-01T08:00:00.000Z' }
+
+  it('改名：正文首个非空行替换、保留 # 层级，文件名同步为新格式，旧文件消失', async () => {
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 旧标题\n\n正文第一段。\n\n第二段。')
+
+    const updated = await updatePlanCard(project(), { id: 'plan-a', title: '龙脉觉醒' })
+
+    // 正文：标题层级保留，只换文本；其余正文不动
+    expect(updated.body).toBe('# 龙脉觉醒\n\n正文第一段。\n\n第二段。')
+    expect(derivePlanTitle(updated.body)).toBe('龙脉觉醒')
+    // 元数据保持
+    expect(updated.id).toBe('plan-a')
+    expect(updated.status).toBe('inbox')
+    expect(updated.order).toBe(0)
+    expect(updated.createdAt).toBe('2026-11-01T08:00:00.000Z')
+    // 文件名：新格式 计划-<原序号>-<清理后名称>-<原短标识>.md
+    expect(updated.sourcePath).toBe('plans/计划-1-龙脉觉醒-ab12cd34.md')
+
+    // 旧文件不存在，新文件可按原 ID 读取
+    const { isNotFoundError } = await import('../tools/path')
+    await expect(readRaw('plans/计划-1-ab12cd34.md')).rejects.toSatisfy(isNotFoundError)
+    const reread = await readPlanCard(project(), 'plan-a')
+    expect(reread?.card.sourcePath).toBe('plans/计划-1-龙脉觉醒-ab12cd34.md')
+    expect(reread?.card.body).toBe('# 龙脉觉醒\n\n正文第一段。\n\n第二段。')
+  })
+
+  it('普通首行（非 Markdown 标题）改名：只替换该行文本', async () => {
+    await seedPlanFile('plans/计划-2-ef56ab78.md', { ...META, id: 'plan-b' }, '普通标题行\n\n正文')
+
+    const updated = await updatePlanCard(project(), { id: 'plan-b', title: '新名字' })
+
+    expect(updated.body).toBe('新名字\n\n正文')
+    expect(updated.sourcePath).toBe('plans/计划-2-新名字-ef56ab78.md')
+  })
+
+  it('名称与当前文件名不一致时：旧格式文件首次改名会补全可读名称（预期迁移）', async () => {
+    await seedPlanFile('plans/计划-3-cd34ef56.md', { ...META, id: 'plan-c' }, '# 固定名称\n\n正文')
+
+    const updated = await updatePlanCard(project(), { id: 'plan-c', title: '固定名称', now: new Date('2026-11-06T00:00:00.000Z') })
+
+    // 旧格式文件名没有名称段：即使标题没变，路径也会补全为带名称的新格式（设计：首次改名迁移）
+    expect(updated.sourcePath).toBe('plans/计划-3-固定名称-cd34ef56.md')
+    expect(updated.updatedAt).toBe('2026-11-06T00:00:00.000Z')
+    // 新路径可读，旧路径消失
+    await expect(readRaw('plans/计划-3-固定名称-cd34ef56.md')).resolves.toContain('固定名称')
+    const { isNotFoundError } = await import('../tools/path')
+    await expect(readRaw('plans/计划-3-cd34ef56.md')).rejects.toSatisfy(isNotFoundError)
+  })
+
+  it('已带计划名的新格式文件再改名：序号与短标识保持，名称更新', async () => {
+    await seedPlanFile('plans/计划-3-旧名字-cd34ef56.md', { ...META, id: 'plan-d' }, '# 旧名字\n\n正文')
+
+    const updated = await updatePlanCard(project(), { id: 'plan-d', title: '新名字' })
+
+    expect(updated.sourcePath).toBe('plans/计划-3-新名字-cd34ef56.md')
+  })
+
+  it('外部手建文件（无序号无短标识）改名：文件名主体取自清理后名称与新正文哈希', async () => {
+    await seedPlanFile('plans/随便写的.md', { ...META, id: 'plan-e' }, '# 随便写的\n\n正文')
+
+    const updated = await updatePlanCard(project(), { id: 'plan-e', title: '规范名称' })
+
+    // 无序号不编造；短标识按当前正文计算（外部文件原本没有）
+    expect(updated.sourcePath).toMatch(/^plans\/计划-规范名称-[0-9a-z]+\.md$/)
+    const reread = await readPlanCard(project(), 'plan-e')
+    expect(reread?.card.sourcePath).toBe(updated.sourcePath)
+  })
+
+  it('改名后原 ID 仍能定位：排序与状态不受影响', async () => {
+    await seedPlanFile('plans/计划-4-aa11bb22.md', { id: 'plan-f', status: 'planned', order: 100, createdAt: '2026-11-01T08:00:00.000Z', updatedAt: '2026-11-01T08:00:00.000Z' }, '# 计划F\n\n正文')
+    await seedPlanFile('plans/计划-5-cc33dd44.md', { id: 'plan-g', status: 'planned', order: 200, createdAt: '2026-11-01T09:00:00.000Z', updatedAt: '2026-11-01T09:00:00.000Z' }, '# 计划G\n\n正文')
+
+    await updatePlanCard(project(), { id: 'plan-f', title: '改名后的F' })
+
+    const scan = await scanPlanCards(project())
+    const planned = scan.cards.filter((card) => card.status === 'planned')
+    expect(planned.map((card) => card.id)).toEqual(['plan-f', 'plan-g'])
+    expect(planned[0]!.sourcePath).toBe('plans/计划-4-改名后的F-aa11bb22.md')
+  })
+
+  it('同名计划允许共存：不同序号/短标识文件名不同，互不覆盖', async () => {
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 重名计划\n\nA 的正文')
+    await seedPlanFile('plans/计划-2-ef56ab78.md', { ...META, id: 'plan-b' }, '重名计划\n\nB 的正文')
+
+    const updated = await updatePlanCard(project(), { id: 'plan-a', title: '重名计划' })
+
+    // plan-a 的目标路径与 plan-b 的目标路径（计划-2-...）不同：序号与短标识保唯一
+    expect(updated.sourcePath).toBe('plans/计划-1-重名计划-ab12cd34.md')
+    const other = await readPlanCard(project(), 'plan-b')
+    expect(other?.card.body).toBe('重名计划\n\nB 的正文')
+    expect(other?.card.sourcePath).toBe('plans/计划-2-ef56ab78.md')
+  })
+
+  it('目标文件已被外部占用：拒绝改名，原文件与目标都不变', async () => {
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 计划A\n\n正文')
+    // 外部已有一个占用目标路径的文件（无 frontmatter id，扫描不在卡片内但文件存在）
+    await seedPlanFile('plans/计划-1-目标名-ab12cd34.md', {}, '外部文件')
+
+    await expect(updatePlanCard(project(), { id: 'plan-a', title: '目标名' })).rejects.toThrow('目标文件已存在')
+
+    // 原文件未被改动，目标外部文件未被覆盖
+    const unchanged = await readPlanCard(project(), 'plan-a')
+    expect(unchanged?.card.body).toBe('# 计划A\n\n正文')
+    expect(unchanged?.card.sourcePath).toBe('plans/计划-1-ab12cd34.md')
+    expect(await readRaw('plans/计划-1-目标名-ab12cd34.md')).toBe('外部文件\n')
+  })
+
+  it('改名也走内容哈希冲突检测：外部改过则拒绝', async () => {
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 旧标题\n\n正文')
+
+    const content = await readRaw('plans/计划-1-ab12cd34.md')
+    const staleHash = hashContent(content)
+    // 外部修改（改名后 hash 已过时）
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 旧标题\n\n被外部改过的正文')
+
+    await expect(updatePlanCard(project(), { id: 'plan-a', title: '新标题', expectedContentHash: staleHash }))
+      .rejects.toThrow(PlanConflictError)
+
+    const current = await readPlanCard(project(), 'plan-a')
+    expect(current?.card.body).toBe('# 旧标题\n\n被外部改过的正文')
+    expect(current?.card.sourcePath).toBe('plans/计划-1-ab12cd34.md')
+  })
+
+  it('title 与 body 同传：以 body 为准（调用方已组合好正文）', async () => {
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 旧标题\n\n正文')
+
+    const updated = await updatePlanCard(project(), {
+      id: 'plan-a',
+      title: '被忽略的名称',
+      body: '# 组合好的标题\n\n组合好的正文',
+    })
+
+    expect(updated.body).toBe('# 组合好的标题\n\n组合好的正文')
+    expect(derivePlanTitle(updated.body)).toBe('组合好的标题')
+  })
+
+  it('空名称拒绝', async () => {
+    await seedPlanFile('plans/计划-1-ab12cd34.md', META, '# 旧标题\n\n正文')
+
+    await expect(updatePlanCard(project(), { id: 'plan-a', title: '   ' })).rejects.toThrow('计划名不能为空')
   })
 })
 

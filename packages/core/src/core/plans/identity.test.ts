@@ -4,11 +4,14 @@ import {
   createPlanFileName,
   createPlanId,
   createPlanPath,
+  createTitledPlanFileName,
   extractPlanSequence,
+  extractPlanSlug,
   isPlanCardPath,
   isStandardPlanFileName,
   nextOrderInColumn,
   orderAfter,
+  sanitizePlanTitleForFileName,
   sortPlanCards,
 } from './identity'
 import type { PlanCard } from '../../types/plans'
@@ -59,6 +62,58 @@ describe('稳定标识与文件名', () => {
     expect(isPlanCardPath('plans/readme.txt')).toBe(false)
     expect(isPlanCardPath('chapters/第一章.md')).toBe(false)
     expect(isPlanCardPath('plansx/a.md')).toBe(false)
+  })
+})
+
+describe('带计划名的文件名（改名与新建共用规则）', () => {
+  it('sanitizePlanTitleForFileName：中文名保留；非法字符剔除；空白压缩为下划线', () => {
+    expect(sanitizePlanTitleForFileName('第三卷 龙脉觉醒')).toBe('第三卷_龙脉觉醒')
+    expect(sanitizePlanTitleForFileName('a/b\\c:d*e?f"g<h>i|j')).toBe('abcdefghij')
+    // 制表符属控制字符先被剔除；剩余空白压缩为单个下划线
+    expect(sanitizePlanTitleForFileName('  空格\t制表  ')).toBe('空格制表')
+    expect(sanitizePlanTitleForFileName(' 空格 制表 ')).toBe('空格_制表')
+    // 控制字符
+    expect(sanitizePlanTitleForFileName('坏\u0000名\u001f称')).toBe('坏名称')
+  })
+
+  it('sanitizePlanTitleForFileName：空名、纯非法字符、路径段返回 null', () => {
+    expect(sanitizePlanTitleForFileName('')).toBeNull()
+    expect(sanitizePlanTitleForFileName('   ')).toBeNull()
+    expect(sanitizePlanTitleForFileName('///:::')).toBeNull()
+    expect(sanitizePlanTitleForFileName('.')).toBeNull()
+    expect(sanitizePlanTitleForFileName('..')).toBeNull()
+  })
+
+  it('sanitizePlanTitleForFileName：超长名称截断到 60 字符', () => {
+    const long = '超'.repeat(80)
+    const cleaned = sanitizePlanTitleForFileName(long)
+    expect(cleaned).not.toBeNull()
+    expect(cleaned!.length).toBe(60)
+  })
+
+  it('createTitledPlanFileName：保留序号与短标识，名称夹在中间', () => {
+    expect(createTitledPlanFileName(3, '龙脉觉醒', 'ab12cd34')).toBe('计划-3-龙脉觉醒-ab12cd34.md')
+    // 外部手建文件无序号：不编造序号
+    expect(createTitledPlanFileName(null, '龙脉觉醒', 'ab12cd34')).toBe('计划-龙脉觉醒-ab12cd34.md')
+  })
+
+  it('createTitledPlanFileName：名称清理后为空时回退纯短标识形态', () => {
+    expect(createTitledPlanFileName(3, '///', 'ab12cd34')).toBe('计划-3-ab12cd34.md')
+    expect(createTitledPlanFileName(null, ' ', 'ab12cd34')).toBe('计划-ab12cd34.md')
+  })
+
+  it('extractPlanSlug：新旧格式都能取出短标识；非标准文件返回 null', () => {
+    expect(extractPlanSlug('plans/计划-3-龙脉觉醒-ab12cd34.md')).toBe('ab12cd34')
+    expect(extractPlanSlug('plans/计划-12-ab12cd34.md')).toBe('ab12cd34')
+    expect(extractPlanSlug('plans/随便写的.md')).toBeNull()
+  })
+
+  it('同名计划文件名相同（靠序号区分）；同计划改名保留原序号', () => {
+    const a = createTitledPlanFileName(1, '重名计划', 'aaaa1111')
+    const b = createTitledPlanFileName(2, '重名计划', 'bbbb2222')
+    expect(a).toBe('计划-1-重名计划-aaaa1111.md')
+    expect(b).toBe('计划-2-重名计划-bbbb2222.md')
+    expect(a).not.toBe(b)
   })
 })
 

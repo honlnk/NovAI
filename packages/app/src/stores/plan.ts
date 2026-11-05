@@ -39,6 +39,8 @@ export const usePlanStore = defineStore('plan', () => {
   const activeCard = ref<PlanCardView | null>(null)
   /** 详情编辑草稿（textarea 绑定值）；null = 无未保存修改 */
   const draftBody = ref<string | null>(null)
+  /** 详情计划名草稿（输入框绑定值）；null = 无未保存修改 */
+  const draftTitle = ref<string | null>(null)
   /** 保存中（禁用重复提交） */
   const isSaving = ref(false)
   /** 打开的卡片在编辑外被外部修改（AI/外部编辑器）：提示重新读取或保留草稿 */
@@ -84,7 +86,13 @@ export const usePlanStore = defineStore('plan', () => {
       : entries.filter(([status]) => status !== 'on-hold')
   })
 
-  const hasUnsavedChanges = computed(() => draftBody.value !== null && activeCard.value !== null && draftBody.value !== activeCard.value.body)
+  const hasUnsavedChanges = computed(() =>
+    activeCard.value !== null
+    && (
+      (draftBody.value !== null && draftBody.value !== activeCard.value.body)
+      || (draftTitle.value !== null && draftTitle.value.trim() !== activeCard.value.title)
+    ),
+  )
 
   async function loadBoard(projectId: string) {
     isLoading.value = true
@@ -121,6 +129,7 @@ export const usePlanStore = defineStore('plan', () => {
 
       activeCard.value = card
       draftBody.value = null
+      draftTitle.value = null
       selectedCardId.value = card.id
     } catch (error) {
       actionError.value = toMessage(error, '读取计划失败')
@@ -130,6 +139,7 @@ export const usePlanStore = defineStore('plan', () => {
   function closeCard() {
     activeCard.value = null
     draftBody.value = null
+    draftTitle.value = null
     conflictNotice.value = null
     actionError.value = ''
     selectedCardId.value = null
@@ -139,14 +149,27 @@ export const usePlanStore = defineStore('plan', () => {
     draftBody.value = body
   }
 
+  /** 计划名输入（详情头部独立输入框） */
+  function updateDraftTitle(title: string) {
+    draftTitle.value = title
+  }
+
   /**
-   * 保存正文草稿。携带读取时 contentHash：文件被外部改过时服务层抛冲突，
-   * 草稿保留并由 conflictNotice 提示（不覆盖别人，也不丢草稿）。
+   * 保存详情（计划名 + 正文一次提交）。携带读取时 contentHash：文件被外部改过时
+   * 服务层抛冲突，草稿保留并由 conflictNotice 提示（不覆盖别人，也不丢草稿）。
+   * 名称变化时服务层同步重命名文件（计划-<原序号>-<清理后名称>-<原短标识>.md），
+   * 视图层对比保存前后 sourcePath 决定是否刷新文件树。返回是否保存成功。
    */
   async function saveDraft(projectId: string) {
     const card = activeCard.value
 
-    if (!card || draftBody.value === null || isSaving.value) {
+    if (!card || isSaving.value) {
+      return false
+    }
+
+    const bodyChanged = draftBody.value !== null && draftBody.value !== card.body
+    const titleChanged = draftTitle.value !== null && draftTitle.value.trim() !== card.title
+    if (!bodyChanged && !titleChanged) {
       return false
     }
 
@@ -154,14 +177,18 @@ export const usePlanStore = defineStore('plan', () => {
     actionError.value = ''
 
     try {
+      const title = draftTitle.value?.trim() ?? ''
       const saved = await updatePlan(projectId, {
         id: card.id,
-        body: draftBody.value,
+        ...(bodyChanged ? { body: draftBody.value as string } : {}),
+        // 改回原值不重发；清空名称则交给服务层拒绝（计划名不能为空）
+        ...(titleChanged ? { title } : {}),
         expectedContentHash: card.contentHash,
       })
 
       activeCard.value = saved
       draftBody.value = null
+      draftTitle.value = null
       await refreshBoard(projectId)
       return true
     } catch (error) {
@@ -311,6 +338,7 @@ export const usePlanStore = defineStore('plan', () => {
     board.value = null
     activeCard.value = null
     draftBody.value = null
+    draftTitle.value = null
     conflictNotice.value = null
     actionError.value = ''
     errorMessage.value = ''
@@ -328,6 +356,7 @@ export const usePlanStore = defineStore('plan', () => {
     errorMessage,
     activeCard,
     draftBody,
+    draftTitle,
     isSaving,
     conflictNotice,
     actionError,
@@ -346,6 +375,7 @@ export const usePlanStore = defineStore('plan', () => {
     openCard,
     closeCard,
     updateDraft,
+    updateDraftTitle,
     saveDraft,
     reloadFromConflict,
     keepDraft,

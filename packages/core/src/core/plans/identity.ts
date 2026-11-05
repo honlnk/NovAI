@@ -32,11 +32,51 @@ export function createPlanPath(sequence: number, content: string): string {
   return `${PLANS_DIRECTORY}/${createPlanFileName(sequence, content)}`
 }
 
+/**
+ * 计划名清理为文件名安全片段：去掉首尾空白、路径分隔符、路径段（. ..）、
+ * 控制字符与跨平台文件系统非法字符，压缩连续空白为下划线；清理后为空返回 null。
+ */
+export function sanitizePlanTitleForFileName(title: string): string | null {
+  const cleaned = title
+    .trim()
+    // 控制字符
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    // 路径分隔符与 Windows 保留字符（等宽冒号之外的形态一并处理）
+    .replace(/[\\/:*?"<>|]/g, '')
+    // 连续空白压缩为单个下划线
+    .replace(/\s+/g, '_')
+
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    return null
+  }
+
+  return cleaned.slice(0, 60)
+}
+
+/**
+ * 组装带计划名的文件名：计划-<序号>-<清理后计划名>-<短标识>.md。
+ * 计划名清理后为空时回退到纯短标识形态（旧格式），保证总有合法文件名。
+ */
+export function createTitledPlanFileName(sequence: number | null, title: string, slug: string): string {
+  const safeTitle = sanitizePlanTitleForFileName(title)
+  const prefix = sequence === null ? '计划' : `计划-${sequence}`
+  return safeTitle ? `${prefix}-${safeTitle}-${slug}.md` : `${prefix}-${slug}.md`
+}
+
 /** 从文件名提取创建时序号；提取不出（外部手建文件）返回 null。 */
 export function extractPlanSequence(sourcePath: string): number | null {
   const name = sourcePath.split('/').pop() ?? ''
   const match = /^计划-(\d+)-/.exec(name)
   return match ? Number(match[1]) : null
+}
+
+/** 从文件名提取创建时的内容短标识（兼容带中文计划名的新格式）；提取不出返回 null。 */
+export function extractPlanSlug(sourcePath: string): string | null {
+  const name = sourcePath.split('/').pop() ?? ''
+  // 形态1（旧）：计划-<序号>-<短标识>.md；形态2（新）：计划-<序号>-<计划名>-<短标识>.md。
+  // 短标识取末段 [0-9a-z]+（(?:.*-)? 惰性回溯到最后一个连字符之后）。
+  const match = /^计划-(?:\d+-)?(?:.*-)?([0-9a-z]+)\.md$/.exec(name)
+  return match ? match[1] : null
 }
 
 const PLAN_FILE_PATTERN = /^计划-(\d+)-[0-9a-z]+\.md$/

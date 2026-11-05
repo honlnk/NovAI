@@ -108,6 +108,8 @@ export async function updatePlan(
   input: {
     id: string
     body?: string
+    /** 新计划名（映射正文首个非空行；变化时文件名同步重命名）。与 body 同传以 body 为准。 */
+    title?: string
     status?: PlanStatusView
     afterId?: string | null
     expectedContentHash?: string

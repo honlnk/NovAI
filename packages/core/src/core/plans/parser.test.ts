@@ -4,6 +4,7 @@ import {
   derivePlanSummary,
   derivePlanTitle,
   parsePlanFile,
+  replacePlanTitleLine,
   serializePlanCard,
 } from './parser'
 import type { PlanCard } from '../../types/plans'
@@ -149,5 +150,35 @@ describe('derivePlanSummary', () => {
 
   it('短正文原样返回首行', () => {
     expect(derivePlanSummary('# 标题\n正文第二行')).toBe('# 标题')
+  })
+})
+
+describe('replacePlanTitleLine（改名时保持单一名称事实来源）', () => {
+  it('Markdown 标题行：保留 # 层级，只替换标题文本', () => {
+    expect(replacePlanTitleLine('## 二级标题\n\n正文', '新名字')).toBe('## 新名字\n\n正文')
+    expect(replacePlanTitleLine('###### 六级标题\n正文', '新名字')).toBe('###### 新名字\n正文')
+  })
+
+  it('普通首行：直接替换为纯文本名称', () => {
+    expect(replacePlanTitleLine('普通标题\n\n正文', '新名字')).toBe('新名字\n\n正文')
+  })
+
+  it('前置空行：只替换首个非空行，空行保留', () => {
+    expect(replacePlanTitleLine('\n\n  \n旧标题\n\n正文', '新名字')).toBe('\n\n  \n新名字\n\n正文')
+  })
+
+  it('多行正文其余部分原样保留', () => {
+    const body = '# 旧标题\n\n第一段。\n\n第二段。\n- 列表项'
+    expect(replacePlanTitleLine(body, '新标题')).toBe('# 新标题\n\n第一段。\n\n第二段。\n- 列表项')
+  })
+
+  it('空正文：名称成为全部内容', () => {
+    expect(replacePlanTitleLine('', '唯一名称')).toBe('唯一名称')
+    expect(replacePlanTitleLine('  \n\n', '唯一名称')).toBe('唯一名称')
+  })
+
+  it('替换后派生标题等于新名称（往返一致）', () => {
+    const renamed = replacePlanTitleLine('# 旧\n\n正文', '新名字')
+    expect(derivePlanTitle(renamed)).toBe('新名字')
   })
 })

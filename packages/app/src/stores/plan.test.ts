@@ -227,6 +227,117 @@ describe('plan store 正文编辑与保存', () => {
   })
 })
 
+describe('plan store 计划名编辑与改名保存', () => {
+  it('updateDraftTitle 单独改计划名：hasUnsavedChanges 置位；保存携带 title 与 hash', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '# 原始名称\n\n正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    expect(store.hasUnsavedChanges).toBe(false)
+
+    store.updateDraftTitle('新名称')
+    expect(store.hasUnsavedChanges).toBe(true)
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '# 新名称\n\n正文', {
+      title: '新名称',
+      sourcePath: 'plans/计划-1-新名称-ab12cd34.md',
+    }))
+    const renamed = await store.saveDraft(PROJECT)
+
+    expect(renamed).toBe(true)
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, {
+      id: 'a',
+      title: '新名称',
+      expectedContentHash: 'hash-a',
+    })
+    // 名称与正文两个草稿一次保存后全部清除
+    expect(store.draftTitle).toBeNull()
+    expect(store.draftBody).toBeNull()
+    expect(store.hasUnsavedChanges).toBe(false)
+    expect(store.activeCard?.title).toBe('新名称')
+    expect(store.activeCard?.sourcePath).toBe('plans/计划-1-新名称-ab12cd34.md')
+  })
+
+  it('saveDraft 成功返回 true；sourcePath 变化由视图层对比检测（文件树刷新）', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '# 原始名称\n\n正文', { sourcePath: 'plans/计划-1-原slug.md' }))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    // 只改正文（路径不变）
+    store.updateDraft('只改正文')
+    mockedUpdatePlan.mockResolvedValue(detail('a', '只改正文', { sourcePath: 'plans/计划-1-原slug.md' }))
+    const samePath = await store.saveDraft(PROJECT)
+    expect(samePath).toBe(true)
+
+    // 再改名（路径变化）：saveDraft 仍只返回成功与否
+    store.updateDraftTitle('改名了')
+    mockedUpdatePlan.mockResolvedValue(detail('a', '# 改名了', {
+      title: '改名了',
+      sourcePath: 'plans/计划-1-改名了-原slug.md',
+    }))
+    const renamed = await store.saveDraft(PROJECT)
+    expect(renamed).toBe(true)
+    expect(store.activeCard?.sourcePath).toBe('plans/计划-1-改名了-原slug.md')
+  })
+
+  it('计划名与正文同改：body + title 一起提交（body 为准，服务层负责组合）', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '# 旧名称\n\n旧正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    store.updateDraftTitle('新名称')
+    store.updateDraft('新名称\n\n新正文')
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '新名称\n\n新正文', { title: '新名称' }))
+    const ok = await store.saveDraft(PROJECT)
+
+    expect(ok).toBe(true)
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, {
+      id: 'a',
+      body: '新名称\n\n新正文',
+      title: '新名称',
+      expectedContentHash: 'hash-a',
+    })
+  })
+
+  it('改名失败：标题草稿与错误保留', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '# 原始名称\n\n正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    store.updateDraftTitle('占用名')
+    mockedUpdatePlan.mockRejectedValue(new Error('目标文件已存在：plans/计划-1-占用名-x.md；请换一个计划名'))
+
+    const ok = await store.saveDraft(PROJECT)
+
+    expect(ok).toBe(false)
+    expect(store.draftTitle).toBe('占用名')
+    expect(store.hasUnsavedChanges).toBe(true)
+    expect(store.actionError).toContain('目标文件已存在')
+    expect(store.conflictNotice).toBeNull()
+  })
+
+  it('openCard / closeCard / reset 清除计划名草稿', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '# 名称A\n\n正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraftTitle('改名草稿')
+
+    store.closeCard()
+    expect(store.draftTitle).toBeNull()
+
+    await store.openCard(PROJECT, 'a')
+    store.updateDraftTitle('改名草稿')
+    store.reset()
+    expect(store.draftTitle).toBeNull()
+  })
+})
+
 describe('plan store 拖拽与状态移动', () => {
   it('moveCard：传状态与 afterId（拖到某卡之后），失败后刷新看板恢复真实状态', async () => {
     const store = usePlanStore()

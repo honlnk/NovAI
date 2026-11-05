@@ -60,10 +60,7 @@ export function serializePlanCard(card: Omit<PlanCard, 'sourcePath'>): string {
 
 /** 展示标题：正文首个非空行，去掉行首 Markdown 标题标记（# 与后续空格）。 */
 export function derivePlanTitle(body: string): string {
-  const firstLine = body
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.length > 0)
+  const firstLine = firstNonEmptyLine(body)
 
   if (!firstLine) {
     return ''
@@ -72,12 +69,30 @@ export function derivePlanTitle(body: string): string {
   return firstLine.replace(/^#{1,6}\s*/, '')
 }
 
+/**
+ * 替换计划名对应的正文行：首个非空行。原行是 Markdown 标题时保留 `#` 层级，
+ * 只替换标题文本；普通行只替换文本；首个非空行之后的正文原样保留。
+ * 用于改名时保持「名称 = 正文首个非空行」的单一事实来源。
+ */
+export function replacePlanTitleLine(body: string, title: string): string {
+  const lines = body.split('\n')
+  const index = lines.findIndex((line) => line.trim().length > 0)
+
+  if (index === -1) {
+    // 无正文（不该发生——正文非空由上游校验）：标题就是全部内容
+    return title
+  }
+
+  const headingMatch = /^(#{1,6})\s*(.*)$/.exec(lines[index]!.trim())
+  const replaced = headingMatch ? `${headingMatch[1]} ${title}` : title
+  lines[index] = replaced
+
+  return lines.join('\n')
+}
+
 /** 正文摘要：首个非空行（不剥标题标记），超出上限截断加省略号。 */
 export function derivePlanSummary(body: string, maxLength = 80): string {
-  const firstLine = body
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.length > 0)
+  const firstLine = firstNonEmptyLine(body)
 
   if (!firstLine) {
     return ''
@@ -115,6 +130,13 @@ function splitFrontmatter(content: string) {
     frontmatter: normalized.slice(4, endIndex),
     body: normalized.slice(endIndex + 5),
   }
+}
+
+function firstNonEmptyLine(body: string): string {
+  return body
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? ''
 }
 
 function parseFrontmatterLines(raw: string): Record<string, string> {

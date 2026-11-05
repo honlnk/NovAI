@@ -347,9 +347,14 @@ async function handlePlanSaveDraft() {
   if (!projectStore.currentProject) {
     return
   }
+  const previousPath = planStore.activeCard?.sourcePath
   const ok = await planStore.saveDraft(projectId.value)
   if (ok) {
     toast.success('已保存')
+    // 名称变化会引起文件重命名：刷新文件树让侧栏与磁盘一致
+    if (planStore.activeCard && planStore.activeCard.sourcePath !== previousPath) {
+      await projectStore.refreshTree()
+    }
   } else if (!planStore.conflictNotice) {
     toast.error(planStore.actionError || '保存失败')
   }
@@ -443,6 +448,7 @@ function handleGoToSettings() {
         :show-on-hold="planStore.showOnHold"
         :active-card="planStore.activeCard"
         :draft-body="planStore.draftBody"
+        :draft-title="planStore.draftTitle"
         :is-saving="planStore.isSaving"
         :conflict-notice="planStore.conflictNotice"
         :action-error="planStore.actionError"
@@ -460,6 +466,7 @@ function handleGoToSettings() {
         @open-card="(id) => { planStore.closeCreate(); void planStore.openCard(projectId, id) }"
         @close-card="planStore.closeCard()"
         @update-draft="planStore.updateDraft"
+        @update-draft-title="planStore.updateDraftTitle"
         @save-draft="handlePlanSaveDraft"
         @reload-from-conflict="planStore.reloadFromConflict(projectId)"
         @keep-draft="planStore.keepDraft()"
