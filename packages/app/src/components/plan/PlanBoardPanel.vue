@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
+import { resetDetailMode, shouldReturnToPreviewAfterSave, type DetailMode } from './detail-mode'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 /**
@@ -70,17 +71,24 @@ const emit = defineEmits<{
 }>()
 
 /** 本地视图状态（随卡片切换重置；草稿真值在 store） */
-const detailMode = ref<'preview' | 'edit'>('preview')
+const detailMode = ref<DetailMode>('preview')
 const isDeleteConfirmOpen = ref<string | null>(null)
 
 watch(
   () => props.activeCard?.id,
   () => {
     // 切换卡片回到预览，并清掉上一张卡片的删除确认残留
-    detailMode.value = 'preview'
+    detailMode.value = resetDetailMode()
     isDeleteConfirmOpen.value = null
   },
 )
+
+// 保存成功回到预览态（§详情预览 5）；冲突 / 失败路径未保存修改仍为 true，不误触发
+watch([() => props.isSaving, () => props.hasUnsavedChanges], ([saving, unsaved], [prevSaving]) => {
+  if (shouldReturnToPreviewAfterSave(prevSaving, saving, unsaved)) {
+    detailMode.value = 'preview'
+  }
+})
 
 const columns = computed(() => {
   if (!props.board) {
