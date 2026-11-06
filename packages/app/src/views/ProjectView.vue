@@ -520,9 +520,10 @@ function handleGoToSettings() {
         @resize="contentPanelWidth = $event"
         @reset-width="contentPanelWidth = CONTENT_PANEL_DEFAULT"
       >
-        <!-- 普通文件 -->
+        <!-- 普通文件：v-show 保挂载——文件编辑草稿是组件内状态，跨分类切换不得丢失（D12 §2.6-4）；
+             kind 互斥由 workspacePanel 规则保证，计划两侧各自 v-if -->
         <FilePanelBody
-          v-if="workspacePanel.kind === 'file'"
+          v-show="workspacePanel.kind === 'file'"
           :file="projectStore.activeFile"
           :notice="panelNotice"
           @close="handleCloseContentPanel"
@@ -531,7 +532,7 @@ function handleGoToSettings() {
         />
         <!-- 计划详情 -->
         <PlanDetailPanel
-          v-else-if="workspacePanel.kind === 'plan-detail' && planStore.activeCard"
+          v-if="workspacePanel.kind === 'plan-detail' && planStore.activeCard"
           :active-card="planStore.activeCard"
           :draft-body="planStore.draftBody"
           :draft-title="planStore.draftTitle"
@@ -552,7 +553,7 @@ function handleGoToSettings() {
         />
         <!-- 新建计划 -->
         <PlanCreatePanel
-          v-else-if="workspacePanel.kind === 'plan-create'"
+          v-if="workspacePanel.kind === 'plan-create'"
           :new-card-title="planStore.newCardTitle"
           :new-card-body="planStore.newCardBody"
           :is-creating="planStore.isCreating"
