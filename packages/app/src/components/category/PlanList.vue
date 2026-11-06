@@ -96,7 +96,8 @@ function statusShortLabel(status: PlanStatusView): string {
         新建计划
       </button>
 
-      <p v-if="isLoading" class="px-2 py-2 text-xs text-gray-600">正在读取计划…</p>
+      <!-- 首载显示读取提示；已有列表时刷新保留列表（标题行图标转圈即可，不整块替换） -->
+      <p v-if="isLoading && cards.length === 0" class="px-2 py-2 text-xs text-gray-600">正在读取计划…</p>
       <p v-else-if="cards.length === 0" class="px-2 py-2 text-xs text-gray-600">
         还没有计划。新建一条，或在看板里随时记录灵感与伏笔。
       </p>

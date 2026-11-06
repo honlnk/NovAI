@@ -351,12 +351,17 @@ function resolvePlanPathFromChange(change: ChangedFileView): string | null {
   return change.path.startsWith('plans/') ? change.path : null
 }
 
+/** 计划看板重试入口（首载失败横幅 / 后台刷新失败保留旧看板时的重试） */
+async function handlePlanRetryLoad() {
+  await handlePlanRefresh()
+}
+
 /** 左侧计划标题行的刷新入口（布局统一计划 D7）：忙碌态由 isLoading 承载并防重复 */
 async function handlePlanRefresh() {
   if (!projectStore.currentProject) {
     return
   }
-  await planStore.refreshBoard(projectId.value)
+  await planStore.refreshBoard(projectId.value, { source: 'manual' })
 }
 
 /** 新建面板提交（看板右上 / 空状态入口共用）：失败保留输入，成功由 store 转入详情预览 */
@@ -499,6 +504,8 @@ function handleGoToSettings() {
         :board="planStore.board"
         :is-loading="planStore.isLoading"
         :error-message="planStore.errorMessage"
+        :board-sync-source="planStore.boardSyncSource"
+        :manual-refreshed-count="planStore.manualRefreshedCount"
         :selected-card-id="planStore.selectedCardId"
         :show-on-hold="planStore.showOnHold"
         :is-sidebar-open="isCategoryOpen"
@@ -506,6 +513,7 @@ function handleGoToSettings() {
         @open-create="handleOpenPlanCreate"
         @open-card="handleOpenPlanCard"
         @move-card="handlePlanMove"
+        @retry-load="handlePlanRetryLoad"
         @toggle-on-hold="planStore.showOnHold = !planStore.showOnHold"
         @toggle-sidebar="toggleSidebar"
         @toggle-mobile-sidebar="toggleMobileSidebar"
