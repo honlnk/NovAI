@@ -321,7 +321,7 @@ describe('plan store 计划名编辑与改名保存', () => {
     expect(store.conflictNotice).toBeNull()
   })
 
-  it('openCard / closeCard / reset 清除计划名草稿', async () => {
+  it('closeCard 彻底清理（删除路径）：草稿与会话一并清除', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockResolvedValue(detail('a', '# 名称A\n\n正文'))
     mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
@@ -330,11 +330,202 @@ describe('plan store 计划名编辑与改名保存', () => {
 
     store.closeCard()
     expect(store.draftTitle).toBeNull()
+    expect(store.activeCard).toBeNull()
+    expect(store.editSessions.size).toBe(0)
 
-    await store.openCard(PROJECT, 'a')
-    store.updateDraftTitle('改名草稿')
     store.reset()
     expect(store.draftTitle).toBeNull()
+    expect(store.editSessions.size).toBe(0)
+  })
+})
+
+describe('plan store 卡片级编辑会话（布局统一计划 §5）', () => {
+  it('切卡保留正文草稿与编辑模式，重开同一卡片恢复', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([
+      summary('a', 'inbox', 0),
+      summary('b', 'planned', 0),
+    ]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 的未保存草稿')
+    store.setDetailMode('edit')
+
+    // 切到卡片 b：a 的草稿进入会话缓存，当前草稿让位给 b
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.draftBody).toBeNull()
+    expect(store.hasUnsavedChanges).toBe(false)
+
+    // 重开 a：草稿与编辑模式恢复，未保存标记仍在
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    expect(store.draftBody).toBe('A 的未保存草稿')
+    expect(store.detailMode).toBe('edit')
+    expect(store.hasUnsavedChanges).toBe(true)
+  })
+
+  it('切卡保留计划名草稿，重开恢复', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([
+      summary('a', 'inbox', 0),
+      summary('b', 'planned', 0),
+    ]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '# 名称A\n\n正文'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraftTitle('改名草稿')
+
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+    expect(store.draftTitle).toBeNull()
+
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '# 名称A\n\n正文'))
+    await store.openCard(PROJECT, 'a')
+    expect(store.draftTitle).toBe('改名草稿')
+    expect(store.hasUnsavedChanges).toBe(true)
+  })
+
+  it('保存成功清除该卡片的会话：重开是已保存的新内容', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([
+      summary('a', 'inbox', 0),
+      summary('b', 'planned', 0),
+    ]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '原始正文'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('保存掉的草稿')
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '保存掉的草稿'))
+    await store.saveDraft(PROJECT)
+    expect(store.editSessions.size).toBe(0)
+
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '保存掉的草稿'))
+    await store.openCard(PROJECT, 'a')
+    expect(store.draftBody).toBeNull()
+    expect(store.hasUnsavedChanges).toBe(false)
+  })
+
+  it('删除卡片清除对应编辑会话', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([
+      summary('a', 'inbox', 0),
+      summary('b', 'planned', 0),
+    ]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 草稿')
+
+    // 删除另一张带草稿的卡片前先给它留下会话：打开 b 写草稿再切走
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+    store.updateDraft('B 草稿')
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    expect(store.editSessions.get('b')?.body).toBe('B 草稿')
+
+    mockedDeletePlan.mockResolvedValue({
+      card: detail('b', 'B 正文'),
+      trashPath: '.novel/trash/x/plans/计划-1-b.md',
+    })
+    await store.removeCard(PROJECT, 'b')
+
+    expect(store.editSessions.has('b')).toBe(false)
+    // 当前卡片不受影响
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.draftBody).toBe('A 草稿')
+  })
+
+  it('开新建不清当前卡片草稿；正在新建时点卡片切详情，新建草稿保留', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([
+      summary('a', 'inbox', 0),
+      summary('b', 'planned', 0),
+    ]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 草稿')
+
+    store.openCreate()
+    expect(store.isCreateOpen).toBe(true)
+    // 当前卡片与草稿保留（取消新建可回到详情）
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.draftBody).toBe('A 草稿')
+
+    store.updateCreateDraft('新建草稿名', '新建草稿正文')
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+    // 切到详情：新建面板让位但输入保留（§2.7）
+    expect(store.isCreateOpen).toBe(false)
+    expect(store.newCardTitle).toBe('新建草稿名')
+    expect(store.newCardBody).toBe('新建草稿正文')
+    expect(store.draftBody).toBeNull()
+  })
+
+  it('重开带草稿卡片且文件已被外部修改：不覆盖草稿，转冲突提示', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([
+      summary('a', 'inbox', 0),
+      summary('b', 'planned', 0),
+    ]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '原始正文'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('我的草稿')
+    store.setDetailMode('edit')
+
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+
+    // 期间文件被外部修改（新 body + 新 hash），重开 a
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '外部新内容', { contentHash: 'hash-a2' }))
+    await store.openCard(PROJECT, 'a')
+
+    expect(store.conflictNotice?.currentCard.body).toBe('外部新内容')
+    // 草稿与编辑模式保留；hash 保持草稿基线（保存仍会命中冲突校验）
+    expect(store.draftBody).toBe('我的草稿')
+    expect(store.detailMode).toBe('edit')
+    expect(store.activeCard?.contentHash).toBe('hash-a')
+
+    // 保留草稿继续编辑：保存仍冲突（旧 hash），草稿不丢
+    store.keepDraft()
+    mockedUpdatePlan.mockRejectedValue(new PlanConflictError('冲突', {
+      id: 'a', status: 'inbox', order: 0, createdAt: '', updatedAt: '',
+      body: '外部新内容', sourcePath: 'plans/计划-1-a.md',
+    }))
+    const saved = await store.saveDraft(PROJECT)
+    expect(saved).toBe(false)
+    expect(store.draftBody).toBe('我的草稿')
+    expect(store.conflictNotice?.currentCard.body).toBe('外部新内容')
+
+    // 重新读取：丢弃草稿（含会话），取文件当前内容
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '外部新内容', { contentHash: 'hash-a2' }))
+    await store.reloadFromConflict(PROJECT)
+    expect(store.draftBody).toBeNull()
+    expect(store.detailMode).toBe('preview')
+    expect(store.activeCard?.body).toBe('外部新内容')
+    expect(store.conflictNotice).toBeNull()
+  })
+
+  it('外部修改到达时无草稿的重开不受会话影响（不误报冲突）', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '旧内容'))
+    await store.openCard(PROJECT, 'a')
+
+    // 用户进入编辑态但没改内容就切走再切回（会话 mode=edit、草稿为 null）
+    store.setDetailMode('edit')
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '旧内容'))
+    await store.openCard(PROJECT, 'a')
+    expect(store.detailMode).toBe('edit')
+    expect(store.conflictNotice).toBeNull()
+
+    // 外部修改到达（ProjectView watch 调 openCard）：正常重读，不误报冲突
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '外部新内容', { contentHash: 'hash-x' }))
+    await store.openCard(PROJECT, 'a')
+    expect(store.activeCard?.body).toBe('外部新内容')
+    expect(store.conflictNotice).toBeNull()
   })
 })
 
@@ -455,7 +646,7 @@ describe('plan store 新建与删除', () => {
 })
 
 describe('plan store 新建抽屉（三入口共用）', () => {
-  it('openCreate 打开抽屉并关闭已有详情；closeCreate(discard) 清理输入', async () => {
+  it('openCreate 打开新建面板（不清当前详情）；closeCreate(discard) 清理输入', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockResolvedValue(detail('a', '正文'))
     mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
@@ -464,7 +655,8 @@ describe('plan store 新建抽屉（三入口共用）', () => {
     store.openCreate()
 
     expect(store.isCreateOpen).toBe(true)
-    expect(store.activeCard).toBeNull()
+    // 布局统一计划 §2.7：新建与详情互斥展示但不互相清空，取消新建可回到详情
+    expect(store.activeCard?.id).toBe('a')
 
     store.updateCreateDraft('新计划', '正文内容')
     expect(store.hasCreateDraft).toBe(true)

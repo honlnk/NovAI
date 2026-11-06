@@ -22,6 +22,8 @@ defineProps<{
   planCards: PlanCardSummaryView[]
   /** 计划板读取中 */
   isPlanLoading: boolean
+  /** 当前打开详情的计划卡片 id（侧栏最近计划选中态与详情一致） */
+  selectedPlanCardId?: string | null
   /** 有待回答提问卡的会话 id 集（会话列表「待回答」徽标；提问按会话路由） */
   pendingQuestionIds?: Set<string>
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
@@ -40,8 +42,8 @@ const emit = defineEmits<{
   deleteSession: [sessionId: string]
   /** 打开主内容区计划看板 */
   openPlanBoard: []
-  /** 新建计划（在主内容区看板新建输入） */
-  createPlan: []
+  /** 刷新计划（左侧标题行入口，布局统一计划 D7） */
+  refreshPlan: []
   /** 打开某张计划卡片详情 */
   openPlanCard: [id: string]
 }>()
@@ -103,8 +105,9 @@ const emit = defineEmits<{
       v-else-if="activeCategory === 'plan'"
       :cards="planCards"
       :is-loading="isPlanLoading"
+      :selected-card-id="selectedPlanCardId"
       @open-board="emit('openPlanBoard')"
-      @create="emit('createPlan')"
+      @refresh="emit('refreshPlan')"
       @open-card="emit('openPlanCard', $event)"
     />
   </aside>

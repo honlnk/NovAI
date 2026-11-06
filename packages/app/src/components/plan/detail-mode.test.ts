@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { resetDetailMode, shouldReturnToPreviewAfterSave } from './detail-mode'
+import { shouldReturnToPreviewAfterSave } from './detail-mode'
 
 describe('详情视图状态机', () => {
-  it('卡片切换回到预览', () => {
-    expect(resetDetailMode()).toBe('preview')
-  })
-
   it('保存成功（保存中结束且未保存修改清零）回到预览', () => {
     expect(shouldReturnToPreviewAfterSave(true, false, false)).toBe(true)
   })

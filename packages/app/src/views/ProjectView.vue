@@ -10,8 +10,11 @@ import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
+import FilePanelBody from '../components/layout/FilePanelBody.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import PlanBoardPanel from '../components/plan/PlanBoardPanel.vue'
+import PlanDetailPanel from '../components/plan/PlanDetailPanel.vue'
+import PlanCreatePanel from '../components/plan/PlanCreatePanel.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
@@ -19,6 +22,7 @@ import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
 import type { ChangedFileView, PlanStatusView } from '@novai/core/services/types'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
+import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,7 +36,10 @@ const projectId = computed(() => route.params.id as string)
 const activeCategory = ref<Category>('chapter')
 const isCategoryOpen = ref(true)
 const isMobileCategoryOpen = ref(false)
+/** 普通文件面板展开偏好（跨分类保留；恢复规则见 workspace-panel） */
 const isContentPanelOpen = ref(false)
+/** 计划面板（详情/新建）展开偏好（跨分类保留；进入计划默认收起，点击卡片或新建后展开） */
+const isPlanPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
 const isRagOpen = ref(false)
@@ -125,7 +132,7 @@ watch(
 )
 
 // AI 改动命中当前打开的文件时：重读新内容（预览/原始模式即时更新，编辑模式草稿是
-// ContentPanel 本地副本不受影响）；删除命中则清空面板——快照再留着就是幽灵文件
+// FilePanelBody 本地副本不受影响）；删除命中则清空面板——快照再留着就是幽灵文件
 // （无删除标记，编辑保存还会复活它），清空后由空态提示回收站去向
 watch(
   () => chatStore.lastFileChange,
@@ -198,7 +205,7 @@ async function handleSelectFile(path: string) {
 
 /**
  * 内容面板编辑模式保存：写盘后由 store 更新 activeFile（同步最新 updatedAt），
- * ContentPanel 侧的草稿会因为 watch viewMode 不再触发而保持，但 isDirty 会
+ * FilePanelBody 侧的草稿会因为 watch viewMode 不再触发而保持，但 isDirty 会
  * 因 file.content 更新而变 false，「未保存」标记自动消失。
  */
 async function handleSaveFile(path: string, content: string) {
@@ -228,7 +235,7 @@ async function handleChangeOutline(path: string | null) {
   }
 }
 
-// ===== 创作计划板（计划分类：看板占据主内容区，替换对话面板） =====
+// ===== 创作计划板（布局统一计划：看板常驻中央；详情与新建共用右侧内容面板） =====
 
 /** 计划分类侧栏用的卡片摘要（按更新时间倒序取最近） */
 const planRecentCards = computed(() => {
@@ -240,17 +247,50 @@ const planRecentCards = computed(() => {
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
 })
 
-/** 进入计划分类时加载看板；切回其他分类恢复原对话与文件面板状态（面板状态都在本组件 ref，天然保留） */
+/** 进入计划分类时加载看板；切回其他分类恢复原对话与文件面板状态（面板偏好都在本组件 ref，天然保留） */
 watch(activeCategory, async (category) => {
   if (category === 'plan' && projectStore.currentProject) {
     await planStore.loadBoard(projectId.value)
   }
 })
 
-/** 切换/关闭项目时清理上一个项目的计划板状态 */
+/** 切换/关闭项目时清理上一个项目的计划板状态（含编辑会话）与面板展开偏好 */
 watch(() => projectStore.currentProject?.id, () => {
   planStore.reset()
+  isPlanPanelOpen.value = false
 })
+
+/** 右侧面板当前应展示的内容与可见性（文件 / 计划详情 / 新建互斥，规则见 workspace-panel） */
+const workspacePanel = computed(() => resolveWorkspacePanel({
+  category: activeCategory.value,
+  isFilePanelOpen: isContentPanelOpen.value,
+  hasFileContent: projectStore.activeFile !== null || panelNotice.value !== null,
+  isPlanPanelOpen: isPlanPanelOpen.value,
+  isCreateOpen: planStore.isCreateOpen,
+  hasActiveCard: planStore.activeCard !== null,
+}))
+
+/** 面板关闭只影响可见性（§2.8）：按当前内容类型收敛对应分类的展开偏好，不清计划与草稿 */
+function handleCloseContentPanel() {
+  const target = panelCloseTarget(workspacePanel.value.kind)
+  if (target === 'file') {
+    isContentPanelOpen.value = false
+  } else if (target === 'plan') {
+    isPlanPanelOpen.value = false
+  }
+}
+
+/** 打开计划详情（看板卡片 / 侧栏最近计划 / 已搁置卡片共用同一入口）：面板随点击展开 */
+function handleOpenPlanCard(id: string) {
+  isPlanPanelOpen.value = true
+  void planStore.openCard(projectId.value, id)
+}
+
+/** 打开新建面板（看板右上 / 空状态共用）：与详情互斥切换，两侧草稿各自保留 */
+function handleOpenPlanCreate() {
+  isPlanPanelOpen.value = true
+  planStore.openCreate()
+}
 
 /** AI 或外部写入计划文件后：看板可见时自动刷新（文件变更账本事件驱动） */
 watch(
@@ -267,7 +307,7 @@ watch(
   },
 )
 
-/** 详情打开且不在编辑时，外部修改到达：重新读取最新内容（不覆盖用户草稿） */
+/** 详情打开、不在编辑且不在新建时，外部修改到达：重新读取最新内容（不覆盖用户草稿） */
 watch(
   () => chatStore.lastFileChange?.change,
   async (change) => {
@@ -276,6 +316,7 @@ watch(
       || !change
       || !planStore.activeCard
       || planStore.hasUnsavedChanges
+      || planStore.isCreateOpen
     ) {
       return
     }
@@ -293,19 +334,15 @@ function resolvePlanPathFromChange(change: ChangedFileView): string | null {
   return change.path.startsWith('plans/') ? change.path : null
 }
 
-async function handlePlanCreate(body: string) {
+/** 左侧计划标题行的刷新入口（布局统一计划 D7）：忙碌态由 isLoading 承载并防重复 */
+async function handlePlanRefresh() {
   if (!projectStore.currentProject) {
     return
   }
-  const card = await planStore.createCard(projectId.value, body)
-  if (card) {
-    toast.success('已创建计划')
-  } else {
-    toast.error(planStore.actionError || '新建计划失败')
-  }
+  await planStore.refreshBoard(projectId.value)
 }
 
-/** 新建抽屉提交（三个入口共用）：失败保留输入，成功由 store 转入详情预览 */
+/** 新建面板提交（看板右上 / 空状态入口共用）：失败保留输入，成功由 store 转入详情预览 */
 async function handlePlanSubmitCreate() {
   if (!projectStore.currentProject) {
     return
@@ -314,7 +351,7 @@ async function handlePlanSubmitCreate() {
   if (card) {
     toast.success('已创建计划')
   } else if (!planStore.isCreateOpen) {
-    // 抽屉已被关闭（如离开保护流程中的异常路径），不再重复报错
+    // 面板已被关闭（异常路径），不再重复报错
     return
   } else {
     toast.error(planStore.actionError || '新建计划失败')
@@ -422,6 +459,7 @@ function handleGoToSettings() {
         :pending-confirmation-ids="chatStore.sessionsWithPendingConfirmations"
         :plan-cards="planRecentCards"
         :is-plan-loading="planStore.isLoading"
+        :selected-plan-card-id="planStore.selectedCardId"
         :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
@@ -433,45 +471,21 @@ function handleGoToSettings() {
         @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
         @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
         @open-plan-board="selectCategory('plan')"
-        @create-plan="() => { selectCategory('plan'); planStore.openCreate() }"
-        @open-plan-card="(id) => { selectCategory('plan'); void planStore.openCard(projectId, id) }"
+        @refresh-plan="handlePlanRefresh"
+        @open-plan-card="(id) => { selectCategory('plan'); handleOpenPlanCard(id) }"
       />
 
-      <!-- 中间主内容区：计划分类显示看板（替换对话面板），其余分类为对话 -->
+      <!-- 中间主内容区：计划分类显示看板（始终保留），其余分类为对话 -->
       <PlanBoardPanel
         v-if="activeCategory === 'plan'"
-        :project-id="projectId"
         :board="planStore.board"
         :is-loading="planStore.isLoading"
         :error-message="planStore.errorMessage"
         :selected-card-id="planStore.selectedCardId"
         :show-on-hold="planStore.showOnHold"
-        :active-card="planStore.activeCard"
-        :draft-body="planStore.draftBody"
-        :draft-title="planStore.draftTitle"
-        :is-saving="planStore.isSaving"
-        :conflict-notice="planStore.conflictNotice"
-        :action-error="planStore.actionError"
-        :has-unsaved-changes="planStore.hasUnsavedChanges"
-        :is-create-open="planStore.isCreateOpen"
-        :new-card-title="planStore.newCardTitle"
-        :new-card-body="planStore.newCardBody"
-        :is-creating="planStore.isCreating"
-        @refresh="planStore.refreshBoard(projectId)"
-        @create="handlePlanCreate"
-        @open-create="planStore.openCreate()"
-        @close-create="(discard) => planStore.closeCreate(discard)"
-        @update-create-draft="(title, body) => planStore.updateCreateDraft(title, body)"
-        @submit-create="handlePlanSubmitCreate"
-        @open-card="(id) => { planStore.closeCreate(); void planStore.openCard(projectId, id) }"
-        @close-card="planStore.closeCard()"
-        @update-draft="planStore.updateDraft"
-        @update-draft-title="planStore.updateDraftTitle"
-        @save-draft="handlePlanSaveDraft"
-        @reload-from-conflict="planStore.reloadFromConflict(projectId)"
-        @keep-draft="planStore.keepDraft()"
+        @open-create="handleOpenPlanCreate"
+        @open-card="handleOpenPlanCard"
         @move-card="handlePlanMove"
-        @remove-card="handlePlanRemove"
         @toggle-on-hold="planStore.showOnHold = !planStore.showOnHold"
       />
       <ChatPanel
@@ -498,19 +512,57 @@ function handleGoToSettings() {
         </template>
       </ChatPanel>
 
-      <!-- 右侧内容面板 -->
+      <!-- 右侧内容面板：普通文件 / 计划详情 / 新建计划 同一外壳（宽度、收起、遮罩统一承载） -->
       <ContentPanel
-        :is-open="isContentPanelOpen"
-        :project-id="projectId"
-        :file="projectStore.activeFile"
-        :notice="panelNotice"
+        :is-open="workspacePanel.visible"
         :width="contentPanelWidth"
-        @close="isContentPanelOpen = false"
-        @save="handleSaveFile"
-        @select-quote="handleSelectQuote"
+        @close="handleCloseContentPanel"
         @resize="contentPanelWidth = $event"
         @reset-width="contentPanelWidth = CONTENT_PANEL_DEFAULT"
-      />
+      >
+        <!-- 普通文件 -->
+        <FilePanelBody
+          v-if="workspacePanel.kind === 'file'"
+          :file="projectStore.activeFile"
+          :notice="panelNotice"
+          @close="handleCloseContentPanel"
+          @save="handleSaveFile"
+          @select-quote="handleSelectQuote"
+        />
+        <!-- 计划详情 -->
+        <PlanDetailPanel
+          v-else-if="workspacePanel.kind === 'plan-detail' && planStore.activeCard"
+          :active-card="planStore.activeCard"
+          :draft-body="planStore.draftBody"
+          :draft-title="planStore.draftTitle"
+          :detail-mode="planStore.detailMode"
+          :is-saving="planStore.isSaving"
+          :conflict-notice="planStore.conflictNotice"
+          :action-error="planStore.actionError"
+          :has-unsaved-changes="planStore.hasUnsavedChanges"
+          @close="handleCloseContentPanel"
+          @update-draft="planStore.updateDraft"
+          @update-draft-title="planStore.updateDraftTitle"
+          @set-detail-mode="planStore.setDetailMode"
+          @save-draft="handlePlanSaveDraft"
+          @reload-from-conflict="planStore.reloadFromConflict(projectId)"
+          @keep-draft="planStore.keepDraft()"
+          @move-card="handlePlanMove"
+          @remove-card="handlePlanRemove"
+        />
+        <!-- 新建计划 -->
+        <PlanCreatePanel
+          v-else-if="workspacePanel.kind === 'plan-create'"
+          :new-card-title="planStore.newCardTitle"
+          :new-card-body="planStore.newCardBody"
+          :is-creating="planStore.isCreating"
+          :action-error="planStore.actionError"
+          @close="handleCloseContentPanel"
+          @update-create-draft="(title, body) => planStore.updateCreateDraft(title, body)"
+          @submit-create="handlePlanSubmitCreate"
+          @cancel="planStore.closeCreate(false)"
+        />
+      </ContentPanel>
     </div>
 
     <!-- 底部项目状态栏：索引状态 + 当前大纲 + 本轮执行状态（常驻，随项目激活） -->

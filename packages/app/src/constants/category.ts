@@ -4,8 +4,9 @@
  * 对应左侧 Activity Bar 的图标分类，每个分类切换右侧 CategoryPanel 的内容。
  * 注意：`settings` 是动作型入口（打开模态框），不会作为 CategoryPanel 的渲染分支，
  * 仅在此保留以统一 Activity Bar 的图标语义。
- * `plan`（创作计划板）的 CategoryPanel 分支只显示入口摘要与新建按钮，
- * 完整看板在主内容区（替换对话面板），见 PlanBoardPanel。
+ * `plan`（创作计划板）的 CategoryPanel 分支显示入口摘要、刷新与最近计划，
+ * 完整看板在主内容区（替换对话面板），见 PlanBoardPanel；计划详情与新建
+ * 在右侧内容面板（布局统一计划）。
  */
 export type Category = 'conversation' | 'chapter' | 'element' | 'prompt' | 'plan'
 
