@@ -6,6 +6,7 @@ import {
   deletePlan,
   getPlanBoard,
   readPlan,
+  replacePlanTitleLine,
   updatePlan,
 } from '@novai/core/services/plan-service'
 import type {
@@ -263,9 +264,16 @@ export const usePlanStore = defineStore('plan', () => {
 
     try {
       const title = draftTitle.value?.trim() ?? ''
+      const rawBody = bodyChanged ? (draftBody.value as string) : null
+      // title 与 body 同传时 core 以 body 为准（组合责任在调用方）：改名遇未保存
+      // 正文草稿，先按新计划名改写正文首行再落盘，保证计划名、正文标题、文件名一致
+      const nextBody
+        = rawBody !== null && titleChanged
+          ? replacePlanTitleLine(rawBody, title)
+          : rawBody ?? undefined
       const saved = await updatePlan(projectId, {
         id: card.id,
-        ...(bodyChanged ? { body: draftBody.value as string } : {}),
+        ...(nextBody !== undefined ? { body: nextBody } : {}),
         // 改回原值不重发；清空名称则交给服务层拒绝（计划名不能为空）
         ...(titleChanged ? { title } : {}),
         expectedContentHash: card.contentHash,

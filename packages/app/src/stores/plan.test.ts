@@ -13,7 +13,9 @@ import {
 } from '@novai/core/services/plan-service'
 import { usePlanStore } from './plan'
 
-vi.mock('@novai/core/services/plan-service', () => ({
+vi.mock('@novai/core/services/plan-service', async (importOriginal) => ({
+  // 纯函数（replacePlanTitleLine）保留真实实现；IO 函数 mock 掉
+  ...await importOriginal<typeof import('@novai/core/services/plan-service')>(),
   createPlan: vi.fn(),
   deletePlan: vi.fn(),
   getPlanBoard: vi.fn(),
@@ -282,7 +284,30 @@ describe('plan store 计划名编辑与改名保存', () => {
     expect(store.activeCard?.sourcePath).toBe('plans/计划-1-改名了-原slug.md')
   })
 
-  it('计划名与正文同改：body + title 一起提交（body 为准，服务层负责组合）', async () => {
+  it('计划名与正文同改且草稿首行是旧名称：store 先按新计划名改写首行再提交（组合责任在调用方）', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', '# 旧名称\n\n旧正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.openCard(PROJECT, 'a')
+
+    store.updateDraftTitle('新名称')
+    // 真实场景：编辑器里的正文草稿还以旧名称开头（首行没跟着改名走）
+    store.updateDraft('# 旧名称\n\n带草稿的正文')
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '# 新名称\n\n带草稿的正文', { title: '新名称' }))
+    const ok = await store.saveDraft(PROJECT)
+
+    expect(ok).toBe(true)
+    // 文件名随新名称重命名的同时，正文首行必须同步改写，否则标题与文件名错位
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, {
+      id: 'a',
+      body: '# 新名称\n\n带草稿的正文',
+      title: '新名称',
+      expectedContentHash: 'hash-a',
+    })
+  })
+
+  it('计划名与正文同改且草稿已自行带上新名称：组合幂等，不再重复改写', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockResolvedValue(detail('a', '# 旧名称\n\n旧正文'))
     mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))

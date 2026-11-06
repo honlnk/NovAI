@@ -8,6 +8,7 @@ import {
   toPlanCardView as toCardView,
   updatePlanCard,
 } from '../core/plans'
+import { replacePlanTitleLine } from '../core/plans/parser'
 import { hashContent } from '../core/util/hash'
 import { requireRuntimeProject } from './project-runtime'
 import type {
@@ -119,6 +120,13 @@ export async function updatePlan(
   const card = await updatePlanCard(project, input)
   return toPlanCardView(card, hashContent(serializePlanCard(card)))
 }
+
+/**
+ * 按新计划名改写正文首个非空行（保持标题层级）。供「改名与正文草稿同存」的
+ * 调用方在落盘前组合正文——core 的 updatePlanCard 约定 body 同传时以 body 为准，
+ * 组合责任在调用方（见 store.ts 注释）。
+ */
+export { replacePlanTitleLine }
 
 export async function deletePlan(
   projectId: string,
