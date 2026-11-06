@@ -289,13 +289,13 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'FindFiles',
-          description: '按 glob 模式递归查找当前小说项目中的文件路径；不读取文件内容。',
+          description: '按 glob 模式递归查找当前小说项目中的文件路径，结果按修改时间降序（最近改的在前）；不读取文件内容。超过上限时跨顶层目录采样展示，完整列表存入 spill 文件可取回。',
           parameters: {
             type: 'object',
             properties: {
               pattern: {
                 type: 'string',
-                description: '必填，glob 文件匹配模式，例如 **/*.md、chapters/*.txt、**/*来信*.md。',
+                description: '必填，glob 文件匹配模式，例如 **/*.md、chapters/*.txt、**/*来信*.md。不含 / 的模式（如 *.txt）匹配任意深度的文件名。',
               },
               path: {
                 type: 'string',
@@ -319,12 +319,21 @@ export function createAgentTools(): AgentRunnableToolMap {
       },
       core: findFilesTool,
       formatResult(output: FindFilesOutput) {
+        const footer = output.truncated
+          ? [
+            `(共找到 ${output.totalMatches} 个文件，已按修改时间降序在 ${output.sampledTopLevelDirs} 个顶层目录中采样展示 ${output.numFiles} 个。`,
+            output.spillPath
+              ? `完整列表已存至 ${output.spillPath}，可用 ReadFile 对该路径以 offset/limit 分段取回。)`
+              : '完整结果未能保存，请缩小 pattern 或 path 后重试。)',
+          ].join('')
+          : ''
+
         return [
           findFilesTool.summarizeOutput(output),
           '',
           output.filenames.length ? output.filenames.join('\n') : 'No files found',
-          output.truncated ? '\n(结果已截断，请使用更具体的 path 或 pattern。)' : '',
-        ].join('\n').trim()
+          footer,
+        ].filter(Boolean).join('\n')
       },
     },
     RagSearch: {

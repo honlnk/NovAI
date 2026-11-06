@@ -250,9 +250,18 @@ export type FindFilesInput = {
 export type FindFilesOutput = {
   pattern: string
   path: string
+  /** 未超限 = 全部匹配（修改时间降序）；超限 = 跨顶层目录采样页 */
   filenames: string[]
   numFiles: number
   truncated: boolean
+  /** 超限时的完整匹配总数 */
+  totalMatches?: number
+  /** 采样页覆盖的顶层目录数（相对搜索根） */
+  sampledTopLevelDirs?: number
+  /** 完整结果覆盖的顶层目录总数 */
+  totalTopLevelDirs?: number
+  /** 完整列表的 spill 落盘路径（写入失败时缺省） */
+  spillPath?: string
 }
 
 export type RagSearchInput = {
