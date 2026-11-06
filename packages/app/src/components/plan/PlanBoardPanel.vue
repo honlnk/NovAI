@@ -3,14 +3,17 @@ import { computed, ref } from 'vue'
 
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
+import { REPO_URL } from '../../constants/repo'
 
 /**
- * 计划看板主面板（布局统一计划 D1/D6/D8/D9）：始终占据中间主内容区，白色体系。
+ * 计划看板主面板（布局统一计划 D1/D6/D9）：始终占据中间主内容区，白色体系。
  *
  * 与旧版的差别（§3/§四 替代表）：
  * - 详情与新建迁入工作区右侧内容面板，看板内不再保留任何内嵌抽屉；
- * - 刷新移到左侧计划标题行，看板右上只保留「新建计划」（统一中性色主按钮）；
- * - 顶栏保留标题、卡片总数与已搁置筛选（内容筛选，不随入口迁移）；
+ * - 刷新在左侧计划标题行，新建在侧栏摘要卡下方（2026-11-06 用户决策推翻 D8 的
+ *   「看板右上保留新建」：顶栏右端与其他页面统一为 GitHub + 内容面板开关）；
+ * - 顶栏结构与其他分类中央头部一致：左侧侧栏开关 + 标题 + 计数 + 已搁置筛选，
+ *   右侧 GitHub 仓库 + 内容面板收起/展开；
  * - 宽度不足时仅看板列区域横向滚动，顶栏不被逐字挤压。
  */
 
@@ -23,6 +26,10 @@ const props = defineProps<{
   errorMessage: string
   selectedCardId: string | null
   showOnHold: boolean
+  /** 左侧分类侧栏是否展开（开关图标状态与其他页面一致） */
+  isSidebarOpen: boolean
+  /** 右侧内容面板是否可见（计划详情/新建均算展开） */
+  isContentPanelOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -30,6 +37,9 @@ const emit = defineEmits<{
   openCard: [id: string]
   moveCard: [id: string, status: PlanStatusView, afterId: string | null]
   toggleOnHold: []
+  toggleSidebar: []
+  toggleMobileSidebar: []
+  toggleContentPanel: []
 }>()
 
 const columns = computed(() => {
@@ -106,32 +116,73 @@ function formatTime(iso: string): string {
 
 <template>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col bg-white text-gray-800">
-    <!-- 顶栏：标题 + 计数 + 搁置筛选 + 新建（刷新在左侧计划标题行） -->
-    <header class="flex shrink-0 items-center gap-3 border-b border-gray-200 px-4 py-3">
-      <h1 class="text-base font-semibold text-gray-800">创作计划板</h1>
-      <span class="shrink-0 text-xs text-gray-500">{{ totalCards }} 张卡片</span>
-
-      <button
-        :class="[
-          'shrink-0 rounded-md border px-2 py-1 text-xs transition-colors',
-          showOnHold
-            ? 'border-gray-900 bg-gray-900 text-white'
-            : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100',
-        ]"
-        aria-label="查看已搁置的卡片"
-        @click="emit('toggleOnHold')"
-      >
-        已搁置
-      </button>
-
-      <div class="ml-auto flex shrink-0 items-center gap-2">
+    <!-- 顶栏：结构与其他分类中央头部一致（刷新在左侧计划标题行，新建在侧栏摘要卡下方） -->
+    <header class="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
+      <div class="flex items-center gap-2">
         <button
-          class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-gray-800"
-          aria-label="新建计划"
-          data-testid="plan-new-card-button"
-          @click="emit('openCreate')"
+          aria-label="打开分类面板"
+          class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
+          @click="emit('toggleMobileSidebar')"
         >
-          + 新建计划
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <button
+          :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
+          class="hidden rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:block"
+          @click="emit('toggleSidebar')"
+        >
+          <!-- 收起状态：显示汉堡菜单（暗示可以展开侧边栏） -->
+          <svg v-if="!isSidebarOpen" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          <!-- 展开状态：显示侧边栏收起图标 -->
+          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+          </svg>
+        </button>
+        <h1 class="text-base font-semibold text-gray-800">创作计划板</h1>
+        <span class="shrink-0 text-xs text-gray-500">{{ totalCards }} 张卡片</span>
+
+        <button
+          :class="[
+            'ml-1 shrink-0 rounded-md border px-2 py-1 text-xs transition-colors',
+            showOnHold
+              ? 'border-gray-900 bg-gray-900 text-white'
+              : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100',
+          ]"
+          aria-label="查看已搁置的卡片"
+          @click="emit('toggleOnHold')"
+        >
+          已搁置
+        </button>
+      </div>
+      <div class="flex shrink-0 items-center gap-1">
+        <a
+          :href="REPO_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="GitHub 仓库"
+          title="GitHub 仓库"
+          class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+          </svg>
+        </a>
+        <button
+          :aria-label="isContentPanelOpen ? '收起内容面板' : '展开内容面板'"
+          class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
+          @click="emit('toggleContentPanel')"
+        >
+          <svg
+            class="h-5 w-5 transition-transform duration-200"
+            :class="isContentPanelOpen ? '' : 'rotate-180'"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
         </button>
       </div>
     </header>

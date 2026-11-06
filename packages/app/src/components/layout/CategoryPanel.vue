@@ -46,6 +46,8 @@ const emit = defineEmits<{
   refreshPlan: []
   /** 打开某张计划卡片详情 */
   openPlanCard: [id: string]
+  /** 新建计划（侧栏摘要卡下方入口） */
+  openPlanCreate: []
 }>()
 </script>
 
@@ -108,6 +110,7 @@ const emit = defineEmits<{
       :selected-card-id="selectedPlanCardId"
       @open-board="emit('openPlanBoard')"
       @refresh="emit('refreshPlan')"
+      @open-create="emit('openPlanCreate')"
       @open-card="emit('openPlanCard', $event)"
     />
   </aside>

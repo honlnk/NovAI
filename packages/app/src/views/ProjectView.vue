@@ -286,10 +286,27 @@ function handleOpenPlanCard(id: string) {
   void planStore.openCard(projectId.value, id)
 }
 
-/** 打开新建面板（看板右上 / 空状态共用）：与详情互斥切换，两侧草稿各自保留 */
+/** 打开新建面板（侧栏摘要卡下方 / 看板空状态共用）：与详情互斥切换，两侧草稿各自保留 */
 function handleOpenPlanCreate() {
   isPlanPanelOpen.value = true
   planStore.openCreate()
+}
+
+/**
+ * 看板顶栏的内容面板收起/展开开关（与其他页面中央头部同一交互）：
+ * 展开时若无选中卡片也不在新建，则落到新建表单——保证开关总有可见效果
+ * （计划分类默认收起，否则默认态下点展开会没有任何反应）。
+ */
+function handleTogglePlanPanel() {
+  if (workspacePanel.value.visible) {
+    handleCloseContentPanel()
+    return
+  }
+  if (planStore.activeCard || planStore.isCreateOpen) {
+    isPlanPanelOpen.value = true
+    return
+  }
+  handleOpenPlanCreate()
 }
 
 /** AI 或外部写入计划文件后：看板可见时自动刷新（文件变更账本事件驱动） */
@@ -472,6 +489,7 @@ function handleGoToSettings() {
         @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
         @open-plan-board="selectCategory('plan')"
         @refresh-plan="handlePlanRefresh"
+        @open-plan-create="handleOpenPlanCreate"
         @open-plan-card="(id) => { selectCategory('plan'); handleOpenPlanCard(id) }"
       />
 
@@ -483,10 +501,15 @@ function handleGoToSettings() {
         :error-message="planStore.errorMessage"
         :selected-card-id="planStore.selectedCardId"
         :show-on-hold="planStore.showOnHold"
+        :is-sidebar-open="isCategoryOpen"
+        :is-content-panel-open="workspacePanel.visible"
         @open-create="handleOpenPlanCreate"
         @open-card="handleOpenPlanCard"
         @move-card="handlePlanMove"
         @toggle-on-hold="planStore.showOnHold = !planStore.showOnHold"
+        @toggle-sidebar="toggleSidebar"
+        @toggle-mobile-sidebar="toggleMobileSidebar"
+        @toggle-content-panel="handleTogglePlanPanel"
       />
       <ChatPanel
         v-else

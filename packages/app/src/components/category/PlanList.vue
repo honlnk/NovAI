@@ -5,8 +5,9 @@ import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/t
 import Tooltip from '../ui/Tooltip.vue'
 
 /**
- * 计划分类面板（侧栏）：入口摘要 + 最近计划直达。布局统一计划 D7/D8：
- * 原左侧「新建」按钮替换为刷新图标按钮（看板右上保留唯一新建入口）；
+ * 计划分类面板（侧栏）：入口摘要 + 新建入口 + 最近计划直达。布局统一计划 D7/D8：
+ * 刷新在标题行；新建在「创作计划板」摘要卡下方（2026-11-06 用户决策：看板顶栏
+ * 右端让位给与其他页面统一的 GitHub + 内容面板开关，新建入口移入侧栏列表区）；
  * 当前打开的计划与看板/右侧详情的选中态一致。
  */
 
@@ -20,8 +21,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 打开主内容区看板（点入口或卡片时） */
   openBoard: []
-  /** 刷新计划（原左侧新建位置，刷新期间禁用防重复触发） */
+  /** 刷新计划（标题行图标按钮，刷新期间禁用防重复触发） */
   refresh: []
+  /** 新建计划（摘要卡下方按钮，与详情互斥切换） */
+  openCreate: []
   /** 点击某张卡片：打开看板并选中该卡详情 */
   openCard: [id: string]
 }>()
@@ -78,6 +81,19 @@ function statusShortLabel(status: PlanStatusView): string {
         <span class="text-xs text-gray-500">
           {{ cards.length }} 张卡片 · 收集箱 {{ inboxCount }} · 进行中 {{ activeCount }}
         </span>
+      </button>
+
+      <!-- 新建计划（摘要卡下方，与右侧详情互斥切换；草稿由 store 保留） -->
+      <button
+        class="mb-2 flex w-full items-center gap-1.5 rounded-md bg-white/5 px-3 py-2 text-left text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-gray-200"
+        aria-label="新建计划"
+        data-testid="plan-sidebar-create"
+        @click="emit('openCreate')"
+      >
+        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+        </svg>
+        新建计划
       </button>
 
       <p v-if="isLoading" class="px-2 py-2 text-xs text-gray-600">正在读取计划…</p>
