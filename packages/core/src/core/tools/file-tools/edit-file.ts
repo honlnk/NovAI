@@ -1,6 +1,6 @@
 import { getProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
 import type { EditFileInput, EditFileOutput, ToolDefinition } from '../types'
-import { normalizeProjectPath } from '../path'
+import { isNotFoundError, normalizeProjectPath } from '../path'
 import { assertChapterNameFormat, isChapterPath } from '../chapter-name'
 import { asRecord, assertMutableDocumentPath, readString } from './common'
 import { countDiffLines } from './diff-line-stats'
@@ -8,6 +8,7 @@ import {
   assertFreshReadFileState,
   createReadFileState,
   readReadFileState,
+  updateReadFileStateAfterWrite,
 } from './read-file-state'
 import {
   countOccurrences,
@@ -17,7 +18,7 @@ import {
 
 export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOutput> = {
   name: 'EditFile',
-  description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；修改前应先读取目标文件。',
+  description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；修改前应先读取目标文件。oldText 传空字符串可向已存在的空文件写入初始内容。',
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeProjectPath(readString(value.path, 'EditFile.path'))
@@ -48,8 +49,40 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
     }
   },
   async run(input, runtime) {
-    const file = await getProjectTextFile(runtime.project.handle, input.path)
+    let file: File
+
+    try {
+      file = await getProjectTextFile(runtime.project.handle, input.path)
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new Error(`文件 ${input.path} 不存在；新建文件请使用 CreateFile，不要用 EditFile`)
+      }
+
+      throw error
+    }
+
     const currentContent = await file.text()
+
+    // 空文件特判（D1，参照 ZCode edit 空串分支）：oldText="" 只允许「填充空文件」一种用法——
+    // 豁免读后写校验（空文件没有旧内容可保护），但仍走确认链（buildConfirmation 不变）。
+    if (!input.oldText) {
+      if (currentContent.trim() !== '') {
+        throw new Error(`文件 ${input.path} 非空，不能用 oldText="" 整体写入；请提供要替换的原文片段`)
+      }
+
+      await writeProjectTextFile(runtime.project.handle, input.path, input.newText)
+      await updateReadFileStateAfterWrite(runtime, input.path, input.newText)
+
+      return {
+        path: input.path,
+        occurrences: 1,
+        contentLength: input.newText.length,
+        ...countDiffLines('', input.newText),
+        oldText: '',
+        newText: input.newText,
+      }
+    }
+
     const currentState = createReadFileState(input.path, currentContent, file)
     const expectedState = input.readFileState ?? runtime.readFileStates?.get(input.path)
 
@@ -58,10 +91,6 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
     }
 
     assertFreshReadFileState(input.path, expectedState, currentState)
-
-    if (!input.oldText) {
-      throw new Error('EditFile.oldText 不能为空；新增文件请使用 CreateFile，修改已有文件请先 ReadFile 并提供要替换的原文片段')
-    }
 
     const actualOldText = findActualText(currentContent, input.oldText)
 
@@ -81,7 +110,8 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       : currentContent.replace(actualOldText, actualNewText)
 
     await writeProjectTextFile(runtime.project.handle, input.path, nextContent)
-    runtime.readFileStates?.delete(input.path)
+    // D2：写完不删读取状态，改为更新为新内容——连续编辑同一文件免重读。
+    await updateReadFileStateAfterWrite(runtime, input.path, nextContent)
 
     return {
       path: input.path,

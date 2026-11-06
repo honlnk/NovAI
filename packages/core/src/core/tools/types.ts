@@ -163,6 +163,8 @@ export type ReadFileState = {
   contentHash: string
   lastModified: string
   fileSizeBytes: number
+  /** 该状态由哪个工具产生（运行时内存标记，不参与新鲜度判断） */
+  sourceTool?: 'Read' | 'Edit'
 }
 
 export type EditFileInput = {

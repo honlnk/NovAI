@@ -6,6 +6,7 @@ import {
   readFileTool,
   renameFileTool,
 } from '../file-tools'
+import { createReadFileState } from './read-file-state'
 import type { ProjectSnapshot } from '../../../types/project'
 import type { ToolRuntime } from '../types'
 
@@ -48,6 +49,155 @@ describe('file tools', () => {
       oldText: '旧内容',
       newText: '新内容',
     }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
+  })
+
+  describe('空文件特判（D1：oldText="" 填充空文件）', () => {
+    it('文件不存在时报错并引导使用 CreateFile', async () => {
+      const runtime = createRuntime({})
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '初始内容',
+      }, runtime)).rejects.toThrow('不存在；新建文件请使用 CreateFile')
+    })
+
+    it('文件为空时允许直接写入，且不需要先 ReadFile（豁免读后写校验）', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '',
+      })
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '第一段\n第二段',
+      }, runtime)
+
+      expect(output.occurrences).toBe(1)
+      expect(output.oldText).toBe('')
+      expect(output.newText).toBe('第一段\n第二段')
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('第一段\n第二段')
+
+      // diff 口径与 CreateFile 一致：oldText 为空、全绿
+      expect(editFileTool.extractChangeDiff?.(output)).toEqual({
+        oldText: '',
+        newText: '第一段\n第二段',
+        linesAdded: 2,
+        linesRemoved: 0,
+      })
+    })
+
+    it('只含空白的文件也视为空文件，允许填充', async () => {
+      const runtime = createRuntime({
+        'elements/characters/空白.md': '  \n\t\n',
+      })
+
+      await editFileTool.run({
+        path: 'elements/characters/空白.md',
+        oldText: '',
+        newText: '姓名：林婉儿',
+      }, runtime)
+
+      await expect(readProjectText(runtime.project.handle, 'elements/characters/空白.md')).resolves.toBe('姓名：林婉儿')
+    })
+
+    it('文件非空时拒绝 oldText="" 整体写入', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '已有内容',
+      })
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '覆盖内容',
+      }, runtime)).rejects.toThrow('非空')
+
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('已有内容')
+    })
+  })
+
+  describe('连续编辑免重读（D2：写后更新 readFileState）', () => {
+    it('Read → Edit → Edit 连续编辑中间不需要重新 ReadFile', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一段\n第二段\n第三段',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第一段',
+        newText: '第一段改',
+      }, runtime)
+
+      // 关键断言：不再删除读取状态，第二次 Edit 不要求重读
+      const editAgain = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第三段',
+        newText: '第三段改',
+      }, runtime)
+
+      expect(editAgain.occurrences).toBe(1)
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('第一段改\n第二段\n第三段改')
+    })
+
+    it('Edit 成功后 readFileState 更新为新内容（sourceTool: Edit），文件未变时再次校验直接放行', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '旧内容',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '旧内容',
+        newText: '新内容',
+      }, runtime)
+
+      const state = runtime.readFileStates?.get('chapters/第001章-初遇.txt')
+      expect(state).toBeDefined()
+      expect(state?.sourceTool).toBe('Edit')
+      expect(state?.contentHash).toBe(createReadFileState('chapters/第001章-初遇.txt', '新内容', new File([], 'x')).contentHash)
+    })
+
+    it('外部 touch（mtime 变新但内容未变）不误拦：hash 兜底放行', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一段\n第二段',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      touchMemoryFile(runtime.project.handle, 'chapters/第001章-初遇.txt', 10)
+
+      // mtime 前进但内容与 hash 都没变：放行
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段',
+        newText: '第二段改',
+      }, runtime)
+
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('第一段\n第二段改')
+    })
+
+    it('Edit 之后外部再改动，下一次 Edit 仍被正确拦截', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一段\n第二段',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第一段',
+        newText: '第一段改',
+      }, runtime)
+
+      // 外部改动（mtime/size/hash 全变）
+      await writeProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt', '外部完全改写的内容')
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段',
+        newText: '第二段改',
+      }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
+    })
   })
 
   it('creates new files but refuses to overwrite existing files', async () => {
@@ -718,6 +868,31 @@ async function writeProjectText(rootHandle: FileSystemDirectoryHandle, path: str
   const writable = await fileHandle.createWritable()
   await writable.write(content)
   await writable.close()
+}
+
+/** 模拟外部 touch：只把 memory 条目的 lastModified 前进 deltaMs，内容不动。 */
+function touchMemoryFile(rootHandle: MemoryDirectoryHandle, path: string, deltaMs: number) {
+  let current: MemoryEntry = rootHandle.__entry
+
+  for (const segment of path.split('/')) {
+    if (current.kind !== 'directory') {
+      throw new Error(`Not a directory: ${path}`)
+    }
+
+    const next = current.entries.get(segment)
+
+    if (!next) {
+      throw new Error(`Not found: ${path}`)
+    }
+
+    current = next
+  }
+
+  if (current.kind !== 'file') {
+    throw new Error(`Not a file: ${path}`)
+  }
+
+  current.lastModified += deltaMs
 }
 
 async function readProjectText(rootHandle: FileSystemDirectoryHandle, path: string) {
