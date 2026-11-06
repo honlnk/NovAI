@@ -281,9 +281,15 @@ function handleCloseContentPanel() {
 }
 
 /** 打开计划详情（看板卡片 / 侧栏最近计划 / 已搁置卡片共用同一入口）：面板随点击展开 */
-function handleOpenPlanCard(id: string) {
+async function handleOpenPlanCard(id: string) {
+  const openingProjectId = projectId.value
   isPlanPanelOpen.value = true
-  void planStore.openCard(projectId.value, id)
+  await planStore.openCard(openingProjectId, id)
+  const error = planStore.detailError
+  if (error?.cardId === id && projectId.value === openingProjectId) {
+    toast.error(`读取所选计划失败：${error.message}`)
+    if (!planStore.activeCard) isPlanPanelOpen.value = false
+  }
 }
 
 /** 打开新建面板（侧栏摘要卡下方 / 看板空状态共用）：与详情互斥切换，两侧草稿各自保留 */
@@ -364,7 +370,9 @@ async function handlePlanSubmitCreate() {
   if (!projectStore.currentProject) {
     return
   }
-  const card = await planStore.submitCreate(projectId.value)
+  const submittingProjectId = projectId.value
+  const card = await planStore.submitCreate(submittingProjectId)
+  if (projectId.value !== submittingProjectId || projectStore.currentProject?.id !== submittingProjectId) return
   if (card) {
     toast.success('已创建计划')
   } else if (!planStore.isCreateOpen) {
@@ -379,7 +387,9 @@ async function handlePlanMove(id: string, status: PlanStatusView, afterId: strin
   if (!projectStore.currentProject) {
     return
   }
-  const ok = await planStore.moveCard(projectId.value, id, status, afterId)
+  const movingProjectId = projectId.value
+  const ok = await planStore.moveCard(movingProjectId, id, status, afterId)
+  if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
   if (!ok) {
     toast.error(planStore.actionError || '移动计划失败')
   }
@@ -389,7 +399,9 @@ async function handlePlanRemove(id: string) {
   if (!projectStore.currentProject) {
     return
   }
-  const ok = await planStore.removeCard(projectId.value, id)
+  const removingProjectId = projectId.value
+  const ok = await planStore.removeCard(removingProjectId, id)
+  if (projectId.value !== removingProjectId || projectStore.currentProject?.id !== removingProjectId) return
   if (ok) {
     toast.success('已移入回收站')
   } else {
@@ -401,14 +413,19 @@ async function handlePlanSaveDraft() {
   if (!projectStore.currentProject) {
     return
   }
+  const savingProjectId = projectId.value
   const previousPath = planStore.activeCard?.sourcePath
-  const ok = await planStore.saveDraft(projectId.value)
+  const ok = await planStore.saveDraft(savingProjectId)
+  if (projectId.value !== savingProjectId || projectStore.currentProject?.id !== savingProjectId) return
   if (ok) {
     toast.success('已保存')
-    // 名称变化会引起文件重命名：刷新文件树让侧栏与磁盘一致
-    if (planStore.activeCard && planStore.activeCard.sourcePath !== previousPath) {
+    // 切卡后仍以保存完成的原卡片为准，不能让当前卡片决定文件树是否刷新。
+    const savedCard = planStore.lastSavedCard
+    if (savedCard && savedCard.sourcePath !== previousPath) {
       await projectStore.refreshTree()
     }
+  } else if (planStore.detailNotice) {
+    toast.error(planStore.detailNotice.message)
   } else if (!planStore.conflictNotice) {
     toast.error(planStore.actionError || '保存失败')
   }

@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { defineStore } from 'pinia'
 
 import {
@@ -46,6 +46,12 @@ export type PlanEditSession = {
   mode: DetailMode
   /** 草稿所基于的读取时内容 hash：重开时与最新 hash 对比判断外部修改 */
   baseContentHash: string
+  /** 草稿版本：识别保存期间继续输入的新内容 */
+  revision: number
+  /** 离开保存失败的卡片后，错误仍属于这张卡，不串到其他卡片 */
+  actionError?: string
+  /** 冲突随会话保留；重新打开该卡时再提示 */
+  conflictCard?: PlanCardView
 }
 
 export const usePlanStore = defineStore('plan', () => {
@@ -63,12 +69,17 @@ export const usePlanStore = defineStore('plan', () => {
   const detailMode = ref<DetailMode>('preview')
   /** 卡片级编辑会话缓存（key = 卡片 id；随项目 reset 清理） */
   const editSessions = ref(new Map<string, PlanEditSession>())
-  /** 保存中（禁用重复提交） */
-  const isSaving = ref(false)
+  /** 保存中（按当前卡片识别；Promise 不交给 Vue 深层代理） */
+  const savingSessions = shallowRef(new Map<string, Promise<boolean>>())
+  const isSaving = computed(() => activeCard.value !== null && savingSessions.value.has(activeCard.value.id))
+  /** 保存成功仍按原卡片返回；视图刷新文件树不依赖保存结束时用户正看哪张卡 */
+  const lastSavedCard = ref<PlanCardView | null>(null)
   /** 打开的卡片在编辑外被外部修改（AI/外部编辑器）：提示重新读取或保留草稿 */
   const conflictNotice = ref<{ currentCard: PlanCardView } | null>(null)
   /** 上一次操作的错误信息（保存失败保留草稿时展示） */
   const actionError = ref('')
+  const detailError = ref<{ cardId: string; message: string } | null>(null)
+  const detailNotice = ref<{ cardId: string; message: string } | null>(null)
 
   const selectedCardId = ref<string | null>(null)
   /** 已搁置筛选：默认只看四列常驻栏目，可单独查看已搁置 */
@@ -84,6 +95,36 @@ export const usePlanStore = defineStore('plan', () => {
   const newCardBody = ref('')
   /** 创建中（禁用重复提交） */
   const isCreating = ref(false)
+  /** 项目代次：reset 使所有在途操作失效，不能回写已关闭的项目 */
+  let projectGeneration = 0
+  let currentProjectId: string | null = null
+  /** 读取序号：只有当前项目里最后一次选择的卡片可以接管详情 */
+  let openSequence = 0
+  /** 看板刷新序号：只允许当前项目最后一次请求回写看板与忙碌态 */
+  let boardRefreshCount = 0
+  /** 每份草稿有独立版本；保存只清理提交时那一版，保留随后继续输入的内容 */
+  const draftVersions = new Map<string, number>()
+  /** 新建只允许当前项目的最后一次提交回写新建草稿 */
+  let createSequence = 0  /** 创建是否已交由独立文件操作承接；界面取消不应让它保持提交锁 */
+  let createDetached = false
+
+  function beginProject(projectId: string): number {
+    if (currentProjectId !== projectId) {
+      currentProjectId = projectId
+      projectGeneration += 1
+    }
+    return projectGeneration
+  }
+
+  function isCurrentProject(projectId: string, generation: number): boolean {
+    return currentProjectId === projectId && projectGeneration === generation
+  }
+
+  function nextDraftVersion(cardId: string): number {
+    const version = (draftVersions.get(cardId) ?? 0) + 1
+    draftVersions.set(cardId, version)
+    return version
+  }
 
   /** 新建面板是否有未提交内容（草稿静默保留，供恢复显示用） */
   const hasCreateDraft = computed(() => newCardTitle.value.trim() !== '' || newCardBody.value.trim() !== '')
@@ -116,28 +157,29 @@ export const usePlanStore = defineStore('plan', () => {
     ),
   )
 
-  // 保存成功（保存中结束且未保存修改清零）自动回到预览态（§详情预览 5）；
-  // 冲突 / 失败路径未保存修改仍为 true，不误触发
-  watch([isSaving, hasUnsavedChanges], ([saving, unsaved], [prevSaving]) => {
-    if (shouldReturnToPreviewAfterSave(prevSaving, saving, unsaved)) {
-      detailMode.value = 'preview'
-    }
-  })
-
-  async function loadBoard(projectId: string) {
+  async function loadBoard(projectId: string): Promise<void> {
+    const generation = beginProject(projectId)
+    // 同一项目的刷新按发起顺序合并；旧请求无论多晚返回都不能覆盖新结果。
+    const requestId = ++boardRefreshCount
     isLoading.value = true
     errorMessage.value = ''
-
     try {
-      board.value = await getPlanBoard(projectId)
+      const result = await getPlanBoard(projectId)
+      if (isCurrentProject(projectId, generation) && requestId === boardRefreshCount) {
+        board.value = result
+      }
     } catch (error) {
-      errorMessage.value = toMessage(error, '读取计划板失败')
+      if (isCurrentProject(projectId, generation) && requestId === boardRefreshCount) {
+        errorMessage.value = toMessage(error, '读取计划板失败')
+      }
     } finally {
-      isLoading.value = false
+      if (isCurrentProject(projectId, generation) && requestId === boardRefreshCount) {
+        isLoading.value = false
+      }
     }
   }
 
-  async function refreshBoard(projectId: string) {
+  async function refreshBoard(projectId: string): Promise<void> {
     await loadBoard(projectId)
   }
 
@@ -154,6 +196,9 @@ export const usePlanStore = defineStore('plan', () => {
       title: draftTitle.value,
       mode: detailMode.value,
       baseContentHash: card.contentHash,
+      revision: draftVersions.get(card.id) ?? 0,
+      actionError: actionError.value || undefined,
+      conflictCard: conflictNotice.value?.currentCard,
     })
   }
 
@@ -167,8 +212,10 @@ export const usePlanStore = defineStore('plan', () => {
       draftBody.value = null
       draftTitle.value = null
       detailMode.value = 'preview'
+      draftVersions.set(card.id, 0)
       return
     }
+    draftVersions.set(card.id, session.revision)
 
     draftBody.value = session.body
     draftTitle.value = session.title
@@ -176,46 +223,82 @@ export const usePlanStore = defineStore('plan', () => {
 
     const hasDraft = (session.body !== null && session.body !== card.body)
       || (session.title !== null && session.title.trim() !== card.title)
-    if (hasDraft && session.baseContentHash !== card.contentHash) {
+    if (hasDraft && (session.baseContentHash !== card.contentHash || session.conflictCard)) {
       activeCard.value = { ...card, contentHash: session.baseContentHash }
-      conflictNotice.value = { currentCard: card }
+      conflictNotice.value = { currentCard: session.conflictCard ?? card }
     }
   }
 
   /** 打开卡片详情：切走当前卡片前暂存草稿，新建面板让位（输入保留） */
-  async function openCard(projectId: string, id: string) {
+  async function openCard(projectId: string, id: string): Promise<void> {
+    const generation = beginProject(projectId)
+    const sequence = ++openSequence
+    const wasCreateOpen = isCreateOpen.value
+    if (activeCard.value?.id !== id || wasCreateOpen || detailMode.value !== 'preview'
+      || draftBody.value !== null || draftTitle.value !== null || conflictNotice.value) {
+      stashEditSession()
+    }
     actionError.value = ''
     conflictNotice.value = null
-    stashEditSession()
+    detailError.value = null
+    detailNotice.value = null
+    if (wasCreateOpen) createSequence += 1
+    createDetached = true
+    isCreating.value = false
     isCreateOpen.value = false
+    const isLatest = () => isCurrentProject(projectId, generation) && sequence === openSequence
 
     try {
       const card = await readPlan(projectId, id)
+      if (!isLatest()) return
       if (!card) {
-        // 卡片刚被删除（外部或 AI）：清空详情与会话并刷新看板
-        await refreshBoard(projectId)
+        // 卡片刚被删除（外部或 AI）：清空详情与会话并刷新看板。
         editSessions.value.delete(id)
+        draftVersions.delete(id)
         activeCard.value = null
         draftBody.value = null
         draftTitle.value = null
         detailMode.value = 'preview'
         selectedCardId.value = null
+        await refreshBoard(projectId)
         return
       }
 
       activeCard.value = card
       restoreEditSession(card)
       selectedCardId.value = card.id
+      actionError.value = editSessions.value.get(id)?.actionError ?? ''
+      if (!conflictNotice.value) detailNotice.value = null
+      const saving = savingSessions.value.get(id)
+      if (saving) {
+        // 保存已在进行中的同卡重读只更新文件基线，已提交的草稿版本不清空。
+        await saving
+        if (!isLatest() || activeCard.value?.id !== id) return
+        const current = activeCard.value
+        const session = editSessions.value.get(id)
+        if (current && session) {
+          draftBody.value = session.body
+          draftTitle.value = session.title
+          detailMode.value = session.mode
+          if (session.baseContentHash !== current.contentHash) {
+            activeCard.value = { ...current, contentHash: session.baseContentHash }
+          }
+        }
+      }
     } catch (error) {
-      actionError.value = toMessage(error, '读取计划失败')
+      if (isLatest()) {
+        detailError.value = { cardId: id, message: toMessage(error, '读取计划失败') }
+      }
     }
   }
 
   /** 彻底关闭详情（删除卡片等清理路径）；面板收起这类纯可见性操作不走这里 */
   function closeCard() {
+    openSequence += 1
     const id = activeCard.value?.id
     if (id) {
       editSessions.value.delete(id)
+      draftVersions.delete(id)
     }
     activeCard.value = null
     draftBody.value = null
@@ -223,15 +306,18 @@ export const usePlanStore = defineStore('plan', () => {
     detailMode.value = 'preview'
     conflictNotice.value = null
     actionError.value = ''
+    detailError.value = null
     selectedCardId.value = null
   }
 
   function updateDraft(body: string) {
+    if (activeCard.value) nextDraftVersion(activeCard.value.id)
     draftBody.value = body
   }
 
   /** 计划名输入（详情头部独立输入框） */
   function updateDraftTitle(title: string) {
+    if (activeCard.value) nextDraftVersion(activeCard.value.id)
     draftTitle.value = title
   }
 
@@ -246,69 +332,144 @@ export const usePlanStore = defineStore('plan', () => {
    * 名称变化时服务层同步重命名文件（计划-<原序号>-<清理后名称>-<原短标识>.md），
    * 视图层对比保存前后 sourcePath 决定是否刷新文件树。返回是否保存成功。
    */
-  async function saveDraft(projectId: string) {
+  /**
+   * 保存只认发起时的项目、卡片和草稿版本。文件写入不能因用户切卡而取消，但结果
+   * 必须更新原卡片的会话，不能覆盖新选择；保存期间继续输入的新版本也不能清掉。
+   */
+  async function saveDraft(projectId: string): Promise<boolean> {
     const card = activeCard.value
-
-    if (!card || isSaving.value) {
-      return false
-    }
+    if (!card || savingSessions.value.has(card.id)) return false
 
     const bodyChanged = draftBody.value !== null && draftBody.value !== card.body
     const titleChanged = draftTitle.value !== null && draftTitle.value.trim() !== card.title
-    if (!bodyChanged && !titleChanged) {
-      return false
-    }
+    if (!bodyChanged && !titleChanged) return false
 
-    isSaving.value = true
+    const generation = beginProject(projectId)
+    const revision = draftVersions.get(card.id) ?? 0
+    const submittedBody = draftBody.value
+    const submittedTitle = draftTitle.value
+    const previousMode = detailMode.value
+    const title = submittedTitle?.trim() ?? ''
+    const rawBody = bodyChanged ? (submittedBody as string) : null
+    const nextBody = rawBody !== null && titleChanged
+      ? replacePlanTitleLine(rawBody, title)
+      : rawBody ?? undefined
+
     actionError.value = ''
+    lastSavedCard.value = null
+    const saving = (async (): Promise<boolean> => {
+      try {
+        const saved = await updatePlan(projectId, {
+          id: card.id,
+          ...(nextBody !== undefined ? { body: nextBody } : {}),
+          ...(titleChanged ? { title } : {}),
+          expectedContentHash: card.contentHash,
+        })
+        if (!isCurrentProject(projectId, generation)) return false
+        lastSavedCard.value = saved
 
-    try {
-      const title = draftTitle.value?.trim() ?? ''
-      const rawBody = bodyChanged ? (draftBody.value as string) : null
-      // title 与 body 同传时 core 以 body 为准（组合责任在调用方）：改名遇未保存
-      // 正文草稿，先按新计划名改写正文首行再落盘，保证计划名、正文标题、文件名一致
-      const nextBody
-        = rawBody !== null && titleChanged
-          ? replacePlanTitleLine(rawBody, title)
-          : rawBody ?? undefined
-      const saved = await updatePlan(projectId, {
-        id: card.id,
-        ...(nextBody !== undefined ? { body: nextBody } : {}),
-        // 改回原值不重发；清空名称则交给服务层拒绝（计划名不能为空）
-        ...(titleChanged ? { title } : {}),
-        expectedContentHash: card.contentHash,
-      })
+        const stillCurrent = activeCard.value?.id === card.id
+        const currentRevision = draftVersions.get(card.id) ?? 0
+        const session = editSessions.value.get(card.id)
+        const unchanged = currentRevision === revision
+        if (unchanged) {
+          // 未再编辑：该版草稿已经落盘，当前详情和暂存会话都以新文件为准。
+          editSessions.value.delete(card.id)
+          if (stillCurrent) {
+            activeCard.value = saved
+            draftBody.value = null
+            draftTitle.value = null
+            detailMode.value = shouldReturnToPreviewAfterSave(true, false, false) ? 'preview' : previousMode
+          }
+        } else {
+          // 只刷新文件基线，保留后续输入；无未保存修改的编辑态会话也可直接清理。
+          const nextSession: PlanEditSession = {
+            body: stillCurrent ? draftBody.value : (session?.body ?? null),
+            title: stillCurrent ? draftTitle.value : (session?.title ?? null),
+            mode: stillCurrent ? detailMode.value : (session?.mode ?? previousMode),
+            baseContentHash: saved.contentHash,
+            revision: currentRevision,
+          }
+          const hasDraft = (nextSession.body !== null && nextSession.body !== saved.body)
+            || (nextSession.title !== null && nextSession.title.trim() !== saved.title)
+          if (hasDraft) {
+            editSessions.value.set(card.id, nextSession)
+          } else {
+            editSessions.value.delete(card.id)
+          }
+          if (stillCurrent) activeCard.value = saved
+        }
+        await refreshBoard(projectId)
+        return true
+      } catch (error) {
+        if (!isCurrentProject(projectId, generation)) return false
 
-      activeCard.value = saved
-      draftBody.value = null
-      draftTitle.value = null
-      // 保存成功清除该卡片的编辑会话（§5.5）：草稿已落盘，无可恢复内容
-      editSessions.value.delete(saved.id)
-      await refreshBoard(projectId)
-      return true
-    } catch (error) {
-      if (error instanceof PlanConflictError) {
-        conflictNotice.value = { currentCard: { ...card, body: error.currentCard.body } }
+        const message = toMessage(error, '保存计划失败')
+        const currentCard = error instanceof PlanConflictError
+          ? { ...card, body: error.currentCard.body }
+          : undefined
+        if (activeCard.value?.id === card.id) {
+          if (currentCard) conflictNotice.value = { currentCard }
+          actionError.value = message
+        } else {
+          const session = editSessions.value.get(card.id)
+          if (session) {
+            editSessions.value.set(card.id, { ...session, actionError: message, conflictCard: currentCard })
+          }
+          detailNotice.value = { cardId: card.id, message: `「${card.title}」${message}` }
+        }
+        return false
       }
-      actionError.value = toMessage(error, '保存计划失败')
-      return false
+    })()
+
+    const sessions = new Map(savingSessions.value)
+    sessions.set(card.id, saving)
+    savingSessions.value = sessions
+    try {
+      return await saving
     } finally {
-      isSaving.value = false
+      // reset 后旧保存的收尾不能删除新项目中同 ID 卡片的新保存。
+      if (savingSessions.value.get(card.id) === saving) {
+        const sessions = new Map(savingSessions.value)
+        sessions.delete(card.id)
+        savingSessions.value = sessions
+      }
     }
   }
 
   /** 冲突处理：丢弃草稿（含会话缓存），重新读取文件当前内容并回到预览 */
   async function reloadFromConflict(projectId: string) {
-    if (!conflictNotice.value || !activeCard.value) {
-      return
-    }
+    if (!conflictNotice.value || !activeCard.value || savingSessions.value.has(activeCard.value.id)) return
+    const generation = beginProject(projectId)
+    const cardId = activeCard.value.id
+    const sequence = ++openSequence
 
-    editSessions.value.delete(activeCard.value.id)
+    editSessions.value.delete(cardId)
+    draftVersions.set(cardId, (draftVersions.get(cardId) ?? 0) + 1)
     draftBody.value = null
     draftTitle.value = null
     conflictNotice.value = null
+    actionError.value = ''
+    detailNotice.value = null
+    detailError.value = null
     detailMode.value = 'preview'
-    await openCard(projectId, activeCard.value.id)
+    try {
+      const card = await readPlan(projectId, cardId)
+      if (!isCurrentProject(projectId, generation) || sequence !== openSequence) return
+      if (!card) {
+        activeCard.value = null
+        selectedCardId.value = null
+        await refreshBoard(projectId)
+        return
+      }
+      draftVersions.set(cardId, 0)
+      activeCard.value = card
+      selectedCardId.value = card.id
+    } catch (error) {
+      if (isCurrentProject(projectId, generation) && sequence === openSequence) {
+        detailError.value = { cardId, message: toMessage(error, '读取计划失败') }
+      }
+    }
   }
 
   /** 冲突处理：保留当前草稿继续编辑（下次保存仍会校验 hash） */
@@ -321,33 +482,44 @@ export const usePlanStore = defineStore('plan', () => {
    * 返回新卡片（失败返回 null，错误进 actionError）。
    */
   async function createCard(projectId: string, body: string, status?: PlanStatusView) {
+    const generation = beginProject(projectId)
+    const sequence = ++createSequence
     actionError.value = ''
 
     try {
       const card = await createPlan(projectId, { body, status })
+      if (!isCurrentProject(projectId, generation)) return card
       await refreshBoard(projectId)
-      await openCard(projectId, card.id)
+      if (sequence === createSequence) {
+        await openCard(projectId, card.id)
+      }
       return card
     } catch (error) {
-      actionError.value = toMessage(error, '新建计划失败')
+      if (isCurrentProject(projectId, generation) && sequence === createSequence) {
+        actionError.value = toMessage(error, '新建计划失败')
+      }
       return null
     }
   }
 
   /** 打开新建面板（看板右上 / 空状态入口共用）：切换展示对象，不清当前卡片草稿 */
   function openCreate() {
+    if (isCreateOpen.value) return
     stashEditSession()
     isCreateOpen.value = true
   }
 
   /** 关闭新建面板；discard=true 时丢弃未提交内容 */
   function closeCreate(discard = false) {
+    createSequence += 1
     if (discard) {
       newCardTitle.value = ''
       newCardBody.value = ''
       actionError.value = ''
     }
     isCreateOpen.value = false
+    isCreating.value = false
+    createDetached = true
   }
 
   /** 新建面板草稿输入 */
@@ -372,24 +544,39 @@ export const usePlanStore = defineStore('plan', () => {
     }
 
     isCreating.value = true
-    actionError.value = ''
+    createDetached = false
+    const wasCreateOpen = isCreateOpen.value
+    const generation = beginProject(projectId)
+    const sequence = ++createSequence
+    const submittedTitle = title
+    const submittedBody = body
 
     try {
-      const fullBody = title && body ? `${title}\n\n${body}` : (title || body)
+      const fullBody = submittedTitle && submittedBody ? `${submittedTitle}\n\n${submittedBody}` : (submittedTitle || submittedBody)
       const card = await createPlan(projectId, { body: fullBody })
+      if (!isCurrentProject(projectId, generation)) return card
       await refreshBoard(projectId)
-
-      newCardTitle.value = ''
-      newCardBody.value = ''
-      isCreateOpen.value = false
-
-      await openCard(projectId, card.id)
+      const current = isCurrentProject(projectId, generation)
+        && sequence === createSequence
+        && (!wasCreateOpen || isCreateOpen.value)
+      if (current) {
+        // 创建中若又输入了其他内容，只清已提交部分，保留随后追加的草稿。
+        if (newCardTitle.value.trim() === submittedTitle) newCardTitle.value = ''
+        if (newCardBody.value.trim() === submittedBody) newCardBody.value = ''
+        isCreateOpen.value = false
+        await openCard(projectId, card.id)
+      }
       return card
     } catch (error) {
-      actionError.value = toMessage(error, '新建计划失败')
+      if (isCurrentProject(projectId, generation) && sequence === createSequence) {
+        actionError.value = toMessage(error, '新建计划失败')
+      }
       return null
     } finally {
-      isCreating.value = false
+      if (isCurrentProject(projectId, generation) && (sequence === createSequence || createDetached)) {
+        isCreating.value = false
+        createDetached = false
+      }
     }
   }
 
@@ -399,51 +586,73 @@ export const usePlanStore = defineStore('plan', () => {
    * 不动正文草稿；异步期间用户已切到其他卡片时不回写旧详情。
    */
   async function moveCard(projectId: string, id: string, status: PlanStatusView, afterId: string | null) {
+    const generation = beginProject(projectId)
     actionError.value = ''
 
     try {
       const updated = await updatePlan(projectId, { id, status, afterId })
+      if (!isCurrentProject(projectId, generation)) return true
       if (activeCard.value?.id === id) {
         activeCard.value = updated
       }
       await refreshBoard(projectId)
       return true
     } catch (error) {
-      actionError.value = toMessage(error, '移动计划失败')
-      await refreshBoard(projectId)
+      if (isCurrentProject(projectId, generation)) {
+        actionError.value = toMessage(error, '移动计划失败')
+        await refreshBoard(projectId)
+      }
       return false
     }
   }
 
   async function removeCard(projectId: string, id: string) {
+    const generation = beginProject(projectId)
     actionError.value = ''
 
     try {
       await deletePlan(projectId, id)
+      if (!isCurrentProject(projectId, generation)) return true
 
       // 删除后清除该卡片的编辑会话（§5.5），删除当前打开的卡片时一并关闭详情
       editSessions.value.delete(id)
+      draftVersions.delete(id)
       if (selectedCardId.value === id) {
         closeCard()
       }
       await refreshBoard(projectId)
       return true
     } catch (error) {
-      actionError.value = toMessage(error, '删除计划失败')
+      if (isCurrentProject(projectId, generation)) {
+        actionError.value = toMessage(error, '删除计划失败')
+      }
       return false
     }
   }
 
   /** 切换项目 / 关闭项目时清理上一个项目的全部界面状态（含编辑会话） */
   function reset() {
+    projectGeneration += 1
+    currentProjectId = null
+    openSequence += 1
+    createSequence += 1
+    boardRefreshCount += 1
+    savingSessions.value = new Map()
+    isLoading.value = false
+    isCreating.value = false
+    createDetached = false
     board.value = null
     activeCard.value = null
     draftBody.value = null
     draftTitle.value = null
     detailMode.value = 'preview'
     editSessions.value.clear()
+    draftVersions.clear()
     conflictNotice.value = null
     actionError.value = ''
+    detailError.value = null
+    detailNotice.value = null
+    lastSavedCard.value = null
     errorMessage.value = ''
     selectedCardId.value = null
     showOnHold.value = false
@@ -463,8 +672,11 @@ export const usePlanStore = defineStore('plan', () => {
     detailMode,
     editSessions,
     isSaving,
+    lastSavedCard,
     conflictNotice,
     actionError,
+    detailError,
+    detailNotice,
     selectedCardId,
     showOnHold,
     isCreateOpen,

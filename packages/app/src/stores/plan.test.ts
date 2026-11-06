@@ -76,6 +76,16 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('plan store 看板加载与状态归并', () => {
   it('loadBoard：按状态归入五列，未加载前列为空', async () => {
     const store = usePlanStore()
@@ -172,6 +182,7 @@ describe('plan store 正文编辑与保存', () => {
     expect(store.conflictNotice).toBeNull()
     expect(store.activeCard?.body).toBe('外部改过的正文')
     expect(store.hasUnsavedChanges).toBe(false)
+    expect(store.actionError).toBe('')
   })
 
   it('saveDraft 冲突后选择「保留草稿」：清提示但草稿不动', async () => {
@@ -815,15 +826,389 @@ describe('plan store 切换项目与外部修改', () => {
     expect(store.conflictNotice).toBeNull()
   })
 
-  it('正在编辑（有草稿）时不由外部 openCard 覆盖：草稿仍在', async () => {
+  it('正在编辑时，外部修改触发同卡重读仍保留草稿并提示冲突', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockResolvedValueOnce(detail('a', '旧内容'))
     mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
     await store.openCard(PROJECT, 'a')
     store.updateDraft('我的草稿')
 
-    // ProjectView 的 watch 有 hasUnsavedChanges 守卫；这里验证 store 层即便被直接调
-    // openCard，草稿值也不会静默丢失（调用方负责守卫，store 不主动清 draft 之外的状态）
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '外部新内容', { contentHash: 'hash-a2' }))
+    await store.openCard(PROJECT, 'a')
+
     expect(store.draftBody).toBe('我的草稿')
+    expect(store.conflictNotice?.currentCard.body).toBe('外部新内容')
+    expect(store.activeCard?.contentHash).toBe('hash-a')
+  })
+})
+
+describe('plan store 异步事件序（布局统一 review 修复）', () => {
+  beforeEach(() => {
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+  })
+
+  it('A 读取慢、B 读取快：旧请求不覆盖新选择', async () => {
+    const store = usePlanStore()
+    const readingA = deferred<PlanCardView>()
+    mockedReadPlan.mockImplementation((_projectId, id) =>
+      id === 'a' ? readingA.promise : Promise.resolve(detail(id, `${id} 正文`)),
+    )
+
+    const openA = store.openCard(PROJECT, 'a')
+    const openB = store.openCard(PROJECT, 'b')
+    await openB
+    expect(store.activeCard?.id).toBe('b')
+
+    readingA.resolve(detail('a', 'A 正文'))
+    await openA
+
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.selectedCardId).toBe('b')
+  })
+
+  it('A 读取失败晚于 B 成功：不把旧读取错误显示到当前卡片', async () => {
+    const store = usePlanStore()
+    const readingA = deferred<PlanCardView>()
+    mockedReadPlan.mockImplementation((_projectId, id) =>
+      id === 'a' ? readingA.promise : Promise.resolve(detail(id, `${id} 正文`)),
+    )
+
+    const openA = store.openCard(PROJECT, 'a')
+    await store.openCard(PROJECT, 'b')
+    readingA.reject(new Error('A 读取失败'))
+    await openA
+
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.detailError).toBeNull()
+    expect(store.actionError).toBe('')
+  })
+
+  it('最后选择的卡片读取失败：错误归属于目标卡，不覆盖当前详情', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    mockedReadPlan.mockRejectedValueOnce(new Error('B 读取失败'))
+
+    await store.openCard(PROJECT, 'b')
+
+    expect(store.detailError).toEqual({ cardId: 'b', message: 'B 读取失败' })
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.selectedCardId).toBe('a')
+  })
+
+  it('A→B→A：第一次 A 最后返回，不清掉后一次 A 恢复的草稿', async () => {
+    const store = usePlanStore()
+    const firstReadA = deferred<PlanCardView>()
+    mockedReadPlan.mockReturnValueOnce(firstReadA.promise)
+    const firstOpenA = store.openCard(PROJECT, 'a')
+
+    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
+    await store.openCard(PROJECT, 'b')
+    mockedReadPlan.mockResolvedValueOnce(detail('a', 'A 正文'))
+    const secondOpenA = store.openCard(PROJECT, 'a')
+    await secondOpenA
+    store.updateDraft('后一次 A 的草稿')
+
+    firstReadA.resolve(detail('a', 'A 正文'))
+    await firstOpenA
+
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.draftBody).toBe('后一次 A 的草稿')
+    expect(store.selectedCardId).toBe('a')
+  })
+
+  it('保存 A 时切到 B：A 成功返回后仍显示 B，且改名结果属于 A', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraftTitle('A 新名称')
+    const saving = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValue(saving.promise)
+    const saveA = store.saveDraft(PROJECT)
+    await store.openCard(PROJECT, 'b')
+    store.updateDraft('B 的独立草稿')
+
+    saving.resolve(detail('a', 'A 新名称', {
+      title: 'A 新名称',
+      sourcePath: 'plans/计划-1-A新名称-a.md',
+    }))
+    expect(await saveA).toBe(true)
+
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.selectedCardId).toBe('b')
+    expect(store.draftBody).toBe('B 的独立草稿')
+    expect(store.lastSavedCard?.id).toBe('a')
+    expect(store.lastSavedCard?.sourcePath).toBe('plans/计划-1-A新名称-a.md')
+  })
+
+  it('保存 A 时切到 B 再回 A：保存已提交的版本，B 的草稿不丢失', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 第一批内容')
+    const saving = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValue(saving.promise)
+    const saveA = store.saveDraft(PROJECT)
+    await store.openCard(PROJECT, 'b')
+    store.updateDraft('B 的独立草稿')
+    const backToA = store.openCard(PROJECT, 'a')
+
+    saving.resolve(detail('a', 'A 第一批内容', { contentHash: 'hash-a2' }))
+    await Promise.all([saveA, backToA])
+
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.draftBody).toBeNull()
+    expect(store.activeCard?.body).toBe('A 第一批内容')
+    expect(store.editSessions.get('b')?.body).toBe('B 的独立草稿')
+  })
+
+  it('同卡保存途中继续输入：保留追加内容，保存后可继续编辑', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', 'A 原始'))
+    await store.openCard(PROJECT, 'a')
+    store.setDetailMode('edit')
+    store.updateDraft('A 第一批已提交内容')
+    const saving = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValue(saving.promise)
+    const save = store.saveDraft(PROJECT)
+    store.updateDraft('A 第一批已提交内容\n\n保存途中追加的新草稿')
+
+    saving.resolve(detail('a', 'A 第一批已提交内容', { contentHash: 'hash-a2' }))
+    expect(await save).toBe(true)
+
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.draftBody).toBe('A 第一批已提交内容\n\n保存途中追加的新草稿')
+    expect(store.hasUnsavedChanges).toBe(true)
+    expect(store.detailMode).toBe('edit')
+    expect(store.isSaving).toBe(false)
+    expect(store.editSessions.get('a')?.baseContentHash).toBe('hash-a2')
+  })
+
+  it('保存 A 时切到 B 再回 A 后继续输入：保留 A、B 各自的新草稿', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 第一批内容')
+    const saving = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValue(saving.promise)
+    const saveA = store.saveDraft(PROJECT)
+    await store.openCard(PROJECT, 'b')
+    store.updateDraft('B 的独立草稿')
+    const backToA = store.openCard(PROJECT, 'a')
+    saving.resolve(detail('a', 'A 第一批内容', { contentHash: 'hash-a2' }))
+    await Promise.all([saveA, backToA])
+    store.updateDraft('A 第一批内容\n\n重开后追加内容')
+
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.draftBody).toBe('A 第一批内容\n\n重开后追加内容')
+    expect(store.hasUnsavedChanges).toBe(true)
+    expect(store.editSessions.get('b')?.body).toBe('B 的独立草稿')
+  })
+
+  it('A 保存冲突晚于切到 B：不串冲突提示，重开 A 才显示自己的冲突', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 的草稿')
+    const saving = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValue(saving.promise)
+    const saveA = store.saveDraft(PROJECT)
+    await store.openCard(PROJECT, 'b')
+    store.updateDraft('B 的独立草稿')
+
+    saving.reject(new PlanConflictError('A 发生冲突', detail('a', 'A 的外部正文')))
+    expect(await saveA).toBe(false)
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.draftBody).toBe('B 的独立草稿')
+    expect(store.conflictNotice).toBeNull()
+    expect(store.detailNotice?.cardId).toBe('a')
+    expect(store.actionError).toBe('')
+
+    await store.openCard(PROJECT, 'a')
+    expect(store.draftBody).toBe('A 的草稿')
+    expect(store.actionError).toBe('A 发生冲突')
+    expect(store.conflictNotice?.currentCard.body).toBe('A 的外部正文')
+  })
+
+  it('A 保存普通失败晚于切到 B：错误不显示在 B，只保留在 A 的会话', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('A 的草稿')
+    const saving = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValue(saving.promise)
+    const saveA = store.saveDraft(PROJECT)
+    await store.openCard(PROJECT, 'b')
+    store.updateDraft('B 的独立草稿')
+
+    saving.reject(new Error('A 写入失败'))
+    expect(await saveA).toBe(false)
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.draftBody).toBe('B 的独立草稿')
+    expect(store.actionError).toBe('')
+    expect(store.detailNotice).toEqual({ cardId: 'a', message: '「a 原始」A 写入失败' })
+
+    await store.openCard(PROJECT, 'a')
+    expect(store.actionError).toBe('A 写入失败')
+    expect(store.draftBody).toBe('A 的草稿')
+    expect(store.conflictNotice).toBeNull()
+  })
+
+  it('旧项目读取晚于 reset：不回写已关闭的项目', async () => {
+    const store = usePlanStore()
+    const reading = deferred<PlanCardView>()
+    mockedReadPlan.mockReturnValue(reading.promise)
+    const open = store.openCard(PROJECT, 'a')
+
+    store.reset()
+    reading.resolve(detail('a', 'P1 的旧正文'))
+    await open
+
+    expect(store.activeCard).toBeNull()
+    expect(store.selectedCardId).toBeNull()
+  })
+
+  it('旧项目看板晚于新项目：不回写看板、错误或忙碌态', async () => {
+    const store = usePlanStore()
+    const oldBoard = deferred<PlanBoardView>()
+    mockedGetPlanBoard.mockReturnValueOnce(oldBoard.promise)
+    const oldLoad = store.loadBoard(PROJECT)
+    store.reset()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('b', 'inbox', 0)]))
+    const newLoad = store.loadBoard('p-2')
+    await newLoad
+
+    oldBoard.resolve(board([summary('a', 'inbox', 0)]))
+    await oldLoad
+
+    expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['b'])
+    expect(store.isLoading).toBe(false)
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('同项目连续刷新：旧看板不覆盖新看板', async () => {
+    const store = usePlanStore()
+    const oldBoard = deferred<PlanBoardView>()
+    mockedGetPlanBoard.mockReturnValueOnce(oldBoard.promise)
+    const oldLoad = store.loadBoard(PROJECT)
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('b', 'inbox', 0)]))
+    const newLoad = store.refreshBoard(PROJECT)
+    await newLoad
+
+    oldBoard.resolve(board([summary('a', 'inbox', 0)]))
+    await oldLoad
+
+    expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['b'])
+    expect(store.isLoading).toBe(false)
+  })
+
+  it('创建途中切卡：创建结果不抢回详情，输入保留且可继续新建', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', 'A 正文'))
+    await store.openCard(PROJECT, 'a')
+    store.openCreate()
+    store.updateCreateDraft('新建计划', '正文')
+    const creating = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValue(creating.promise)
+    const create = store.submitCreate(PROJECT)
+
+    await store.openCard(PROJECT, 'a')
+    creating.resolve(detail('new-1', '新建计划\n\n正文'))
+    expect((await create)?.id).toBe('new-1')
+
+    expect(store.activeCard?.id).toBe('a')
+    expect(store.isCreateOpen).toBe(false)
+    expect(store.newCardTitle).toBe('新建计划')
+    expect(store.newCardBody).toBe('正文')
+    expect(store.isCreating).toBe(false)
+  })
+
+  it('旧项目保存晚于新项目同 ID 保存：收尾不删新保存锁', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', 'P1 原始'))
+    await store.openCard(PROJECT, 'a')
+    store.updateDraft('P1 草稿')
+    const oldSave = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValueOnce(oldSave.promise)
+    const oldSaving = store.saveDraft(PROJECT)
+
+    store.reset()
+    mockedReadPlan.mockResolvedValue(detail('a', 'P2 原始'))
+    await store.openCard('p-2', 'a')
+    store.updateDraft('P2 草稿')
+    const newSave = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValueOnce(newSave.promise)
+    const newSaving = store.saveDraft('p-2')
+    oldSave.resolve(detail('a', 'P1 草稿'))
+    expect(await oldSaving).toBe(false)
+
+    expect(store.isSaving).toBe(true)
+    expect(await store.saveDraft('p-2')).toBe(false)
+    newSave.resolve(detail('a', 'P2 草稿'))
+    expect(await newSaving).toBe(true)
+    expect(store.activeCard?.body).toBe('P2 草稿')
+  })
+
+  it('旧项目创建晚于 reset：不回写看板，也不打开旧项目详情', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+    const creating = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValue(creating.promise)
+    const create = store.createCard(PROJECT, '旧项目新计划')
+
+    store.reset()
+    mockedGetPlanBoard.mockClear()
+    mockedReadPlan.mockClear()
+    creating.resolve(detail('new-old', '旧项目新计划'))
+    expect((await create)?.id).toBe('new-old')
+
+    expect(store.board).toBeNull()
+    expect(store.activeCard).toBeNull()
+    expect(mockedGetPlanBoard).not.toHaveBeenCalled()
+    expect(mockedReadPlan).not.toHaveBeenCalled()
+  })
+
+  it('旧项目提交新建晚于 reset：不刷新旧看板，也不抢回新建界面', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+    store.openCreate()
+    store.updateCreateDraft('旧项目新计划', '正文')
+    const creating = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValue(creating.promise)
+    const create = store.submitCreate(PROJECT)
+
+    store.reset()
+    mockedGetPlanBoard.mockClear()
+    creating.resolve(detail('new-old', '旧项目新计划\n\n正文'))
+    expect((await create)?.id).toBe('new-old')
+
+    expect(store.board).toBeNull()
+    expect(store.activeCard).toBeNull()
+    expect(store.isCreateOpen).toBe(false)
+    expect(mockedGetPlanBoard).not.toHaveBeenCalled()
+  })
+
+  it('旧项目移动和删除晚于新项目：不刷新或清空新项目状态', async () => {
+    const store = usePlanStore()
+    mockedReadPlan.mockResolvedValue(detail('a', 'P1 正文'))
+    await store.openCard(PROJECT, 'a')
+    const moving = deferred<PlanCardView>()
+    const deleting = deferred<{ card: PlanCardView; trashPath: string }>()
+    mockedUpdatePlan.mockReturnValue(moving.promise)
+    mockedDeletePlan.mockReturnValue(deleting.promise)
+    const move = store.moveCard(PROJECT, 'a', 'done', null)
+    const remove = store.removeCard(PROJECT, 'a')
+
+    store.reset()
+    mockedReadPlan.mockResolvedValue(detail('b', 'P2 正文'))
+    await store.openCard('p-2', 'b')
+    mockedGetPlanBoard.mockClear()
+    moving.resolve(detail('a', 'P1 正文', { status: 'done' }))
+    deleting.resolve({ card: detail('a', 'P1 正文'), trashPath: '.novel/trash/a.md' })
+    await Promise.all([move, remove])
+
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.board).toBeNull()
+    expect(mockedGetPlanBoard).not.toHaveBeenCalled()
   })
 })

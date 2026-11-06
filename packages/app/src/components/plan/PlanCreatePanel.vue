@@ -17,7 +17,7 @@ const emit = defineEmits<{
   close: []
   updateCreateDraft: [title: string, body: string]
   submitCreate: []
-  /** 取消 / 关闭：仅切换展示对象，新建草稿保留（§2.7） */
+  /** 取消：回到当前详情，新建草稿保留（§2.7）；顶部 close 只收起面板 */
   cancel: []
 }>()
 
@@ -32,7 +32,7 @@ function onBodyInput(event: Event) {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col" data-testid="plan-create-panel">
-    <PanelHeader @close="emit('cancel')">
+    <PanelHeader @close="emit('close')">
       <template #leading>
         <h2 class="truncate text-sm font-semibold text-gray-800">新建计划</h2>
       </template>
