@@ -327,8 +327,8 @@ function sortEntries<TEntry extends { name: string; kind: 'file' | 'directory' }
   })
 }
 
-/** 遍历产出文件路径 + 修改时间（mtime 排序与采样都依赖它）。 */
-async function* walkFiles(
+/** 遍历产出文件路径 + 修改时间（mtime 排序与采样都依赖它）；SearchFiles 复用遍历、忽略 mtime。 */
+export async function* walkFiles(
   directoryHandle: FileSystemDirectoryHandle,
   directoryPath: string,
   includeHidden: boolean,
@@ -383,7 +383,8 @@ function validateGlobPattern(pattern: string) {
 /** 统一双参签名：path = 项目根相对全路径，relativeToSearchPath = 相对搜索根的路径。 */
 type GlobMatcher = (path: string, relativeToSearchPath: string) => boolean
 
-function createGlobMatcher(pattern: string): GlobMatcher {
+/** SearchFiles 的 include 过滤复用同一套 glob 语义（无 `/` 匹配任意深度 basename）。 */
+export function createGlobMatcher(pattern: string): GlobMatcher {
   const normalizedPattern = pattern.startsWith('./') ? pattern.slice(2) : pattern
   const regex = new RegExp(`^${globToRegexSource(normalizedPattern)}$`)
 

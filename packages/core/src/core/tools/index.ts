@@ -6,6 +6,7 @@ import {
   renameFileTool,
 } from './file-tools'
 import { findFilesTool, listDirectoryTool } from './directory-tools'
+import { searchFilesTool } from './search-text'
 import { ragSearchTool } from './rag-search'
 import { loadElementsTool } from './load-elements'
 import {
@@ -29,6 +30,8 @@ import type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  SearchFilesInput,
+  SearchFilesOutput,
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
   KnowledgeLookupInput,
@@ -76,6 +79,8 @@ export type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  SearchFilesInput,
+  SearchFilesOutput,
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
   KnowledgeLookupInput,
@@ -120,6 +125,7 @@ type ToolOutputMap = {
   DeleteFile: DeleteFileOutput
   ListDirectory: ListDirectoryOutput
   FindFiles: FindFilesOutput
+  SearchFiles: SearchFilesOutput
   RagSearch: RagSearchOutput
   LoadElements: LoadElementsOutput
   ListPlans: ListPlansOutput
@@ -141,6 +147,7 @@ const tools = {
   DeleteFile: deleteFileTool,
   ListDirectory: listDirectoryTool,
   FindFiles: findFilesTool,
+  SearchFiles: searchFilesTool,
   RagSearch: ragSearchTool,
   LoadElements: loadElementsTool,
   ListPlans: listPlansTool,

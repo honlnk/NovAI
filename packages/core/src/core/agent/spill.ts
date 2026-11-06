@@ -33,7 +33,7 @@ export const SPILL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
  * FindFiles/SearchFiles 的超限已由工具层做「跨目录采样 + 计数触发 spill」（dsh glob/grep 同款），
  * 此处白名单是字符阈值兜底：采样页/预览页本身仍超长时再拦一道（罕见，但指针在尾部可恢复）。
  */
-export const SPILLABLE_TOOLS = ['RagSearch', 'FindFiles'] as const
+export const SPILLABLE_TOOLS = ['RagSearch', 'FindFiles', 'SearchFiles'] as const
 
 export function createSpillFileId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`

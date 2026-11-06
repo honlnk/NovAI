@@ -289,6 +289,7 @@ export type ToolNameView =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
   | 'ListPlans'

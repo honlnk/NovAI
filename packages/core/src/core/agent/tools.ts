@@ -6,6 +6,7 @@ import {
   renameFileTool,
 } from '../tools/file-tools'
 import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
+import { searchFilesTool } from '../tools/search-text'
 import { ragSearchTool } from '../tools/rag-search'
 import { loadElementsTool, renderElementContent } from '../tools/load-elements'
 import {
@@ -45,6 +46,7 @@ import type {
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
+  SearchFilesOutput,
   RenameFileInput,
   RenameFileOutput,
   ToolDefinition,
@@ -334,6 +336,73 @@ export function createAgentTools(): AgentRunnableToolMap {
           output.filenames.length ? output.filenames.join('\n') : 'No files found',
           footer,
         ].filter(Boolean).join('\n')
+      },
+    },
+    SearchFiles: {
+      name: 'SearchFiles',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'SearchFiles',
+          description: '按文件内容搜索项目中的文本，返回匹配行及前后上下文，按文件分组。默认字面匹配；设 regex: true 启用正则。常用 include: "*.txt" 限定只搜章节。',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description: '必填，搜索词。默认字面匹配（非正则），适合精确人名、词组、句子。',
+              },
+              path: {
+                type: 'string',
+                description: '可选，搜索范围（项目内目录相对路径）；不传则搜索项目根目录。常传 chapters/。',
+              },
+              include: {
+                type: 'string',
+                description: '可选，单个正向 glob 过滤文件名，例如 *.txt、*.{txt,md}。不支持 ! 取反和逗号列表。',
+              },
+              regex: {
+                type: 'boolean',
+                description: 'true 时 query 按 JS 正则解释。默认 false（字面匹配）。',
+              },
+              contextLines: {
+                type: 'integer',
+                minimum: 0,
+                maximum: 5,
+                description: '可选，匹配行前后各带 N 行上下文。默认 2，范围 0-5。',
+              },
+              limit: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 500,
+                description: '可选，返回匹配数上限。默认 100，最大 500；超出时完整结果存入 spill 文件可取回。',
+              },
+            },
+            required: ['query'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: searchFilesTool,
+      formatResult(output: SearchFilesOutput) {
+        if (output.totalMatches === 0) {
+          return `搜索「${output.query}」没有找到匹配`
+        }
+
+        const header = output.truncated
+          ? `Found ${output.shownMatches} of ${output.totalMatches} matches`
+          : `Found ${output.totalMatches} ${output.totalMatches === 1 ? 'match' : 'matches'}`
+        const footer = output.truncated
+          ? [
+            `(共找到 ${output.totalMatches} 处匹配，已显示前 ${output.shownMatches} 处。`,
+            output.spillPath
+              ? `完整结果已存至 ${output.spillPath}，可用 ReadFile 对该路径以 offset/limit 分段取回。)`
+              : '完整结果未能保存，请缩小 query、path 或 include 后重试。)',
+          ].join('')
+          : ''
+
+        return [header, '', output.content, '', footer].filter(Boolean).join('\n')
       },
     },
     RagSearch: {
@@ -806,6 +875,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'DeleteFile'
     || value === 'ListDirectory'
     || value === 'FindFiles'
+    || value === 'SearchFiles'
     || value === 'RagSearch'
     || value === 'LoadElements'
     || value === 'ListPlans'

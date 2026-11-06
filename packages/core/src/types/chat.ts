@@ -15,6 +15,7 @@ export type ChatToolName =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
   | 'ListPlans'

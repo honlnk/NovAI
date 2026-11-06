@@ -62,6 +62,26 @@ export function assertReadableDocumentPath(path: string, label: string) {
   }
 }
 
+/**
+ * 读路径断言的目录版（SearchFiles 的搜索范围用）：与文件版同一套内部目录边界，
+ * `.novel/spill/` 同样放行（模型可显式在 spill 目录内搜索）。目录路径不带尾斜杠，
+ * spill 目录自身（`.novel/spill`）也算放行范围。
+ */
+export function assertReadableDirectoryPath(path: string, label: string) {
+  const folded = foldInternalPath(path)
+  // 目录路径不带尾斜杠：裸目录名（.novel、.novai 本身）也算内部目录
+  const isInternal = folded === '.novel' || folded === '.novai' || isInternalPath(folded)
+
+  if (isInternal && !isSpillDirectory(folded)) {
+    throw new Error(`${label} 不能指向项目内部目录（novel.config.json、.novel、.novai；.novel/spill/ 除外）`)
+  }
+}
+
+/** 是否落在放行的 spill 目录内（目录本身或其子路径）。 */
+function isSpillDirectory(folded: string) {
+  return folded === SPILL_DIR_PREFIX.slice(0, -1) || folded.startsWith(SPILL_DIR_PREFIX)
+}
+
 export function normalizeTextFilePath(value: unknown, label: string) {
   const path = normalizeProjectPath(readString(value, label))
   assertWritableTextFilePath(path)

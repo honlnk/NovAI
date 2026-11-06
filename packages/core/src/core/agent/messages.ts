@@ -8,6 +8,7 @@ export type AgentToolName =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
   | 'ListPlans'

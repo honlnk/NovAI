@@ -121,8 +121,8 @@ export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOut
   },
 }
 
-/** 单行截断：超过 READ_MAX_LINE_LENGTH 字符的行截断并附标记（dsh truncateLine 同款）。 */
-function truncateLongLine(line: string) {
+/** 单行截断：超过 READ_MAX_LINE_LENGTH 字符的行截断并附标记（dsh truncateLine 同款）；SearchFiles 复用同一闸。 */
+export function truncateLongLine(line: string) {
   return line.length > READ_MAX_LINE_LENGTH
     ? `${line.slice(0, READ_MAX_LINE_LENGTH)}……（本行过长，已截断至 ${READ_MAX_LINE_LENGTH} 字符）`
     : line

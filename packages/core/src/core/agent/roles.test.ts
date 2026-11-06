@@ -69,7 +69,7 @@ describe('主角色声明与重构前装配等价', () => {
   it('工具面 = 全量工具 + 委派工具 + 主动提问工具（主角色专属装配）', () => {
     const expectedFull = [
       'ReadFile', 'EditFile', 'CreateFile', 'RenameFile', 'DeleteFile',
-      'ListDirectory', 'FindFiles', 'RagSearch', 'LoadElements',
+      'ListDirectory', 'FindFiles', 'SearchFiles', 'RagSearch', 'LoadElements',
       'ListPlans', 'ReadPlan', 'CreatePlan', 'UpdatePlan', 'DeletePlan',
       'GetFileChangeHistory',
       'WebSearch', 'WebFetch', 'KnowledgeLookup',

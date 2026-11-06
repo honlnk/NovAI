@@ -17,6 +17,7 @@ export type CoreToolName =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
   | 'ListPlans'
@@ -261,6 +262,37 @@ export type FindFilesOutput = {
   /** 完整结果覆盖的顶层目录总数 */
   totalTopLevelDirs?: number
   /** 完整列表的 spill 落盘路径（写入失败时缺省） */
+  spillPath?: string
+}
+
+export type SearchFilesInput = {
+  /** 搜索词；默认字面匹配，regex: true 时按 JS 正则解释 */
+  query: string
+  /** 搜索范围（项目内目录相对路径），默认项目根目录 */
+  path?: string
+  /** 单个正向 glob 过滤文件名（如 *.txt）；拒绝 ! 取反与逗号列表 */
+  include?: string
+  /** true 时 query 按 JS 正则解释；默认 false（字面匹配） */
+  regex: boolean
+  /** 匹配行前后各带 N 行上下文；默认 2，范围 0-5 */
+  contextLines: number
+  /** 返回匹配数上限；默认 100，最大 500 */
+  limit: number
+}
+
+export type SearchFilesOutput = {
+  query: string
+  path: string
+  include?: string
+  regex: boolean
+  contextLines: number
+  /** D8 格式渲染好的匹配正文（超限时为前 limit 处的预览页） */
+  content: string
+  /** content 中包含的匹配数（≤ limit） */
+  shownMatches: number
+  totalMatches: number
+  truncated: boolean
+  /** 完整结果的 spill 落盘路径（写入失败时缺省） */
   spillPath?: string
 }
 
