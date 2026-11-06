@@ -183,14 +183,17 @@ function formatTime(iso: string): string {
             v-for="card in cards"
             :key="card.id"
             :class="[
-              'group cursor-pointer rounded-md border bg-white p-2.5 transition-colors hover:border-gray-300',
+              'group cursor-pointer rounded-md border bg-white p-2.5 transition-colors hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-gray-900',
               dragCardId === card.id ? 'opacity-40' : '',
               selectedCardId === card.id ? 'border-gray-900' : 'border-gray-200',
               dropTarget?.status === status && dropTarget.afterId === card.id ? 'border-t-2 border-t-gray-900' : '',
             ]"
             draggable="true"
+            tabindex="0"
             data-testid="plan-card"
             @click="emit('openCard', card.id)"
+            @keydown.enter.prevent="emit('openCard', card.id)"
+            @keydown.space.prevent="emit('openCard', card.id)"
             @dragstart="onCardDragStart(card, $event)"
             @dragend="onCardDragEnd"
             @dragover.prevent="dropTarget = { status, afterId: card.id }"

@@ -43,7 +43,7 @@ function handleResize(width: number) {
     :class="[
       'relative flex shrink-0 flex-col border-l border-gray-200 bg-white',
       isResizing ? '' : 'transition-all duration-200',
-      'max-lg:fixed max-lg:top-0 max-lg:bottom-7 max-lg:right-0 max-lg:z-50',
+      'max-lg:fixed max-lg:top-0 max-lg:bottom-7 max-lg:right-0 max-lg:z-50 max-lg:max-w-full',
       isOpen ? '' : 'w-0 overflow-hidden',
       isOpen ? 'max-lg:translate-x-0' : 'max-lg:translate-x-full',
     ]"
