@@ -7,7 +7,8 @@ import PanelHeader from './PanelHeader.vue'
 
 /**
  * 普通文件内容（右侧面板的文件内容类型）：由旧 ContentPanel 原样迁出，
- * 预览/编辑/原始三态、引用选中与草稿行为保持不变（布局统一计划只迁移位置归属）。
+ * 预览/编辑两态、引用选中与草稿行为保持不变（布局统一计划只迁移位置归属）。
+ * 内容卡片撑满面板剩余高度（与计划详情一致），滚动发生在卡片内部。
  */
 const props = defineProps<{
   file: FileContentView | null
@@ -21,7 +22,7 @@ const emit = defineEmits<{
   selectQuote: [payload: { path: string; name: string; text: string }]
 }>()
 
-const viewMode = ref<'preview' | 'edit' | 'raw'>('preview')
+const viewMode = ref<'preview' | 'edit'>('preview')
 const editDraft = ref('')
 const isSaving = ref(false)
 
@@ -96,7 +97,7 @@ async function handleSave() {
 
 /**
  * 预览模式下捕获用户选中的文本，生成引用 chip。
- * 仅预览模式触发（编辑模式选中是编辑操作，原始模式选中无意义）。
+ * 仅预览模式触发（编辑模式选中是编辑操作）。
  * 单段上限 500 字符，超出截断（避免整篇复制）。
  */
 function handleContentMouseup() {
@@ -135,7 +136,7 @@ function handleContentMouseup() {
         </span>
       </template>
       <template #actions>
-        <!-- 预览/编辑/原始 三态分段控件 -->
+        <!-- 预览/编辑 两态分段控件 -->
         <div
           v-if="file"
           class="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5"
@@ -144,7 +145,6 @@ function handleContentMouseup() {
             v-for="mode in [
               { key: 'preview', label: '预览', icon: 'eye' },
               { key: 'edit', label: '编辑', icon: 'pencil' },
-              { key: 'raw', label: '原始', icon: 'code' },
             ]"
             :key="mode.key"
             :text="mode.key === 'edit' && !canEdit ? `${mode.label}（该文件类型不支持编辑）` : mode.label"
@@ -170,12 +170,8 @@ function handleContentMouseup() {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
               </svg>
               <!-- 编辑（铅笔） -->
-              <svg v-else-if="mode.icon === 'pencil'" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-              <!-- 原始（代码括号） -->
               <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
             </button>
           </Tooltip>
@@ -183,10 +179,10 @@ function handleContentMouseup() {
       </template>
     </PanelHeader>
 
-    <!-- 内容区域 -->
-    <div class="flex-1 overflow-y-auto p-4">
+    <!-- 内容区域：卡片撑满剩余高度，滚动发生在卡片内部（与计划详情一致） -->
+    <div class="flex min-h-0 flex-1 flex-col p-4">
       <!-- 空状态 -->
-      <div v-if="!file" class="flex flex-col items-center justify-center py-16">
+      <div v-if="!file" class="flex flex-1 flex-col items-center justify-center">
         <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
@@ -203,11 +199,11 @@ function handleContentMouseup() {
       </div>
 
       <!-- 文件内容 -->
-      <div v-else-if="file" class="space-y-3">
+      <div v-else-if="file" class="flex min-h-0 flex-1 flex-col space-y-3">
         <!-- 预览模式 -->
         <div
           v-if="viewMode === 'preview'"
-          class="rounded-lg border border-gray-200 bg-gray-50 p-4"
+          class="min-h-0 flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-4"
           @mouseup="handleContentMouseup"
         >
           <MarkdownRenderer v-if="shouldRenderMarkdown(file.format)" :content="file.content" />
@@ -215,15 +211,15 @@ function handleContentMouseup() {
         </div>
 
         <!-- 编辑模式 -->
-        <div v-else-if="viewMode === 'edit'" class="flex flex-col rounded-lg border border-gray-200 bg-white p-2">
+        <div v-else-if="viewMode === 'edit'" class="flex min-h-0 flex-1 flex-col rounded-lg border border-gray-200 bg-white p-2">
           <textarea
             v-model="editDraft"
             :disabled="!canEdit"
-            class="min-h-[400px] w-full resize-none rounded-md border border-gray-200 p-3 font-mono text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+            class="min-h-0 w-full flex-1 resize-none rounded-md border border-gray-200 p-3 font-mono text-sm text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
             placeholder="该文件类型不支持编辑"
             @keydown="handleKeydown"
           />
-          <div class="mt-2 flex items-center justify-between px-1">
+          <div class="mt-2 flex shrink-0 items-center justify-between px-1">
             <span class="text-xs text-gray-400">Ctrl/⌘ + S 保存</span>
             <button
               type="button"
@@ -236,13 +232,8 @@ function handleContentMouseup() {
           </div>
         </div>
 
-        <!-- 原始模式 -->
-        <div v-else-if="viewMode === 'raw'" class="rounded-lg border border-gray-200 bg-gray-900 p-4">
-          <pre class="whitespace-pre-wrap font-mono text-sm text-gray-100">{{ file.content }}</pre>
-        </div>
-
         <!-- 文件信息 -->
-        <div class="flex items-center justify-between text-xs text-gray-500">
+        <div class="flex shrink-0 items-center justify-between text-xs text-gray-500">
           <span>{{ file.path }}</span>
           <span v-if="file.updatedAt">{{ new Date(file.updatedAt).toLocaleString('zh-CN') }}</span>
         </div>
