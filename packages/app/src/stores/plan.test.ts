@@ -76,6 +76,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+/** 手动放行的异步结果：制造「请求已发出、尚未返回」的中间态 */
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -86,6 +87,8 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+/** 走一轮宏任务，让排队的看板读取真正启动 */
+const flushAsync = () => new Promise<void>((resolve) => { setTimeout(resolve, 0) })
 describe('plan store 看板加载与状态归并', () => {
   it('loadBoard：按状态归入五列，未加载前列为空', async () => {
     const store = usePlanStore()
@@ -126,6 +129,104 @@ describe('plan store 看板加载与状态归并', () => {
 
     expect(store.errorMessage).toBe('boom')
     expect(store.board).toBeNull()
+  })
+})
+
+describe('plan store 看板加载反馈（首载骨架屏 / 后台刷新保留看板）', () => {
+  it('首载期间 isLoading 且 board 仍为空：组件据此显示骨架屏而非白屏', async () => {
+    const store = usePlanStore()
+    const pending = deferred<PlanBoardView>()
+    mockedGetPlanBoard.mockReturnValueOnce(pending.promise)
+
+    const loading = store.loadBoard(PROJECT)
+    expect(store.isLoading).toBe(true)
+    expect(store.board).toBeNull()
+
+    pending.resolve(board([summary('a', 'inbox', 0)]))
+    await loading
+
+    expect(store.isLoading).toBe(false)
+    expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['a'])
+  })
+
+  it('已有数据时后台刷新保留旧看板：等待期间不清空，返回后替换', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('a', 'inbox', 0)]))
+    await store.loadBoard(PROJECT)
+
+    const pending = deferred<PlanBoardView>()
+    mockedGetPlanBoard.mockReturnValueOnce(pending.promise)
+    const refreshing = store.refreshBoard(PROJECT)
+
+    // 关键断言：刷新中旧看板仍在（拖动/保存后不再闪「正在读取计划…」）
+    expect(store.isLoading).toBe(true)
+    expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['a'])
+
+    pending.resolve(board([summary('a', 'inbox', 0), summary('b', 'planned', 0)]))
+    await refreshing
+
+    expect(store.isLoading).toBe(false)
+    expect(store.board?.columns.planned.map((card) => card.id)).toEqual(['b'])
+  })
+
+  it('后台刷新失败：旧看板保留、错误进 errorMessage（可重试）', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('a', 'inbox', 0)]))
+    await store.loadBoard(PROJECT)
+
+    mockedGetPlanBoard.mockRejectedValueOnce(new Error('网络断了'))
+    await store.refreshBoard(PROJECT)
+
+    expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['a'])
+    expect(store.errorMessage).toBe('网络断了')
+    expect(store.isLoading).toBe(false)
+  })
+
+  it('手动刷新成功短暂提示一次；自动同步成功不打扰', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
+    await store.loadBoard(PROJECT)
+    expect(store.manualRefreshedCount).toBe(0)
+
+    await store.refreshBoard(PROJECT, { source: 'auto' })
+    expect(store.manualRefreshedCount).toBe(0)
+
+    await store.refreshBoard(PROJECT, { source: 'manual' })
+    expect(store.manualRefreshedCount).toBe(1)
+  })
+
+  it('连续刷新合并为一段加载态并按请求顺序落板：手动刷新完成提示等全部结束', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('a', 'inbox', 0)]))
+    await store.loadBoard(PROJECT)
+
+    const first = deferred<PlanBoardView>()
+    const second = deferred<PlanBoardView>()
+    mockedGetPlanBoard
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+
+    const manualRefresh = store.refreshBoard(PROJECT, { source: 'manual' })
+    const autoRefresh = store.refreshBoard(PROJECT)
+    await flushAsync()
+    // 串行排队：手动段先发，自动段排队等前一段结束（不并发打目录）
+    expect(mockedGetPlanBoard).toHaveBeenCalledTimes(2)
+
+    // 第一段（手动）返回：批次还有自动同步在跑，不提前报「已更新」
+    first.resolve(board([summary('a', 'inbox', 0), summary('m', 'planned', 0)]))
+    await flushAsync()
+    expect(mockedGetPlanBoard).toHaveBeenCalledTimes(3)
+    expect(store.isLoading).toBe(true)
+    expect(store.manualRefreshedCount).toBe(0)
+    expect(store.board?.columns.planned.map((card) => card.id)).toEqual(['m'])
+
+    // 第二段（自动）返回：批次结束，按最后结果落板并补一次手动完成提示
+    second.resolve(board([summary('a', 'inbox', 0), summary('n', 'planned', 0)]))
+    await Promise.all([manualRefresh, autoRefresh])
+
+    expect(store.isLoading).toBe(false)
+    expect(store.board?.columns.planned.map((card) => card.id)).toEqual(['n'])
+    expect(store.manualRefreshedCount).toBe(1)
   })
 })
 
@@ -566,6 +667,41 @@ describe('plan store 卡片级编辑会话（布局统一计划 §5）', () => {
 })
 
 describe('plan store 拖拽与状态移动', () => {
+  it('moveCard 松手后本地立即移到目标位置：不等写盘与目录重扫', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([
+      summary('a', 'planned', 0),
+      summary('b', 'planned', 100),
+    ]))
+    await store.loadBoard(PROJECT)
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '正文', { status: 'planned', order: 50 }))
+    mockedGetPlanBoard.mockResolvedValueOnce(board([
+      summary('a', 'planned', 0),
+      summary('b', 'planned', 100),
+    ]))
+    const moving = store.moveCard(PROJECT, 'a', 'planned', 'b')
+
+    // 请求还没返回，看板已经显示松手后的位置（无回跳）
+    expect(store.board?.columns.planned.map((card) => card.id)).toEqual(['b', 'a'])
+    await moving
+  })
+
+  it('moveCard 失败：本地乐观位置被重新拉取的真实看板覆盖', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('a', 'inbox', 0)]))
+    await store.loadBoard(PROJECT)
+
+    mockedUpdatePlan.mockRejectedValue(new Error('移动失败'))
+    mockedGetPlanBoard.mockResolvedValueOnce(board([summary('a', 'inbox', 0)]))
+    const ok = await store.moveCard(PROJECT, 'a', 'done', null)
+
+    expect(ok).toBe(false)
+    expect(store.actionError).toBe('移动失败')
+    expect(store.board?.columns.done).toEqual([])
+    expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['a'])
+  })
+
   it('moveCard：传状态与 afterId（拖到某卡之后），失败后刷新看板恢复真实状态', async () => {
     const store = usePlanStore()
     mockedGetPlanBoard.mockResolvedValue(board([
@@ -1073,13 +1209,13 @@ describe('plan store 异步事件序（布局统一 review 修复）', () => {
     const oldBoard = deferred<PlanBoardView>()
     mockedGetPlanBoard.mockReturnValueOnce(oldBoard.promise)
     const oldLoad = store.loadBoard(PROJECT)
+    await flushAsync()
     store.reset()
     mockedGetPlanBoard.mockResolvedValueOnce(board([summary('b', 'inbox', 0)]))
     const newLoad = store.loadBoard('p-2')
-    await newLoad
-
+    // 旧项目的响应此时才返回：项目代次已过，守卫拦下，不回写看板/错误/忙碌态
     oldBoard.resolve(board([summary('a', 'inbox', 0)]))
-    await oldLoad
+    await Promise.all([newLoad, oldLoad])
 
     expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['b'])
     expect(store.isLoading).toBe(false)
@@ -1090,13 +1226,13 @@ describe('plan store 异步事件序（布局统一 review 修复）', () => {
     const store = usePlanStore()
     const oldBoard = deferred<PlanBoardView>()
     mockedGetPlanBoard.mockReturnValueOnce(oldBoard.promise)
-    const oldLoad = store.loadBoard(PROJECT)
+    const oldLoad = store.refreshBoard(PROJECT)
+    await flushAsync()
     mockedGetPlanBoard.mockResolvedValueOnce(board([summary('b', 'inbox', 0)]))
     const newLoad = store.refreshBoard(PROJECT)
-    await newLoad
-
+    // 旧响应此时才放行：串行队列先落新看板，旧结果晚到不再覆盖
     oldBoard.resolve(board([summary('a', 'inbox', 0)]))
-    await oldLoad
+    await Promise.all([newLoad, oldLoad])
 
     expect(store.board?.columns.inbox.map((card) => card.id)).toEqual(['b'])
     expect(store.isLoading).toBe(false)

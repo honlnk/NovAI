@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
@@ -15,7 +15,14 @@ import { REPO_URL } from '../../constants/repo'
  * - 顶栏结构与其他分类中央头部一致：左侧侧栏开关 + 标题 + 计数 + 已搁置筛选，
  *   右侧 GitHub 仓库 + 内容面板收起/展开；
  * - 宽度不足时仅看板列区域横向滚动，顶栏不被逐字挤压。
+ * - 加载反馈（加载反馈修复）：首载显示四列骨架屏；已有数据时任何刷新都保留
+ *   旧看板，只在顶栏下给轻量同步提示，不再整块替换成「正在读取计划…」。
  */
+
+/** 骨架屏列：与默认四常驻列一致（首载时还没有可跟随的筛选状态数据） */
+const SKELETON_STATUSES: PlanStatusView[] = ['inbox', 'planned', 'in-progress', 'done']
+/** 手动刷新成功后「计划已更新」的停留时长（自动同步成功不打扰，无提示） */
+const REFRESHED_NOTICE_MS = 1600
 
 const props = defineProps<{
   board: {
@@ -24,6 +31,10 @@ const props = defineProps<{
   } | null
   isLoading: boolean
   errorMessage: string
+  /** 后台同步提示来源：手动刷新与操作后自动同步文案不同 */
+  boardSyncSource: 'auto' | 'manual'
+  /** 手动刷新成功序号：每次 +1 触发短暂的「计划已更新」 */
+  manualRefreshedCount: number
   selectedCardId: string | null
   showOnHold: boolean
   /** 左侧分类侧栏是否展开（开关图标状态与其他页面一致） */
@@ -36,6 +47,7 @@ const emit = defineEmits<{
   openCreate: []
   openCard: [id: string]
   moveCard: [id: string, status: PlanStatusView, afterId: string | null]
+  retryLoad: []
   toggleOnHold: []
   toggleSidebar: []
   toggleMobileSidebar: []
@@ -59,6 +71,44 @@ const totalCards = computed(() => {
   }
   return (Object.values(props.board.columns) as PlanCardSummaryView[][])
     .reduce((total, cards) => total + cards.length, 0)
+})
+
+/** 首载（还没有任何看板数据）才显示骨架屏；后台刷新一律保留旧看板 */
+const isInitialLoading = computed(() => props.isLoading && props.board === null)
+
+/* ---------- 顶部轻量同步提示 ---------- */
+
+const showRefreshedNotice = ref(false)
+let refreshedNoticeTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(() => props.manualRefreshedCount, (count, previous) => {
+  if (count <= previous) {
+    return
+  }
+  if (refreshedNoticeTimer !== null) {
+    clearTimeout(refreshedNoticeTimer)
+  }
+  showRefreshedNotice.value = true
+  refreshedNoticeTimer = setTimeout(() => {
+    showRefreshedNotice.value = false
+    refreshedNoticeTimer = null
+  }, REFRESHED_NOTICE_MS)
+})
+
+onBeforeUnmount(() => {
+  if (refreshedNoticeTimer !== null) {
+    clearTimeout(refreshedNoticeTimer)
+  }
+})
+
+const syncMessage = computed(() => {
+  if (props.isLoading && props.board !== null) {
+    return props.boardSyncSource === 'manual' ? '正在刷新计划…' : '正在同步计划…'
+  }
+  if (showRefreshedNotice.value) {
+    return '计划已更新'
+  }
+  return ''
 })
 
 /* ---------- 拖拽（HTML5 DnD：卡片 → 列 / 卡片之间） ---------- */
@@ -187,17 +237,85 @@ function formatTime(iso: string): string {
       </div>
     </header>
 
-    <!-- 错误横幅（看板级错误） -->
-    <p v-if="errorMessage" class="shrink-0 border-b border-red-100 bg-red-50 px-4 py-2 text-xs text-red-600">
-      {{ errorMessage }}
-    </p>
-
-    <!-- 主体：看板列区（宽度不足时仅列区横向滚动，顶栏不受挤压） -->
+    <!-- 轻量同步提示：顶栏下细条；后台刷新期间看板照常可用 -->
     <div
-      v-if="isLoading"
-      class="flex flex-1 items-center justify-center text-sm text-gray-400"
+      v-if="syncMessage"
+      class="flex shrink-0 items-center gap-1.5 border-b border-gray-100 bg-gray-50 px-4 py-1.5 text-xs text-gray-500"
+      role="status"
+      aria-live="polite"
+      data-testid="plan-sync-notice"
     >
-      正在读取计划…
+      <svg
+        v-if="isLoading"
+        class="h-3.5 w-3.5 animate-spin"
+        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+      </svg>
+      <svg
+        v-else
+        class="h-3.5 w-3.5 text-green-600"
+        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+      </svg>
+      {{ syncMessage }}
+    </div>
+
+    <!-- 错误横幅（后台刷新失败时旧看板仍在，可从这重试；首载失败走下方居中重试） -->
+    <div
+      v-if="errorMessage && board !== null"
+      class="flex shrink-0 items-center justify-between gap-3 border-b border-red-100 bg-red-50 px-4 py-2 text-xs text-red-600"
+      role="alert"
+    >
+      <span>{{ errorMessage }}</span>
+      <button
+        class="shrink-0 rounded-md border border-red-200 px-2 py-0.5 font-medium text-red-600 transition-colors hover:bg-red-100"
+        data-testid="plan-retry-banner-button"
+        @click="emit('retryLoad')"
+      >
+        重试
+      </button>
+    </div>
+
+    <!-- 首载骨架屏：四常驻列占位，读完后一次性换成真实看板 -->
+    <div
+      v-if="isInitialLoading"
+      class="flex flex-1 gap-3 overflow-x-auto p-4"
+      aria-hidden="true"
+      data-testid="plan-board-skeleton"
+    >
+      <section
+        v-for="status in SKELETON_STATUSES"
+        :key="status"
+        class="flex w-64 shrink-0 flex-col rounded-lg bg-gray-50"
+      >
+        <header class="flex items-center gap-2 px-3 py-2.5">
+          <span class="h-3 w-12 animate-pulse rounded bg-gray-200" />
+          <span class="h-3 w-5 animate-pulse rounded-full bg-gray-200" />
+        </header>
+        <div class="flex flex-1 flex-col gap-2 px-2 pb-2">
+          <div
+            v-for="n in 3"
+            :key="n"
+            class="h-20 animate-pulse rounded-md border border-gray-100 bg-white"
+          />
+        </div>
+      </section>
+    </div>
+    <!-- 首载失败：没有可保留的旧看板，给重试入口 -->
+    <div
+      v-else-if="board === null && errorMessage"
+      class="flex flex-1 flex-col items-center justify-center gap-3"
+    >
+      <p class="text-sm text-gray-500">{{ errorMessage }}</p>
+      <button
+        class="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+        data-testid="plan-retry-button"
+        @click="emit('retryLoad')"
+      >
+        重试
+      </button>
     </div>
     <div
       v-else-if="totalCards === 0"

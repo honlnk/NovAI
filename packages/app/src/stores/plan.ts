@@ -1,4 +1,4 @@
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 
 import {
@@ -16,6 +16,7 @@ import type {
   PlanStatusView,
 } from '@novai/core/services/types'
 import { PlanConflictError } from '@novai/core/types/plans'
+import { moveCardInBoard } from '../components/plan/board-reorder'
 import { shouldReturnToPreviewAfterSave, type DetailMode } from '../components/plan/detail-mode'
 
 /**
@@ -54,10 +55,17 @@ export type PlanEditSession = {
   conflictCard?: PlanCardView
 }
 
+/** 看板读取来源：首载（骨架屏）、操作后/外部变更自动同步、左侧手动刷新 */
+export type BoardLoadSource = 'initial' | 'auto' | 'manual'
+
 export const usePlanStore = defineStore('plan', () => {
   const board = ref<PlanBoardView | null>(null)
   const isLoading = ref(false)
   const errorMessage = ref('')
+  /** 后台同步提示来源（手动刷新文案区分「刷新」与「同步」）；首载不显示提示 */
+  const boardSyncSource = ref<'auto' | 'manual'>('auto')
+  /** 手动刷新成功序号：组件据此短暂显示「计划已更新」（自动同步成功不打扰） */
+  const manualRefreshedCount = ref(0)
 
   /** 当前打开的详情卡片完整内容（含 contentHash） */
   const activeCard = ref<PlanCardView | null>(null)
@@ -100,8 +108,6 @@ export const usePlanStore = defineStore('plan', () => {
   let currentProjectId: string | null = null
   /** 读取序号：只有当前项目里最后一次选择的卡片可以接管详情 */
   let openSequence = 0
-  /** 看板刷新序号：只允许当前项目最后一次请求回写看板与忙碌态 */
-  let boardRefreshCount = 0
   /** 每份草稿有独立版本；保存只清理提交时那一版，保留随后继续输入的内容 */
   const draftVersions = new Map<string, number>()
   /** 新建只允许当前项目的最后一次提交回写新建草稿 */
@@ -157,30 +163,84 @@ export const usePlanStore = defineStore('plan', () => {
     ),
   )
 
-  async function loadBoard(projectId: string): Promise<void> {
+  // 保存成功（保存中结束且未保存修改清零）自动回到预览态（§详情预览 5）；
+  // 冲突 / 失败路径未保存修改仍为 true，不误触发
+  watch([isSaving, hasUnsavedChanges], ([saving, unsaved], [prevSaving]) => {
+    if (shouldReturnToPreviewAfterSave(prevSaving, saving, unsaved)) {
+      detailMode.value = 'preview'
+    }
+  })
+
+  /* ---------- 看板读取：首载骨架屏 + 后台刷新保留看板（加载反馈修复） ---------- */
+
+  // 串行排队 + 批次计数：保存/拖动/手动刷新/外部变更连续触发时合并为一段
+  // 同步状态，响应严格按请求顺序落 board（后发不覆盖先发的乱序结果）。
+  // 每次读取再叠加项目代次守卫：切换项目后，旧项目的在途响应不能回写。
+  let boardLoadQueue: Promise<void> = Promise.resolve()
+  let pendingBoardLoads = 0
+  let pendingManualLoads = 0
+  let batchManualSucceeded = false
+
+  function enqueueBoardLoad(projectId: string, source: BoardLoadSource) {
     const generation = beginProject(projectId)
-    // 同一项目的刷新按发起顺序合并；旧请求无论多晚返回都不能覆盖新结果。
-    const requestId = ++boardRefreshCount
+    pendingBoardLoads += 1
+    if (source === 'manual') {
+      pendingManualLoads += 1
+    }
+    // 批次里只要含手动刷新，提示就按「刷新」口径显示（合并成一次反馈）
+    boardSyncSource.value = pendingManualLoads > 0 ? 'manual' : (source === 'initial' ? boardSyncSource.value : source)
     isLoading.value = true
+
+    const run = boardLoadQueue.then(() => performBoardLoad(projectId, generation, source))
+    boardLoadQueue = run.catch(() => {})
+    return run.finally(() => {
+      pendingBoardLoads -= 1
+      if (source === 'manual') {
+        pendingManualLoads -= 1
+      }
+      // 项目已切换：忙碌态与提示交给新项目的批次收尾，旧批次不再回写
+      if (!isCurrentProject(projectId, generation)) {
+        return
+      }
+      if (pendingBoardLoads === 0) {
+        isLoading.value = false
+        // 批次全部结束才给「已更新」：期间还有同步在跑时不提前报完成
+        if (batchManualSucceeded && !errorMessage.value) {
+          manualRefreshedCount.value += 1
+        }
+        batchManualSucceeded = false
+        boardSyncSource.value = 'auto'
+      } else if (pendingManualLoads === 0) {
+        boardSyncSource.value = 'auto'
+      }
+    })
+  }
+
+  async function performBoardLoad(projectId: string, generation: number, source: BoardLoadSource) {
     errorMessage.value = ''
     try {
       const result = await getPlanBoard(projectId)
-      if (isCurrentProject(projectId, generation) && requestId === boardRefreshCount) {
+      if (isCurrentProject(projectId, generation)) {
         board.value = result
+        if (source === 'manual') {
+          batchManualSucceeded = true
+        }
       }
     } catch (error) {
-      if (isCurrentProject(projectId, generation) && requestId === boardRefreshCount) {
+      if (isCurrentProject(projectId, generation)) {
         errorMessage.value = toMessage(error, '读取计划板失败')
-      }
-    } finally {
-      if (isCurrentProject(projectId, generation) && requestId === boardRefreshCount) {
-        isLoading.value = false
       }
     }
   }
 
-  async function refreshBoard(projectId: string): Promise<void> {
-    await loadBoard(projectId)
+  /** 进入计划分类读取看板：无数据为首载（骨架屏），已有数据时等同后台同步 */
+  async function loadBoard(projectId: string) {
+    await enqueueBoardLoad(projectId, board.value === null ? 'initial' : 'auto')
+  }
+
+  /** 重新拉取看板：操作后自动同步与左侧手动刷新共用，source 决定顶部提示文案 */
+  async function refreshBoard(projectId: string, options: { source?: 'auto' | 'manual' } = {}) {
+    await enqueueBoardLoad(projectId, options.source ?? 'auto')
   }
 
   /* ---------- 卡片级编辑会话（布局统一计划 §5.2/§5.3） ---------- */
@@ -582,12 +642,17 @@ export const usePlanStore = defineStore('plan', () => {
 
   /**
    * 状态切换 / 拖拽排序的统一入口（立即保存）。afterId 为目标位置前一卡片。
-   * 成功后按 ID 同步当前详情（状态高亮 + 最新 contentHash），
-   * 不动正文草稿；异步期间用户已切到其他卡片时不回写旧详情。
+   * 松手后先把卡片本地移到目标位置（不等写盘与目录重扫），成功后刷新看板以
+   * 文件系统为准；失败保留错误提示并刷新回真实状态。按 ID 同步当前详情
+   * （状态高亮 + 最新 contentHash），不动正文草稿；异步期间用户已切到其他
+   * 卡片时不回写旧详情。
    */
   async function moveCard(projectId: string, id: string, status: PlanStatusView, afterId: string | null) {
     const generation = beginProject(projectId)
     actionError.value = ''
+    if (board.value) {
+      board.value = moveCardInBoard(board.value, id, status, afterId)
+    }
 
     try {
       const updated = await updatePlan(projectId, { id, status, afterId })
@@ -636,12 +701,12 @@ export const usePlanStore = defineStore('plan', () => {
     currentProjectId = null
     openSequence += 1
     createSequence += 1
-    boardRefreshCount += 1
     savingSessions.value = new Map()
-    isLoading.value = false
     isCreating.value = false
     createDetached = false
     board.value = null
+    isLoading.value = false
+    boardSyncSource.value = 'auto'
     activeCard.value = null
     draftBody.value = null
     draftTitle.value = null
@@ -666,6 +731,8 @@ export const usePlanStore = defineStore('plan', () => {
     board,
     isLoading,
     errorMessage,
+    boardSyncSource,
+    manualRefreshedCount,
     activeCard,
     draftBody,
     draftTitle,
