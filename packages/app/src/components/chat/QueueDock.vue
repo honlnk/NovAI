@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 
 import type { QueuedMessageView } from '@novai/core/services/types'
 import { expandSlashCommand } from '../../constants/slash-commands'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * QueueDock（文档 4 S5）：渲染在输入框正上方。
@@ -78,15 +79,7 @@ function cancelEdit() {
       class="mb-0 flex w-full items-center gap-2 text-xs font-medium text-blue-700"
       @click="expanded = !expanded"
     >
-      <svg
-        class="h-3 w-3 transition-transform"
-        :class="expanded ? 'rotate-90' : ''"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-      </svg>
+      <AppIcon name="chevron-right" :size="12" class="h-3 w-3 transition-transform" :class="expanded ? 'rotate-90' : ''" />
       {{ headerLabel }}
     </button>
 

@@ -156,9 +156,7 @@ function formatTime(iso: string) {
           title="关闭大纲"
           @click="handleClearOutline"
         >
-          <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <AppIcon name="x" :size="12" class="h-3 w-3" />
         </button>
       </div>
     </div>

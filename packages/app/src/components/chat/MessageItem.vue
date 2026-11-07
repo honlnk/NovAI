@@ -6,6 +6,7 @@ import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import AskUserQuestionCard from './AskUserQuestionCard.vue'
 import ReasoningCollapse from './ReasoningCollapse.vue'
 import TurnChangesPanel from './TurnChangesPanel.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   message: ChatMessageView
@@ -135,23 +136,10 @@ async function copyDetail() {
         @click="canExpand && (detailExpanded = !detailExpanded)"
       >
         <!-- 展开箭头（仅有详情可展开时显示） -->
-        <svg
-          v-if="canExpand"
-          class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform"
-          :class="detailExpanded ? 'rotate-90' : ''"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-        </svg>
+        <AppIcon name="chevron-right" :size="14" class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform" :class="detailExpanded ? 'rotate-90' : ''" v-if="canExpand" />
         <!-- 命令图标 -->
-        <svg v-if="message.command === '/压缩上下文'" class="h-4 w-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7 7 7M12 3v12m-7 6h14" />
-        </svg>
-        <svg v-else class="h-4 w-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
+        <AppIcon name="fold-vertical" :size="16" class="h-4 w-4 shrink-0 text-gray-400" v-if="message.command === '/压缩上下文'" />
+        <AppIcon name="zap" :size="16" class="h-4 w-4 shrink-0 text-gray-400" v-else />
         <span class="shrink-0 text-xs font-medium text-gray-700">{{ message.command }}</span>
         <span
           class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
@@ -183,9 +171,7 @@ async function copyDetail() {
   >
     <div class="max-w-[90%] rounded-lg bg-amber-50 px-4 py-2.5 text-amber-800">
       <div class="flex items-center gap-2">
-        <svg class="h-4 w-4 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-        </svg>
+        <AppIcon name="triangle-alert" :size="16" class="h-4 w-4 shrink-0 text-amber-500" />
         <span class="text-sm">{{ message.text }}</span>
       </div>
     </div>
@@ -198,9 +184,7 @@ async function copyDetail() {
   >
     <div class="max-w-[90%] rounded-lg bg-red-50 px-4 py-2.5 text-red-800">
       <div class="flex items-center gap-2">
-        <svg class="h-4 w-4 shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+        <AppIcon name="circle-alert" :size="16" class="h-4 w-4 shrink-0 text-red-500" />
         <span class="text-sm">{{ message.text }}</span>
       </div>
     </div>

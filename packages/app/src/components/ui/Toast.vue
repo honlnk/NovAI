@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import type { ToastAction } from '../../composables/useToast'
+import AppIcon from './AppIcon.vue'
 
 const props = defineProps<{
   message: string
@@ -53,42 +54,10 @@ onMounted(() => {
       ]"
     >
       <!-- 图标 -->
-      <svg
-        v-if="type === 'success'"
-        class="h-5 w-5 shrink-0"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      <svg
-        v-else-if="type === 'error'"
-        class="h-5 w-5 shrink-0"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      <svg
-        v-else-if="type === 'warning'"
-        class="h-5 w-5 shrink-0"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-      </svg>
-      <svg
-        v-else
-        class="h-5 w-5 shrink-0"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
+      <AppIcon name="circle-check" :size="20" class="h-5 w-5 shrink-0" v-if="type === 'success'" />
+      <AppIcon name="circle-alert" :size="20" class="h-5 w-5 shrink-0" v-else-if="type === 'error'" />
+      <AppIcon name="triangle-alert" :size="20" class="h-5 w-5 shrink-0" v-else-if="type === 'warning'" />
+      <AppIcon name="info" :size="20" class="h-5 w-5 shrink-0" v-else />
 
       <!-- 消息 -->
       <span class="text-sm">{{ message }}</span>
@@ -109,9 +78,7 @@ onMounted(() => {
         class="ml-2 shrink-0 rounded p-1 transition-colors hover:bg-white/20"
         @click="dismiss()"
       >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <AppIcon name="x" :size="16" class="h-4 w-4" />
       </button>
     </div>
   </Transition>

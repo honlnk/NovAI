@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { ChatMessageView } from '@novai/core/services/types'
 
 import { useChatStore } from '../../stores/chat'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 主动提问卡（AskUserQuestion 工具调用在消息流里的只读记录，交互优化计划 §8）：
@@ -38,14 +39,7 @@ const isInterrupted = computed(
     <div class="rounded-lg border border-blue-200 bg-blue-50/60 p-4">
       <!-- 标题行：短标题（若有）+ 状态徽标 -->
       <div class="mb-2 flex items-center gap-2">
-        <svg class="h-4 w-4 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
+        <AppIcon name="circle-help" :size="16" class="h-4 w-4 shrink-0 text-blue-500" />
         <span v-if="card.header" class="text-xs font-medium text-blue-700">{{ card.header }}</span>
         <span
           v-if="isPendingHere"

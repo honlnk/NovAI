@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
 import { REPO_URL } from '../../constants/repo'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 计划看板主面板（布局统一计划 D1/D6/D9）：始终占据中间主内容区，白色体系。
@@ -163,9 +164,7 @@ function formatTime(iso: string): string {
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
           @click="emit('toggleMobileSidebar')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <AppIcon name="menu" :size="20" class="h-5 w-5" />
         </button>
         <button
           :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
@@ -173,13 +172,9 @@ function formatTime(iso: string): string {
           @click="emit('toggleSidebar')"
         >
           <!-- 收起状态：显示汉堡菜单（暗示可以展开侧边栏） -->
-          <svg v-if="!isSidebarOpen" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <AppIcon name="menu" :size="20" class="h-5 w-5" v-if="!isSidebarOpen" />
           <!-- 展开状态：显示侧边栏收起图标 -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-          </svg>
+          <AppIcon name="chevrons-left" :size="20" class="h-5 w-5" v-else />
         </button>
         <h1 class="text-base font-semibold text-gray-800">创作计划板</h1>
         <span class="shrink-0 text-xs text-gray-500">{{ totalCards }} 张卡片</span>
@@ -215,13 +210,7 @@ function formatTime(iso: string): string {
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
           @click="emit('toggleContentPanel')"
         >
-          <svg
-            class="h-5 w-5 transition-transform duration-200"
-            :class="isContentPanelOpen ? '' : 'rotate-180'"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
+          <AppIcon name="chevron-right" :size="20" class="h-5 w-5 transition-transform duration-200" :class="isContentPanelOpen ? '' : 'rotate-180'" />
         </button>
       </div>
     </header>

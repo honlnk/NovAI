@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import AppIcon from './AppIcon.vue'
 
 const emit = defineEmits<{
   close: []
@@ -34,9 +35,7 @@ function handleGoToSettings() {
     >
       <div class="flex items-start gap-4">
         <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100">
-          <svg class="h-5 w-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <AppIcon name="info" :size="20" class="h-5 w-5 text-blue-600" />
         </div>
         <div class="flex-1">
           <h3 class="mb-2 text-lg font-semibold text-blue-900">欢迎使用 NovAI！</h3>

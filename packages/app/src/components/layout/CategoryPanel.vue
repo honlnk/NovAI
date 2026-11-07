@@ -6,6 +6,7 @@ import ElementList from '../category/ElementList.vue'
 import PromptList from '../category/PromptList.vue'
 import ConversationList from '../category/ConversationList.vue'
 import PlanList from '../category/PlanList.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 defineProps<{
   activeCategory: Category
@@ -70,9 +71,7 @@ const emit = defineEmits<{
       class="absolute right-2 top-2 z-10 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
       @click="emit('closeMobile')"
     >
-      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-      </svg>
+      <AppIcon name="x" :size="16" class="h-4 w-4" />
     </button>
 
     <!-- 按分类切换内容 -->

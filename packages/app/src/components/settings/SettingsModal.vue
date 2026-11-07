@@ -13,6 +13,7 @@ import SearchSettingsPanel from './SearchSettingsPanel.vue'
 import { useProjectStore } from '../../stores/project'
 import { useSettingsStore } from '../../stores/settings'
 import type { SearchSettingsForm } from '../../utils/search-settings'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   projectId: string
@@ -420,9 +421,7 @@ function restoreTab(): SettingsTab {
         class="cursor-pointer rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
         @click="handleClose"
       >
-        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <AppIcon name="x" :size="20" class="h-5 w-5" />
       </button>
     </header>
 

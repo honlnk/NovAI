@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import Tooltip from '../ui/Tooltip.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 计划分类面板（侧栏）：入口摘要 + 新建入口 + 最近计划直达。布局统一计划 D7/D8：
@@ -59,14 +60,7 @@ function statusShortLabel(status: PlanStatusView): string {
           data-testid="plan-refresh-button"
           @click="emit('refresh')"
         >
-          <svg
-            :class="['h-4 w-4', isLoading ? 'animate-spin' : '']"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
+          <AppIcon name="refresh-cw" :size="16" :class="['h-4 w-4', isLoading ? 'animate-spin' : '']" />
         </button>
       </Tooltip>
     </div>
@@ -90,9 +84,7 @@ function statusShortLabel(status: PlanStatusView): string {
         data-testid="plan-sidebar-create"
         @click="emit('openCreate')"
       >
-        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-        </svg>
+        <AppIcon name="plus" :size="16" class="h-4 w-4 shrink-0" />
         新建计划
       </button>
 

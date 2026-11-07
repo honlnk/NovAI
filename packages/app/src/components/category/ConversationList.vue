@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ChatSessionSummaryView } from '@novai/core/services/types'
 import { AGENT_ROLE_META } from '../../constants/agent-roles'
 import { CONVERSATION_FILTER_META, useConversationFilter, type ConversationFilter } from '../../composables/useConversationFilter'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   sessions: ChatSessionSummaryView[]
@@ -204,9 +205,7 @@ function formatRelativeTime(iso: string): string {
         title="开始新对话"
         @click="emit('create')"
       >
-        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-        </svg>
+        <AppIcon name="plus" :size="14" class="h-3.5 w-3.5" />
         <span>新对话</span>
       </button>
     </div>
@@ -214,9 +213,7 @@ function formatRelativeTime(iso: string): string {
     <!-- 标题搜索 -->
     <div class="px-3 pb-2">
       <div class="relative">
-        <svg class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
+        <AppIcon name="search" :size="14" class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-500" />
         <input
           v-model="search"
           type="search"
@@ -248,9 +245,7 @@ function formatRelativeTime(iso: string): string {
     <div class="flex-1 overflow-y-auto px-2 pb-2">
       <!-- 空状态（区分无对话 / 筛选无结果 / 归档区为空） -->
       <div v-if="filteredSessions.length === 0" class="px-2 py-8 text-center">
-        <svg class="mx-auto mb-3 h-10 w-10 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-        </svg>
+        <AppIcon name="message-circle-more" :size="40" class="mx-auto mb-3 h-10 w-10 text-gray-600" />
         <p class="mb-1 text-sm text-gray-400">{{ emptyText.title }}</p>
         <p class="text-xs text-gray-500">{{ emptyText.hint }}</p>
       </div>
@@ -284,9 +279,7 @@ function formatRelativeTime(iso: string): string {
               ]"
               @click="emit('select', session.sessionId); closeMenu()"
             >
-              <svg class="mt-0.5 h-4 w-4 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" />
-              </svg>
+              <AppIcon name="message-circle-more" :size="16" class="mt-0.5 h-4 w-4 shrink-0 text-gray-500" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <p class="truncate text-sm" :class="session.archivedAt !== undefined ? 'text-gray-400' : ''">{{ session.title }}</p>
@@ -324,9 +317,7 @@ function formatRelativeTime(iso: string): string {
                 @click.stop="toggleMenu(session.sessionId)"
                 @keydown="onMenuKeydown"
               >
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01" />
-                </svg>
+                <AppIcon name="dots-vertical" :size="16" class="h-4 w-4" />
               </button>
 
               <!-- 下拉菜单 -->
@@ -340,9 +331,7 @@ function formatRelativeTime(iso: string): string {
                   class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-200 transition-colors hover:bg-white/10"
                   @click="startRename(session)"
                 >
-                  <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
+                  <AppIcon name="square-pen" :size="14" class="h-3.5 w-3.5 text-gray-400" />
                   重命名
                 </button>
                 <button
@@ -351,9 +340,7 @@ function formatRelativeTime(iso: string): string {
                   class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-200 transition-colors hover:bg-white/10"
                   @click="closeMenu(); emit('archive', session.sessionId)"
                 >
-                  <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 00-2 2v8a2 2 0 002 2h14a2 2 0 002-2v-8a2 2 0 00-2-2m0 0a2 2 0 00-2-2H7a2 2 0 00-2 2m9 5v2m-4-2v2" />
-                  </svg>
+                  <AppIcon name="archive" :size="14" class="h-3.5 w-3.5 text-gray-400" />
                   归档
                 </button>
                 <template v-else>
@@ -362,9 +349,7 @@ function formatRelativeTime(iso: string): string {
                     class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-200 transition-colors hover:bg-white/10"
                     @click="closeMenu(); emit('unarchive', session.sessionId)"
                   >
-                    <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
+                    <AppIcon name="refresh-cw" :size="14" class="h-3.5 w-3.5 text-gray-400" />
                     恢复
                   </button>
                   <button
@@ -372,9 +357,7 @@ function formatRelativeTime(iso: string): string {
                     class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-300 transition-colors hover:bg-red-500/15"
                     @click="confirmRemove(session)"
                   >
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
+                    <AppIcon name="trash" :size="14" class="h-3.5 w-3.5" />
                     永久删除
                   </button>
                 </template>

@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 
 import type { ToolRowItem } from '../../stores/chat-render'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 工具行合一（文档 3 S4）：一次工具调用从头到尾只占一行——
@@ -37,46 +38,13 @@ const summaryLine = computed(() => {
       @click="item.result && (expanded = !expanded)"
     >
       <!-- 状态图标：调用中转圈 / 成功勾 / 失败叉 -->
-      <svg
-        v-if="pending"
-        class="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500"
-        fill="none"
-        viewBox="0 0 24 24"
-      >
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-      </svg>
-      <svg
-        v-else-if="!failed"
-        class="h-3.5 w-3.5 shrink-0 text-green-500"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-      </svg>
-      <svg
-        v-else
-        class="h-3.5 w-3.5 shrink-0 text-red-500"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-      </svg>
+      <AppIcon v-if="pending" name="loader-circle" :size="14" class="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+      <AppIcon name="check" :size="14" class="h-3.5 w-3.5 shrink-0 text-green-500" v-else-if="!failed" />
+      <AppIcon name="x" :size="14" class="h-3.5 w-3.5 shrink-0 text-red-500" v-else />
 
       <span class="shrink-0 font-medium">{{ toolName }}</span>
       <span class="min-w-0 flex-1 truncate">{{ summaryLine }}</span>
-      <svg
-        v-if="item.result"
-        class="h-3 w-3 shrink-0 transition-transform"
-        :class="expanded ? 'rotate-90' : ''"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-      </svg>
+      <AppIcon name="chevron-right" :size="12" class="h-3 w-3 shrink-0 transition-transform" :class="expanded ? 'rotate-90' : ''" v-if="item.result" />
     </button>
 
     <!-- 展开区：结果全文 -->

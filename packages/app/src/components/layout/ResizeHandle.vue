@@ -10,7 +10,7 @@ import { onUnmounted, ref } from 'vue'
  *   因此目标宽度 = startWidth - deltaX（基于起始宽度，不依赖当前 width 做累加）
  * - 拖拽期间锁定 body 光标与文本选中，避免误触
  * - 双击触发 reset，恢复默认宽度
- * - 仅 lg: 断点以上渲染（移动端浮层全屏，无需拖拽）
+ * - 仅 xl: 断点以上渲染（抽屉模式全屏浮层，无需拖拽）
  */
 const props = defineProps<{
   /** 拖拽起始时的面板宽度，用于按位移等量计算 */
@@ -69,7 +69,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="absolute left-0 top-0 z-10 hidden h-full w-1 cursor-col-resize -translate-x-1/2 bg-transparent transition-colors hover:bg-blue-400 lg:block"
+    class="absolute left-0 top-0 z-10 hidden h-full w-1 cursor-col-resize -translate-x-1/2 bg-transparent transition-colors hover:bg-blue-400 xl:block"
     :class="{ 'bg-blue-400': isDragging }"
     role="separator"
     aria-orientation="vertical"

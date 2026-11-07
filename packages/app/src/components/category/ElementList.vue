@@ -74,12 +74,7 @@ function isExpanded(key: string) {
             class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
             @click="toggleGroup(category.key)"
           >
-            <svg
-              :class="['h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', isExpanded(category.key) ? 'rotate-90' : '']"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-            </svg>
+            <AppIcon name="chevron-right" :size="14" :class="['h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', isExpanded(category.key) ? 'rotate-90' : '']" />
             <AppIcon :name="category.icon" :size="15" class="shrink-0 text-gray-400" />
             <span class="flex-1 truncate">{{ category.label }}</span>
             <span class="shrink-0 text-xs text-gray-500">{{ counts.get(category.key) ?? 0 }}</span>

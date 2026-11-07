@@ -31,25 +31,27 @@ function handleResize(width: number) {
 </script>
 
 <template>
-  <!-- 移动端遮罩 -->
+  <!-- 抽屉模式遮罩（小于 xl：内容面板不并排占位，避免挤压聊天主栏） -->
   <div
     v-if="isOpen"
-    class="fixed inset-0 z-40 bg-black/50 lg:hidden"
+    class="fixed inset-0 z-40 bg-black/50 xl:hidden"
     @click="emit('close')"
   />
 
-  <!-- 内容面板（桌面实际占位可收起，窄屏右侧抽屉；bottom-7 让开底部状态栏） -->
+  <!-- 内容面板（桌面实际占位可收起，窄屏右侧抽屉；bottom-7 让开底部状态栏）。
+       并排断点为 xl（1280）：1024–1279 若继续并排，聊天主栏会被 240–720px 的
+       面板挤到不足 60px（阶段5 视口矩阵确认），故该区间与移动端同样走右侧抽屉。 -->
   <aside
     :class="[
       'relative flex shrink-0 flex-col border-l border-gray-200 bg-white',
       isResizing ? '' : 'transition-all duration-200',
-      'max-lg:fixed max-lg:top-0 max-lg:bottom-7 max-lg:right-0 max-lg:z-50 max-lg:max-w-full',
+      'max-xl:fixed max-xl:top-0 max-xl:bottom-7 max-xl:right-0 max-xl:z-50 max-xl:max-w-full',
       isOpen ? '' : 'w-0 overflow-hidden',
-      isOpen ? 'max-lg:translate-x-0' : 'max-lg:translate-x-full',
+      isOpen ? 'max-xl:translate-x-0' : 'max-xl:translate-x-full',
     ]"
     :style="isOpen ? { width: width + 'px' } : undefined"
   >
-    <!-- 拖拽改宽手柄（仅 lg: 以上显示，R7） -->
+    <!-- 拖拽改宽手柄（仅 xl: 并排模式下显示，R7） -->
     <ResizeHandle
       :start-width="width"
       @dragstart="isResizing = true"

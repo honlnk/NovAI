@@ -743,9 +743,7 @@ onBeforeUnmount(() => {
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
           @click="emit('toggleMobileSidebar')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <AppIcon name="menu" :size="20" class="h-5 w-5" />
         </button>
         <button
           :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
@@ -753,13 +751,9 @@ onBeforeUnmount(() => {
           @click="emit('toggleSidebar')"
         >
           <!-- 收起状态：显示汉堡菜单（暗示可以展开侧边栏） -->
-          <svg v-if="!isSidebarOpen" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <AppIcon name="menu" :size="20" class="h-5 w-5" v-if="!isSidebarOpen" />
           <!-- 展开状态：显示侧边栏收起图标 -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-          </svg>
+          <AppIcon name="chevrons-left" :size="20" class="h-5 w-5" v-else />
         </button>
         <h1 class="text-base font-semibold text-gray-800">AI 对话</h1>
       </div>
@@ -781,13 +775,7 @@ onBeforeUnmount(() => {
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
           @click="emit('toggleContentPanel')"
         >
-          <svg
-            class="h-5 w-5 transition-transform duration-200"
-            :class="isContentPanelOpen ? '' : 'rotate-180'"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
+          <AppIcon name="chevron-right" :size="20" class="h-5 w-5 transition-transform duration-200" :class="isContentPanelOpen ? '' : 'rotate-180'" />
         </button>
       </div>
     </header>
@@ -797,9 +785,7 @@ onBeforeUnmount(() => {
       v-if="roleMeta"
       class="flex items-center justify-center gap-1.5 border-b border-amber-200/60 bg-amber-50 px-4 py-1 text-xs text-amber-700"
     >
-      <svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
-      </svg>
+      <AppIcon name="library" :size="14" class="h-3.5 w-3.5 shrink-0" />
       <span>正在与{{ roleMeta.label }}对话{{ roleMeta.scopeNote ? ` · ${roleMeta.scopeNote}` : '' }}</span>
     </div>
 
@@ -819,9 +805,7 @@ onBeforeUnmount(() => {
             v-if="chatStore.messages.length === 0"
             class="flex flex-col items-center justify-center py-16"
           >
-            <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-            </svg>
+            <AppIcon name="message-circle-more" :size="48" class="mb-4 h-12 w-12 text-gray-300" />
             <p class="mb-1 text-lg font-medium text-gray-400">开始创作</p>
             <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
           </div>
@@ -833,10 +817,7 @@ onBeforeUnmount(() => {
               v-if="chatStore.loadingOlder"
               class="flex items-center justify-center gap-2 py-1 text-xs text-gray-400"
             >
-              <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
+              <AppIcon name="loader-circle" :size="14" class="h-3.5 w-3.5 animate-spin" />
               正在加载更早消息…
             </div>
             <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
@@ -878,9 +859,7 @@ onBeforeUnmount(() => {
         class="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
         @click="followAndScrollToBottom"
       >
-        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-        </svg>
+        <AppIcon name="arrow-down" :size="14" class="h-3.5 w-3.5" />
         {{ hasNewBelow ? '有新内容' : '回到底部' }}
       </button>
     </div>
@@ -890,9 +869,7 @@ onBeforeUnmount(() => {
       v-if="chatStore.activeWriteConfirmation"
       class="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600"
     >
-      <svg class="h-3.5 w-3.5 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-      </svg>
+      <AppIcon name="file-text" :size="14" class="h-3.5 w-3.5 shrink-0 text-gray-400" />
       <span class="min-w-0 flex-1 truncate">
         等待你审阅「{{ confirmFileName }}」的{{ confirmKindLabel }}请求（待确认 {{ chatStore.pendingConfirmationCount }} 项）
       </span>
@@ -912,9 +889,7 @@ onBeforeUnmount(() => {
           class="mb-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800"
           role="status"
         >
-          <svg class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-          </svg>
+          <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <span>{{ localCommandNotice }}</span>
         </div>
         <!-- QueueDock：输入框正上方，渲染排队/插话队列（空队列不渲染） -->
@@ -1019,9 +994,7 @@ onBeforeUnmount(() => {
                     title="距上次整理已新增多章；点击把整理任务模板落入输入框，可编辑后发送"
                     @click="handleReminderApply"
                   >
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                    </svg>
+                    <AppIcon name="bell" :size="14" class="h-3.5 w-3.5" />
                     <span>整理提醒</span>
                     <span
                       role="button"
@@ -1039,10 +1012,7 @@ onBeforeUnmount(() => {
                   title="正在停止…"
                   disabled
                 >
-                  <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
+                  <AppIcon name="loader-circle" :size="20" class="h-5 w-5 animate-spin" />
                 </button>
                 <button
                   v-else-if="chatStore.isRunning"

@@ -236,18 +236,14 @@ async function handleConfirmDeleteProject() {
             class="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
             @click="showCreateDialog = true"
           >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
+            <AppIcon name="plus" :size="16" class="h-4 w-4" />
             新建项目
           </button>
           <button
             class="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
             @click="handleOpenProject"
           >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
-            </svg>
+            <AppIcon name="folder-open" :size="16" class="h-4 w-4" />
             打开项目
           </button>
 
@@ -306,9 +302,7 @@ async function handleConfirmDeleteProject() {
                   title="移除最近项目"
                   @click.stop="handleAskDeleteProject(project)"
                 >
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 .93h6a1 1 0 001-.93l1-12" />
-                  </svg>
+                  <AppIcon name="trash" :size="16" class="h-4 w-4" />
                 </button>
               </div>
             </div>
@@ -320,9 +314,7 @@ async function handleConfirmDeleteProject() {
           v-else
           class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 py-16"
         >
-          <svg class="mb-4 h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-          </svg>
+          <AppIcon name="book-open" :size="48" class="mb-4 h-12 w-12 text-gray-400" />
           <p class="mb-2 text-lg font-medium text-gray-900">欢迎使用 NovAI</p>
           <p class="text-sm text-gray-500">点击「新建项目」开始你的第一部小说</p>
         </div>

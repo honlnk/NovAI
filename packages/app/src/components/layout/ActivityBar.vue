@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Category } from '../../constants/category'
 import Tooltip from '../ui/Tooltip.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 defineProps<{
   activeCategory: Category
@@ -85,25 +86,15 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           @click="emit('select', item.key)"
         >
           <!-- 对话 -->
-          <svg v-if="item.icon === 'chat'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-          </svg>
+          <AppIcon name="message-circle-more" :size="20" class="h-5 w-5" v-if="item.icon === 'chat'" />
           <!-- 章节 -->
-          <svg v-else-if="item.icon === 'book'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-          </svg>
+          <AppIcon name="book-open" :size="20" class="h-5 w-5" v-else-if="item.icon === 'book'" />
           <!-- 要素 -->
-          <svg v-else-if="item.icon === 'tag'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-          </svg>
+          <AppIcon name="tag" :size="20" class="h-5 w-5" v-else-if="item.icon === 'tag'" />
           <!-- 提示词 -->
-          <svg v-else-if="item.icon === 'note'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-          </svg>
+          <AppIcon name="clipboard-check" :size="20" class="h-5 w-5" v-else-if="item.icon === 'note'" />
           <!-- 计划（剪贴板清单） -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m3 7l-2-2-2 2m-5 4l-2-2 2-2" />
-          </svg>
+          <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else />
         </button>
       </Tooltip>
     </div>
@@ -129,25 +120,15 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           @click="emitAction(item.key)"
         >
           <!-- 校对 -->
-          <svg v-if="item.icon === 'check'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <AppIcon name="circle-check" :size="20" class="h-5 w-5" v-if="item.icon === 'check'" />
           <!-- 章节整理 -->
-          <svg v-else-if="item.icon === 'list'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-          </svg>
+          <AppIcon name="list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'list'" />
           <!-- 版本管理 -->
-          <svg v-else-if="item.icon === 'branch'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-          </svg>
+          <AppIcon name="arrows-right-left" :size="20" class="h-5 w-5" v-else-if="item.icon === 'branch'" />
           <!-- 管理要素（书架，与聊天工具栏按钮同款） -->
-          <svg v-else-if="item.icon === 'library'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
-          </svg>
+          <AppIcon name="library" :size="20" class="h-5 w-5" v-else-if="item.icon === 'library'" />
           <!-- 向量索引（circle-stack） -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 5.625c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
-          </svg>
+          <AppIcon name="database" :size="20" class="h-5 w-5" v-else />
         </button>
       </Tooltip>
 
@@ -160,10 +141,7 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           class="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
           @click="emit('openSettings')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
+          <AppIcon name="settings" :size="20" class="h-5 w-5" />
         </button>
       </Tooltip>
       <Tooltip text="返回首页" :delay="300" preferred-placement="right">
@@ -172,9 +150,7 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           class="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
           @click="emit('backToHome')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-          </svg>
+          <AppIcon name="home" :size="20" class="h-5 w-5" />
         </button>
       </Tooltip>
     </div>

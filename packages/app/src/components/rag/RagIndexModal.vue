@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 
 import { useIndexStore, getIndexStatusClass, getIndexStatusLabel } from '../../stores/index'
 import { useToast } from '../../composables/useToast'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 向量索引独立管理页（模态框）。
@@ -97,9 +98,7 @@ function formatDate(value?: string) {
           title="关闭"
           @click="emit('close')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <AppIcon name="x" :size="20" class="h-5 w-5" />
         </button>
       </header>
 

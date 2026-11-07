@@ -5,6 +5,7 @@ import type { AskUserQuestionRequestView } from '@novai/core/services/types'
 
 import { useChatStore } from '../../stores/chat'
 import TakeoverStopButton from './TakeoverStopButton.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 主动提问的输入区接管（交互优化计划 §8「提问、重命名与删除」）：Agent 提问在原输入
@@ -98,9 +99,7 @@ function handleKeydown(event: KeyboardEvent) {
   >
     <!-- 标题行：header 短标题 + 问题正文（§8 紧凑说明谁在问、问什么） -->
     <div class="flex items-start gap-2.5 border-b border-gray-100 p-3">
-      <svg class="mt-0.5 h-4 w-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
+      <AppIcon name="circle-help" :size="16" class="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
       <div class="min-w-0 flex-1">
         <p class="text-sm font-medium text-gray-700">
           <span v-if="props.question.header" class="mr-1.5 rounded bg-gray-100 px-1 py-0.5 text-[10px] font-normal text-gray-500">{{ props.question.header }}</span>
