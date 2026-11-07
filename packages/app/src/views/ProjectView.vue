@@ -20,6 +20,11 @@ import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
+import {
+  loadLegacyContentPanelWidth,
+  loadWorkspaceState,
+  saveWorkspaceState,
+} from '../utils/workspace-state'
 import type { ChangedFileView, PlanStatusView } from '@novai/core/services/types'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
@@ -69,6 +74,107 @@ watch(contentPanelWidth, (width) => {
   localStorage.setItem(CONTENT_PANEL_WIDTH_KEY, String(width))
 })
 
+// ===== 工作区现场恢复（交互优化计划 §3.4）=====
+// 按项目存浏览器 localStorage：分类、会话、文件、侧栏与面板展开状态、面板宽度。
+// 项目打开后先恢复现场，再接受新选择；恢复完成前禁止持久化，防止初始化默认值覆盖记录。
+
+/** 恢复完成前持久化守卫：初始化流程对 ref 的赋值不得写回恢复记录 */
+let workspaceRestored = false
+/** 激活代次：项目重恢复时递增，晚到的异步恢复步骤不得覆盖新现场（跨项目不串） */
+let workspaceGeneration = 0
+
+/** 把当前现场写入当前项目的恢复记录（各字段缺失时按「明确无」语义落 null）。 */
+function persistWorkspaceState() {
+  const project = projectStore.currentProject
+  if (!workspaceRestored || !project) {
+    return
+  }
+  saveWorkspaceState(project.id, {
+    category: activeCategory.value,
+    activeSessionId: chatStore.activeSessionId,
+    activeFilePath: projectStore.activeFile ? projectStore.activeFile.path : null,
+    categoryOpen: isCategoryOpen.value,
+    contentPanelOpen: isContentPanelOpen.value,
+    planPanelOpen: isPlanPanelOpen.value,
+    contentPanelWidth: contentPanelWidth.value,
+  })
+}
+
+/**
+ * 项目激活后恢复上次现场：
+ * - 有记录：恢复分类/侧栏/面板/宽度，会话走 initSessions 首选恢复（失效自动回退），
+ *   文件按记录恢复——null 表示用户明确没有选择文件，不得自动打开首文件。
+ * - 无记录（首次）：不写任何默认值进记录，沿用现有默认选择。
+ * - 记录对象失效（文件读不到/会话不存在）：回退并轻提示，回退后的现场成为新记录。
+ */
+async function restoreWorkspaceState() {
+  const project = projectStore.currentProject
+  if (!project) {
+    return
+  }
+  const generation = ++workspaceGeneration
+  const record = loadWorkspaceState(project.id)
+
+  if (record) {
+    activeCategory.value = record.category
+    isCategoryOpen.value = record.categoryOpen
+    isContentPanelOpen.value = record.contentPanelOpen
+    isPlanPanelOpen.value = record.planPanelOpen
+    // 面板宽度：项目记录优先，回退旧全局 key（历史 installations 只有全局一份）
+    const width = record.contentPanelWidth ?? loadLegacyContentPanelWidth()
+    if (width !== null) {
+      contentPanelWidth.value = Math.max(CONTENT_PANEL_MIN, Math.min(CONTENT_PANEL_MAX, width))
+    }
+  }
+
+  // 会话恢复：initSessions 内部校验首选会话存在性，失效回退最近一条（或新建）
+  const preferredSessionId = record?.activeSessionId ?? null
+  await chatStore.initSessions(project.id, preferredSessionId)
+  if (generation !== workspaceGeneration) {
+    return
+  }
+  const sessionFallback = preferredSessionId !== null
+    && !chatStore.sessions.some((s) => s.sessionId === preferredSessionId)
+
+  // 文件恢复：仅记录存在时接管；undefined（旧记录/无记录）沿用 core 的默认首文件行为
+  let fileFallback = false
+  if (record && record.activeFilePath !== undefined) {
+    if (record.activeFilePath === null) {
+      projectStore.clearActiveFile()
+    } else {
+      const opened = await projectStore.openFile(record.activeFilePath)
+      if (generation !== workspaceGeneration) {
+        return
+      }
+      if (!opened) {
+        projectStore.clearActiveFile()
+        fileFallback = true
+      }
+    }
+  }
+
+  // 恢复完成：开启持久化，并把回退后的现场写为新记录（下次不再尝试失效对象）
+  workspaceRestored = true
+  persistWorkspaceState()
+  if (sessionFallback || fileFallback) {
+    toast.info('上次的工作区现场部分失效，已回退到最近状态')
+  }
+}
+
+// 现场任一维度变化即持久化（守卫在 persistWorkspaceState 内）
+watch(
+  [
+    activeCategory,
+    isCategoryOpen,
+    isContentPanelOpen,
+    isPlanPanelOpen,
+    contentPanelWidth,
+    () => chatStore.activeSessionId,
+    () => projectStore.activeFile?.path,
+  ],
+  persistWorkspaceState,
+)
+
 /** 从 currentProject 取配置里的激活大纲路径（分类面板需读取它做高亮联动） */
 const activeOutlinePath = computed(() => {
   return projectStore.currentProject?.config.settings.activeOutlinePath ?? null
@@ -101,8 +207,8 @@ onMounted(async () => {
     }
   }
 
-  // 初始化聊天会话（拉取历史列表，有历史则激活最近一条，否则新建）
-  await chatStore.initSessions(projectId.value)
+  // 初始化聊天会话并恢复上次工作区现场（恢复内部含会话首选/回退与文件恢复）
+  await restoreWorkspaceState()
 
   // 初始化 RAG 索引状态栏（订阅事件 + 首次读取 meta）
   await indexStore.init(projectId.value)

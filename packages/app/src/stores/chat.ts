@@ -162,11 +162,20 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 项目打开时的会话初始化入口：
-   * 拉取历史会话列表，有历史则激活最近一条，无历史则新建。
+   * 拉取历史会话列表；有恢复记录时优先激活记录的会话（工作区现场恢复，§3.4），
+   * 记录缺失/失效回退最近一条，无历史则新建。
    * 取代旧的 ensureSessionView（后者只支持单会话）。
    */
-  async function initSessions(projectId: string): Promise<ChatSessionView> {
+  async function initSessions(projectId: string, preferredSessionId?: string | null): Promise<ChatSessionView> {
     await loadSessions(projectId)
+
+    if (preferredSessionId && sessions.value.some((s) => s.sessionId === preferredSessionId)) {
+      const restored = await selectSession(projectId, preferredSessionId)
+      if (restored) {
+        return restored
+      }
+      // 记录的会话读取失败（文件损坏等）：回退最近一条，不让打开流程失败
+    }
 
     if (sessions.value.length > 0) {
       await selectSession(projectId, sessions.value[0].sessionId)

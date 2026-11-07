@@ -810,3 +810,81 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.sessions.some((s) => s.sessionId === 'session-other')).toBe(false)
   })
 })
+
+describe('initSessions 首选会话恢复（工作区现场恢复 §3.4）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    mockedIsAgentRunActive.mockReturnValue(false)
+    mockedSubscribeAgentEvents.mockReturnValue(() => {})
+    mockedEnqueueMessage.mockResolvedValue({ sessionId: 'session-current' })
+  })
+
+  function makeSummary(sessionId: string, updatedAt: string) {
+    return {
+      sessionId,
+      projectId: 'project-1',
+      title: `会话 ${sessionId}`,
+      createdAt: '2026-11-07T00:00:00.000Z',
+      updatedAt,
+      messageCount: 0,
+    }
+  }
+
+  it('记录的会话存在时优先激活（不再取最近一条）', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-recorded', '2026-11-07T09:00:00.000Z'),
+    ])
+    mockedGetSession.mockResolvedValue(createSessionView('session-recorded'))
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1', 'session-recorded')
+
+    expect(view.sessionId).toBe('session-recorded')
+    expect(store.activeSessionId).toBe('session-recorded')
+    expect(mockedGetSession).toHaveBeenCalledWith('project-1', 'session-recorded', { tailMessages: HISTORY_PAGE_SIZE })
+  })
+
+  it('记录的会话已不存在（失效）时回退最近一条', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+    ])
+    mockedGetSession.mockResolvedValue(createSessionView('session-latest'))
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1', 'session-gone')
+
+    expect(view.sessionId).toBe('session-latest')
+    expect(store.activeSessionId).toBe('session-latest')
+  })
+
+  it('记录的会话读取失败（getSession 返回 null）时同样回退最近一条', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-recorded', '2026-11-07T09:00:00.000Z'),
+    ])
+    // 首选会话读盘失败（文件损坏），最近一条正常
+    mockedGetSession.mockImplementation((_projectId, sessionId) =>
+      Promise.resolve(sessionId === 'session-recorded' ? null : createSessionView(sessionId ?? '')),
+    )
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1', 'session-recorded')
+
+    expect(view.sessionId).toBe('session-latest')
+    expect(store.activeSessionId).toBe('session-latest')
+  })
+
+  it('无恢复记录（undefined）时保持现有默认：激活最近一条', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+    ])
+    mockedGetSession.mockResolvedValue(createSessionView('session-latest'))
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1')
+
+    expect(view.sessionId).toBe('session-latest')
+  })
+})
