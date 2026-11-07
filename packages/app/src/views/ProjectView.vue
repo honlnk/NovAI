@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
@@ -7,6 +7,15 @@ import { useIndexStore } from '../stores/index'
 import { usePlanStore } from '../stores/plan'
 import { useToast } from '../composables/useToast'
 import { useConversationFilter } from '../composables/useConversationFilter'
+import { hasDirtyDrafts } from '../composables/useFileDrafts'
+import {
+  clearChangeHighlights,
+  pushChangeNotice,
+  startHighlightJob,
+  useChangeHighlights,
+  type ChangeNotice,
+} from '../composables/useChangeHighlights'
+import { hashContent } from '@novai/core'
 import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
@@ -26,7 +35,8 @@ import {
   loadWorkspaceState,
   saveWorkspaceState,
 } from '../utils/workspace-state'
-import type { ChangedFileView, PlanStatusView } from '@novai/core/services/types'
+import type { ChangedFileView, FileChangeRecordView, PlanStatusView } from '@novai/core/services/types'
+import type { RecentFileChange } from '../stores/chat'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
 
@@ -227,6 +237,20 @@ onMounted(async () => {
 
 onUnmounted(() => {
   indexStore.dispose()
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
+
+// 未保存内容保护的刷新风险口（§6）：项目内有任何未保存编辑草稿时，刷新/关闭
+// 标签页给出浏览器原生确认（正文不自动保存，离开即丢——必须让用户明确选择）
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  const projectId = projectStore.currentProject?.id
+  if (projectId && hasDirtyDrafts(projectId)) {
+    event.preventDefault()
+    event.returnValue = ''
+  }
+}
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 // 监听文件变更，自动刷新分类面板数据。
@@ -245,29 +269,160 @@ watch(
   },
 )
 
-// AI 改动命中当前打开的文件时：重读新内容（预览/原始模式即时更新，编辑模式草稿是
-// FilePanelBody 本地副本不受影响）；删除命中则清空面板——快照再留着就是幽灵文件
-// （无删除标记，编辑保存还会复活它），清空后由空态提示回收站去向
-watch(
-  () => chatStore.lastFileChange,
-  (record) => {
-    if (!record) {
-      return
+// ===== 定位高亮反馈队列（交互优化计划 §7）=====
+// file-changed 逐条到达（recentFileChanges 不吞并发改动）：命中当前打开文件且现场
+// 无干扰（预览模式、无草稿、改动来自当前会话）时，重读到最新内容并校验版本后自动
+// 播放差异；用户在编辑/有草稿/看别的文件/后台会话改动 → 只入通知队列（可点击查看，
+// 不抢现场）。计划文件只刷新计划工作流，不套用章节高亮。
+const highlights = useChangeHighlights(projectId.value)
+/** 已消费的实时改动 id（防最近队列重复处理） */
+const processedChangeIds = new Set<string>()
+
+/** 账本记录 → 反馈通知（携带重播所需的定位载荷） */
+function buildChangeNotice(record: FileChangeRecordView): ChangeNotice {
+  const change = record.change
+  const path = change.type === 'renamed' ? change.toPath : change.path
+  const canLocate = Boolean(record.coords && record.coords.ranges.length > 0)
+  return {
+    recordId: record.id,
+    path,
+    fileName: path.split('/').pop() ?? path,
+    status: change.type === 'created' ? 'created' : 'updated',
+    count: record.coords?.ranges.length ?? 1,
+    canLocate,
+    ...(canLocate
+      ? {
+          locate: {
+            ranges: record.coords!.ranges,
+            oldText: record.diff?.oldText ?? '',
+            afterHash: record.coords!.afterVersion?.contentHash,
+          },
+        }
+      : {}),
+  }
+}
+
+async function processChangeRecord(entry: RecentFileChange) {
+  const record = entry.record
+  const change = record.change
+  const isContentChange = change.type === 'created' || change.type === 'updated'
+  const targetPath = change.type === 'renamed' ? change.toPath : change.path
+
+  // 计划文件只刷新现有计划工作流（计划看板 watch 自行处理），不套用章节高亮（§7）
+  if (targetPath.startsWith('plans/')) {
+    return
+  }
+
+  const panel = filePanelRef.value?.getAutoPlayState?.() ?? null
+  const effect = resolveActiveFileEffect(panel?.path ?? projectStore.activeFile?.path ?? null, change)
+  const isActiveSession = entry.sessionId === chatStore.activeSessionId
+
+  // 删除命中当前打开文件：清空面板——快照再留着就是幽灵文件（编辑保存还会复活它），
+  // 清空后由空态提示回收站去向
+  if (effect?.action === 'clear') {
+    const deleted = change.type === 'deleted' ? change : null
+    panelNotice.value = {
+      name: projectStore.activeFile?.name ?? '当前文件',
+      trashPath: deleted?.trashPath,
     }
-    const effect = resolveActiveFileEffect(projectStore.activeFile?.path, record.change)
-    if (effect?.action === 'reload') {
-      void projectStore.openFile(effect.path)
-      return
-    }
-    if (effect?.action === 'clear') {
-      const deleted = record.change.type === 'deleted' ? record.change : null
-      panelNotice.value = {
-        name: projectStore.activeFile?.name ?? '当前文件',
-        trashPath: deleted?.trashPath,
+    projectStore.clearActiveFile()
+    return
+  }
+
+  // 命中当前打开的文件：重读 + 尝试自动播放
+  if (effect?.action === 'reload') {
+    // 未保存内容保护（§6）：有草稿不静默覆盖，保留草稿并提醒；通知给出查看入口
+    if (panel?.dirty) {
+      toast.info(`「${projectStore.activeFile?.name ?? effect.path}」已被 AI 更新，你的未保存草稿已保留`)
+      if (isContentChange) {
+        pushChangeNotice(projectId.value, buildChangeNotice(record))
       }
-      projectStore.clearActiveFile()
+      return
+    }
+    // 编辑模式不打断输入：入通知队列（改名除外——旧路径已不存在，仍需静默重读）
+    if (panel?.viewMode === 'edit' && isContentChange) {
+      pushChangeNotice(projectId.value, buildChangeNotice(record))
+      return
+    }
+    await projectStore.openFile(effect.path)
+    // 版本相符才自动播放（§7：失配降级为通知，绝不覆盖较新内容）
+    const file = projectStore.activeFile
+    if (
+      isActiveSession
+      && record.coords
+      && record.coords.ranges.length > 0
+      && record.coords.afterVersion
+      && file
+      && file.format !== 'json'
+      && hashContent(file.content) === record.coords.afterVersion.contentHash
+    ) {
+      highlights.startJob({
+        recordId: record.id,
+        path: effect.path,
+        ranges: record.coords.ranges,
+        oldText: record.diff?.oldText ?? '',
+        mode: 'timed',
+      })
+      return
+    }
+    if (isContentChange) {
+      pushChangeNotice(projectId.value, buildChangeNotice(record))
+    }
+    return
+  }
+
+  // 未命中当前文件：只入通知队列，不跳转不抢占（§7.4）
+  if (isContentChange) {
+    pushChangeNotice(projectId.value, buildChangeNotice(record))
+  }
+}
+
+watch(
+  () => chatStore.recentFileChanges.length,
+  () => {
+    for (const entry of chatStore.recentFileChanges) {
+      if (processedChangeIds.has(entry.record.id)) continue
+      processedChangeIds.add(entry.record.id)
+      void processChangeRecord(entry)
     }
   },
+)
+
+/** 变更通知「查看差异」点击令牌：递增驱动 FilePanelBody 在路径未变（正编辑同文件）时也切回预览 */
+const locateToken = ref(0)
+
+/** 变更通知点击：打开对应文件；可定位且版本相符则重播稳定差异，失配降级为提示 */
+async function handleLocateChange(notice: ChangeNotice) {
+  locateToken.value += 1
+  await projectStore.openFile(notice.path)
+  // 面板被收起时等同「在文件树点文件」：先展开，否则高亮在隐藏面板里无从看见
+  isContentPanelOpen.value = true
+  if (!notice.locate) {
+    return
+  }
+  const file = projectStore.activeFile
+  if (!notice.locate.afterHash || (file && hashContent(file.content) === notice.locate.afterHash)) {
+    highlights.startJob({
+      recordId: notice.recordId,
+      path: notice.path,
+      ranges: notice.locate.ranges,
+      oldText: notice.locate.oldText,
+      mode: 'stable',
+    })
+    return
+  }
+  toast.info(`「${notice.fileName}」内容已再次变化，无法定位该处修改`)
+}
+
+// 切项目：清空上一项目的反馈队列与高亮状态（跨项目不串扰）
+watch(
+  projectId,
+  () => {
+    processedChangeIds.clear()
+    chatStore.clearRecentFileChanges()
+    clearChangeHighlights(projectId.value)
+  },
+  { immediate: true },
 )
 
 // 切换文件时清空选中引用（引用绑定当前文件，避免跨文件残留）；
@@ -351,18 +506,21 @@ async function handleSelectFile(path: string) {
 }
 
 /**
- * 内容面板编辑模式保存：写盘后由 store 更新 activeFile（同步最新 updatedAt），
- * FilePanelBody 侧的草稿会因为 watch viewMode 不再触发而保持，但 isDirty 会
- * 因 file.content 更新而变 false，「未保存」标记自动消失。
+ * 内容面板编辑模式保存（§6 保存状态机的数据源）：结果交回 FilePanelBody 呈现
+ * ——成功由面板「已保存」承载，失败/版本冲突在面板内保留草稿并给出出口，不再弹 toast。
+ * 写盘后由 store 更新 activeFile（同步最新 updatedAt），草稿 isDirty 自动回落。
  */
-async function handleSaveFile(path: string, content: string) {
-  const saved = await projectStore.saveFile(path, content)
-  if (saved) {
-    toast.success('已保存')
-  } else {
-    toast.error(projectStore.errorMessage || '保存失败')
-  }
+function handleFileSave(path: string, content: string, options?: { expectedUpdatedAt?: string; force?: boolean }) {
+  return projectStore.saveFile(path, content, options)
 }
+
+/** 冲突出口「读取最新（放弃草稿）」：重读磁盘内容（FilePanelBody 侧已重置编辑态） */
+function handleReloadFile(path: string) {
+  void projectStore.openFile(path)
+}
+
+/** FilePanelBody 实例引用：AI 改动重读守卫读它的未保存草稿状态 */
+const filePanelRef = useTemplateRef('filePanelRef')
 
 /** 内容面板选中文字后，把引用存入状态供 ChatPanel 显示 chip */
 function handleSelectQuote(payload: { path: string; name: string; text: string }) {
@@ -720,11 +878,16 @@ function handleGoToSettings() {
              kind 互斥由 workspacePanel 规则保证，计划两侧各自 v-if -->
         <FilePanelBody
           v-show="workspacePanel.kind === 'file'"
+          ref="filePanelRef"
           :file="projectStore.activeFile"
+          :project-id="projectId"
           :notice="panelNotice"
+          :save-file="handleFileSave"
+          :locate-token="locateToken"
           @close="handleCloseContentPanel"
-          @save="handleSaveFile"
+          @reload="handleReloadFile"
           @select-quote="handleSelectQuote"
+          @locate-change="handleLocateChange"
         />
         <!-- 计划详情 -->
         <PlanDetailPanel

@@ -40,24 +40,24 @@ export function createReadFileState(path: string, content: string, file: File): 
  * EditFile 写入成功后刷新读取状态（D2）：条目更新为刚写入的新内容（新 hash、新 mtime、
  * 新 size），标记 sourceTool: 'Edit'——模型连续编辑同一文件时不再需要重新 ReadFile。
  * 需要重新取一次文件句柄拿写入后的真实 mtime/size（内容本身已知，不必重读文本）。
+ * 返回刷新后的状态供调用方复用（改动账本记 afterVersion 免二次取句柄）；
+ * 无读取状态注册表时仍计算并返回，只是不落表。
  */
 export async function updateReadFileStateAfterWrite(
   runtime: Pick<ToolRuntime, 'project' | 'readFileStates'>,
   path: string,
   nextContent: string,
-): Promise<void> {
-  if (!runtime.readFileStates) {
-    return
-  }
-
+): Promise<ReadFileState> {
   const file = await getProjectTextFile(runtime.project.handle, path)
-  runtime.readFileStates.set(path, {
+  const state: ReadFileState = {
     path,
     contentHash: hashContent(nextContent),
     lastModified: new Date(file.lastModified).toISOString(),
     fileSizeBytes: file.size,
     sourceTool: 'Edit',
-  })
+  }
+  runtime.readFileStates?.set(path, state)
+  return state
 }
 
 export function assertFreshReadFileState(

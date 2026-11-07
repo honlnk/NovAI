@@ -433,6 +433,7 @@ async function runDriverTurn(options: {
             at: new Date().toISOString(),
             change: event.fileChange,
             ...(event.diff ? { diff: event.diff } : {}),
+            ...(event.coords ? { coords: event.coords } : {}),
             ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           },
         ]

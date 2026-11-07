@@ -1,7 +1,9 @@
 import { getProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
-import type { EditFileInput, EditFileOutput, ToolDefinition } from '../types'
+import type { FileChangeVersion } from '../../../types/chat'
+import type { EditFileInput, EditFileOutput, ReadFileState, ToolDefinition } from '../types'
 import { isNotFoundError, normalizeProjectPath } from '../path'
 import { assertChapterNameFormat, isChapterPath } from '../chapter-name'
+import { computeReplaceRanges } from './change-coords'
 import { asRecord, assertMutableDocumentPath, readString } from './common'
 import { countDiffLines } from './diff-line-stats'
 import {
@@ -71,7 +73,7 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       }
 
       await writeProjectTextFile(runtime.project.handle, input.path, input.newText)
-      await updateReadFileStateAfterWrite(runtime, input.path, input.newText)
+      const afterState = await updateReadFileStateAfterWrite(runtime, input.path, input.newText)
 
       return {
         path: input.path,
@@ -80,6 +82,11 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
         ...countDiffLines('', input.newText),
         oldText: '',
         newText: input.newText,
+        coords: {
+          ranges: computeReplaceRanges(currentContent, '', input.newText, false),
+          beforeVersion: toVersion(createReadFileState(input.path, currentContent, file)),
+          afterVersion: toVersion(afterState),
+        },
       }
     }
 
@@ -116,7 +123,7 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
 
     await writeProjectTextFile(runtime.project.handle, input.path, nextContent)
     // D2：写完不删读取状态，改为更新为新内容——连续编辑同一文件免重读。
-    await updateReadFileStateAfterWrite(runtime, input.path, nextContent)
+    const afterState = await updateReadFileStateAfterWrite(runtime, input.path, nextContent)
 
     return {
       path: input.path,
@@ -125,6 +132,11 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       ...countDiffLines(actualOldText, actualNewText),
       oldText: actualOldText,
       newText: actualNewText,
+      coords: {
+        ranges: computeReplaceRanges(currentContent, actualOldText, actualNewText, input.replaceAll === true),
+        beforeVersion: toVersion(currentState),
+        afterVersion: toVersion(afterState),
+      },
     }
   },
   summarizeInput(input) {
@@ -146,7 +158,15 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
       linesRemoved: output.linesRemoved,
     }
   },
+  extractChangeCoords(output) {
+    return output.coords
+  },
   buildConfirmation(input) {
     return { kind: 'edit', path: input.path, oldText: input.oldText, newText: input.newText }
   },
+}
+
+/** ReadFileState → 账本版本标识（同一口径：内容哈希 + mtime ISO） */
+function toVersion(state: ReadFileState): FileChangeVersion {
+  return { contentHash: state.contentHash, updatedAt: state.lastModified }
 }

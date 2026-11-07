@@ -162,6 +162,10 @@ const changeLabels: Record<string, string> = {
               第 {{ index + 1 }} 处修改
             </div>
             <DiffLines :old-text="record.diff!.oldText" :new-text="record.diff!.newText" />
+            <!-- 旧记录无定位坐标（§7）：仍显示片段差异，但明确说明不支持定位，不伪造高亮 -->
+            <div v-if="!record.coords" class="px-1 pt-0.5 text-[10px] text-gray-400">
+              此历史记录不支持定位
+            </div>
           </div>
         </div>
       </div>

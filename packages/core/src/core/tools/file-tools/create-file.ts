@@ -1,7 +1,9 @@
-import { readProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
+import { getProjectTextFile, readProjectTextFile, writeProjectTextFile } from '../../fs/project-fs'
+import { hashContent } from '../../util/hash'
 import { isNotFoundError } from '../path'
 import { assertChapterNumberAvailable, isChapterPath } from '../chapter-name'
 import type { CreateFileInput, CreateFileOutput, ToolDefinition } from '../types'
+import { computeReplaceRanges } from './change-coords'
 import { asRecord, assertWritableDocumentPath, normalizeTextFilePath, readString } from './common'
 import { countDiffLines } from './diff-line-stats'
 
@@ -39,12 +41,22 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
 
     await writeProjectTextFile(runtime.project.handle, input.path, input.content)
 
+    // 写盘后取真实 mtime 组 afterVersion（新建无 beforeVersion）；只读句柄，不进读取状态注册表
+    const written = await getProjectTextFile(runtime.project.handle, input.path)
+
     return {
       path: input.path,
       contentLength: input.content.length,
       linesAdded: countDiffLines('', input.content).linesAdded,
       created: true,
       content: input.content,
+      coords: {
+        ranges: computeReplaceRanges('', '', input.content, false),
+        afterVersion: {
+          contentHash: hashContent(input.content),
+          updatedAt: new Date(written.lastModified).toISOString(),
+        },
+      },
     }
   },
   summarizeInput(input) {
@@ -63,6 +75,9 @@ export const createFileTool: ToolDefinition<'CreateFile', CreateFileInput, Creat
       linesAdded: output.linesAdded,
       linesRemoved: 0,
     }
+  },
+  extractChangeCoords(output) {
+    return output.coords
   },
   buildConfirmation(input) {
     return { kind: 'create', path: input.path, content: input.content }

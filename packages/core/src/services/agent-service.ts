@@ -1503,6 +1503,7 @@ function toFileChangeRecordView(record: FileChangeRecord): FileChangeRecordView 
     at: record.at,
     change: toChangedFileView(record.change),
     ...(record.diff ? { diff: { ...record.diff } } : {}),
+    ...(record.coords ? { coords: record.coords } : {}),
     ...(record.agent ? { agent: record.agent } : {}),
   }
 }

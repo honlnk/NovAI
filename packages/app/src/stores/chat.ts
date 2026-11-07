@@ -40,6 +40,12 @@ import { getOrCreateClientId } from '../utils/client-id'
 /** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
 export type RunStatusType = 'idle' | 'running' | 'error'
 
+/** 实时文件改动 + 产生它的会话（定位高亮据此判定「是否当前会话的改动」） */
+export type RecentFileChange = {
+  sessionId: string
+  record: FileChangeRecordView
+}
+
 /**
  * 历史窗口页大小（借鉴 dsh 分页防线）：首屏只装尾部一页，滚动到顶向前翻页。
  * 取 100 而非 dsh 的 50——一轮 Agent 任务产生多条工具行，50 条可能不足两轮。
@@ -57,6 +63,13 @@ export const useChatStore = defineStore('chat', () => {
    * 也逐条触发，不因去重漏掉重读时机）。
    */
   const lastFileChange = ref<FileChangeRecordView | null>(null)
+  /**
+   * 实时到达的文件改动队列（file-changed 事件按到达序逐条保留，含会话归属）：
+   * 定位高亮反馈队列（交互优化计划 §7）的数据源。与 lastFileChange 的分工：那份只留
+   * 最新一条（内容面板重读触发），这份逐条保留——同文件连续多次修改不互相吞掉。
+   * 上限 30 条，最老的先出；切项目时由 ProjectView 清空（跨项目不串扰）。
+   */
+  const recentFileChanges = ref<RecentFileChange[]>([])
   /** 收件箱队列快照（QueueDock 渲染用），由 queue-updated 事件同步、切换会话时从 view 重建 */
   const queue = ref<QueuedMessageView[]>([])
   const runStatus = ref('还没有开始执行。')
@@ -681,6 +694,11 @@ export const useChatStore = defineStore('chat', () => {
       // lastFileChange 逐条记录原文，供内容面板判断是否重读当前打开的文件。
       applyFileChangeRecord(event.file)
       lastFileChange.value = event.file
+      // 反馈队列（§7）：逐条保留供定位高亮消费，上限 30 防长任务堆积
+      recentFileChanges.value = [
+        ...recentFileChanges.value.slice(-29),
+        { sessionId: event.sessionId, record: event.file },
+      ]
       return
     }
 
@@ -822,9 +840,16 @@ export const useChatStore = defineStore('chat', () => {
     setRunStatus('Agent 正在执行...', 'running')
   }
 
+  /** 清空实时改动队列（切项目时由 ProjectView 调用，跨项目不串扰） */
+  function clearRecentFileChanges() {
+    recentFileChanges.value = []
+  }
+
   return {
     changedFiles,
     lastFileChange,
+    recentFileChanges,
+    clearRecentFileChanges,
     queue,
     isRunning,
     isStopping,

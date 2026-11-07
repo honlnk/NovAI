@@ -252,6 +252,33 @@ export type InboxState = {
 }
 
 /**
+ * 改动定位的版本标识（交互优化计划 §7「前后内容版本」）：FNV-1a 内容哈希 +
+ * 写盘时刻 mtime。界面据此校验「记录坐标描述的版本 == 面板当前版本」，失配降级。
+ */
+export type FileChangeVersion = {
+  contentHash: string
+  updatedAt: string
+}
+
+/**
+ * 一处替换的行范围（1-based 闭区间，统一源码行口径）；空范围 end = start - 1
+ * （空文件填充 oldEnd=0；替换为空 newEnd = newStart - 1）。
+ */
+export type FileChangeRange = {
+  oldStart: number
+  oldEnd: number
+  newStart: number
+  newEnd: number
+}
+
+/** 一次写盘的定位信息：逐处范围 + 前后版本（created 无 beforeVersion） */
+export type FileChangeCoords = {
+  ranges: FileChangeRange[]
+  beforeVersion?: FileChangeVersion
+  afterVersion?: FileChangeVersion
+}
+
+/**
  * 改动账本的一条记录（append-only，与 modelView 彻底无关 → 天然免疫压缩）。
  * diff 仅 created/updated 有；renamed/deleted 无（删除原文去回收站 trashPath 看）。
  */
@@ -263,6 +290,11 @@ export type FileChangeRecord = {
   at: string
   change: FileChange
   diff?: ChangeDiff
+  /**
+   * 定位坐标与前后版本（§7，可选）：EditFile/CreateFile 写盘时由工具层产出；
+   * 旧记录/删除改名无此字段——界面降级为片段差异，不伪造高亮。
+   */
+  coords?: FileChangeCoords
   /** 改动归属：要素管理员子代理的写入带 elementManager（轮次归属标记，写回面板展示用）；主 Agent 记录无此字段 */
   agent?: 'element-manager'
 }

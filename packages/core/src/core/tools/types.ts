@@ -1,5 +1,5 @@
 import type { ProjectSnapshot } from '../../types/project'
-import type { FileChangeRecord } from '../../types/chat'
+import type { FileChangeCoords, FileChangeRecord } from '../../types/chat'
 import type { ElementType } from '../../types/rag'
 import type { PlanStatus } from '../../types/plans'
 import type { KnowledgePlatformName } from './knowledge-platforms'
@@ -130,6 +130,11 @@ export type ToolDefinition<TName extends string, TInput, TOutput> = {
    */
   extractChangeDiff?(output: TOutput): ChangeDiff | undefined
   /**
+   * 写工具用它产出定位坐标（逐处行范围 + 前后版本，交互优化计划 §7）；EditFile/CreateFile 实现。
+   * 返回 undefined 表示该 output 无坐标可存（旧记录形态，界面降级为片段差异）。
+   */
+  extractChangeCoords?(output: TOutput): FileChangeCoords | undefined
+  /**
    * 写工具用它构造写入前确认预览；只读工具不实现。
    * 入参是经过 validateInput 校验的强类型 input，执行前调用。
    */
@@ -186,6 +191,8 @@ export type EditFileOutput = {
   oldText: string
   /** 实际写入的新片段 */
   newText: string
+  /** 定位坐标（§7）：逐处行范围 + 前后版本，extractChangeCoords 转交改动账本；模型视图不消费 */
+  coords?: FileChangeCoords
 }
 
 export type CreateFileInput = {
@@ -200,6 +207,8 @@ export type CreateFileOutput = {
   created: true
   /** 新建的完整内容；改动账本 diff 用（oldText 为 ''，全绿） */
   content: string
+  /** 定位坐标（§7）：整文件落盘范围（无 beforeVersion，新建没有原文） */
+  coords?: FileChangeCoords
 }
 
 export type RenameFileInput = {

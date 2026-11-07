@@ -16,6 +16,7 @@ import {
   updateRecentProjectCounts,
 } from '@novai/core/services/project-service'
 import {
+  FileSaveConflictError,
   readFile,
   refreshFiles,
   writeFile,
@@ -49,6 +50,15 @@ export type ProjectActionNotice = {
   /** kind='permission' 时提供重新授权的重跑目标：'last'=上次项目，其余为最近项目 id */
   retryTarget?: string
 }
+
+/**
+ * 内容面板手动保存的结果（交互优化计划 §6 保存状态机的数据源）：
+ * ok=true 才算「已保存」；conflict=true 表示版本失配（外部修改/删除），
+ * 草稿仍保留在面板，由用户选择覆盖保存或读取最新。
+ */
+export type SaveFileOutcome =
+  | { ok: true; file: FileContentView }
+  | { ok: false; conflict: boolean; message: string; diskUpdatedAt?: string }
 
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<ProjectView | null>(null)
@@ -256,20 +266,38 @@ export const useProjectStore = defineStore('project', () => {
    * 保存内容面板编辑模式的草稿到磁盘。
    * 写盘成功后更新 activeFile（同步最新 updatedAt），不刷新整个文件树
    *（文件树结构未变，仅内容更新）。
+   *
+   * 返回判别结果供面板保存状态机使用（§6「真实成功才报已更新」）：冲突（文件被外部
+   * 修改/删除）单独标出，草稿的保留与覆盖选择由面板呈现。
    */
-  async function saveFile(path: string, content: string) {
+  async function saveFile(
+    path: string,
+    content: string,
+    options?: { expectedUpdatedAt?: string; force?: boolean },
+  ): Promise<SaveFileOutcome> {
     if (!currentProject.value) {
-      return null
+      return { ok: false, conflict: false, message: '没有打开的项目' }
     }
 
     errorMessage.value = ''
 
     try {
-      activeFile.value = await writeFile(currentProject.value.id, path, content)
-      return activeFile.value
+      activeFile.value = await writeFile(currentProject.value.id, path, content, {
+        ...(options?.force ? {} : { expectedUpdatedAt: options?.expectedUpdatedAt }),
+      })
+      return { ok: true, file: activeFile.value }
     } catch (error) {
-      errorMessage.value = toMessage(error, '保存文件失败')
-      return null
+      if (error instanceof FileSaveConflictError) {
+        return {
+          ok: false,
+          conflict: true,
+          message: error.message,
+          diskUpdatedAt: error.diskUpdatedAt,
+        }
+      }
+      const message = toMessage(error, '保存文件失败')
+      errorMessage.value = message
+      return { ok: false, conflict: false, message }
     }
   }
 

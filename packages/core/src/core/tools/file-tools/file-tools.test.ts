@@ -8,6 +8,7 @@ import {
 } from '../file-tools'
 import { createAgentTools } from '../../agent/tools'
 import { createReadFileState } from './read-file-state'
+import { hashContent } from '../../util/hash'
 import type { ProjectSnapshot } from '../../../types/project'
 import type { ToolRuntime } from '../types'
 
@@ -714,6 +715,92 @@ describe('file tools', () => {
         content: '新',
       }, runtime)
       await expect(readProjectText(runtime.project.handle, 'chapters/第001章-新.txt')).resolves.toBe('新')
+    })
+  })
+
+  describe('定位坐标（§7：改动账本逐处行范围 + 前后版本）', () => {
+    it('EditFile 单处替换产出正确行范围与前后版本', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一行\n第二行\n第三行',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二行',
+        newText: '第二行改',
+      }, runtime)
+
+      expect(output.coords).toBeDefined()
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 2, oldEnd: 2, newStart: 2, newEnd: 2 },
+      ])
+      // 前后版本都有，且内容哈希不同（内容确实变了）
+      expect(output.coords?.beforeVersion?.contentHash).toBeTruthy()
+      expect(output.coords?.afterVersion?.contentHash).toBeTruthy()
+      expect(output.coords?.beforeVersion?.contentHash).not.toBe(output.coords?.afterVersion?.contentHash)
+      // 版本时间取自盘上文件的真实 mtime
+      expect(output.coords?.afterVersion?.updatedAt).toBeTruthy()
+      // extractChangeCoords 转交 output.coords（账本链路入口）
+      expect(editFileTool.extractChangeCoords?.(output)).toBe(output.coords)
+    })
+
+    it('EditFile 空文件填充产出空原文范围（oldEnd=0）', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '',
+      })
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '第一段\n第二段',
+      }, runtime)
+
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 1, oldEnd: 0, newStart: 1, newEnd: 2 },
+      ])
+      expect(output.coords?.beforeVersion).toBeDefined()
+      expect(output.coords?.afterVersion).toBeDefined()
+    })
+
+    it('EditFile replaceAll 产出逐处范围', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '旧名出场\n中间过渡\n旧名又出场',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '旧名',
+        newText: '新名',
+        replaceAll: true,
+      }, runtime)
+
+      expect(output.occurrences).toBe(2)
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 1, oldEnd: 1, newStart: 1, newEnd: 1 },
+        { oldStart: 3, oldEnd: 3, newStart: 3, newEnd: 3 },
+      ])
+    })
+
+    it('CreateFile 产出整文件范围，无 beforeVersion', async () => {
+      const runtime = createRuntime({})
+
+      const output = await createFileTool.run({
+        path: 'chapters/第001章-新篇.txt',
+        content: '第一段\n第二段\n第三段',
+      }, runtime)
+
+      expect(output.coords).toBeDefined()
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 1, oldEnd: 0, newStart: 1, newEnd: 3 },
+      ])
+      // 新建没有原文，只有 afterVersion
+      expect(output.coords?.beforeVersion).toBeUndefined()
+      expect(output.coords?.afterVersion?.contentHash).toBe(hashContent('第一段\n第二段\n第三段'))
+      expect(createFileTool.extractChangeCoords?.(output)).toBe(output.coords)
     })
   })
 })

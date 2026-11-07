@@ -30,4 +30,7 @@ export * as projectService from './services/project-service'
 export * as ragService from './services/rag-service'
 export * as settingsService from './services/settings-service'
 export * from './services/project-runtime'
+export * from './core/util/word-count'
+// 内容哈希（FNV-1a）：app 侧定位高亮做「记录坐标描述的版本 == 面板当前版本」校验用（§7）
+export * from './core/util/hash'
 export type * from './services/types'

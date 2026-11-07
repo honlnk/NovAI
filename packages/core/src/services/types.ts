@@ -2,6 +2,7 @@ import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/pro
 import type { ReasoningEffort } from '../types/ai'
 import type { AgentRoleId } from '../core/agent/roles'
 import type { PlanScanIssue } from '../types/plans'
+import type { FileChangeCoords } from '../types/chat'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
 export { isDeepSeekDialect } from '../core/ai/shared'
@@ -359,6 +360,11 @@ export type FileChangeRecordView = {
     linesAdded: number
     linesRemoved: number
   }
+  /**
+   * 定位坐标与前后版本（交互优化计划 §7）：EditFile/CreateFile 写盘时由工具层产出。
+   * 旧记录/删除改名无此字段——界面降级为片段差异，不伪造高亮。
+   */
+  coords?: FileChangeCoords
   /** 改动归属：要素管理员子代理的记录带 elementManager（写回面板归属标记）；主 Agent 记录无此字段 */
   agent?: 'element-manager'
 }
