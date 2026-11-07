@@ -10,6 +10,7 @@ import type {
 } from '@novai/core/services/types'
 
 import {
+  archiveAgentSession,
   createSession,
   enqueueMessage,
   getSession,
@@ -30,6 +31,7 @@ vi.mock('@novai/core/services/agent-service', () => ({
   listSessions: vi.fn(),
   renameSession: vi.fn(),
   deleteSession: vi.fn(),
+  archiveAgentSession: vi.fn(),
   enqueueMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
   loadOlderMessages: vi.fn(),
@@ -44,6 +46,7 @@ vi.mock('@novai/core/services/agent-service', () => ({
 const mockedCreateSession = vi.mocked(createSession)
 const mockedGetSession = vi.mocked(getSession)
 const mockedListSessions = vi.mocked(listSessions)
+const mockedArchiveAgentSession = vi.mocked(archiveAgentSession)
 const mockedEnqueueMessage = vi.mocked(enqueueMessage)
 const mockedLoadOlderMessages = vi.mocked(loadOlderMessages)
 const mockedStopAgentRun = vi.mocked(stopAgentRun)
@@ -73,6 +76,20 @@ function createTextMessageView(index: number): ChatSessionView['messages'][numbe
     kind: 'text',
     text: `第 ${index} 条`,
     createdAt: new Date(1700000000000 + index * 1000).toISOString(),
+  }
+}
+
+/** 会话摘要夹具（含新必填 status 字段） */
+function makeSummary(sessionId: string, updatedAt: string, overrides: { archivedAt?: string } = {}) {
+  return {
+    sessionId,
+    projectId: 'project-1',
+    status: 'idle' as const,
+    title: `会话 ${sessionId}`,
+    createdAt: '2026-11-07T00:00:00.000Z',
+    updatedAt,
+    messageCount: 0,
+    ...overrides,
   }
 }
 
@@ -774,6 +791,7 @@ describe('chat store（W4 事件总线版）', () => {
       sessionId: 'session-em',
       projectId: 'project-1',
       agent: 'element-manager',
+      status: 'idle',
       title: '在 elements/ 下新建回归测试',
       createdAt: '2026-10-22T12:00:00.000Z',
       updatedAt: '2026-10-22T12:00:01.000Z',
@@ -819,17 +837,6 @@ describe('initSessions 首选会话恢复（工作区现场恢复 §3.4）', () 
     mockedSubscribeAgentEvents.mockReturnValue(() => {})
     mockedEnqueueMessage.mockResolvedValue({ sessionId: 'session-current' })
   })
-
-  function makeSummary(sessionId: string, updatedAt: string) {
-    return {
-      sessionId,
-      projectId: 'project-1',
-      title: `会话 ${sessionId}`,
-      createdAt: '2026-11-07T00:00:00.000Z',
-      updatedAt,
-      messageCount: 0,
-    }
-  }
 
   it('记录的会话存在时优先激活（不再取最近一条）', async () => {
     mockedListSessions.mockResolvedValue([
@@ -886,5 +893,118 @@ describe('initSessions 首选会话恢复（工作区现场恢复 §3.4）', () 
     const view = await store.initSessions('project-1')
 
     expect(view.sessionId).toBe('session-latest')
+  })
+})
+
+describe('会话归档（交互优化计划 §3）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    mockedIsAgentRunActive.mockReturnValue(false)
+    mockedSubscribeAgentEvents.mockReturnValue(() => {})
+    mockedListSessions.mockResolvedValue([])
+  })
+
+  /** 建一个含若干会话的 store：全部激活为第一条 */
+  async function setupStore(summaries: ReturnType<typeof makeSummary>[]) {
+    const store = useChatStore()
+    mockedListSessions.mockResolvedValue(summaries)
+    mockedGetSession.mockImplementation((_projectId, sessionId) =>
+      Promise.resolve(createSessionView(sessionId ?? '')),
+    )
+    await store.initSessions('project-1')
+    return store
+  }
+
+  it('归档非激活会话：列表项带上 archivedAt，不改激活现场，fallbackTo 为 null', async () => {
+    const store = await setupStore([
+      makeSummary('session-a', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-b', '2026-11-07T09:00:00.000Z'),
+    ])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(
+      { ...makeSummary('session-b', '2026-11-07T09:00:00.000Z'), archivedAt: '2026-11-07T11:00:00.000Z' },
+    )
+    const { fallbackTo } = await store.archiveSession('project-1', 'session-b')
+
+    expect(fallbackTo).toBeNull()
+    expect(store.activeSessionId).toBe('session-a') // 归档其他会话不改现场
+    expect(store.sessions.find((s) => s.sessionId === 'session-b')?.archivedAt).toBe('2026-11-07T11:00:00.000Z')
+  })
+
+  it('归档激活会话：自动切到最近的未归档会话并返回 fallbackTo', async () => {
+    const store = await setupStore([
+      makeSummary('session-a', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-b', '2026-11-07T09:00:00.000Z'),
+    ])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(
+      { ...makeSummary('session-a', '2026-11-07T10:00:00.000Z'), archivedAt: '2026-11-07T11:00:00.000Z' },
+    )
+    const { fallbackTo } = await store.archiveSession('project-1', 'session-a')
+
+    expect(fallbackTo).toBe('session-b') // 列表已按 updatedAt 降序，第一条未归档即最近
+    expect(store.activeSessionId).toBe('session-b')
+  })
+
+  it('归档唯一的会话（全部已归档）：新建空会话兜底', async () => {
+    const store = await setupStore([makeSummary('session-a', '2026-11-07T10:00:00.000Z')])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(
+      { ...makeSummary('session-a', '2026-11-07T10:00:00.000Z'), archivedAt: '2026-11-07T11:00:00.000Z' },
+    )
+    mockedCreateSession.mockResolvedValue(createSessionView('session-new'))
+
+    const { fallbackTo } = await store.archiveSession('project-1', 'session-a')
+
+    expect(fallbackTo).toBe('session-new')
+    expect(store.activeSessionId).toBe('session-new')
+  })
+
+  it('恢复归档：只清 archivedAt，不改激活会话', async () => {
+    const store = await setupStore([
+      makeSummary('session-a', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-b', '2026-11-07T09:00:00.000Z', { archivedAt: '2026-11-07T08:00:00.000Z' }),
+    ])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(makeSummary('session-b', '2026-11-07T09:00:00.000Z'))
+    await store.unarchiveSession('project-1', 'session-b')
+
+    const restored = store.sessions.find((s) => s.sessionId === 'session-b')
+    expect(restored?.archivedAt).toBeUndefined()
+    expect(store.activeSessionId).toBe('session-a') // 长期恢复不抢占现场
+  })
+
+  it('运行态集合：run-start 记入（含后台会话），run-finish 按注册表收敛', async () => {
+    const store = useChatStore()
+    await store.initSessions('project-1')
+    const emit = captureListener()
+
+    // 后台委派会话运行：不在激活会话也要点亮
+    emit({ type: 'run-start', sessionId: 'session-em' } as AgentUiEvent)
+    expect(store.runningSessionIds.has('session-em')).toBe(true)
+
+    // 收尾时注册表已无该 driver：移除
+    mockedIsAgentRunActive.mockReturnValue(false)
+    emit({
+      type: 'run-finish',
+      sessionId: 'session-em',
+      result: { projectId: 'project-1', sessionId: 'session-em', turnChanges: [], sessionChangedFileCount: 0, session: createSessionView('session-em') },
+    } as unknown as AgentUiEvent)
+    expect(store.runningSessionIds.has('session-em')).toBe(false)
+
+    // 新 run 的 run-start 先于旧 driver 收尾到达时：注册表仍有 driver，不误清
+    emit({ type: 'run-start', sessionId: 'session-x' } as AgentUiEvent)
+    mockedIsAgentRunActive.mockReturnValue(true)
+    emit({
+      type: 'run-error',
+      sessionId: 'session-x',
+      error: new Error('旧 driver 的迟到报错'),
+    } as unknown as AgentUiEvent)
+    expect(store.runningSessionIds.has('session-x')).toBe(true)
   })
 })

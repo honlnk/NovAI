@@ -16,6 +16,7 @@ import {
   listSessions as listAgentSessions,
   renameSession as renameAgentSession,
   deleteSession as deleteAgentSession,
+  archiveAgentSession,
   compactSession as compactAgentSession,
 } from '@novai/core/services/agent-service'
 
@@ -109,6 +110,13 @@ export const useChatStore = defineStore('chat', () => {
   // 当前激活会话 id（高亮 + 事件路由用）
   const activeSessionId = ref<string | null>(null)
   const isLoadingSessions = ref(false)
+  /**
+   * 各会话的运行中标记（事件驱动，会话列表「进行中」筛选与状态徽标的实时来源）：
+   * run-start 记入、run-finish/run-error 以 driver 注册表真实状态收敛。
+   * 不受激活会话过滤影响——后台委派会话运行时列表同样要点亮；
+   * 刷新后为空（core 的 driver 注册表在内存），快照 status='running' 不作为运行依据。
+   */
+  const runningSessionIds = ref(new Set<string>())
 
   /**
    * 历史窗口起点：sessionView.messages[0] 在全量历史中的下标（append-only 数组下标游标）。
@@ -301,6 +309,7 @@ export const useChatStore = defineStore('chat', () => {
         sessionId: view.sessionId,
         projectId,
         ...(view.agent ? { agent: view.agent } : {}),
+        status: view.status,
         title: view.title ?? '新对话',
         createdAt: view.createdAt ?? new Date().toISOString(),
         updatedAt: view.updatedAt ?? new Date().toISOString(),
@@ -348,6 +357,44 @@ export const useChatStore = defineStore('chat', () => {
 
     // 列表已空：新建空会话并本地插入，省一次全量重扫（skipReload）
     await createNewSession(projectId, { skipReload: true })
+  }
+
+  /**
+   * 归档会话（交互优化计划 §3）：不弹确认、不停止运行中的 driver，只改列表可见性。
+   * 归档的是激活会话时自动切到最近的未归档会话（没有则新建空会话）；
+   * 归档其他会话不改变当前现场。
+   * 返回 fallbackTo = 归档激活会话时自动切到的会话 id——撤销动作据此判断能否
+   * 切回原会话（用户后来手动切走则不抢占）。
+   */
+  async function archiveSession(
+    projectId: string,
+    sessionId: string,
+  ): Promise<{ fallbackTo: string | null }> {
+    const summary = await archiveAgentSession(projectId, sessionId, true)
+    upsertSessionSummary(summary)
+
+    if (activeSessionId.value !== sessionId) {
+      return { fallbackTo: null }
+    }
+
+    const next = sessions.value.find((s) => !s.archivedAt)
+    if (next) {
+      await selectSession(projectId, next.sessionId)
+      return { fallbackTo: next.sessionId }
+    }
+
+    // 全部已归档：新建空会话兜底（否则 UI 进入无活跃会话态，发消息会报错）
+    await createNewSession(projectId)
+    return { fallbackTo: activeSessionId.value }
+  }
+
+  /**
+   * 恢复归档（撤销与归档区「恢复」共用）：只清归档标记，不动活动时间、不改激活会话
+   * ——是否切回原会话由撤销方按 fallbackTo 上下文决定，长期恢复不抢占现场。
+   */
+  async function unarchiveSession(projectId: string, sessionId: string): Promise<void> {
+    const summary = await archiveAgentSession(projectId, sessionId, false)
+    upsertSessionSummary(summary)
   }
 
   /**
@@ -483,6 +530,18 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
+    // 运行态集合全局维护（先于激活会话过滤）：后台委派会话运行时列表同样要点亮「进行中」。
+    // run-finish/run-error 以注册表真实状态收敛——停止后立刻再发送时，新 run 的
+    // run-start 可能先于旧 driver 的收尾事件到达，无条件删除会误清新 run。
+    if (event.type === 'run-start') {
+      runningSessionIds.value = new Set(runningSessionIds.value).add(event.sessionId)
+    } else if ((event.type === 'run-finish' || event.type === 'run-error')
+      && !isAgentRunActive(event.sessionId)) {
+      const next = new Set(runningSessionIds.value)
+      next.delete(event.sessionId)
+      runningSessionIds.value = next
+    }
+
     // 全局事件（与会话激活态无关，先于激活会话过滤处理）：
     // 待确认快照按会话路由，非激活会话（委派中的要素管理员会话）也要记录徽标；
     // session-created（服务端新建的委派会话落盘）刷新当前项目的会话列表。
@@ -780,6 +839,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionView,
     sessions,
     activeSessionId,
+    runningSessionIds,
     historyStart,
     loadingOlder,
     hasMoreHistory,
@@ -788,6 +848,7 @@ export const useChatStore = defineStore('chat', () => {
     hasSessionView,
     streamingMessageId,
     abortRun,
+    archiveSession,
     compactActiveSession,
     confirmWriteTool,
     createNewSession,
@@ -805,6 +866,7 @@ export const useChatStore = defineStore('chat', () => {
     skipCurrentQuestion,
     steerQueuedMessage,
     submitQuestionAnswer,
+    unarchiveSession,
     toggleQuestionOption,
     toggleProcessGroup,
   }

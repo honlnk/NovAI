@@ -303,10 +303,48 @@ export async function listSessions(
     projectId,
     ...(meta.agent ? { agent: meta.agent } : {}),
     title: meta.title,
+    ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
+    status: meta.status,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     messageCount: meta.messageCount,
   }))
+}
+
+/**
+ * 归档/恢复会话（交互优化计划 §3.3）：只改 archivedAt，不改 updatedAt、不停止
+ * 运行中的 driver——归档是列表归类行为，会话本身照常收尾落盘（落盘的快照里
+ * archivedAt 已在，driver 复写不会丢）。返回更新后的摘要视图供前端即时刷新。
+ */
+export async function archiveAgentSession(
+  projectId: string,
+  sessionId: string,
+  archived: boolean,
+): Promise<ChatSessionSummaryView> {
+  const project = requireRuntimeProject(projectId)
+  const session = await resolveSession(projectId, sessionId)
+  if (!session) {
+    throw new Error(`会话不存在或已删除：${sessionId}`)
+  }
+
+  if (archived) {
+    session.archivedAt = new Date().toISOString()
+  } else {
+    delete session.archivedAt
+  }
+  await saveSession(project, session, { touchUpdatedAt: false })
+
+  return {
+    sessionId: session.sessionId,
+    projectId,
+    ...(session.agent ? { agent: session.agent } : {}),
+    ...(session.archivedAt ? { archivedAt: session.archivedAt } : {}),
+    status: session.status,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messageCount: session.messages.length,
+  }
 }
 
 /** 重命名会话标题（只改 state.title，不动文件名）。返回更新后的视图。 */
@@ -419,6 +457,11 @@ export async function enqueueMessage(input: {
   projectId: string
   sessionId?: string
   text: string
+  /**
+   * 气泡显示文本（显示/指令分离，交互优化计划 §3.2）：斜杠命令发送时由 app 层传
+   * 用户原草稿，text 为展开后的驱动 prompt。缺省即普通消息（渲染 text）。
+   */
+  displayLabel?: string
   quote?: string
   mode: 'queue' | 'steer'
   /** 发送时打开的文件路径（隐式上下文，目标解析用快照） */
@@ -778,6 +821,7 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
       sessionId: session.sessionId,
       projectId: project.id,
       agent: 'element-manager',
+      status: session.status,
       title: session.title,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
@@ -1301,6 +1345,8 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       role: message.role,
       kind: 'text',
       text: message.text,
+      // 显示/指令分离：user text 消息的气泡显示文本（斜杠命令原草稿）；assistant 无此字段
+      ...('displayLabel' in message && message.displayLabel !== undefined ? { displayLabel: message.displayLabel } : {}),
       // 仅 user text 消息有 quote/steered；assistant text 无此字段，undefined 自动忽略
       quote: 'quote' in message ? message.quote : undefined,
       steered: 'steered' in message ? message.steered : undefined,

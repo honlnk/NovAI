@@ -23,18 +23,20 @@ export function buildSessionFilePath(sessionId: string) {
 }
 
 /**
- * 保存会话到项目文件系统。写前刷新 updatedAt，保证列表按最近更新排序。
+ * 保存会话到项目文件系统。写前原地刷新 updatedAt（内存对象与落盘内容保持同一值
+ * ——若只盖在副本上，内存会滞后磁盘，归档等「原样保留」路径会把滞后值写回盘上，
+ * 列表排序被悄悄回拨）；归档/恢复等「不改活动时间」的操作传 { touchUpdatedAt: false }。
  * 整对象 JSON 覆盖写——会话是状态快照，不需要追加（区别于 agent-log 的 jsonl）。
  */
 export async function saveSession(
   project: ProjectSnapshot,
   session: ChatSessionState,
+  options?: { touchUpdatedAt?: boolean },
 ): Promise<void> {
-  const stamped: ChatSessionState = {
-    ...session,
-    updatedAt: new Date().toISOString(),
+  if (options?.touchUpdatedAt !== false) {
+    session.updatedAt = new Date().toISOString()
   }
-  const text = JSON.stringify(stamped, null, 2)
+  const text = JSON.stringify(session, null, 2)
   await writeProjectTextFile(project.handle, buildSessionFilePath(session.sessionId), text)
 }
 
@@ -97,9 +99,13 @@ export async function listSessionMetas(
 
 export type SessionMeta = {
   sessionId: string
-  /** 会话角色（缺省即主角色）：列表按角色分组的依据 */
+  /** 会话角色（缺省即主角色）：列表展示用 */
   agent?: AgentRoleId
   title: string
+  /** 归档时间（缺省即未归档）：列表筛选与归档区展示用 */
+  archivedAt?: string
+  /** 会话状态（落盘快照）：「进行中/待处理」筛选的依据 */
+  status: ChatSessionState['status']
   createdAt: string
   updatedAt: string
   messageCount: number
@@ -129,6 +135,8 @@ function parseSessionMeta(text: string): SessionMeta | null {
     sessionId: session.sessionId,
     ...(session.agent ? { agent: session.agent } : {}),
     title: session.title,
+    ...(session.archivedAt ? { archivedAt: session.archivedAt } : {}),
+    status: session.status,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,

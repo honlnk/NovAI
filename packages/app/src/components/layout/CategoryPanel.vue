@@ -26,6 +26,8 @@ defineProps<{
   selectedPlanCardId?: string | null
   /** 有待回答提问卡的会话 id 集（会话列表「待回答」徽标；提问按会话路由） */
   pendingQuestionIds?: Set<string>
+  /** 实时运行中的会话 id 集（会话列表「进行中」筛选与徽标） */
+  runningIds?: Set<string>
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -39,6 +41,8 @@ const emit = defineEmits<{
   selectSession: [sessionId: string]
   createSession: []
   renameSession: [sessionId: string, title: string]
+  archiveSession: [sessionId: string]
+  unarchiveSession: [sessionId: string]
   deleteSession: [sessionId: string]
   /** 打开主内容区计划看板 */
   openPlanBoard: []
@@ -78,9 +82,12 @@ const emit = defineEmits<{
       :active-session-id="activeSessionId"
       :pending-confirmation-ids="pendingConfirmationIds"
       :pending-question-ids="pendingQuestionIds"
+      :running-ids="runningIds"
       @select="emit('selectSession', $event)"
       @create="emit('createSession')"
       @rename="(sessionId, title) => emit('renameSession', sessionId, title)"
+      @archive="emit('archiveSession', $event)"
+      @unarchive="emit('unarchiveSession', $event)"
       @remove="emit('deleteSession', $event)"
     />
     <ChapterList

@@ -35,6 +35,12 @@ export type UserTextMessage = {
   role: 'user'
   kind: 'text'
   text: string
+  /**
+   * 气泡显示文本（交互优化计划 §3.2 显示/指令分离）：斜杠命令发送时存用户原草稿
+   * （如「/管理要素 整理人物」），text 则是展开后的驱动 prompt（内部指令，不得
+   * 出现在气泡、队列或自动标题里）。可选字段：普通消息/旧会话无此字段，渲染 text。
+   */
+  displayLabel?: string
   /** 用户在内容面板选中的引用内容，作为独立引用块展示在用户气泡内 */
   quote?: string
   /** 插话（steer）标记：渲染与普通用户气泡零视觉区别，仅供任务组分组规则判定（不是组边界）。 */
@@ -196,6 +202,11 @@ export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'awaiting-
 export type QueuedMessage = {
   id: string
   text: string
+  /**
+   * 气泡显示文本（显示/指令分离）：斜杠命令排队时存用户原草稿，text 是展开后的
+   * 驱动 prompt。可选字段：旧队列消息无此字段，渲染 text。
+   */
+  displayLabel?: string
   /** 排队时快照的引用内容 */
   quote?: string
   /**
@@ -271,6 +282,11 @@ export type ChatSessionState = {
   lastOutlinePath?: string | null
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
   title: string
+  /**
+   * 归档时间（ISO）。可选字段：旧会话无此字段视为未归档，无需迁移。
+   * 归档/恢复只改此字段，不改变 updatedAt（原活动时间保留，列表排序不受归档影响）。
+   */
+  archivedAt?: string
   /** 会话创建时间（ISO），落盘与列表排序用 */
   createdAt: string
   /** 会话最近更新时间（ISO），每轮保存刷新；列表按此降序 */

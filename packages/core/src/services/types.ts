@@ -390,6 +390,8 @@ export type ChatMessageView =
       role: 'user'
       kind: 'text'
       text: string
+      /** 气泡显示文本（显示/指令分离）：斜杠命令时为用户原草稿；缺省渲染 text */
+      displayLabel?: string
       /** 引用的选中内容，渲染为用户气泡内的独立引用块 */
       quote?: string
       /** 插话产生的用户消息：渲染与普通气泡相同，仅作分组边界判定的数据标记（不是组边界） */
@@ -464,6 +466,19 @@ export type ChatMessageView =
       text: string
       createdAt: string
     }
+  | {
+      id: string
+      role: 'system'
+      kind: 'local-command'
+      /** 命令名（如「/压缩上下文」） */
+      command: string
+      outcome: 'completed' | 'noop' | 'failed'
+      /** 一行结果说明 */
+      text: string
+      /** 失败详情（展开区展示、可复制） */
+      detail?: string
+      createdAt: string
+    }
 
 export type ChatSessionView = {
   sessionId: string
@@ -507,9 +522,13 @@ export type ChatHistoryPageView = {
 export type ChatSessionSummaryView = {
   sessionId: string
   projectId: string
-  /** 会话角色（缺省即主角色）：会话列表按角色分组的依据 */
+  /** 会话角色（缺省即主角色）：列表角色小标签的依据 */
   agent?: AgentRoleId
   title: string
+  /** 归档时间（缺省即未归档）：列表筛选「已归档」的依据 */
+  archivedAt?: string
+  /** 会话状态（落盘快照）：「进行中/待处理」筛选与状态展示的依据 */
+  status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   createdAt: string
   updatedAt: string
   messageCount: number
@@ -520,6 +539,8 @@ export type EnqueueMessageInput = {
   projectId: string
   sessionId?: string
   text: string
+  /** 气泡显示文本（显示/指令分离）：斜杠命令发送时传用户原草稿，text 为展开后的驱动 prompt */
+  displayLabel?: string
   /** 引用的选中内容，随消息入队快照 */
   quote?: string
   mode: 'queue' | 'steer'
@@ -532,13 +553,15 @@ export type UpdateQueuedMessageInput = {
   projectId: string
   sessionId: string
   id: string
-  action: { kind: 'edit'; text: string } | { kind: 'remove' } | { kind: 'steer' }
+  action: { kind: 'edit'; text: string; displayLabel?: string } | { kind: 'remove' } | { kind: 'steer' }
 }
 
 /** QueueDock 渲染用排队消息视图：placement = queued（next-turn 排队）/ steering（next-step 插话）。 */
 export type QueuedMessageView = {
   id: string
   text: string
+  /** 气泡显示文本（显示/指令分离）：斜杠命令排队时为用户原草稿；缺省渲染 text */
+  displayLabel?: string
   quote?: string
   at: string
   placement: 'queued' | 'steering'

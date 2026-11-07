@@ -6,6 +6,7 @@ import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
 import { usePlanStore } from '../stores/plan'
 import { useToast } from '../composables/useToast'
+import { useConversationFilter } from '../composables/useConversationFilter'
 import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
@@ -36,6 +37,8 @@ const chatStore = useChatStore()
 const indexStore = useIndexStore()
 const planStore = usePlanStore()
 const toast = useToast()
+// 「查看已归档」动作经模块级单例切换对话列表筛选（不跨组件转发 ref）
+const { showArchived: showArchivedFilter } = useConversationFilter()
 
 const projectId = computed(() => route.params.id as string)
 const activeCategory = ref<Category>('chapter')
@@ -307,6 +310,39 @@ function handleNotImplemented(name: string) {
  */
 function handleElementManagerNewSession() {
   void chatStore.createNewSession(projectId.value, { agent: 'element-manager' })
+}
+
+// ===== 会话归档（交互优化计划 §3）：不弹确认、不停运行；轻提示带撤销与查看已归档 =====
+
+/** 归档成功后的轻提示动作：撤销（5 秒内）或跳到归档区 */
+function handleUndoArchive(sessionId: string, fallbackTo: string | null) {
+  void (async () => {
+    await chatStore.unarchiveSession(projectId.value, sessionId)
+    // 撤销不抢占用户后来切到的会话：仅当激活会话仍是归档时自动切过去的那条才切回
+    if (fallbackTo && chatStore.activeSessionId === fallbackTo) {
+      await chatStore.selectSession(projectId.value, sessionId)
+    }
+  })()
+}
+
+async function handleArchiveSession(sessionId: string) {
+  const archived = chatStore.sessions.find((s) => s.sessionId === sessionId)
+  const { fallbackTo } = await chatStore.archiveSession(projectId.value, sessionId)
+  toast.success(`已归档「${archived?.title ?? '对话'}」`, {
+    duration: 5000,
+    actions: [
+      { label: '撤销', run: () => handleUndoArchive(sessionId, fallbackTo) },
+      { label: '查看已归档', run: () => showArchivedFilter() },
+    ],
+  })
+}
+
+function handleUnarchiveSession(sessionId: string) {
+  void (async () => {
+    const restored = chatStore.sessions.find((s) => s.sessionId === sessionId)
+    await chatStore.unarchiveSession(projectId.value, sessionId)
+    toast.info(`已恢复「${restored?.title ?? '对话'}」`)
+  })()
 }
 
 async function handleSelectFile(path: string) {
@@ -611,6 +647,7 @@ function handleGoToSettings() {
         :is-plan-loading="planStore.isLoading"
         :selected-plan-card-id="planStore.selectedCardId"
         :pending-question-ids="chatStore.sessionsWithPendingQuestions"
+        :running-ids="chatStore.runningSessionIds"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"
@@ -619,6 +656,8 @@ function handleGoToSettings() {
         @select-session="(sessionId) => chatStore.selectSession(projectId, sessionId)"
         @create-session="chatStore.createNewSession(projectId)"
         @rename-session="(sessionId, title) => chatStore.renameSession(projectId, sessionId, title)"
+        @archive-session="handleArchiveSession"
+        @unarchive-session="handleUnarchiveSession"
         @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
         @open-plan-board="selectCategory('plan')"
         @refresh-plan="handlePlanRefresh"
@@ -746,13 +785,16 @@ function handleGoToSettings() {
       @close="isRagOpen = false"
     />
 
-    <!-- Toast 提示 -->
-    <Toast
-      v-for="t in toast.toasts.value"
-      :key="t.id"
-      :message="t.message"
-      :type="t.type"
-      @close="toast.remove(t.id)"
-    />
+    <!-- Toast 提示：容器统一定位，多条并存纵向堆叠不遮挡（交互优化计划 §3） -->
+    <div class="pointer-events-none fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+      <div v-for="t in toast.toasts.value" :key="t.id" class="pointer-events-auto">
+        <Toast
+          :message="t.message"
+          :type="t.type"
+          :actions="t.actions"
+          @close="toast.remove(t.id)"
+        />
+      </div>
+    </div>
   </div>
 </template>
