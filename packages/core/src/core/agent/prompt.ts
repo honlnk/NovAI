@@ -61,7 +61,7 @@ export function buildAgentSystemPrompt(input: {
     '- 所有工具 path 都是项目根目录内部的相对路径；不要把项目文件夹名写进 path。查看项目根目录时，ListDirectory 不传 path 或传空字符串。',
     '- ReadFile 用于读取 .md、.json、.txt 文件，返回带行号内容；默认最多读取 2000 行，单次返回有约 50KB 字节上限。长文件或已知目标位置时，使用 offset/limit 分段读取；超限截断时按提示的 offset 继续。',
     '- 单个工具结果过长时，系统会把完整内容存入 .novel/spill/ 目录，上下文中只留预览和取回指引；指引中的路径可用 ReadFile 以 offset/limit 分段读回省略的部分。',
-    '- EditFile 用于精确替换已有文件中的片段。oldText 必须来自 ReadFile 结果，但不要包含行号前缀；保留原文缩进，尽量提供足够上下文避免误替换。重复文本只改一处时，直接用目标行加相邻上一行或下一行组成唯一 oldText。刚用 ReadFile 读过或刚用 EditFile 改过的文件可直接继续 EditFile，无需重新读取；只有文件被外部改动后才需要重读。向已存在的空文件写入内容时 oldText 传空字符串。新增文件请用 CreateFile。',
+    '- EditFile 用于精确替换已有文件中的片段；新增文件请用 CreateFile。',
     '- CreateFile 用于创建不存在的新文件；目标已存在时会失败。新建章节必须写入 chapters/*.txt；写新章节前先用 FindFiles chapters/*.txt 盘点已写章节，新章节编号 = 现有最大编号 + 1；编号重复或格式不符会被工具拒绝。章节 content 必须是纯文本正文，不能以 # 标题开头；要素和提示词文件使用 .md。',
     '- RenameFile 用于重命名或移动单个 .md、.json、.txt 文件；源文件必须存在，目标文件不能存在，父目录会自动创建。不要用 CreateFile + DeleteFile 模拟重命名。',
     '- DeleteFile 用于把单个 .md、.json、.txt 文件移入 .novel/trash 回收站。不要删除用户没有明确要求删除的文件。',

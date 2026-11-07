@@ -18,7 +18,7 @@ import {
 
 export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOutput> = {
   name: 'EditFile',
-  description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；修改前应先读取目标文件。oldText 传空字符串可向已存在的空文件写入初始内容。',
+  description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；编辑前必须先 ReadFile 读取目标文件。',
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeProjectPath(readString(value.path, 'EditFile.path'))
@@ -95,6 +95,11 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
     const actualOldText = findActualText(currentContent, input.oldText)
 
     if (!actualOldText) {
+      // ZCode 式错误教学：空文件里不可能匹配到原文，把 D1 入口（oldText=""）在这里告诉模型
+      if (currentContent.trim() === '') {
+        throw new Error(`文件 ${input.path} 为空；向空文件写入内容请把 oldText 设为空字符串`)
+      }
+
       throw new Error(`在 ${input.path} 中没有找到要替换的原文；请先用 ReadFile 读取最新内容，确认 oldText 与文件内容完全一致，且不要包含行号前缀`)
     }
 

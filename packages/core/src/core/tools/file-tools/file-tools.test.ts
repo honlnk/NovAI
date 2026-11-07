@@ -6,6 +6,7 @@ import {
   readFileTool,
   renameFileTool,
 } from '../file-tools'
+import { createAgentTools } from '../../agent/tools'
 import { createReadFileState } from './read-file-state'
 import type { ProjectSnapshot } from '../../../types/project'
 import type { ToolRuntime } from '../types'
@@ -114,6 +115,38 @@ describe('file tools', () => {
 
       await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('已有内容')
     })
+
+    it('空文件 + 非空 oldText 匹配失败时，错误消息教学 oldText="" 入口（ZCode 式错误教学）', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '',
+      })
+
+      // 空文件也走正常读后写链路：先 Read 注册读取状态，再用非空 oldText 编辑
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '不存在的原文',
+        newText: '初始内容',
+      }, runtime)).rejects.toThrow('为空；向空文件写入内容请把 oldText 设为空字符串')
+    })
+  })
+
+  it('EditFile 成功结果的模型文案带免重读后缀（ZCode 式动态反馈，代替系统提示词静态规则）', () => {
+    const formatted = createAgentTools().EditFile.formatResult({
+      path: 'chapters/第001章-初遇.txt',
+      occurrences: 1,
+      contentLength: 10,
+      linesAdded: 1,
+      linesRemoved: 0,
+      oldText: '旧',
+      newText: '新',
+    })
+
+    expect(formatted).toContain('已修改 chapters/第001章-初遇.txt')
+    expect(formatted).toContain('无需重新读取即可继续编辑')
+    // 前缀仍复用 summarizeOutput，聊天摘要与模型文案共享同一句主体
+    expect(formatted).toContain('替换 1 处')
   })
 
   describe('连续编辑免重读（D2：写后更新 readFileState）', () => {

@@ -124,7 +124,13 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'EditFile',
-          description: '用精确文本替换的方式修改当前小说项目中的已有文本文件；调用前必须先 ReadFile 读取目标内容。',
+          description: [
+            '对当前小说项目中的已有文本文件做精确字符串替换。',
+            '',
+            '- 编辑前必须先在本会话用 ReadFile 读取目标文件，否则调用会失败。',
+            '- oldText 必须与文件内容完全一致（含缩进）且在文件中唯一，否则调用会失败；匹配时去掉 ReadFile 输出的行号前缀。',
+            '- replaceAll 为 true 时替换所有匹配项。',
+          ].join('\n'),
           parameters: {
             type: 'object',
             properties: {
@@ -134,7 +140,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               oldText: {
                 type: 'string',
-                description: '要替换的原文，必须来自 ReadFile 返回内容；不要包含行号前缀，保留原文缩进。必须非空。重复文本只改一处时，用目标行加相邻行组成唯一片段。',
+                description: '要替换的原文。',
               },
               newText: {
                 type: 'string',
@@ -152,7 +158,8 @@ export function createAgentTools(): AgentRunnableToolMap {
       },
       core: editFileTool,
       formatResult(output: EditFileOutput) {
-        return editFileTool.summarizeOutput(output)
+        // ZCode 式动态反馈：成功结果尾部告知状态已同步，代替系统提示词里的静态免重读规则
+        return `${editFileTool.summarizeOutput(output)}（文件状态已同步，无需重新读取即可继续编辑）`
       },
     },
     CreateFile: {
