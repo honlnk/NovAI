@@ -1,6 +1,21 @@
 import type { ModelProtocol, ReasoningEffort } from './ai'
 
 /**
+ * 恢复/打开最近项目时目录读写权限未授予：与「没有记录」（service 返回 null）区分开，
+ * 供界面给出黄色授权提醒并提供重新授权入口，不得把权限拒绝误报为失败或用户取消。
+ */
+export class ProjectPermissionRequiredError extends Error {
+  /** 拒绝授权的目标项目名，供提醒文案展示 */
+  readonly projectName: string
+
+  constructor(message: string, projectName: string) {
+    super(message)
+    this.name = 'ProjectPermissionRequiredError'
+    this.projectName = projectName
+  }
+}
+
+/**
  * 写工具权限档位：review=仅审阅 / chapter=章节内容 / material=素材内容 /
  * chapter-material=章节+素材（默认） / full=完全访问。
  * 判定规则见 core/agent/permission.ts。

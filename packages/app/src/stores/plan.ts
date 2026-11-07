@@ -16,7 +16,7 @@ import type {
   PlanStatusView,
 } from '@novai/core/services/types'
 import { PlanConflictError } from '@novai/core/types/plans'
-import { moveCardInBoard } from '../components/plan/board-reorder'
+import { isSameBoardOrder, moveCardInBoard } from '../components/plan/board-reorder'
 import { shouldReturnToPreviewAfterSave, type DetailMode } from '../components/plan/detail-mode'
 
 /**
@@ -650,8 +650,24 @@ export const usePlanStore = defineStore('plan', () => {
   async function moveCard(projectId: string, id: string, status: PlanStatusView, afterId: string | null) {
     const generation = beginProject(projectId)
     actionError.value = ''
-    if (board.value) {
-      board.value = moveCardInBoard(board.value, id, status, afterId)
+    const previousBoard = board.value
+    const nextBoard = previousBoard
+      ? moveCardInBoard(previousBoard, id, status, afterId)
+      : null
+    if (nextBoard) {
+      board.value = nextBoard
+    }
+
+    // 原地投放短路（交互优化计划 §10）：本地重排真实生效且各列 id 序列未变——
+    // 状态、前驱与实际顺序均未变化——不写盘、不全量刷新、也不报成功。
+    // 重排未生效（卡片或锚点不在本地视图、看板陈旧）时不短路，维持原行为交服务层判定。
+    if (
+      previousBoard
+      && nextBoard
+      && nextBoard !== previousBoard
+      && isSameBoardOrder(previousBoard, nextBoard)
+    ) {
+      return true
     }
 
     try {

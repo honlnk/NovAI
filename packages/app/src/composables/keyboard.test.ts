@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isImeComposing, resolveSubmitMode, shouldSubmitOnEnter } from './keyboard'
+import { isImeComposing, resolveSubmitMode, shouldBlockImeDefault, shouldSubmitOnEnter } from './keyboard'
 
 function keyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return {
@@ -36,5 +36,13 @@ describe('keyboard helpers', () => {
     expect(resolveSubmitMode(keyEvent({ key: 'Enter', keyCode: 229 }))).toBeNull()
     expect(resolveSubmitMode(keyEvent({ key: 'a' }))).toBeNull()
     expect(resolveSubmitMode(keyEvent({ key: 'Tab' }))).toBeNull()
+  })
+
+  it('shouldBlockImeDefault：IME 放行分支吞掉 Enter 默认换段，保留 Shift+Enter 换行', () => {
+    // 发送残行根因：组字期/尾窗 Enter 不拦截会让 contenteditable 插入游离空段
+    expect(shouldBlockImeDefault({ key: 'Enter', shiftKey: false })).toBe(true)
+    expect(shouldBlockImeDefault({ key: 'Enter', shiftKey: true })).toBe(false)
+    expect(shouldBlockImeDefault({ key: 'a', shiftKey: false })).toBe(false)
+    expect(shouldBlockImeDefault({ key: 'ArrowDown', shiftKey: false })).toBe(false)
   })
 })

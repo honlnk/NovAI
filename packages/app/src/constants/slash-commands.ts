@@ -1,4 +1,5 @@
 import { ELEMENT_MANAGER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
+import type { AppIconName } from '../components/ui/app-icons'
 
 /**
  * 斜杠命令注册表（R6 起源；要素整理参数化 W3 起新范式）。
@@ -24,8 +25,8 @@ export type SlashCommand = {
   label: string
   /** 简短描述 */
   description: string
-  /** 图标（emoji） */
-  icon: string
+  /** 受控语义图标名（交互优化计划 §9，Lucide 线性图形） */
+  icon: AppIconName
   /** 裸发（命令文本后无参数）时光标处的行内浅灰提示；不配置则裸发无提示 */
   bareHint?: string
   /** 本地执行型命令的动作；不配置即 prompt 展开型 */
@@ -38,20 +39,20 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     id: 'element-manager',
     label: '/管理要素',
     description: '管理 elements/ 要素库（要素管理员执行）；可在命令后补范围/目标，留空即全权委托整理整个要素库',
-    icon: '📚',
+    icon: 'library',
     bareHint: '← 可在此补充范围/目标，留空则整理整个要素库',
   },
   {
     id: 'init',
     label: '/生成项目记忆',
     description: '扫描项目生成/更新 prompts/NovAI.md 项目总览；选中后填入输入框，可补充参数后发送',
-    icon: '📋',
+    icon: 'clipboard-list',
   },
   {
     id: 'compact-context',
     label: '/压缩上下文',
     description: '立即把当前会话的早期历史压缩成检查点摘要；本地操作，不发送消息、不消耗对话轮次',
-    icon: '🗜️',
+    icon: 'fold-vertical',
     bareHint: '← 直接发送执行，无需参数',
     localAction: 'compact-context',
   },

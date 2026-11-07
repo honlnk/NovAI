@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { ELEMENT_CATEGORIES } from '../../constants/elements'
 import { collectFilesByPrefix } from '../../utils/file-tree'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   files: ProjectFileNodeView[]
@@ -79,7 +80,7 @@ function isExpanded(key: string) {
             >
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
-            <span class="shrink-0 text-sm">{{ category.icon }}</span>
+            <AppIcon :name="category.icon" :size="15" class="shrink-0 text-gray-400" />
             <span class="flex-1 truncate">{{ category.label }}</span>
             <span class="shrink-0 text-xs text-gray-500">{{ counts.get(category.key) ?? 0 }}</span>
           </button>

@@ -3,10 +3,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { checkElementReminder, markElementReminderShown } from '@novai/core/services/element-reminder-service'
 import { useChatStore } from '../../stores/chat'
-import { resolveSubmitMode } from '../../composables/keyboard'
+import { resolveSubmitMode, shouldBlockImeDefault } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useComposerBridge } from '../../composables/useComposerBridge'
+import { useToast } from '../../composables/useToast'
 import { useProjectStore } from '../../stores/project'
+import AppIcon from '../ui/AppIcon.vue'
 import MessageItem from '../chat/MessageItem.vue'
 import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
@@ -68,6 +70,7 @@ const emit = defineEmits<{
 }>()
 
 const chatStore = useChatStore()
+const toast = useToast()
 const projectStore = useProjectStore()
 const messagesContainer = ref<HTMLDivElement | null>(null)
 
@@ -143,8 +146,40 @@ const lastChangeSummaryId = computed(() => {
 async function steerAllQueued() {
   for (const message of chatStore.queue) {
     if (message.placement === 'queued') {
-      await chatStore.steerQueuedMessage(message.id)
+      try {
+        await chatStore.steerQueuedMessage(message.id)
+      } catch (error) {
+        // 首条失败即停：剩余排队项原样保留（§5 失败保留原文），原因就地报出
+        toast.error(`插话失败：${error instanceof Error ? error.message : '未知错误'}`)
+        return
+      }
     }
+  }
+}
+
+/* ---------- QueueDock 操作失败反馈（§5：队列行就地区分失败，原文保留） ---------- */
+
+async function handleQueueEdit(id: string, text: string) {
+  try {
+    await chatStore.editQueuedMessage(id, text)
+  } catch (error) {
+    toast.error(`排队消息编辑失败：${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+async function handleQueueRemove(id: string) {
+  try {
+    await chatStore.removeQueuedMessage(id)
+  } catch (error) {
+    toast.error(`排队消息撤回失败：${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+async function handleQueueSteer(id: string) {
+  try {
+    await chatStore.steerQueuedMessage(id)
+  } catch (error) {
+    toast.error(`升级插话失败：${error instanceof Error ? error.message : '未知错误'}`)
   }
 }
 
@@ -287,7 +322,13 @@ watch(
  * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
  */
 async function handleSend(mode: 'queue' | 'steer' = 'queue') {
-  const draftText = draft.value.trim()
+  // 组字期（含 Safari 尾窗）不抢键：此刻清空编辑器会与未提交的组字 DOM 文本竞态，
+  // 产生残行/丢字；组字提交后用户再次发送即可（键盘路径已在 handleKeydown 拦截）
+  if (composer.isCompositionActive()) return
+
+  // 失败回填用未 trim 的原文（§3.1：失败保留用户原文）；发送内容仍取 trim 后文本
+  const rawDraft = draft.value
+  const draftText = rawDraft.trim()
   if (!draftText) return
 
   clearSuggestion()
@@ -298,7 +339,7 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     composer.setDraft('')
     const ok = await chatStore.compactActiveSession()
     if (!ok) {
-      composer.setDraft(draftText)
+      composer.setDraft(rawDraft)
     }
     return
   }
@@ -310,7 +351,7 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     const ok = chatStore.submitQuestionAnswer({ text: draftText })
     if (!ok) {
       // 提交失败（如被校验拒绝）：草稿填回，等待态不变
-      composer.setDraft(draftText)
+      composer.setDraft(rawDraft)
     }
     return
   }
@@ -329,9 +370,9 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     // 发送成功后清除引用 chip
     emit('clearQuote')
   } else {
-    // 发送失败草稿恢复：把原草稿文本填回输入框（dsh restoreFailedDrafts 简化版；
+    // 发送失败草稿恢复：填回未 trim 的用户原草稿（dsh restoreFailedDrafts 简化版；
     // 填回的是用户输入的草稿而非替换后的 prompt 全文）
-    composer.setDraft(draftText)
+    composer.setDraft(rawDraft)
   }
 }
 
@@ -341,8 +382,15 @@ function handleStop() {
 
 function handleKeydown(event: KeyboardEvent) {
   // IME 组字期（含 Safari compositionend 后 10ms 尾窗，dsh keymap 三条件）一切按键
-  // 放行给输入法/浏览器——补全采纳、菜单导航、发送均不抢键
-  if (composer.isComposing(event)) return
+  // 放行给输入法/浏览器——补全采纳、菜单导航、发送均不抢键；但 Enter 的
+  // contenteditable 默认行为（插入新段落）必须吞掉，否则组字期/尾窗的 Enter 会在
+  // 编辑器里留下游离空段（「发送残行」根因，交互优化计划 §3.1）
+  if (composer.isComposing(event)) {
+    if (shouldBlockImeDefault(event)) {
+      event.preventDefault()
+    }
+    return
+  }
   // 输入框 AI 补全交互（最高优先级，贴近光标）：
   // - Tab 接受建议的首个分词单位；Esc 丢弃剩余建议
   // - 仅当 ghost text 可见时拦截，避免吞掉其他场景的 Tab/Esc
@@ -808,9 +856,9 @@ onBeforeUnmount(() => {
         <QueueDock
           :queue="chatStore.queue"
           :running="chatStore.isRunning"
-          @edit="chatStore.editQueuedMessage"
-          @remove="chatStore.removeQueuedMessage"
-          @steer="chatStore.steerQueuedMessage"
+          @edit="handleQueueEdit"
+          @remove="handleQueueRemove"
+          @steer="handleQueueSteer"
         />
         <!-- chip 区：引用 chip（大纲 chip 已移至底部状态栏） -->
         <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
@@ -905,7 +953,7 @@ onBeforeUnmount(() => {
                       aria-label="忽略本次提醒"
                       class="ml-0.5 cursor-pointer rounded p-0.5 text-amber-400 transition-colors hover:bg-amber-200 hover:text-amber-700"
                       @click.stop="dismissReminder"
-                    >×</span>
+                    ><AppIcon name="x" :size="12" /></span>
                   </button>
                 </Transition>
               </div>

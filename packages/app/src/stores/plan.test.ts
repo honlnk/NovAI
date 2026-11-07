@@ -687,6 +687,39 @@ describe('plan store 拖拽与状态移动', () => {
     await moving
   })
 
+  it('moveCard 原地投放（各列顺序未变化）：不写盘、不全量刷新、不报成功', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([
+      summary('a', 'planned', 0),
+      summary('b', 'planned', 100),
+    ]))
+    await store.loadBoard(PROJECT)
+
+    // b 已紧跟在 a 之后，再投放到 a 之后是原地投放
+    const ok = await store.moveCard(PROJECT, 'b', 'planned', 'a')
+
+    expect(ok).toBe(true)
+    expect(mockedUpdatePlan).not.toHaveBeenCalled()
+    expect(mockedGetPlanBoard).toHaveBeenCalledTimes(1)
+    expect(store.actionError).toBe('')
+    expect(store.board?.columns.planned.map((card) => card.id)).toEqual(['a', 'b'])
+  })
+
+  it('moveCard 拖到所在列列尾且已是列尾：同样短路', async () => {
+    const store = usePlanStore()
+    mockedGetPlanBoard.mockResolvedValueOnce(board([
+      summary('a', 'planned', 0),
+      summary('b', 'planned', 100),
+    ]))
+    await store.loadBoard(PROJECT)
+
+    const ok = await store.moveCard(PROJECT, 'b', 'planned', null)
+
+    expect(ok).toBe(true)
+    expect(mockedUpdatePlan).not.toHaveBeenCalled()
+    expect(mockedGetPlanBoard).toHaveBeenCalledTimes(1)
+  })
+
   it('moveCard 失败：本地乐观位置被重新拉取的真实看板覆盖', async () => {
     const store = usePlanStore()
     mockedGetPlanBoard.mockResolvedValueOnce(board([summary('a', 'inbox', 0)]))

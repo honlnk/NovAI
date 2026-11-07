@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 
 const props = defineProps<{
   message: string
-  type?: 'success' | 'error' | 'info'
+  type?: 'success' | 'error' | 'info' | 'warning'
   duration?: number
 }>()
 
@@ -37,6 +37,8 @@ onMounted(() => {
         'fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg px-4 py-3 shadow-lg',
         type === 'success' ? 'bg-green-600 text-white' : '',
         type === 'error' ? 'bg-red-600 text-white' : '',
+        // 黄色提醒走低饱和浅底细边框（交互优化计划 §5），不用整块染黄
+        type === 'warning' ? 'border border-amber-200 bg-amber-50 text-amber-800' : '',
         type === 'info' || !type ? 'bg-gray-800 text-white' : '',
       ]"
     >
@@ -58,6 +60,15 @@ onMounted(() => {
         viewBox="0 0 24 24"
       >
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <svg
+        v-else-if="type === 'warning'"
+        class="h-5 w-5 shrink-0"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
       </svg>
       <svg
         v-else

@@ -51,3 +51,28 @@ export function moveCardInBoard(
 
   return { ...board, columns }
 }
+
+/**
+ * 判断两次看板各列的卡片 id 序列是否完全一致（同列同序）。
+ * 供 moveCard 做「原地投放」短路：状态、前驱与实际顺序均未变化时不写盘、
+ * 不全量刷新、不报成功（交互优化计划 §10）。只比较 id 序列，不比较其余字段。
+ */
+export function isSameBoardOrder(
+  a: PlanBoardView | null,
+  b: PlanBoardView | null,
+): boolean {
+  if (a === b) {
+    return true
+  }
+
+  if (!a || !b) {
+    return false
+  }
+
+  const entries = Object.entries(a.columns) as [PlanStatusView, PlanCardSummaryView[]][]
+  return entries.every(([status, cards]) => {
+    const nextCards = b.columns[status] ?? []
+    return cards.length === nextCards.length
+      && cards.every((card, index) => card.id === nextCards[index]?.id)
+  })
+}

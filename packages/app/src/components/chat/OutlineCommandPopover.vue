@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 大纲指令弹层（R4）。
@@ -88,16 +89,18 @@ function displayDirectory(path: string): string {
           ]"
           @click="emit('select', outline.path)"
         >
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-50 text-xs text-blue-400">M↓</span>
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-400">
+            <AppIcon name="scroll" :size="14" />
+          </span>
           <span class="min-w-0 flex-1">
             <span class="align-baseline text-sm font-semibold leading-5">{{ displayName(outline.name) }}</span>
             <span class="ml-2 align-baseline text-xs font-medium text-gray-400">{{ displayDirectory(outline.path) }}</span>
           </span>
           <span
             v-if="outline.path === activeOutlinePath"
-            class="shrink-0 text-xs text-emerald-400"
+            class="shrink-0 text-emerald-400"
             title="当前激活"
-          >●</span>
+          ><AppIcon name="circle-dot" :size="12" /></span>
         </button>
       </li>
     </ul>
@@ -105,7 +108,7 @@ function displayDirectory(path: string): string {
       {{ query ? '没有匹配的大纲' : '暂无写作大纲' }}
     </div>
     <div class="flex items-center gap-2.5 border-t border-gray-100 px-4 py-3 text-xs font-semibold text-gray-400">
-      <span class="flex h-4 w-4 items-center justify-center rounded-full border border-gray-300 text-[10px] text-gray-500">i</span>
+      <AppIcon name="info" :size="14" class="text-gray-500" />
       <span>输入内容以搜索大纲</span>
     </div>
   </div>

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { REPO_URL } from '../constants/repo'
 import { useEnvironmentCheck } from '../composables/useEnvironmentCheck'
+import AppIcon from '../components/ui/AppIcon.vue'
 import BrowserUnsupportedView from './BrowserUnsupportedView.vue'
 import type { RecentProject } from '@novai/core/types/project'
 
@@ -16,6 +17,68 @@ const newProjectName = ref('')
 const isCreating = ref(false)
 const isDeleting = ref(false)
 const shouldDeleteDirectory = ref(false)
+
+/**
+ * 原操作附近的黄色轻提醒（交互优化计划 §5）：取消与待授权不是错误，不进红色错误区。
+ * 取消/无记录类 3 秒后自动淡出；授权提醒常驻，提供「重新授权」，重新执行原操作时被新提醒替换。
+ */
+const NOTICE_AUTO_DISMISS_MS = 3000
+const noticeVisible = ref(false)
+let noticeTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(
+  () => projectStore.notice,
+  (value) => {
+    if (noticeTimer) {
+      clearTimeout(noticeTimer)
+      noticeTimer = null
+    }
+
+    if (!value) {
+      noticeVisible.value = false
+      return
+    }
+
+    noticeVisible.value = true
+
+    if (value.kind !== 'permission') {
+      noticeTimer = setTimeout(() => {
+        noticeTimer = null
+        noticeVisible.value = false
+        projectStore.dismissNotice()
+      }, NOTICE_AUTO_DISMISS_MS)
+    }
+  },
+)
+
+onBeforeUnmount(() => {
+  if (noticeTimer) {
+    clearTimeout(noticeTimer)
+    noticeTimer = null
+  }
+})
+
+function dismissHomeNotice() {
+  if (noticeTimer) {
+    clearTimeout(noticeTimer)
+    noticeTimer = null
+  }
+
+  noticeVisible.value = false
+  projectStore.dismissNotice()
+}
+
+function handleNoticeRetry() {
+  const value = projectStore.notice
+  if (!value || value.kind !== 'permission' || !value.retryTarget) return
+
+  if (value.retryTarget === 'last') {
+    void handleRestoreProject()
+    return
+  }
+
+  void handleSelectProject(value.retryTarget)
+}
 
 onMounted(async () => {
   // 环境不达标时首页整页替换为不可用提示，最近项目等数据没有加载的必要。
@@ -167,8 +230,8 @@ async function handleConfirmDeleteProject() {
           </div>
         </div>
 
-        <!-- 操作按钮 -->
-        <div class="mb-6 flex gap-3">
+        <!-- 操作按钮（黄色轻提醒悬浮在按钮行下方，不推移页面内容） -->
+        <div class="relative mb-6 flex gap-3">
           <button
             class="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
             @click="showCreateDialog = true"
@@ -187,6 +250,36 @@ async function handleConfirmDeleteProject() {
             </svg>
             打开项目
           </button>
+
+          <Transition name="home-notice">
+            <div
+              v-if="noticeVisible && projectStore.notice"
+              class="absolute left-0 top-full z-20 mt-2 flex max-w-xl items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 shadow-sm"
+              role="status"
+              data-testid="home-action-notice"
+            >
+              <AppIcon name="triangle-alert" :size="16" class="mt-0.5 text-amber-500" />
+              <p class="min-w-0 text-sm leading-5 text-amber-800">
+                {{ projectStore.notice.message }}
+              </p>
+              <button
+                v-if="projectStore.notice.kind === 'permission' && projectStore.notice.retryTarget"
+                class="ml-1 shrink-0 rounded-md border border-amber-300 px-2 py-0.5 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
+                data-testid="home-notice-retry"
+                @click="handleNoticeRetry"
+              >
+                重新授权
+              </button>
+              <button
+                v-if="projectStore.notice.kind === 'permission'"
+                class="ml-0.5 shrink-0 rounded p-0.5 text-amber-500 transition-colors hover:bg-amber-100 hover:text-amber-700"
+                aria-label="关闭提醒"
+                @click="dismissHomeNotice"
+              >
+                <AppIcon name="x" :size="14" />
+              </button>
+            </div>
+          </Transition>
         </div>
 
         <!-- 项目列表 -->
@@ -313,3 +406,18 @@ async function handleConfirmDeleteProject() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.home-notice-enter-active,
+.home-notice-leave-active {
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+
+.home-notice-enter-from,
+.home-notice-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>

@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import Tooltip from '../ui/Tooltip.vue'
+import AppIcon from '../ui/AppIcon.vue'
 import { useIndexStore, getIndexStatusDotClass, getIndexStatusLabel } from '../../stores/index'
 import type { RunStatusType } from '../../stores/chat'
 import type { IndexStatusView } from '@novai/core/services/types'
@@ -141,13 +142,13 @@ function formatTime(iso: string) {
         </button>
       </Tooltip>
 
-      <!-- 当前激活大纲（紧凑内联，无壳）：📍 名称 × -->
+      <!-- 当前激活大纲（紧凑内联，无壳）：定位图标 名称 × -->
       <div
         v-if="activeOutlineName"
         class="flex min-w-0 items-center gap-1 text-green-600"
         title="当前写作大纲"
       >
-        <span class="shrink-0">📍</span>
+        <AppIcon name="map-pin" :size="12" class="shrink-0" />
         <span class="truncate font-medium">{{ activeOutlineName }}</span>
         <button
           type="button"

@@ -120,13 +120,18 @@ onUnmounted(() => {
   indexStore.dispose()
 })
 
-// 监听文件变更，自动刷新分类面板数据
+// 监听文件变更，自动刷新分类面板数据。
+// 反馈口径（交互优化计划 §5）：后台刷新成功时文件树本身可见更新即反馈，不再
+// 无条件报「已更新」（此前刷新失败也会误报成功）；失败时错误原因必须可见——
+// projectStore.errorMessage 只在首页渲染，这里就地 toast 报错。
 watch(
   () => chatStore.changedFiles.length,
   async (newLength, oldLength) => {
     if (newLength > oldLength && projectStore.currentProject) {
       await projectStore.refreshTree()
-      toast.success('文件列表已更新')
+      if (projectStore.errorMessage) {
+        toast.error(`文件列表刷新失败：${projectStore.errorMessage}`)
+      }
     }
   },
 )
@@ -521,8 +526,6 @@ function handleGoToSettings() {
         :board="planStore.board"
         :is-loading="planStore.isLoading"
         :error-message="planStore.errorMessage"
-        :board-sync-source="planStore.boardSyncSource"
-        :manual-refreshed-count="planStore.manualRefreshedCount"
         :selected-card-id="planStore.selectedCardId"
         :show-on-hold="planStore.showOnHold"
         :is-sidebar-open="isCategoryOpen"

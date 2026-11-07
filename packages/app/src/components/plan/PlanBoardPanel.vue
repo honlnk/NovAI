@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 
 import type { PlanCardSummaryView, PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
@@ -15,14 +15,14 @@ import { REPO_URL } from '../../constants/repo'
  * - 顶栏结构与其他分类中央头部一致：左侧侧栏开关 + 标题 + 计数 + 已搁置筛选，
  *   右侧 GitHub 仓库 + 内容面板收起/展开；
  * - 宽度不足时仅看板列区域横向滚动，顶栏不被逐字挤压。
- * - 加载反馈（加载反馈修复）：首载显示四列骨架屏；已有数据时任何刷新都保留
- *   旧看板，只在顶栏下给轻量同步提示，不再整块替换成「正在读取计划…」。
+ * - 加载反馈（交互优化计划 §10 修订）：首载显示四列骨架屏；已有数据时拖拽与
+ *   自动/手动同步一律静默（忙碌态由左侧标题行刷新按钮承载），不再插入任何
+ *   文档流内提示条——插入即挤压看板造成几何跳动；错误横幅悬浮在看板上层，
+ *   同样不改变看板几何。
  */
 
 /** 骨架屏列：与默认四常驻列一致（首载时还没有可跟随的筛选状态数据） */
 const SKELETON_STATUSES: PlanStatusView[] = ['inbox', 'planned', 'in-progress', 'done']
-/** 手动刷新成功后「计划已更新」的停留时长（自动同步成功不打扰，无提示） */
-const REFRESHED_NOTICE_MS = 1600
 
 const props = defineProps<{
   board: {
@@ -31,10 +31,6 @@ const props = defineProps<{
   } | null
   isLoading: boolean
   errorMessage: string
-  /** 后台同步提示来源：手动刷新与操作后自动同步文案不同 */
-  boardSyncSource: 'auto' | 'manual'
-  /** 手动刷新成功序号：每次 +1 触发短暂的「计划已更新」 */
-  manualRefreshedCount: number
   selectedCardId: string | null
   showOnHold: boolean
   /** 左侧分类侧栏是否展开（开关图标状态与其他页面一致） */
@@ -76,41 +72,6 @@ const totalCards = computed(() => {
 /** 首载（还没有任何看板数据）才显示骨架屏；后台刷新一律保留旧看板 */
 const isInitialLoading = computed(() => props.isLoading && props.board === null)
 
-/* ---------- 顶部轻量同步提示 ---------- */
-
-const showRefreshedNotice = ref(false)
-let refreshedNoticeTimer: ReturnType<typeof setTimeout> | null = null
-
-watch(() => props.manualRefreshedCount, (count, previous) => {
-  if (count <= previous) {
-    return
-  }
-  if (refreshedNoticeTimer !== null) {
-    clearTimeout(refreshedNoticeTimer)
-  }
-  showRefreshedNotice.value = true
-  refreshedNoticeTimer = setTimeout(() => {
-    showRefreshedNotice.value = false
-    refreshedNoticeTimer = null
-  }, REFRESHED_NOTICE_MS)
-})
-
-onBeforeUnmount(() => {
-  if (refreshedNoticeTimer !== null) {
-    clearTimeout(refreshedNoticeTimer)
-  }
-})
-
-const syncMessage = computed(() => {
-  if (props.isLoading && props.board !== null) {
-    return props.boardSyncSource === 'manual' ? '正在刷新计划…' : '正在同步计划…'
-  }
-  if (showRefreshedNotice.value) {
-    return '计划已更新'
-  }
-  return ''
-})
-
 /* ---------- 拖拽（HTML5 DnD：卡片 → 列 / 卡片之间） ---------- */
 
 const dragCardId = ref<string | null>(null)
@@ -129,7 +90,18 @@ function onCardDragEnd() {
   dropTarget.value = null
 }
 
-/** 拖到某列的空白区：目标列为空或列尾 */
+/** 卡片当前所在列；找不到返回 null（看板数据与拖拽瞬间不一致时按跨列移动处理） */
+function findCardStatus(id: string): PlanStatusView | null {
+  if (!props.board) {
+    return null
+  }
+
+  const entries = Object.entries(props.board.columns) as [PlanStatusView, PlanCardSummaryView[]][]
+  const source = entries.find(([, cards]) => cards.some((card) => card.id === id))
+  return source ? source[0] : null
+}
+
+/** 拖到某列的空白区：目标列为空或列尾。卡片已是该列列尾时属原地投放，不触发移动 */
 function onColumnDrop(status: PlanStatusView) {
   const id = dragCardId.value
   if (!id) {
@@ -137,17 +109,34 @@ function onColumnDrop(status: PlanStatusView) {
   }
   const column = props.board?.columns[status] ?? []
   const afterId = column.length > 0 ? column[column.length - 1]?.id ?? null : null
+  const currentIndex = findCardStatus(id) === status
+    ? column.findIndex((card) => card.id === id)
+    : -1
+  if (currentIndex !== -1 && currentIndex === column.length - 1) {
+    onCardDragEnd()
+    return
+  }
   emit('moveCard', id, status, afterId)
   onCardDragEnd()
 }
 
-/** 拖到某卡片上：插到该卡片之后 */
+/** 拖到某卡片上：插到该卡片之后。卡片已紧跟在该卡片之后时属原地投放，不触发移动 */
 function onCardDrop(status: PlanStatusView, afterCard: PlanCardSummaryView) {
   const id = dragCardId.value
   if (!id || id === afterCard.id) {
     onCardDragEnd()
     return
   }
+
+  if (findCardStatus(id) === status) {
+    const column = props.board?.columns[status] ?? []
+    const currentIndex = column.findIndex((card) => card.id === id)
+    if (currentIndex > 0 && column[currentIndex - 1]?.id === afterCard.id) {
+      onCardDragEnd()
+      return
+    }
+  }
+
   emit('moveCard', id, status, afterCard.id)
   onCardDragEnd()
 }
@@ -165,7 +154,7 @@ function formatTime(iso: string): string {
 </script>
 
 <template>
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col bg-white text-gray-800">
+  <div class="relative flex min-h-0 min-w-0 flex-1 flex-col bg-white text-gray-800">
     <!-- 顶栏：结构与其他分类中央头部一致（刷新在左侧计划标题行，新建在侧栏摘要卡下方） -->
     <header class="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex items-center gap-2">
@@ -237,35 +226,11 @@ function formatTime(iso: string): string {
       </div>
     </header>
 
-    <!-- 轻量同步提示：顶栏下细条；后台刷新期间看板照常可用 -->
-    <div
-      v-if="syncMessage"
-      class="flex shrink-0 items-center gap-1.5 border-b border-gray-100 bg-gray-50 px-4 py-1.5 text-xs text-gray-500"
-      role="status"
-      aria-live="polite"
-      data-testid="plan-sync-notice"
-    >
-      <svg
-        v-if="isLoading"
-        class="h-3.5 w-3.5 animate-spin"
-        fill="none" stroke="currentColor" viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-      </svg>
-      <svg
-        v-else
-        class="h-3.5 w-3.5 text-green-600"
-        fill="none" stroke="currentColor" viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-      </svg>
-      {{ syncMessage }}
-    </div>
-
-    <!-- 错误横幅（后台刷新失败时旧看板仍在，可从这重试；首载失败走下方居中重试） -->
+    <!-- 错误横幅（后台刷新失败时旧看板仍在，可从这重试；首载失败走下方居中重试）。
+         悬浮在看板上层，不占用文档流——错误的出现与消失不改变看板几何（§10） -->
     <div
       v-if="errorMessage && board !== null"
-      class="flex shrink-0 items-center justify-between gap-3 border-b border-red-100 bg-red-50 px-4 py-2 text-xs text-red-600"
+      class="absolute inset-x-4 top-2 z-20 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 shadow-sm"
       role="alert"
     >
       <span>{{ errorMessage }}</span>
@@ -352,10 +317,9 @@ function formatTime(iso: string): string {
             v-for="card in cards"
             :key="card.id"
             :class="[
-              'group cursor-pointer rounded-md border bg-white p-2.5 transition-colors hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-gray-900',
+              'group relative cursor-pointer rounded-md border bg-white p-2.5 transition-colors hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-gray-900',
               dragCardId === card.id ? 'opacity-40' : '',
               selectedCardId === card.id ? 'border-gray-900' : 'border-gray-200',
-              dropTarget?.status === status && dropTarget.afterId === card.id ? 'border-t-2 border-t-gray-900' : '',
             ]"
             draggable="true"
             tabindex="0"
@@ -369,6 +333,13 @@ function formatTime(iso: string): string {
             @dragleave="dropTarget = null"
             @drop.prevent.stop="onCardDrop(status, card)"
           >
+            <!-- 插入指示：悬浮在卡片上边缘的等占地横条，不改变边框厚度与卡片位置（§10） -->
+            <span
+              v-if="dropTarget?.status === status && dropTarget.afterId === card.id"
+              class="absolute inset-x-1 -top-1 z-10 h-0.5 rounded-full bg-gray-900"
+              aria-hidden="true"
+              data-testid="plan-drop-indicator"
+            />
             <p class="text-sm font-medium text-gray-800">{{ card.title || '（无标题）' }}</p>
             <p v-if="card.summary && card.summary !== card.title" class="mt-1 line-clamp-3 text-xs text-gray-500">
               {{ card.summary }}

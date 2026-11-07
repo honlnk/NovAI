@@ -60,6 +60,12 @@ export interface ComposerBridge {
    * 三条件合并（照 dsh keymap）：event 自带标记 + 桥监听的 composition 期 + 尾窗。
    */
   isComposing: (event: Pick<KeyboardEvent, 'isComposing' | 'keyCode'>) => boolean
+  /**
+   * 组字是否进行中（或 Safari compositionend 后 10ms 尾窗）。
+   * 鼠标发送路径（不经键盘事件）用它守卫：组字期清空编辑器会与未提交的
+   * 组字 DOM 文本竞态，产生残行/丢字。
+   */
+  isCompositionActive: () => boolean
 }
 
 export interface ComposerBridgeOptions {
@@ -328,6 +334,9 @@ export function useComposerBridge(options: ComposerBridgeOptions = {}): Composer
     },
     isComposing(event) {
       return isImeComposing(event) || composingActive || Date.now() < composingGuardUntil
+    },
+    isCompositionActive() {
+      return composingActive || Date.now() < composingGuardUntil
     },
   }
 }

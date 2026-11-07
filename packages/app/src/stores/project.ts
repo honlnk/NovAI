@@ -28,6 +28,7 @@ import type {
   ProjectFileNodeView,
   ProjectView,
 } from '@novai/core/services/types'
+import { ProjectPermissionRequiredError } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
 import type { PermissionPreset } from '@novai/core/types/project'
 import type { RecentProject } from '@novai/core/types/project'
@@ -38,6 +39,17 @@ import type { RecentProject } from '@novai/core/types/project'
  */
 let isRefreshingCounts = false
 
+/**
+ * 项目操作的非失败反馈：用户主动取消、待重新授权、无记录等中性/提醒级信息。
+ * 与 errorMessage（真实失败的红色错误）严格分级——取消与待授权不是错误（交互优化计划 §5）。
+ */
+export type ProjectActionNotice = {
+  kind: 'cancelled' | 'permission' | 'info'
+  message: string
+  /** kind='permission' 时提供重新授权的重跑目标：'last'=上次项目，其余为最近项目 id */
+  retryTarget?: string
+}
+
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<ProjectView | null>(null)
   const recentProjects = ref<RecentProject[]>([])
@@ -46,56 +58,73 @@ export const useProjectStore = defineStore('project', () => {
   const isBusy = ref(false)
   const errorMessage = ref('')
   const statusMessage = ref('等待选择小说项目')
+  const notice = ref<ProjectActionNotice | null>(null)
+
+  function dismissNotice() {
+    notice.value = null
+  }
 
   const isReady = computed(() => currentProject.value !== null)
   const isFileSystemSupported = computed(() => isProjectAccessSupported())
 
   async function createNewProject(projectName: string) {
-    return runProjectAction(async () => {
-      const project = await createProject(projectName)
-      await setCurrentProject(project)
-      statusMessage.value = `已创建项目「${project.name}」`
-      return project
-    })
+    return runProjectAction(
+      async () => {
+        const project = await createProject(projectName)
+        await setCurrentProject(project)
+        statusMessage.value = `已创建项目「${project.name}」`
+        return project
+      },
+      { cancelNotice: '未选择目录，项目未创建' },
+    )
   }
 
   async function openExistingProject() {
-    return runProjectAction(async () => {
-      const project = await openProject()
-      await setCurrentProject(project)
-      statusMessage.value = `已打开项目「${project.name}」`
-      return project
-    })
+    return runProjectAction(
+      async () => {
+        const project = await openProject()
+        await setCurrentProject(project)
+        statusMessage.value = `已打开项目「${project.name}」`
+        return project
+      },
+      { cancelNotice: '未选择目录，项目未打开' },
+    )
   }
 
   async function restoreLastOpenedProject() {
-    return runProjectAction(async () => {
-      const project = await restoreLastProject()
+    return runProjectAction(
+      async () => {
+        const project = await restoreLastProject()
 
-      if (!project) {
-        statusMessage.value = '没有可恢复的上次项目，或目录权限尚未授权'
-        return null
-      }
+        if (!project) {
+          notice.value = { kind: 'info', message: '没有可恢复的上次项目记录' }
+          return null
+        }
 
-      await setCurrentProject(project)
-      statusMessage.value = `已恢复上次项目「${project.name}」`
-      return project
-    })
+        await setCurrentProject(project)
+        statusMessage.value = `已恢复上次项目「${project.name}」`
+        return project
+      },
+      { permissionRetryTarget: 'last' },
+    )
   }
 
   async function openRecentProject(projectId: string) {
-    return runProjectAction(async () => {
-      const project = await restoreRecentProject(projectId)
+    return runProjectAction(
+      async () => {
+        const project = await restoreRecentProject(projectId)
 
-      if (!project) {
-        statusMessage.value = '没有找到该最近项目，或目录权限尚未授权'
-        return null
-      }
+        if (!project) {
+          notice.value = { kind: 'info', message: '没有找到该最近项目记录' }
+          return null
+        }
 
-      await setCurrentProject(project)
-      statusMessage.value = `已打开最近项目「${project.name}」`
-      return project
-    })
+        await setCurrentProject(project)
+        statusMessage.value = `已打开最近项目「${project.name}」`
+        return project
+      },
+      { permissionRetryTarget: projectId },
+    )
   }
 
   async function loadLastProjectSummary() {
@@ -406,13 +435,33 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
-  async function runProjectAction<T>(action: () => Promise<T>) {
+  async function runProjectAction<T>(
+    action: () => Promise<T>,
+    options: { cancelNotice?: string; permissionRetryTarget?: string } = {},
+  ) {
     errorMessage.value = ''
+    notice.value = null
     isBusy.value = true
 
     try {
       return await action()
     } catch (error) {
+      // 分级反馈（交互优化计划 §5）：用户主动取消与权限待授权不是失败，
+      // 不进红色错误区，由视图在原操作附近就地轻提醒。
+      if (isAbortError(error)) {
+        notice.value = { kind: 'cancelled', message: options.cancelNotice ?? '操作已取消' }
+        return null
+      }
+
+      if (error instanceof ProjectPermissionRequiredError) {
+        notice.value = {
+          kind: 'permission',
+          message: error.message,
+          retryTarget: options.permissionRetryTarget,
+        }
+        return null
+      }
+
       errorMessage.value = toMessage(error, '项目操作失败')
       return null
     } finally {
@@ -428,6 +477,7 @@ export const useProjectStore = defineStore('project', () => {
     isFileSystemSupported,
     isReady,
     lastProjectSummary,
+    notice,
     recentProjects,
     statusMessage,
     changeActiveOutlinePath,
@@ -436,6 +486,7 @@ export const useProjectStore = defineStore('project', () => {
     clearActiveFile,
     closeCurrentProject,
     createNewProject,
+    dismissNotice,
     forgetLastOpenedProject,
     loadLastProjectSummary,
     loadRecentProjects,
@@ -449,6 +500,11 @@ export const useProjectStore = defineStore('project', () => {
     updateCurrentProjectConfig,
   }
 })
+
+/** 目录选择器用户取消时浏览器抛出的 AbortError（DOMException 的现代浏览器形态）。 */
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
 
 function toMessage(error: unknown, fallback: string) {
   if (error instanceof Error) {
