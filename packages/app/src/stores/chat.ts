@@ -16,6 +16,7 @@ import {
   listSessions as listAgentSessions,
   renameSession as renameAgentSession,
   deleteSession as deleteAgentSession,
+  compactSession as compactAgentSession,
 } from '@novai/core/services/agent-service'
 
 import type {
@@ -421,6 +422,36 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * 手动压缩当前会话上下文（/压缩上下文）：摘要调用走一次真实 LLM 请求，
+   * 期间状态栏显示进行中；结果写状态栏（context-summary 消息经事件总线回流渲染）。
+   * 返回是否成功执行——noop（无可压缩/摘要被拒）也算执行完毕，失败时 UI 恢复草稿。
+   */
+  async function compactActiveSession(): Promise<boolean> {
+    if (!sessionView.value) {
+      setRunStatus('没有活跃的会话', 'error')
+      return false
+    }
+    setRunStatus('正在压缩上下文…', 'running')
+    try {
+      const outcome = await compactAgentSession({
+        projectId: sessionView.value.projectId,
+        sessionId: sessionView.value.sessionId,
+      })
+      if (outcome.kind === 'compacted') {
+        setRunStatus(`已压缩 ${outcome.compactedMessageCount} 条早期消息（约 ${outcome.originalTokens} → ${outcome.summaryTokens} token）`)
+      } else if (outcome.reason === 'nothing-to-compact') {
+        setRunStatus('当前上下文还很小，没有可压缩的早期历史')
+      } else {
+        setRunStatus('压缩摘要未通过校验，上下文未改动', 'error')
+      }
+      return true
+    } catch (error) {
+      setRunStatus(error instanceof Error ? error.message : '压缩失败', 'error')
+      return false
+    }
+  }
+
+  /**
    * 统一的 runStatus 写入入口：同时设置文案与语义类型，
    * UI（状态栏）按 type 上色，无需靠字符串匹配。
    */
@@ -748,6 +779,7 @@ export const useChatStore = defineStore('chat', () => {
     hasSessionView,
     streamingMessageId,
     abortRun,
+    compactActiveSession,
     confirmWriteTool,
     createNewSession,
     deleteSession,

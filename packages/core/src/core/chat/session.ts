@@ -6,6 +6,11 @@ import {
 import { syncElementCatalogReminder } from '../agent/element-catalog-reminder'
 import { scanElementCatalog } from '../elements/catalog'
 import { buildSteeringContent, query } from '../agent/query'
+import {
+  computeRetainTokens,
+  runCompaction,
+  selectCompactionRange,
+} from '../agent/compaction'
 import { getAgentRole, syncConstraintDocReminder, type AgentRoleId } from '../agent/roles'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
@@ -36,6 +41,7 @@ import type {
   QueuedMessage,
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
+import type { ProjectConfig } from '../../types/project'
 
 /** driver 运行中的会话事件（service 层转发为 AgentUiEvent 用；type 随事件携带 sessionId 路由）。 */
 export type SessionEvent =
@@ -210,6 +216,53 @@ export async function runChatDriver(options: RunChatDriverOptions): Promise<Chat
     session,
     target: session.currentTarget,
   }
+}
+
+/** 手动压缩结果：compacted = 摘要已落地；noop 携带原因（视图一律未动）。 */
+export type ManualCompactionOutcome =
+  | { kind: 'compacted'; compactedMessageCount: number; originalTokens: number; summaryTokens: number }
+  | { kind: 'noop'; reason: 'nothing-to-compact' | 'summary-rejected' }
+
+/**
+ * 手动压缩会话上下文（/压缩上下文）：把当前模型视图的早期历史立即浓缩为检查点摘要。
+ * 与 query 内的自动压缩共用同一套选区与摘要逻辑（保留参数口径、八节检查点、宁缺毋滥），
+ * 差别仅在触发来源是用户而非压力检查。拷贝建视图（与 runDriverTurn 同口径）：
+ * noop 路径不污染会话持有的视图；成功才写回并推一条 context-summary 显示消息
+ * （不带队 onEvent——落盘与广播由 service 层负责）。
+ */
+export async function compactChatSession(options: {
+  session: ChatSessionState
+  config: ProjectConfig
+  signal?: AbortSignal
+}): Promise<ManualCompactionOutcome> {
+  const { session, config } = options
+  const view = createModelView(session.modelView?.messages ?? [])
+  const thresholdTokens = config.settings.conversationTokenLimit
+  const keepRecentTurns = config.settings.compressionKeepRecentTurns
+  const retainTokens = computeRetainTokens(view.messages, thresholdTokens, keepRecentTurns)
+
+  // 先判区间再调摘要：区分「没有可压缩内容」与「摘要未通过校验」两种 noop，给 UI 不同文案
+  if (!selectCompactionRange(view, retainTokens)) {
+    return { kind: 'noop', reason: 'nothing-to-compact' }
+  }
+
+  const result = await runCompaction({ config, view, retainTokens, signal: options.signal })
+  if (!result) {
+    return { kind: 'noop', reason: 'summary-rejected' }
+  }
+
+  session.modelView = view
+  pushMessage(
+    session,
+    {
+      id: createId('message'),
+      role: 'system',
+      kind: 'context-summary',
+      summary: `已手动压缩 ${result.compactedMessageCount} 条早期消息（约 ${result.originalTokens} → ${result.summaryTokens} token），此前对话以检查点摘要继续`,
+      createdAt: new Date().toISOString(),
+    },
+  )
+  return { kind: 'compacted', ...result }
 }
 
 type DriverTurnBatch = {

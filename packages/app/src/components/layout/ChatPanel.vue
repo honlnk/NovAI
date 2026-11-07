@@ -26,6 +26,7 @@ import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import {
   bareSlashCommandHint,
   expandSlashCommand,
+  matchLocalSlashCommand,
   SLASH_COMMANDS,
   slashCommandDraftText,
   type SlashCommandId,
@@ -290,6 +291,17 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
   if (!draftText) return
 
   clearSuggestion()
+  // 本地斜杠命令拦截（最优先，先于提问改道）：/压缩上下文 等客户端动作是显式操作，
+  // 不会是对提问卡的自由文本回答；不发送消息，失败时草稿填回供稍后重试
+  const localAction = matchLocalSlashCommand(draftText)
+  if (localAction === 'compact-context') {
+    composer.setDraft('')
+    const ok = await chatStore.compactActiveSession()
+    if (!ok) {
+      composer.setDraft(draftText)
+    }
+    return
+  }
   // 等待提问期间：普通输入（排队/插话语义 alike）改道为对当前问题的自由文本回答——
   // 不创建新的用户轮次、不进收件箱；若卡片上已选候选项，与文本合并提交（计划「等待期间的操作」）
   if (chatStore.pendingQuestion) {

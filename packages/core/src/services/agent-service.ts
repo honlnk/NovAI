@@ -5,8 +5,10 @@ import {
   wakeChatDriver,
   stopChatDriver,
   isChatDriverActive,
+  compactChatSession,
   DEFAULT_SESSION_TITLE,
   deriveSessionTitle,
+  type ManualCompactionOutcome,
   type SessionEvent,
 } from '../core/chat/session'
 import {
@@ -59,6 +61,9 @@ export { INIT_NOVEL_PROMPT }
  * 指示主 Agent 立即委派 DelegateToElementManager（要素管理员子代理）管理要素库，并转述其结构化汇报。
  */
 export { ELEMENT_MANAGER_TASK_PROMPT }
+
+/** 手动压缩（/压缩上下文）的结果类型，app 层据 kind 与 reason 写状态栏文案。 */
+export type { ManualCompactionOutcome }
 
 import {
   getRuntimeProject,
@@ -501,6 +506,40 @@ export function stopAgentRun(sessionId: string): void {
 /** 指定会话的 driver 是否活着（store 切换会话时恢复 isRunning 用）。 */
 export function isAgentRunActive(sessionId: string): boolean {
   return isChatDriverActive(sessionId)
+}
+
+/**
+ * 手动压缩会话上下文（/压缩上下文）：驱动器空闲时把当前模型视图的早期历史
+ * 浓缩为检查点摘要并落盘；压缩产生的 context-summary 消息即时广播给 UI。
+ * 运行中的会话拒绝手动压缩——driver 正持有同一视图，并发改写会互相踩。
+ */
+export async function compactSession(input: {
+  projectId: string
+  sessionId: string
+}): Promise<ManualCompactionOutcome> {
+  const project = requireRuntimeProject(input.projectId)
+  const session = await resolveSession(input.projectId, input.sessionId)
+  if (!session) {
+    throw new Error(`会话不存在或已删除：${input.sessionId}`)
+  }
+  if (isChatDriverActive(session.sessionId)) {
+    throw new Error('会话运行中不能手动压缩，请等待本轮结束或先停止运行')
+  }
+
+  // 特化角色（要素管理员直聊）用其覆盖模型配置生成摘要，与运行时口径一致
+  const role = getAgentRole(session.agent)
+  const effectiveConfig = role.mergeConfig?.(project.config) ?? project.config
+
+  const outcome = await compactChatSession({ session, config: effectiveConfig })
+  await saveSession(project, session)
+
+  if (outcome.kind === 'compacted') {
+    const summary = session.messages[session.messages.length - 1]
+    if (summary) {
+      emitMessageEvent(summary, session.sessionId, session.changeLedger)
+    }
+  }
+  return outcome
 }
 
 type DriverTitleContext = {

@@ -5,11 +5,17 @@ import { ELEMENT_MANAGER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/serv
  *
  * 斜杠菜单是纯命令补全器：选中命令后把命令文本填入输入框（尾部带空格），
  * 用户可在其后补充参数——命令是纯文本，可编辑可删除，行为与普通文字一致。
- * 发送链路对行首命中的命令做前缀拦截替换（expandSlashCommand）：
- * 裸命令文本本身不构成对主 Agent 的有效指令，替换为驱动 prompt（入口重构 W1 起
- * /管理要素 为一句委派指令，主 Agent 自行解读委派；/生成项目记忆 仍为全文）。
+ * 命令分两类，发送链路按序拦截：
+ * - prompt 展开型：行首命中的命令文本替换为驱动 prompt（expandSlashCommand；
+ *   入口重构 W1 起 /管理要素 为一句委派指令，主 Agent 自行解读委派；/生成项目记忆 仍为全文）。
+ * - 本地执行型（localAction）：客户端直接执行的动作，不展开 prompt、不发送消息
+ *   （发送链路第一道拦截 matchLocalSlashCommand，先于提问改道——命令是显式操作，
+ *   不会是对提问卡的自由文本回答）。
  */
-export type SlashCommandId = 'init' | 'element-manager'
+export type SlashCommandId = 'init' | 'element-manager' | 'compact-context'
+
+/** 本地执行型命令的动作标识（发送链路据此改道，无 prompt 展开） */
+export type LocalSlashCommandAction = 'compact-context'
 
 export type SlashCommand = {
   /** 命令唯一标识 */
@@ -22,6 +28,8 @@ export type SlashCommand = {
   icon: string
   /** 裸发（命令文本后无参数）时光标处的行内浅灰提示；不配置则裸发无提示 */
   bareHint?: string
+  /** 本地执行型命令的动作；不配置即 prompt 展开型 */
+  localAction?: LocalSlashCommandAction
 }
 
 /** 当前可用的斜杠命令（/提取要素 已于 2026-10 退役，要素整理参数化 W4） */
@@ -39,6 +47,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: '扫描项目生成/更新 prompts/NovAI.md 项目总览；选中后填入输入框，可补充参数后发送',
     icon: '📋',
   },
+  {
+    id: 'compact-context',
+    label: '/压缩上下文',
+    description: '立即把当前会话的早期历史压缩成检查点摘要；本地操作，不发送消息、不消耗对话轮次',
+    icon: '🗜️',
+    bareHint: '← 直接发送执行，无需参数',
+    localAction: 'compact-context',
+  },
 ]
 
 /** 落输入框的命令文本（尾部带空格，光标置后可直接补参数） */
@@ -53,6 +69,16 @@ export function slashCommandDraftText(label: string): string {
 export function bareSlashCommandHint(draft: string): string {
   const text = draft.trimEnd()
   return SLASH_COMMANDS.find((entry) => entry.bareHint && text === entry.label)?.bareHint ?? ''
+}
+
+/**
+ * 本地命令匹配（发送链路第一道拦截）：草稿恰为带 localAction 的命令文本
+ * （可带尾随空白）时返回该动作。本地命令无参数——命令后带其他文字或多行
+ * 不命中，视作普通文本交给后续链路（prompt 展开/发送）。
+ */
+export function matchLocalSlashCommand(draft: string): LocalSlashCommandAction | undefined {
+  const text = draft.trim()
+  return SLASH_COMMANDS.find((entry) => entry.localAction && text === entry.label)?.localAction
 }
 
 /** 行首命中即替换的命令 → 驱动 prompt 映射（发送链路前缀拦截，W3 D6） */
