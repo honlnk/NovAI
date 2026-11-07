@@ -29,6 +29,7 @@ import {
   bareSlashCommandHint,
   expandSlashCommand,
   matchLocalSlashCommand,
+  matchLocalSlashCommandWithArgs,
   SLASH_COMMANDS,
   slashCommandDraftText,
   type SlashCommandId,
@@ -157,11 +158,29 @@ async function steerAllQueued() {
   }
 }
 
-/* ---------- QueueDock 操作失败反馈（§5：队列行就地区分失败，原文保留） ---------- */
+/* ---------- 本地命令反馈（§3.2）：压缩防重复 + 行内提示（草稿保留在输入框） ---------- */
 
-async function handleQueueEdit(id: string, text: string) {
+/** 压缩在途标记（本地命令独立防重复）：在途再发不重复执行，仅提示 */
+const compactInFlight = ref(false)
+/** 输入区附近的行内提示（非法命令/参数、压缩在途等）；草稿不动 */
+const localCommandNotice = ref<string | null>(null)
+let localCommandNoticeTimer: ReturnType<typeof setTimeout> | null = null
+
+function showLocalCommandNotice(message: string) {
+  localCommandNotice.value = message
+  if (localCommandNoticeTimer) {
+    clearTimeout(localCommandNoticeTimer)
+  }
+  // 提示 5 秒后自动淡出（草稿仍保留在输入框，用户可直接修改重发）
+  localCommandNoticeTimer = setTimeout(() => {
+    localCommandNotice.value = null
+    localCommandNoticeTimer = null
+  }, 5000)
+}
+
+/* ---------- QueueDock 操作失败反馈（§5：队列行就地区分失败，原文保留） ---------- */async function handleQueueEdit(id: string, text: string, displayLabel?: string) {
   try {
-    await chatStore.editQueuedMessage(id, text)
+    await chatStore.editQueuedMessage(id, text, displayLabel)
   } catch (error) {
     toast.error(`排队消息编辑失败：${error instanceof Error ? error.message : '未知错误'}`)
   }
@@ -336,11 +355,25 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
   // 不会是对提问卡的自由文本回答；不发送消息，失败时草稿填回供稍后重试
   const localAction = matchLocalSlashCommand(draftText)
   if (localAction === 'compact-context') {
-    composer.setDraft('')
-    const ok = await chatStore.compactActiveSession()
-    if (!ok) {
-      composer.setDraft(rawDraft)
+    // 本地命令独立防重复（§3.2）：压缩在途时不重复执行，草稿保留供重试
+    if (compactInFlight.value) {
+      showLocalCommandNotice('正在压缩上下文，请等当前压缩完成')
+      return
     }
+    composer.setDraft('')
+    compactInFlight.value = true
+    try {
+      await chatStore.compactActiveSession()
+    } finally {
+      compactInFlight.value = false
+    }
+    return
+  }
+  // 本地命令带参数（§3.2「非法命令或参数」）：不静默退化为普通长提示——
+  // 在输入区附近说明原因并保留草稿
+  const localCommandWithArgs = matchLocalSlashCommandWithArgs(draftText)
+  if (localCommandWithArgs) {
+    showLocalCommandNotice(`${localCommandWithArgs.label} 不接受参数，请去掉命令后的文字后直接发送`)
     return
   }
   // 等待提问期间：普通输入（排队/插话语义 alike）改道为对当前问题的自由文本回答——
@@ -356,8 +389,11 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     return
   }
   // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
-  // 其后参数原样保留；不在行首的命令文本视作正文，不替换
+  // 其后参数原样保留；不在行首的命令文本视作正文，不替换。
+  // 显示/指令分离（§3.2）：实际发生展开时把用户原草稿作为 displayLabel 随消息入队——
+  // 气泡、队列与自动标题显示原草稿，内部 prompt 不外露。
   const message = expandSlashCommand(draftText)
+  const displayLabel = message === draftText ? undefined : draftText
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
   // 清空走桥（onTextChange 会顺带重置高度与指令状态）
@@ -365,7 +401,7 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
 
   // 自己发消息恒吸底：发送即「要看最新输出」的显式意图
   followAndScrollToBottom()
-  const ok = await chatStore.sendMessage(message, quoteText, mode)
+  const ok = await chatStore.sendMessage(message, quoteText, mode, displayLabel)
   if (ok) {
     // 发送成功后清除引用 chip
     emit('clearQuote')
@@ -852,6 +888,17 @@ onBeforeUnmount(() => {
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
+        <!-- 本地命令行内提示（§3.2）：输入区附近说明原因，草稿保留在输入框不动 -->
+        <div
+          v-if="localCommandNotice"
+          class="mb-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800"
+          role="status"
+        >
+          <svg class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span>{{ localCommandNotice }}</span>
+        </div>
         <!-- QueueDock：输入框正上方，渲染排队/插话队列（空队列不渲染） -->
         <QueueDock
           :queue="chatStore.queue"

@@ -21,11 +21,11 @@ export function inboxOrEmpty(state: InboxState | undefined): InboxState {
   return state ?? createEmptyInbox()
 }
 
-/** 入队：返回新 state 与带 id/at 的消息本体。activeFilePath 随消息快照（undefined 不落字段）。 */
+/** 入队：返回新 state 与带 id/at 的消息本体。activeFilePath/displayLabel 随消息快照（undefined 不落字段）。 */
 export function enqueueToInbox(
   state: InboxState | undefined,
   target: InboxTarget,
-  input: { text: string; quote?: string; activeFilePath?: string | null },
+  input: { text: string; quote?: string; activeFilePath?: string | null; displayLabel?: string },
 ): { state: InboxState; message: QueuedMessage } {
   const current = inboxOrEmpty(state)
   const message: QueuedMessage = {
@@ -33,6 +33,7 @@ export function enqueueToInbox(
     text: input.text,
     ...(input.quote ? { quote: input.quote } : {}),
     ...(input.activeFilePath !== undefined ? { activeFilePath: input.activeFilePath } : {}),
+    ...(input.displayLabel !== undefined ? { displayLabel: input.displayLabel } : {}),
     at: new Date().toISOString(),
   }
 
@@ -93,10 +94,28 @@ export function removeFromInbox(state: InboxState | undefined, id: string): Inbo
   }
 }
 
-/** 就地改文案（QueueDock 行内编辑）；不存在则原样返回。 */
-export function replaceInInbox(state: InboxState | undefined, id: string, text: string): InboxState {
+/**
+ * 就地改文案（QueueDock 行内编辑）：displayLabel 传新显示草稿；不传则视为编辑后
+ * 不再是命令草稿，原 displayLabel 一并清除。不存在则原样返回。
+ */
+export function replaceInInbox(
+  state: InboxState | undefined,
+  id: string,
+  text: string,
+  displayLabel?: string,
+): InboxState {
   const current = inboxOrEmpty(state)
-  const apply = (message: QueuedMessage) => (message.id === id ? { ...message, text } : message)
+  const apply = (message: QueuedMessage) => {
+    if (message.id !== id) {
+      return message
+    }
+    const { displayLabel: _dropped, ...rest } = message
+    return {
+      ...rest,
+      text,
+      ...(displayLabel !== undefined ? { displayLabel } : {}),
+    }
+  }
   return {
     nextTurn: current.nextTurn.map(apply),
     nextStep: current.nextStep.map(apply),

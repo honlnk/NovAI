@@ -121,7 +121,7 @@ export function isChatDriverActive(sessionId: string): boolean {
 export function enqueueChatMessage(
   session: ChatSessionState,
   target: InboxTarget,
-  input: { text: string; quote?: string; activeFilePath?: string | null },
+  input: { text: string; quote?: string; activeFilePath?: string | null; displayLabel?: string },
 ): QueuedMessage {
   const enqueued = enqueueToInbox(session.inbox, target, input)
   session.inbox = enqueued.state
@@ -308,11 +308,12 @@ async function runDriverTurn(options: {
 
   // 显示层逐条 push（批次内顺序 = 先全部 steer 气泡，后 followup 气泡）：
   // followup = 普通 user 气泡，是任务组边界；steer 批次 = steering 气泡（steered 标记），不是边界。
+  // displayLabel（显示/指令分离）随消息落盘：斜杠命令气泡显示用户原草稿，不暴露内部 prompt。
   for (const message of batch.steering) {
     pushMessage(session, createSteeringMessage(message), onEvent)
   }
   if (batch.followup) {
-    pushMessage(session, createUserMessage(batch.followup.text, batch.followup.quote), onEvent)
+    pushMessage(session, createUserMessage(batch.followup.text, batch.followup.quote, batch.followup.displayLabel), onEvent)
   }
   // 每 turn 的两条 context-summary 保持每 turn push；steer 续 turn 在 query 内发生，不产生新条目
   pushMessage(session, createContextSummary(target), onEvent)
@@ -906,13 +907,14 @@ function pushErrorMessage(
   )
 }
 
-function createUserMessage(text: string, quote?: string): ChatMessage {
+function createUserMessage(text: string, quote?: string, displayLabel?: string): ChatMessage {
   return {
     id: createId('message'),
     role: 'user',
     kind: 'text',
     text,
     quote,
+    ...(displayLabel !== undefined ? { displayLabel } : {}),
     createdAt: new Date().toISOString(),
   }
 }
@@ -924,6 +926,7 @@ function createSteeringMessage(message: QueuedMessage): ChatMessage {
     role: 'user',
     kind: 'text',
     text: message.text,
+    ...(message.displayLabel !== undefined ? { displayLabel: message.displayLabel } : {}),
     quote: message.quote,
     steered: true,
     createdAt: message.at,

@@ -82,6 +82,26 @@ export function matchLocalSlashCommand(draft: string): LocalSlashCommandAction |
   return SLASH_COMMANDS.find((entry) => entry.localAction && text === entry.label)?.localAction
 }
 
+/**
+ * 本地命令带参数检测（§3.2「非法命令或参数」）：草稿首行以本地命令开头但带了
+ * 参数（含裸命令后另起多行）时返回该命令——发送链路据此在输入区附近说明原因
+ * 并保留草稿，不静默退化为普通长提示（本地命令不在 prompt 展开表，原文会直发模型）。
+ */
+export function matchLocalSlashCommandWithArgs(draft: string): SlashCommand | undefined {
+  const lines = draft.split('\n')
+  const firstLine = (lines[0] ?? '').trim().trimStart()
+  return SLASH_COMMANDS.find((entry) => {
+    if (!entry.localAction) {
+      return false
+    }
+    if (firstLine.startsWith(`${entry.label} `)) {
+      return true
+    }
+    // 裸命令后还有后续行：同样是「带参数」形态（多行正文）
+    return firstLine === entry.label && lines.length > 1
+  })
+}
+
 /** 行首命中即替换的命令 → 驱动 prompt 映射（发送链路前缀拦截，W3 D6） */
 const SLASH_COMMAND_EXPANSIONS: Array<{ command: string; prompt: string }> = [
   { command: '/管理要素', prompt: ELEMENT_MANAGER_TASK_PROMPT },

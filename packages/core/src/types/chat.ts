@@ -135,6 +135,26 @@ export type TurnLimitMessage = {
 }
 
 /**
+ * 本地命令状态行（交互优化计划 §3.2）：/压缩上下文 等客户端命令执行后在消息流里
+ * 的紧凑反馈位（图标 + 命令名 + 状态），随会话落盘持久保留。
+ * 只落终态（completed 已完成 / noop 未执行：没有可处理内容未做修改 / failed 失败）；
+ * 排队中/执行中是过程态，由状态栏与输入区就地反馈，不落消息。
+ */
+export type LocalCommandMessage = {
+  id: string
+  role: 'system'
+  kind: 'local-command'
+  /** 命令名（显示用，如「/压缩上下文」） */
+  command: string
+  outcome: 'completed' | 'noop' | 'failed'
+  /** 一行结果说明（状态行副文案） */
+  summary: string
+  /** 失败详情（展开区展示、可复制；不存异常堆栈） */
+  detail?: string
+  createdAt: string
+}
+
+/**
  * 改动汇总消息（取代 action-summary 生态位；任务完成 diff 面板在消息流里的占位）。
  * 只存 runId：面板数据渲染时从会话 changeLedger 按 runId 解析，不重复存 diff。
  * 随消息持久化，重载后每一轮的面板都在原位。
@@ -185,6 +205,7 @@ export type ChatMessage =
   | ErrorMessage
   | ContextSummaryMessage
   | TurnLimitMessage
+  | LocalCommandMessage
   | ChangeSummaryMessage
   | AskUserQuestionMessage
 

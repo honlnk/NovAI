@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ELEMENT_MANAGER_TASK_PROMPT, INIT_NOVEL_PROMPT } from '@novai/core/services/agent-service'
 
-import { bareSlashCommandHint, expandSlashCommand, matchLocalSlashCommand, slashCommandDraftText } from './slash-commands'
+import { bareSlashCommandHint, expandSlashCommand, matchLocalSlashCommand, matchLocalSlashCommandWithArgs, slashCommandDraftText } from './slash-commands'
 
 describe('expandSlashCommand 发送链路前缀拦截（W3 D6）', () => {
   it('行首裸命令：替换为驱动 prompt 全文', () => {
@@ -76,6 +76,28 @@ describe('matchLocalSlashCommand 本地命令匹配（/压缩上下文）', () =
 
   it('前缀扩展不命中：/压缩上下文库 不是命令', () => {
     expect(matchLocalSlashCommand('/压缩上下文库')).toBeUndefined()
+  })
+})
+
+describe('matchLocalSlashCommandWithArgs 本地命令带参数检测（§3.2 非法参数）', () => {
+  it('命令后带参数命中，返回命令定义', () => {
+    const matched = matchLocalSlashCommandWithArgs('/压缩上下文 现在')
+    expect(matched?.localAction).toBe('compact-context')
+    expect(matched?.label).toBe('/压缩上下文')
+    // 尾随空白而无参数仍是裸命令形态，走正常拦截不在此命中
+    expect(matchLocalSlashCommandWithArgs('/压缩上下文  ')).toBeUndefined()
+    expect(matchLocalSlashCommandWithArgs(' /压缩上下文 立即')?.localAction).toBe('compact-context')
+  })
+
+  it('多行草稿按首行判定：首行命令带参命中，其余行不管', () => {
+    expect(matchLocalSlashCommandWithArgs('/压缩上下文\n帮我看看')?.localAction).toBe('compact-context')
+  })
+
+  it('裸命令、prompt 命令、正文提及不命中', () => {
+    expect(matchLocalSlashCommandWithArgs('/压缩上下文')).toBeUndefined() // 裸命令走正常拦截
+    expect(matchLocalSlashCommandWithArgs('/管理要素 整理人物')).toBeUndefined() // prompt 命令合法带参
+    expect(matchLocalSlashCommandWithArgs('帮忙 /压缩上下文 一下')).toBeUndefined() // 非行首
+    expect(matchLocalSlashCommandWithArgs('')).toBeUndefined()
   })
 })
 

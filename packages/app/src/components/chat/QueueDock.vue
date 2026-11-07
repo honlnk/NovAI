@@ -2,11 +2,14 @@
 import { computed, ref } from 'vue'
 
 import type { QueuedMessageView } from '@novai/core/services/types'
+import { expandSlashCommand } from '../../constants/slash-commands'
 
 /**
  * QueueDock（文档 4 S5）：渲染在输入框正上方。
  * 1 条直接显示行；多条默认折叠成「N 条排队消息」计数头 + 展开箭头；空队列不渲染。
  * 每行三个操作：编辑（行内 input，Enter 存 Esc 取消）、删除（撤回）、立即插话（仅运行中可用）。
+ * 显示/指令分离（交互优化计划 §3.2）：行显示 displayLabel（用户原草稿）；编辑提交时
+ * 按新草稿重新展开斜杠命令，text 与 displayLabel 一起回传。
  */
 const props = defineProps<{
   queue: QueuedMessageView[]
@@ -14,7 +17,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'edit', id: string, text: string): void
+  (e: 'edit', id: string, text: string, displayLabel?: string): void
   (e: 'remove', id: string): void
   (e: 'steer', id: string): void
 }>()
@@ -43,12 +46,17 @@ const editingText = ref('')
 
 function startEdit(message: QueuedMessageView) {
   editingId.value = message.id
-  editingText.value = message.text
+  // 编辑的是显示草稿（斜杠命令行显示原草稿，不是内部 prompt）
+  editingText.value = message.displayLabel ?? message.text
 }
 
 function commitEdit() {
   if (editingId.value !== null && editingText.value.trim()) {
-    emit('edit', editingId.value, editingText.value.trim())
+    const displayDraft = editingText.value.trim()
+    // 编辑重推导（显示/指令分离）：新草稿命中斜杠命令时重新展开为驱动 prompt，
+    // 展开前原草稿作为 displayLabel 回传；未命中则清除命令标记（displayLabel 缺省）
+    const expanded = expandSlashCommand(displayDraft)
+    emit('edit', editingId.value, expanded, expanded === displayDraft ? undefined : displayDraft)
   }
   editingId.value = null
 }
@@ -108,8 +116,8 @@ function cancelEdit() {
       <span
         v-else
         class="min-w-0 flex-1 truncate text-gray-700"
-        :title="message.text"
-      >{{ message.text }}</span>
+        :title="message.displayLabel ?? message.text"
+      >{{ message.displayLabel ?? message.text }}</span>
 
       <!-- 行操作：编辑 / 删除 / 立即插话（仅运行中可用） -->
       <button

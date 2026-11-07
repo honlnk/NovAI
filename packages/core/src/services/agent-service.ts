@@ -493,6 +493,8 @@ export async function enqueueMessage(input: {
     quote: input.quote,
     // 消息级快照：排队执行时按「发送那一刻」的文件解析目标，不被后来的入队覆盖
     ...(input.activeFilePath !== undefined ? { activeFilePath: input.activeFilePath } : {}),
+    // 显示/指令分离：气泡、队列与自动标题用用户原草稿，内部 prompt 不外露
+    ...(input.displayLabel !== undefined ? { displayLabel: input.displayLabel } : {}),
   })
   // 耐久入队先于唤醒（刷新后队列还在，不自动消费）
   await saveSession(project, session)
@@ -505,7 +507,8 @@ export async function enqueueMessage(input: {
     titleContext: {
       hadNoUserMessage,
       titleBeforeRun,
-      firstUserText: input.text,
+      // 自动标题取用户原草稿（斜杠命令显示命令名+参数，不暴露内部 prompt 全文）
+      firstUserText: input.displayLabel ?? input.text,
     },
   })
   return { sessionId: session.sessionId }
@@ -516,7 +519,8 @@ export async function updateQueuedMessage(input: {
   projectId: string
   sessionId: string
   id: string
-  action: { kind: 'edit'; text: string } | { kind: 'remove' } | { kind: 'steer' }
+  /** edit：text 为展开后的驱动指令，displayLabel 为新显示草稿（编辑重推导，app 层负责展开） */
+  action: { kind: 'edit'; text: string; displayLabel?: string } | { kind: 'remove' } | { kind: 'steer' }
 }): Promise<void> {
   const project = requireRuntimeProject(input.projectId)
   const session = await resolveSession(input.projectId, input.sessionId)
@@ -525,7 +529,7 @@ export async function updateQueuedMessage(input: {
   }
 
   if (input.action.kind === 'edit') {
-    session.inbox = replaceInInbox(session.inbox, input.id, input.action.text)
+    session.inbox = replaceInInbox(session.inbox, input.id, input.action.text, input.action.displayLabel)
   } else if (input.action.kind === 'remove') {
     session.inbox = removeFromInbox(session.inbox, input.id)
   } else {
@@ -574,10 +578,31 @@ export async function compactSession(input: {
   const effectiveConfig = role.mergeConfig?.(project.config) ?? project.config
 
   const outcome = await compactChatSession({ session, config: effectiveConfig })
+
+  // 本地命令状态行（§3.2）：执行结果落成紧凑消息随会话持久化，刷新后在原位可查。
+  // 排队中/执行中不落消息（状态栏就地反馈）；driver 忙的拒绝在 UI 层提示，不落盘。
+  const statusLine: ChatMessage = {
+    id: createMessageId(),
+    role: 'system',
+    kind: 'local-command',
+    command: '/压缩上下文',
+    outcome: outcome.kind === 'compacted' ? 'completed' : outcome.kind === 'noop' && outcome.reason === 'nothing-to-compact' ? 'noop' : 'failed',
+    summary: outcome.kind === 'compacted'
+      ? `已压缩 ${outcome.compactedMessageCount} 条早期消息（约 ${outcome.originalTokens} → ${outcome.summaryTokens} token）`
+      : outcome.kind === 'noop' && outcome.reason === 'nothing-to-compact'
+        ? '没有可压缩的早期历史，未做修改'
+        : '压缩摘要未通过校验，上下文未改动',
+    ...(outcome.kind === 'noop' && outcome.reason === 'summary-rejected'
+      ? { detail: '生成的摘要内容未通过长度/格式校验（宁缺毋滥防线），本次上下文保持原样，可稍后重试。' }
+      : {}),
+    createdAt: new Date().toISOString(),
+  }
+  session.messages = [...session.messages, statusLine]
   await saveSession(project, session)
+  emitMessageEvent(statusLine, session.sessionId, session.changeLedger)
 
   if (outcome.kind === 'compacted') {
-    const summary = session.messages[session.messages.length - 1]
+    const summary = session.messages[session.messages.length - 2]
     if (summary) {
       emitMessageEvent(summary, session.sessionId, session.changeLedger)
     }
@@ -810,8 +835,7 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
   const session = createChatSession(project.id, { agent: 'element-manager' })
   session.title = deriveSessionTitle(input.task)
   cacheSession(session)
-  await saveSession(project, session)
-  session.updatedAt = new Date().toISOString()
+  await saveSession(project, session) // 原地盖 updatedAt：内存与落盘同值
   broadcastAgentEvent({
     type: 'session-created',
     sessionId: session.sessionId,
@@ -1367,6 +1391,19 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       text: message.summary,
       targetPath: message.targetPath,
       relatedPaths: message.relatedPaths,
+      createdAt: message.createdAt,
+    }
+  }
+
+  if (message.kind === 'local-command') {
+    return {
+      id: message.id,
+      role: 'system',
+      kind: 'local-command',
+      command: message.command,
+      outcome: message.outcome,
+      text: message.summary,
+      ...(message.detail ? { detail: message.detail } : {}),
       createdAt: message.createdAt,
     }
   }

@@ -407,6 +407,7 @@ export const useChatStore = defineStore('chat', () => {
     text: string,
     quote?: string,
     mode: 'queue' | 'steer' = 'queue',
+    displayLabel?: string,
   ): Promise<boolean> {
     if (!sessionView.value) {
       setRunStatus('没有活跃的会话', 'error')
@@ -422,6 +423,8 @@ export const useChatStore = defineStore('chat', () => {
         text,
         quote,
         mode,
+        // 显示/指令分离：斜杠命令时传用户原草稿（气泡、队列、自动标题用它，不暴露内部 prompt）
+        ...(displayLabel !== undefined ? { displayLabel } : {}),
         activeFilePath: projectStore.activeFile?.path ?? null,
         // 匿名联网配额身份：随消息注入，沿 ChatTurnInput → ToolRuntime 到达 WebSearch/WebFetch
         webClientId: getOrCreateClientId(),
@@ -433,14 +436,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** QueueDock 行内编辑排队消息；失败抛错由 UI toast。 */
-  async function editQueuedMessage(id: string, text: string): Promise<void> {
+  /** QueueDock 行内编辑排队消息；displayLabel = 编辑后的显示草稿（缺省清除命令标记）；失败抛错由 UI toast。 */
+  async function editQueuedMessage(id: string, text: string, displayLabel?: string): Promise<void> {
     if (!sessionView.value) return
     await updateAgentQueuedMessage({
       projectId: sessionView.value.projectId,
       sessionId: sessionView.value.sessionId,
       id,
-      action: { kind: 'edit', text },
+      action: { kind: 'edit', text, ...(displayLabel !== undefined ? { displayLabel } : {}) },
     })
   }
 
@@ -496,7 +499,8 @@ export const useChatStore = defineStore('chat', () => {
       if (outcome.kind === 'compacted') {
         setRunStatus(`已压缩 ${outcome.compactedMessageCount} 条早期消息（约 ${outcome.originalTokens} → ${outcome.summaryTokens} token）`)
       } else if (outcome.reason === 'nothing-to-compact') {
-        setRunStatus('当前上下文还很小，没有可压缩的早期历史')
+        // 与消息流里的本地命令状态行同文案：主动取消或无变化不是错误
+        setRunStatus('没有可压缩的早期历史，未做修改')
       } else {
         setRunStatus('压缩摘要未通过校验，上下文未改动', 'error')
       }
