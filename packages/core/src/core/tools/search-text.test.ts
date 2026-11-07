@@ -255,6 +255,53 @@ describe('SearchFiles 参数校验', () => {
     expect(output.content).not.toContain('session.txt')
   })
 
+  it('内容侧漏堵死（D3）：根目录搜索不出 novel.config.json 的任何行（含密钥行）', async () => {
+    const runtime = createRuntime({
+      'chapters/第001章-公开.txt': '林婉儿出现。',
+      // 模拟密钥行：ReadFile 挡住的内容，SearchFiles 也不能经匹配行/上下文带进上下文
+      'novel.config.json': '{\n  "apiKey": "sk-FAKE-KEY-123",\n  "model": "deepseek-chat"\n}',
+    })
+
+    // 搜密钥本身：零命中（配置文件在遍历层被整体跳过）
+    const keyOutput = await searchFilesTool.run(
+      searchFilesTool.validateInput({ query: 'sk-FAKE-KEY-123' }),
+      runtime,
+    )
+    expect(keyOutput.totalMatches).toBe(0)
+
+    // 搜普通词（model/apiKey 都可能撞到配置行）：只命中章节，配置行与上下文零出现
+    const commonOutput = await searchFilesTool.run(
+      searchFilesTool.validateInput({ query: 'model' }),
+      runtime,
+    )
+    expect(commonOutput.totalMatches).toBe(0)
+    expect(commonOutput.content).not.toContain('novel.config.json')
+    expect(commonOutput.content).not.toContain('sk-FAKE-KEY')
+
+    // 对照组：正常章节内容照常可搜
+    const normalOutput = await searchFilesTool.run(
+      searchFilesTool.validateInput({ query: '林婉儿' }),
+      runtime,
+    )
+    expect(normalOutput.totalMatches).toBe(1)
+  })
+
+  it('显式搜索 spill 目录照常（D3 豁免：取回通道不受影响）', async () => {
+    const runtime = createRuntime({
+      '.novel/spill/search-files-x1.txt': '林婉儿的溢出内容',
+      'chapters/第001章-公开.txt': '林婉儿出现。',
+    })
+
+    const output = await searchFilesTool.run(
+      searchFilesTool.validateInput({ query: '林婉儿', path: '.novel/spill' }),
+      runtime,
+    )
+
+    expect(output.totalMatches).toBe(1)
+    expect(output.content).toContain('.novel/spill/search-files-x1.txt')
+    expect(output.content).not.toContain('chapters/第001章-公开.txt')
+  })
+
   it('搜索目录不存在时报错', async () => {
     const runtime = createRuntime({})
 

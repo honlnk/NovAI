@@ -1,4 +1,5 @@
-import { isNotFoundError, normalizeProjectDirectoryPath } from './path'
+import { isAgentHiddenEntry, isNotFoundError, normalizeProjectDirectoryPath, shouldSkipInWalk } from './path'
+import { assertReadableDirectoryPath } from './file-tools/common'
 import { createSpillFileId, SPILL_DIR } from '../agent/spill'
 import { writeProjectTextFile } from '../fs/project-fs'
 import type {
@@ -20,10 +21,11 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeProjectDirectoryPath(readOptionalString(value.path, 'ListDirectory.path'))
+    // 内部目录对模型不可见（D2）：显式列内部目录直接报教学文案，与 SearchFiles 同一边界
+    assertReadableDirectoryPath(path, 'ListDirectory.path')
 
     return {
       path: path || undefined,
-      showHidden: typeof value.showHidden === 'boolean' ? value.showHidden : false,
     }
   },
   async run(input, runtime) {
@@ -43,9 +45,8 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
     const entries: ListDirectoryEntry[] = []
 
     for await (const entry of directoryHandle.values()) {
-      const hidden = entry.name.startsWith('.')
-
-      if (hidden && !input.showHidden) {
+      // 点开头与内部条目对模型永远隐藏（D2，无开关）：判定单一来源在 path.ts
+      if (isAgentHiddenEntry(entry.name)) {
         continue
       }
 
@@ -53,7 +54,7 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
         name: entry.name,
         path: directoryPath ? `${directoryPath}/${entry.name}` : entry.name,
         kind: entry.kind,
-        hidden,
+        hidden: false,
       })
     }
 
@@ -64,9 +65,7 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
   },
   summarizeInput(input) {
     const target = input.path || '项目根目录'
-    return input.showHidden
-      ? `查看 ${target} 的目录结构，包括隐藏项`
-      : `查看 ${target} 的目录结构`
+    return `查看 ${target} 的目录结构`
   },
   summarizeOutput(output) {
     const target = output.path || '项目根目录'
@@ -101,11 +100,12 @@ export const findFilesTool: ToolDefinition<'FindFiles', FindFilesInput, FindFile
     }
 
     validateGlobPattern(pattern)
+    // 内部目录对模型不可见（D2）：显式在内部目录下查找直接报教学文案（spill 例外照旧）
+    assertReadableDirectoryPath(path, 'FindFiles.path')
 
     return {
       pattern,
       path: path || undefined,
-      includeHidden: typeof value.includeHidden === 'boolean' ? value.includeHidden : false,
       limit: readLimit(value.limit),
     }
   },
@@ -118,7 +118,7 @@ export const findFilesTool: ToolDefinition<'FindFiles', FindFilesInput, FindFile
     // 遍历时一并收集 mtime，结果按修改时间降序（D3）；同 mtime 按路径字典序兜底保证确定性
     const matches: Array<{ path: string; lastModified: number }> = []
 
-    for await (const entry of walkFiles(directoryHandle, searchPath, Boolean(input.includeHidden))) {
+    for await (const entry of walkFiles(directoryHandle, searchPath)) {
       const relativeToSearchPath = searchPath ? entry.path.slice(searchPath.length + 1) : entry.path
 
       if (!matcher(entry.path, relativeToSearchPath)) {
@@ -327,16 +327,21 @@ function sortEntries<TEntry extends { name: string; kind: 'file' | 'directory' }
   })
 }
 
-/** 遍历产出文件路径 + 修改时间（mtime 排序与采样都依赖它）；SearchFiles 复用遍历、忽略 mtime。 */
+/**
+ * 遍历产出文件路径 + 修改时间（mtime 排序与采样都依赖它）；SearchFiles 复用遍历、忽略 mtime。
+ * 内部路径与点开头条目在遍历层整体跳过（D3，目录命中即整棵子树跳过，novel.config.json 内容侧漏由此堵死）；
+ * 判定单一来源在 path.ts 的 shouldSkipInWalk，spill 子树豁免。
+ */
 export async function* walkFiles(
   directoryHandle: FileSystemDirectoryHandle,
   directoryPath: string,
-  includeHidden: boolean,
 ): AsyncGenerator<{ path: string; lastModified: number }> {
   const entries: FileSystemHandle[] = []
 
   for await (const entry of directoryHandle.values()) {
-    if (!includeHidden && entry.name.startsWith('.')) {
+    const entryPath = directoryPath ? `${directoryPath}/${entry.name}` : entry.name
+
+    if (shouldSkipInWalk(entryPath)) {
       continue
     }
 
@@ -360,7 +365,7 @@ export async function* walkFiles(
       continue
     }
 
-    yield* walkFiles(entry as FileSystemDirectoryHandle, entryPath, includeHidden)
+    yield* walkFiles(entry as FileSystemDirectoryHandle, entryPath)
   }
 }
 

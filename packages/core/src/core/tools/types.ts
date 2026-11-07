@@ -226,13 +226,13 @@ export type DeleteFileOutput = {
 
 export type ListDirectoryInput = {
   path?: string
-  showHidden?: boolean
 }
 
 export type ListDirectoryEntry = {
   name: string
   path: string
   kind: 'file' | 'directory'
+  /** 遗留字段：内部/点开头条目已整体对模型隐藏（无开关），恒为 false；保留以避免下游类型级联改动 */
   hidden: boolean
 }
 
@@ -244,7 +244,6 @@ export type ListDirectoryOutput = {
 export type FindFilesInput = {
   pattern: string
   path?: string
-  includeHidden?: boolean
   limit?: number
 }
 

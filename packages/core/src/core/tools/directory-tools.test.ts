@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findFilesTool, sampleAcrossTopLevel } from './directory-tools'
+import { findFilesTool, listDirectoryTool, sampleAcrossTopLevel } from './directory-tools'
 import { createAgentTools } from '../agent/tools'
 import type { ProjectSnapshot } from '../../types/project'
 import type { ToolRuntime } from './types'
@@ -141,6 +141,81 @@ describe('FindFiles', () => {
     const formatted = createAgentTools().FindFiles.formatResult(output)
     expect(formatted).not.toContain('采样')
     expect(formatted).not.toContain('spill')
+  })
+})
+
+describe('内部文件不可见化（D2/D3：无开关，任何参数组合都不出现）', () => {
+  function seedInternalProject(): ToolRuntime {
+    const runtime = createRuntime()
+    seedFile(runtime, 'chapters/第001章-公开.txt', '正文', 1000)
+    seedFile(runtime, 'elements/甲.md', '设定', 2000)
+    seedFile(runtime, 'novel.config.json', '{"apiKey": "sk-FAKE-KEY"}', 3000)
+    seedFile(runtime, '.novel/trash/20260101/chapters/废稿.txt', '废稿', 4000)
+    seedFile(runtime, '.novel/spill/find-files-x1.txt', '溢出列表', 5000)
+    seedFile(runtime, '.novai/session-state.json', '{}', 6000)
+    seedFile(runtime, '.DS_Store', 'binary', 7000)
+    return runtime
+  }
+
+  it('ListDirectory 根目录不列 novel.config.json、.novel、.novai（含 .DS_Store 等点开头条目）', async () => {
+    const runtime = seedInternalProject()
+
+    const output = await listDirectoryTool.run(
+      listDirectoryTool.validateInput({}),
+      runtime,
+    )
+
+    const names = output.entries.map((entry) => entry.name)
+    expect(names).toEqual(['chapters', 'elements'])
+    expect(names).not.toContain('novel.config.json')
+    expect(names).not.toContain('.novel')
+    expect(names).not.toContain('.novai')
+    // 遗留字段恒 false（计划 §七：保留字段避免类型级联）
+    expect(output.entries.every((entry) => entry.hidden === false)).toBe(true)
+  })
+
+  it('ListDirectory 大小写变体路径同样拒绝，spill 目录显式列出放行', () => {
+    expect(() => listDirectoryTool.validateInput({ path: '.novel' }))
+      .toThrow('ListDirectory.path 不能指向应用内部文件')
+    expect(() => listDirectoryTool.validateInput({ path: '.NOVEL/trash' }))
+      .toThrow('ListDirectory.path 不能指向应用内部文件')
+    expect(() => listDirectoryTool.validateInput({ path: '.novai' }))
+      .toThrow('ListDirectory.path 不能指向应用内部文件')
+    expect(() => listDirectoryTool.validateInput({ path: '.novel/spill' })).not.toThrow()
+  })
+
+  it('FindFiles 任意模式都不匹配 novel.config.json 与内部目录内容（walkFiles 层跳过）', async () => {
+    const runtime = seedInternalProject()
+
+    const jsonOutput = await findFilesTool.run(
+      findFilesTool.validateInput({ pattern: '*.json' }),
+      runtime,
+    )
+    expect(jsonOutput.filenames).toEqual([])
+
+    const allOutput = await findFilesTool.run(
+      findFilesTool.validateInput({ pattern: '**/*' }),
+      runtime,
+    )
+    expect(new Set(allOutput.filenames)).toEqual(new Set([
+      'chapters/第001章-公开.txt',
+      'elements/甲.md',
+    ]))
+  })
+
+  it('FindFiles 显式指向内部目录报教学文案，显式查找 spill 照常（豁免三角）', async () => {
+    const runtime = seedInternalProject()
+
+    expect(() => findFilesTool.validateInput({ pattern: '**/*', path: '.novel' }))
+      .toThrow('FindFiles.path 不能指向应用内部文件')
+    expect(() => findFilesTool.validateInput({ pattern: '**/*', path: '.novai' }))
+      .toThrow('FindFiles.path 不能指向应用内部文件')
+
+    const spillOutput = await findFilesTool.run(
+      findFilesTool.validateInput({ pattern: '**/*', path: '.novel/spill' }),
+      runtime,
+    )
+    expect(spillOutput.filenames).toEqual(['.novel/spill/find-files-x1.txt'])
   })
 })
 

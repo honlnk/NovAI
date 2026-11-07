@@ -267,10 +267,6 @@ export function createAgentTools(): AgentRunnableToolMap {
                 type: 'string',
                 description: '可选，项目内目录相对路径；不传则查看项目根目录。',
               },
-              showHidden: {
-                type: 'boolean',
-                description: '是否显示以 . 开头的隐藏文件或目录。默认 false。',
-              },
             },
             additionalProperties: false,
           },
@@ -309,10 +305,6 @@ export function createAgentTools(): AgentRunnableToolMap {
               path: {
                 type: 'string',
                 description: '可选，项目内目录相对路径；不传则从项目根目录查找。',
-              },
-              includeHidden: {
-                type: 'boolean',
-                description: '是否包含以 . 开头的隐藏文件或目录。默认 false。',
               },
               limit: {
                 type: 'integer',

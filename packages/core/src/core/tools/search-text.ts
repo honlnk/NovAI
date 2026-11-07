@@ -137,7 +137,7 @@ async function collectMatches(
   // 字面匹配用 includes；正则用 search（无 lastIndex 状态副作用，多次调用行为一致）
   const regex = input.regex ? new RegExp(input.query) : undefined
 
-  for await (const entry of walkFiles(directoryHandle, searchPath, false)) {
+  for await (const entry of walkFiles(directoryHandle, searchPath)) {
     const relativeToSearchPath = searchPath ? entry.path.slice(searchPath.length + 1) : entry.path
 
     if (includeMatcher && !includeMatcher(entry.path, relativeToSearchPath)) {
