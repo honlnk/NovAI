@@ -103,7 +103,7 @@ export type ChangeDiff = {
  */
 export type WriteConfirmation =
   | { kind: 'create'; path: string; content: string }
-  | { kind: 'edit'; path: string; oldText: string; newText: string }
+  | { kind: 'edit'; path: string; oldText: string; newText: string; /** 全部替换：确认面板按候选原文在当前文件的所有出现处预览 */ replaceAll?: boolean }
   | { kind: 'rename'; fromPath: string; toPath: string }
   | { kind: 'delete'; path: string }
 

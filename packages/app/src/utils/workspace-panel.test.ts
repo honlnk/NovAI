@@ -152,4 +152,8 @@ describe('panelCloseTarget 关闭收敛目标', () => {
   it('面板本就收起时不动作', () => {
     expect(panelCloseTarget(null)).toBeNull()
   })
+
+  it('写入确认面板关闭只藏确认视图（§8）：不动文件/计划偏好', () => {
+    expect(panelCloseTarget('write-confirm')).toBe('write-confirm')
+  })
 })

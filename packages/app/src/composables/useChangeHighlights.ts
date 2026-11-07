@@ -225,6 +225,47 @@ export type TextHighlightSegment = {
 }
 
 /**
+ * 待确认写入的预览切分（§8）：在当前磁盘内容里定位候选原文的全部出现处（replaceAll
+ * 与 EditFile 落盘语义一致），原文以红段呈现、替换后的候选文本以绿段呈现，两段都只是
+ * 预览、尚未写盘。返回 null 表示候选原文在当前内容中已找不到（版本失配，调用方降级）。
+ * 非红段顺序拼接与原内容完全一致（排版不变的硬约束）。
+ */
+export function buildPendingReplaceSegments(
+  content: string,
+  oldText: string,
+  newText: string,
+  replaceAll: boolean,
+): TextHighlightSegment[] | null {
+  // 空原文 = 空文件填充语义（EditFile 只对空文件放行）：整段候选内容绿显
+  if (oldText === '') {
+    if (content !== '') return [{ kind: 'plain', text: content }]
+    return newText === '' ? [] : [{ kind: 'green', text: newText }]
+  }
+  if (!content.includes(oldText)) {
+    return null
+  }
+  const segments: TextHighlightSegment[] = []
+  let from = 0
+  while (true) {
+    const index = content.indexOf(oldText, from)
+    if (index === -1) break
+    if (index > from) {
+      segments.push({ kind: 'plain', text: content.slice(from, index) })
+    }
+    segments.push({ kind: 'red', text: oldText })
+    if (newText !== '') {
+      segments.push({ kind: 'green', text: newText })
+    }
+    from = index + oldText.length
+    if (!replaceAll) break
+  }
+  if (from < content.length) {
+    segments.push({ kind: 'plain', text: content.slice(from) })
+  }
+  return segments
+}
+
+/**
  * 把当前游标处的一处修改切进整篇文本：新内容行绿显，被替换/删除的原文以相邻
  * 红段呈现（仅用于比较，不存在于当前内容中）。段落文本按整行边界拼接，
  * 所有非红段顺序拼接必须与原内容完全一致（排版不变的硬约束）。

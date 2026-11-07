@@ -263,6 +263,22 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * 只读探测某文件当前磁盘内容，不动 activeFile（§8 确认面板审阅候选写入用：
+   * 展示 diff 与确认前版本复检都不应把用户正在看的文件换掉）。
+   * 文件不存在（create 候选目标已被占用等）返回 null。
+   */
+  async function peekFile(path: string): Promise<FileContentView | null> {
+    if (!currentProject.value) {
+      return null
+    }
+    try {
+      return await readFile(currentProject.value.id, path)
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * 保存内容面板编辑模式的草稿到磁盘。
    * 写盘成功后更新 activeFile（同步最新 updatedAt），不刷新整个文件树
    *（文件树结构未变，仅内容更新）。
@@ -520,6 +536,7 @@ export const useProjectStore = defineStore('project', () => {
     loadRecentProjects,
     openExistingProject,
     openFile,
+    peekFile,
     openRecentProject,
     refreshTree,
     removeRecentProject,

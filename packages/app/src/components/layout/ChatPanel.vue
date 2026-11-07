@@ -23,7 +23,8 @@ import {
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
-import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
+import WriteActionTakeover from '../chat/WriteActionTakeover.vue'
+import QuestionTakeover from '../chat/QuestionTakeover.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import {
   bareSlashCommandHint,
@@ -68,6 +69,8 @@ const emit = defineEmits<{
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
+  /** 打开右侧内容面板的写入确认审阅（§8：聊天区只留标记与返回入口） */
+  openConfirmReview: []
 }>()
 
 const chatStore = useChatStore()
@@ -166,6 +169,26 @@ const compactInFlight = ref(false)
 const localCommandNotice = ref<string | null>(null)
 let localCommandNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
+/* ---------- 写入确认分流（§8） ---------- */
+// 队首为 create/edit → 右侧内容面板审阅，聊天区只留等待标记与返回入口；
+// 队首为 rename/delete → 原输入卡片位置紧凑接管（编辑器隐藏但挂载，草稿保留）
+const structureConfirmation = computed(() => {
+  const head = chatStore.pendingConfirmation
+  if (!head) return null
+  return head.confirmation.kind === 'rename' || head.confirmation.kind === 'delete' ? head : null
+})
+const confirmFileName = computed(() => {
+  const head = chatStore.activeWriteConfirmation
+  const kind = head?.confirmation.kind
+  if (!head || (kind !== 'create' && kind !== 'edit')) return ''
+  const path = head.confirmation.path
+  return path.split('/').pop() ?? path
+})
+const confirmKindLabel = computed(() => {
+  const kind = chatStore.activeWriteConfirmation?.confirmation.kind
+  return kind === 'create' ? '新建' : '编辑'
+})
+
 function showLocalCommandNotice(message: string) {
   localCommandNotice.value = message
   if (localCommandNoticeTimer) {
@@ -178,8 +201,7 @@ function showLocalCommandNotice(message: string) {
   }, 5000)
 }
 
-/* ---------- QueueDock 操作失败反馈（§5：队列行就地区分失败，原文保留） ---------- */async function handleQueueEdit(id: string, text: string, displayLabel?: string) {
-  try {
+/* ---------- QueueDock 操作失败反馈（§5：队列行就地区分失败，原文保留） ---------- */async function handleQueueEdit(id: string, text: string, displayLabel?: string) {  try {
     await chatStore.editQueuedMessage(id, text, displayLabel)
   } catch (error) {
     toast.error(`排队消息编辑失败：${error instanceof Error ? error.message : '未知错误'}`)
@@ -376,18 +398,8 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
     showLocalCommandNotice(`${localCommandWithArgs.label} 不接受参数，请去掉命令后的文字后直接发送`)
     return
   }
-  // 等待提问期间：普通输入（排队/插话语义 alike）改道为对当前问题的自由文本回答——
-  // 不创建新的用户轮次、不进收件箱；若卡片上已选候选项，与文本合并提交（计划「等待期间的操作」）
-  if (chatStore.pendingQuestion) {
-    composer.setDraft('')
-    followAndScrollToBottom()
-    const ok = chatStore.submitQuestionAnswer({ text: draftText })
-    if (!ok) {
-      // 提交失败（如被校验拒绝）：草稿填回，等待态不变
-      composer.setDraft(rawDraft)
-    }
-    return
-  }
+  // 等待提问期间输入区已整体被提问接管（§8），普通发送路径不可达：
+  // 回答只在提问接管面板里显式提交，普通输入不再隐式把发送当成答案
   // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
   // 其后参数原样保留；不在行首的命令文本视作正文，不替换。
   // 显示/指令分离（§3.2）：实际发生展开时把用户原草稿作为 displayLabel 随消息入队——
@@ -873,17 +885,23 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- 写工具确认卡片（Agent Step 2/3） -->
-    <WriteConfirmationCard
-      v-if="chatStore.pendingConfirmation"
-      :confirmation="chatStore.pendingConfirmation.confirmation"
-      :tool-name="chatStore.pendingConfirmation.toolName"
-      :title="chatStore.pendingConfirmation.title"
-      :summary="chatStore.pendingConfirmation.summary"
-      :agent-label="chatStore.pendingConfirmation.agentLabel"
-      @confirm="chatStore.confirmWriteTool()"
-      @reject="chatStore.rejectWriteTool()"
-    />
+    <!-- 写入确认分流（§8）：create/edit 确认迁入右侧内容面板，聊天区只留「等待审阅」标记与返回入口 -->
+    <div
+      v-if="chatStore.activeWriteConfirmation"
+      class="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600"
+    >
+      <svg class="h-3.5 w-3.5 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+      <span class="min-w-0 flex-1 truncate">
+        等待你审阅「{{ confirmFileName }}」的{{ confirmKindLabel }}请求（待确认 {{ chatStore.pendingConfirmationCount }} 项）
+      </span>
+      <button
+        type="button"
+        class="shrink-0 rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-700"
+        @click="emit('openConfirmReview')"
+      >去审阅</button>
+    </div>
 
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
@@ -935,8 +953,20 @@ onBeforeUnmount(() => {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
+          <!-- 输入区接管（§8，互斥链）：Agent 提问优先于结构写操作，二者都不在时才是普通编辑器。
+               编辑器隐藏但保持挂载（草稿保留），队列/停止/会话切换不受影响 -->
+          <QuestionTakeover
+            v-if="chatStore.pendingQuestion"
+            :question="chatStore.pendingQuestion"
+          />
+          <WriteActionTakeover
+            v-else-if="structureConfirmation"
+            :confirmation="structureConfirmation"
+            @confirm="chatStore.confirmWriteTool()"
+            @reject="chatStore.rejectWriteTool()"
+          />
           <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
-          <div class="chat-input-card">
+          <div v-show="!chatStore.pendingQuestion && !structureConfirmation" class="chat-input-card">
             <!-- 编辑器 + ghost text 覆盖层（斜杠裸发提示或 FIM 补全建议，二者合流） -->
             <div class="relative">
               <GhostTextOverlay
@@ -950,12 +980,10 @@ onBeforeUnmount(() => {
                 v-if="draft === ''"
                 class="chat-input-base pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-gray-400"
                 aria-hidden="true"
-              >{{ chatStore.pendingQuestion
-                ? 'Agent 提问等待回答：Enter 把输入内容作为回答提交（与卡片所选合并），也可在上方卡片作答'
-                : chatStore.isRunning
-                  ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
-                  : (roleMeta?.inputPlaceholder
-                    ?? '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)') }}</div>
+              >{{ chatStore.isRunning
+                ? 'Agent 运行中：Enter 排队发送，Ctrl/Cmd+Enter 插话，Shift+Enter 换行'
+                : (roleMeta?.inputPlaceholder
+                  ?? '输入创作指令... (Enter 发送，Shift+Enter 换行；输入 @ 切换大纲)') }}</div>
               <!-- Lexical 编辑器宿主：contenteditable 由 setRootElement 接管，键入与选区归编辑器管 -->
               <div
                 ref="editorHostRef"
@@ -1027,7 +1055,7 @@ onBeforeUnmount(() => {
                   </svg>
                 </button>
                 <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示；
-                     等待提问期间隐藏——此时 Enter 语义已是「提交回答」，不再有插话分支 -->
+                     等待提问期间输入区整体被提问接管，本就不可见 -->
                 <button
                   v-if="chatStore.isRunning && !chatStore.pendingQuestion"
                   class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
@@ -1046,14 +1074,12 @@ onBeforeUnmount(() => {
                 <button
                   class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
                   :disabled="!draft.trim()"
-                  :title="chatStore.pendingQuestion
-                    ? '提交回答：输入内容作为当前问题的自由文本回答（与卡片所选合并）'
-                    : chatStore.isRunning
-                      ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）'
-                      : '发送'"
+                  :title="chatStore.isRunning
+                    ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）'
+                    : '发送'"
                   @click="handleSend('queue')"
                 >
-                  {{ chatStore.pendingQuestion ? '提交回答' : chatStore.isRunning ? '排队发送' : '发送' }}
+                  {{ chatStore.isRunning ? '排队发送' : '发送' }}
                 </button>
               </div>
             </div>

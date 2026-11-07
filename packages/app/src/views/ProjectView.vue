@@ -22,6 +22,7 @@ import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
 import FilePanelBody from '../components/layout/FilePanelBody.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
+import WriteConfirmPanel from '../components/layout/WriteConfirmPanel.vue'
 import PlanBoardPanel from '../components/plan/PlanBoardPanel.vue'
 import PlanDetailPanel from '../components/plan/PlanDetailPanel.vue'
 import PlanCreatePanel from '../components/plan/PlanCreatePanel.vue'
@@ -58,6 +59,8 @@ const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 /** 计划面板（详情/新建）展开偏好（跨分类保留；进入计划默认收起，点击卡片或新建后展开） */
 const isPlanPanelOpen = ref(false)
+/** 写入确认面板开关（§8）：仅在安全时机自动打开，用户可随时离开（关闭面板不取消请求） */
+const isConfirmPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
 const isRagOpen = ref(false)
@@ -566,17 +569,35 @@ watch(() => projectStore.currentProject?.id, () => {
 })
 
 /** 右侧面板当前应展示的内容与可见性（文件 / 计划详情 / 新建互斥，规则见 workspace-panel） */
-const workspacePanel = computed(() => resolveWorkspacePanel({
-  category: activeCategory.value,
-  isFilePanelOpen: isContentPanelOpen.value,
-  hasFileContent: projectStore.activeFile !== null || panelNotice.value !== null,
-  isPlanPanelOpen: isPlanPanelOpen.value,
-  isCreateOpen: planStore.isCreateOpen,
-  hasActiveCard: planStore.activeCard !== null,
-}))
+const workspacePanel = computed(() => {
+  const base = resolveWorkspacePanel({
+    category: activeCategory.value,
+    isFilePanelOpen: isContentPanelOpen.value,
+    hasFileContent: projectStore.activeFile !== null || panelNotice.value !== null,
+    isPlanPanelOpen: isPlanPanelOpen.value,
+    isCreateOpen: planStore.isCreateOpen,
+    hasActiveCard: planStore.activeCard !== null,
+  })
+  // 写入确认覆盖（§8）：不进 resolveWorkspacePanel（那里不知道确认状态）。基础解析为
+  // 文件类或空（面板未开/未开文件）即接管——聊天条「去审阅」必须总能打开；可见的
+  // 计划详情/新建优先级更高，不被覆盖
+  if (
+    isConfirmPanelOpen.value
+    && chatStore.activeWriteConfirmation
+    && (base.kind === 'file' || base.kind === null)
+  ) {
+    return { visible: true, kind: 'write-confirm' as const }
+  }
+  return base
+})
 
 /** 面板关闭只影响可见性（§2.8）：按当前内容类型收敛对应分类的展开偏好，不清计划与草稿 */
 function handleCloseContentPanel() {
+  // 确认面板「离开」：只藏确认面板，不取消请求（§8），也不动文件面板展开偏好
+  if (workspacePanel.value.kind === 'write-confirm') {
+    isConfirmPanelOpen.value = false
+    return
+  }
   const target = panelCloseTarget(workspacePanel.value.kind)
   if (target === 'file') {
     isContentPanelOpen.value = false
@@ -584,6 +605,29 @@ function handleCloseContentPanel() {
     isPlanPanelOpen.value = false
   }
 }
+
+// 确认请求到达/清空（§8）：到达时不抢现场——只在面板空闲（未在看计划）或正以预览态
+// 看文件且无未保存草稿时自动切到确认面板；编辑中/有草稿/在看计划时保持聊天条入口。
+// 队列清空（最后一项同意/拒绝）后确认面板随之退场（请求已处理，无需再展示）。
+watch(
+  () => chatStore.pendingConfirmation,
+  (head) => {
+    if (!head) {
+      isConfirmPanelOpen.value = false
+      return
+    }
+    const panel = filePanelRef.value?.getAutoPlayState?.()
+    const panelIdle = workspacePanel.value.kind === null
+    const filePreviewSafe =
+      workspacePanel.value.kind === 'file' &&
+      workspacePanel.value.visible &&
+      panel?.viewMode === 'preview' &&
+      !panel.dirty
+    if (chatStore.activeWriteConfirmation && (panelIdle || filePreviewSafe)) {
+      isConfirmPanelOpen.value = true
+    }
+  },
+)
 
 /** 打开计划详情（看板卡片 / 侧栏最近计划 / 已搁置卡片共用同一入口）：面板随点击展开 */
 async function handleOpenPlanCard(id: string) {
@@ -752,6 +796,11 @@ function toggleSidebar() {
 }
 
 function toggleContentPanel() {
+  // 确认面板打开时，头部开关即「离开确认审阅」（§8 离开不取消请求，聊天条保留入口）
+  if (workspacePanel.value.kind === 'write-confirm') {
+    isConfirmPanelOpen.value = false
+    return
+  }
   isContentPanelOpen.value = !isContentPanelOpen.value
 }
 
@@ -846,7 +895,7 @@ function handleGoToSettings() {
         v-else
         :project-id="projectId"
         :is-sidebar-open="isCategoryOpen"
-        :is-content-panel-open="isContentPanelOpen"
+        :is-content-panel-open="workspacePanel.visible"
         :quote="selectionQuote"
         :outlines="outlineList"
         :active-outline-path="activeOutlinePath"
@@ -855,6 +904,7 @@ function handleGoToSettings() {
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
+        @open-confirm-review="isConfirmPanelOpen = true"
       >
         <!-- 首次使用引导 -->
         <template #guide>
@@ -888,6 +938,15 @@ function handleGoToSettings() {
           @reload="handleReloadFile"
           @select-quote="handleSelectQuote"
           @locate-change="handleLocateChange"
+        />
+        <!-- 写入确认面板（§8）：接管内容面板时 FilePanelBody 由 v-show 隐藏（保持挂载、草稿不丢） -->
+        <WriteConfirmPanel
+          v-if="workspacePanel.kind === 'write-confirm' && chatStore.activeWriteConfirmation"
+          :confirmation="chatStore.activeWriteConfirmation"
+          :total-count="chatStore.pendingConfirmationCount"
+          @confirm="chatStore.confirmWriteTool()"
+          @reject="chatStore.rejectWriteTool()"
+          @close="handleCloseContentPanel"
         />
         <!-- 计划详情 -->
         <PlanDetailPanel

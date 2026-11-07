@@ -544,10 +544,15 @@ export async function updateQueuedMessage(input: {
   broadcastQueueUpdated(session)
 }
 
-/** 停止指定会话的运行：abort 当前 turn + 清闩锁；队列保留不自动续跑。挂起提问按取消 resolve（停止不留下永久等待）。 */
+/**
+ * 停止指定会话的运行：abort 当前 turn + 清闩锁；队列保留不自动续跑。
+ * 挂起提问按取消、挂起确认按拒绝 resolve（§8：停止运行后服务层收敛等待状态，
+ * 不留下永久等待；abort 中断的 confirm await 只丢弃 Promise，注册表条目由此处清出）。
+ */
 export function stopAgentRun(sessionId: string): void {
   stopChatDriver(sessionId)
   cancelPendingSessionQuestions(sessionId)
+  rejectPendingSessionConfirmations(sessionId)
 }
 
 /** 指定会话的 driver 是否活着（store 切换会话时恢复 isRunning 用）。 */
@@ -953,10 +958,17 @@ function requestConfirmation(
   })
 }
 
-/** UI 调用：响应对某次写工具确认的接受/拒绝，唤醒等待中的 Agent Loop。 */
-export function respondConfirmation(confirmationId: string, accepted: boolean) {
+/**
+ * UI 调用：响应对某次写工具确认的接受/拒绝，唤醒等待中的 Agent Loop。
+ * expectedSessionId 供调用方自证会话归属（§8 按会话路由不串答）：携带且与注册时不符
+ * 视为误触，不 resolve 不广播。
+ */
+export function respondConfirmation(confirmationId: string, accepted: boolean, expectedSessionId?: string) {
   const pending = confirmationMap.get(confirmationId)
   if (!pending) {
+    return
+  }
+  if (expectedSessionId !== undefined && pending.sessionId !== expectedSessionId) {
     return
   }
   confirmationMap.delete(confirmationId)
@@ -1157,7 +1169,13 @@ function toWriteConfirmationView(confirmation: WriteConfirmation): WriteConfirma
     case 'create':
       return { kind: 'create', path: confirmation.path, content: confirmation.content }
     case 'edit':
-      return { kind: 'edit', path: confirmation.path, oldText: confirmation.oldText, newText: confirmation.newText }
+      return {
+        kind: 'edit',
+        path: confirmation.path,
+        oldText: confirmation.oldText,
+        newText: confirmation.newText,
+        ...(confirmation.replaceAll === true ? { replaceAll: true } : {}),
+      }
     case 'rename':
       return { kind: 'rename', fromPath: confirmation.fromPath, toPath: confirmation.toPath }
     case 'delete':

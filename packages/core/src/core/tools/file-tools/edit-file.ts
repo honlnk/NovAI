@@ -162,7 +162,13 @@ export const editFileTool: ToolDefinition<'EditFile', EditFileInput, EditFileOut
     return output.coords
   },
   buildConfirmation(input) {
-    return { kind: 'edit', path: input.path, oldText: input.oldText, newText: input.newText }
+    return {
+      kind: 'edit',
+      path: input.path,
+      oldText: input.oldText,
+      newText: input.newText,
+      ...(input.replaceAll === true ? { replaceAll: true } : {}),
+    }
   },
 }
 

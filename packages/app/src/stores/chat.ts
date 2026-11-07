@@ -93,6 +93,22 @@ export const useChatStore = defineStore('chat', () => {
     }
     return pendingConfirmationsBySession.value.get(active)?.[0] ?? null
   })
+  /** 激活会话待确认队首是否为内容类（create/edit）：走右侧内容面板审阅（§8）；rename/delete 走输入区接管 */
+  const activeWriteConfirmation = computed<FileChangeConfirmationView | null>(() => {
+    const head = pendingConfirmation.value
+    if (!head || (head.confirmation.kind !== 'create' && head.confirmation.kind !== 'edit')) {
+      return null
+    }
+    return head
+  })
+  /** 激活会话待确认总数（内容面板审阅区「第 x / 共 n 项」用） */
+  const pendingConfirmationCount = computed<number>(() => {
+    const active = activeSessionId.value
+    if (!active) {
+      return 0
+    }
+    return pendingConfirmationsBySession.value.get(active)?.length ?? 0
+  })
   /**
    * 各会话的待回答提问快照（question-required / questions-updated 事件同步，仿确认链）：
    * Agent 任务中途的 AskUserQuestion 挂起在这里。切换会话后回来仍能恢复等待态；
@@ -749,21 +765,24 @@ export const useChatStore = defineStore('chat', () => {
   /** 用户确认当前待确认的写操作，唤醒 Agent Loop 继续执行。 */
   function confirmWriteTool() {
     const confirmation = pendingConfirmation.value
+    const active = activeSessionId.value
     if (!confirmation) {
       return
     }
-    // respondConfirmation 内同步广播 confirmations-updated（含本次 resolve），map 随之更新
-    respondAgentConfirmation(confirmation.id, true)
+    // respondConfirmation 内同步广播 confirmations-updated（含本次 resolve），map 随之更新；
+    // expectedSessionId 自证会话归属（§8 按会话路由不串答），服务层校验不符则忽略
+    respondAgentConfirmation(confirmation.id, true, active ?? undefined)
     setRunStatus('Agent 正在执行...', 'running')
   }
 
   /** 用户拒绝当前待确认的写操作，Agent 收到拒绝结果后可调整。 */
   function rejectWriteTool() {
     const confirmation = pendingConfirmation.value
+    const active = activeSessionId.value
     if (!confirmation) {
       return
     }
-    respondAgentConfirmation(confirmation.id, false)
+    respondAgentConfirmation(confirmation.id, false, active ?? undefined)
     setRunStatus('Agent 正在执行...', 'running')
   }
 
@@ -857,6 +876,8 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     renderItems,
     pendingConfirmation,
+    activeWriteConfirmation,
+    pendingConfirmationCount,
     pendingConfirmationsBySession,
     sessionsWithPendingConfirmations,
     pendingQuestion,

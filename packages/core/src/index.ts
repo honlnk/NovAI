@@ -33,4 +33,6 @@ export * from './services/project-runtime'
 export * from './core/util/word-count'
 // 内容哈希（FNV-1a）：app 侧定位高亮做「记录坐标描述的版本 == 面板当前版本」校验用（§7）
 export * from './core/util/hash'
+// 候选替换的逐处行范围计算（与 EditFile 落盘语义同一实现）：确认面板预览 diff 用（§8）
+export { computeReplaceRanges } from './core/tools/file-tools/change-coords'
 export type * from './services/types'

@@ -9,7 +9,7 @@ import type { Category } from '../constants/category'
  * 返回原分类时恢复离开前的展开状态（§2.5），未选中内容时不得凭空显示空面板。
  */
 
-export type WorkspacePanelKind = 'file' | 'plan-detail' | 'plan-create'
+export type WorkspacePanelKind = 'file' | 'plan-detail' | 'plan-create' | 'write-confirm'
 
 export type WorkspacePanelInput = {
   category: Category
@@ -60,12 +60,15 @@ export function resolveWorkspacePanel(input: WorkspacePanelInput): WorkspacePane
  * 面板关闭入口按当前展示内容收敛对应分类的展开偏好（§2.8 关闭只影响可见性）。
  * 返回需要置 false 的偏好位；面板本就收起（kind null）时不动任何状态。
  */
-export function panelCloseTarget(kind: WorkspacePanelKind | null): 'file' | 'plan' | null {
+export function panelCloseTarget(kind: WorkspacePanelKind | null): 'file' | 'plan' | 'write-confirm' | null {
   if (kind === 'file') {
     return 'file'
   }
   if (kind === 'plan-detail' || kind === 'plan-create') {
     return 'plan'
+  }
+  if (kind === 'write-confirm') {
+    return 'write-confirm'
   }
   return null
 }

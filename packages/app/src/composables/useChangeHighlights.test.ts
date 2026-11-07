@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   advanceHighlightCursor,
+  buildPendingReplaceSegments,
   buildTextHighlightSegments,
   clearChangeHighlights,
   dismissHighlightJob,
@@ -248,6 +249,83 @@ describe('markdownBlockIndicesInRange（源码行→块映射）', () => {
   it('末块延伸到文件末行', () => {
     const starts = [0, 3]
     expect(markdownBlockIndicesInRange(starts, 10, { oldStart: 9, oldEnd: 9, newStart: 9, newEnd: 9 })).toEqual([1])
+  })
+})
+
+describe('buildPendingReplaceSegments（待确认写入预览切分，§8）', () => {
+  /** 预览仍是当前文件内容：去掉绿段（尚未写盘的候选）后必须还原原内容（排版不变硬约束） */
+  const concatOriginal = (segments: { kind: string; text: string }[]) =>
+    segments.filter((seg) => seg.kind !== 'green').map((seg) => seg.text).join('')
+
+  it('单处替换：原文红段 + 候选绿段，其余原样', () => {
+    const content = '雨停了。\n蹙眉不语。\n夜深了。'
+    const segments = buildPendingReplaceSegments(content, '蹙眉不语', '低头叹息', false)
+    expect(segments).toEqual([
+      { kind: 'plain', text: '雨停了。\n' },
+      { kind: 'red', text: '蹙眉不语' },
+      { kind: 'green', text: '低头叹息' },
+      { kind: 'plain', text: '。\n夜深了。' },
+    ])
+    expect(concatOriginal(segments!)).toBe(content)
+  })
+
+  it('删除（newText 为空）：只有红段，无绿段', () => {
+    const segments = buildPendingReplaceSegments('前句。删除我。后句。', '删除我', '', false)
+    expect(segments).toEqual([
+      { kind: 'plain', text: '前句。' },
+      { kind: 'red', text: '删除我' },
+      { kind: 'plain', text: '。后句。' },
+    ])
+    expect(concatOriginal(segments!)).toBe('前句。删除我。后句。')
+  })
+
+  it('replaceAll：所有出现处都切换（多出现处不漏）', () => {
+    const content = 'A他说B他说C'
+    const segments = buildPendingReplaceSegments(content, '他说', '她讲', true)
+    expect(segments).toEqual([
+      { kind: 'plain', text: 'A' },
+      { kind: 'red', text: '他说' },
+      { kind: 'green', text: '她讲' },
+      { kind: 'plain', text: 'B' },
+      { kind: 'red', text: '他说' },
+      { kind: 'green', text: '她讲' },
+      { kind: 'plain', text: 'C' },
+    ])
+    expect(concatOriginal(segments!)).toBe(content)
+  })
+
+  it('非 replaceAll 只切第一处，其余出现处保持原样', () => {
+    const segments = buildPendingReplaceSegments('他说A他说', '他说', '她讲', false)
+    expect(segments).toEqual([
+      { kind: 'red', text: '他说' },
+      { kind: 'green', text: '她讲' },
+      { kind: 'plain', text: 'A他说' },
+    ])
+    expect(concatOriginal(segments!)).toBe('他说A他说')
+  })
+
+  it('候选原文缺失：返回 null（版本失配，调用方降级）', () => {
+    expect(buildPendingReplaceSegments('完全不同的内容', '蹙眉不语', '低头叹息', false)).toBeNull()
+  })
+
+  it('空原文（空文件填充语义）：非空内容原样 plain，空内容整篇绿', () => {
+    expect(buildPendingReplaceSegments('已有内容', '', '新文', false)).toEqual([{ kind: 'plain', text: '已有内容' }])
+    expect(buildPendingReplaceSegments('', '', '新文', false)).toEqual([{ kind: 'green', text: '新文' }])
+    expect(buildPendingReplaceSegments('', '', '', false)).toEqual([])
+  })
+
+  it('拼接不变式：多种替换形态下 plain+red 拼接还原原内容', () => {
+    const content = 'xx替换点yy替换点zz'
+    const cases = [
+      { oldText: '替换点', newText: '新的话', replaceAll: false },
+      { oldText: '替换点', newText: '新的话', replaceAll: true },
+      { oldText: '替换点', newText: '', replaceAll: true },
+    ]
+    for (const { oldText, newText, replaceAll } of cases) {
+      const segments = buildPendingReplaceSegments(content, oldText, newText, replaceAll)
+      expect(segments).not.toBeNull()
+      expect(concatOriginal(segments!)).toBe(content)
+    }
   })
 })
 

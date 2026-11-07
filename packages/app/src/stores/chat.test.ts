@@ -665,6 +665,80 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.sessionsWithPendingQuestions.has('session-current')).toBe(false)
   })
 
+  it('内容类确认分流（§8 批1）：create/edit 进 activeWriteConfirmation，rename/delete 不进；计数按激活会话', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const editCard: FileChangeConfirmationView = {
+      id: 'conf-edit-1',
+      toolName: 'EditFile',
+      title: '编辑文件：chapters/第012章-旧约.txt',
+      summary: '将替换 1 处正文',
+      confirmation: {
+        kind: 'edit',
+        path: 'chapters/第012章-旧约.txt',
+        oldText: '蹙眉不语',
+        newText: '低头叹息',
+        replaceAll: true,
+      },
+    }
+
+    // 无待确认：分流为空、计数为 0
+    expect(store.activeWriteConfirmation).toBeNull()
+    expect(store.pendingConfirmationCount).toBe(0)
+
+    // 激活会话的 create/edit：进内容面板审阅位（§8），计数 1
+    emit({ type: 'confirmation-required', sessionId: 'session-current', request: editCard })
+    expect(store.activeWriteConfirmation?.id).toBe('conf-edit-1')
+    expect(store.pendingConfirmationCount).toBe(1)
+
+    // 追加一张（多项请求逐项审阅）：队首不变，计数累加
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-current',
+      request: {
+        ...editCard,
+        id: 'conf-edit-2',
+        confirmation: { kind: 'edit', path: 'chapters/第012章-旧约.txt', oldText: '蹙眉不语', newText: '抬头望灯' },
+      },
+    })
+    expect(store.activeWriteConfirmation?.id).toBe('conf-edit-1')
+    expect(store.pendingConfirmationCount).toBe(2)
+
+    // rename/delete 是结构类：不进 activeWriteConfirmation（走输入区接管），但计数照常
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-current',
+      request: {
+        id: 'conf-del-1',
+        toolName: 'DeleteFile',
+        title: '删除文件：notes/草稿.md',
+        summary: '将删除 notes/草稿.md',
+        confirmation: { kind: 'delete', path: 'notes/草稿.md' },
+      },
+    })
+    expect(store.activeWriteConfirmation?.id).toBe('conf-edit-1')
+    expect(store.pendingConfirmationCount).toBe(3)
+
+    // 非激活会话的确认不进激活会话的计数与审阅位
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-other',
+      request: { ...editCard, id: 'conf-other' },
+    })
+    expect(store.pendingConfirmationCount).toBe(3)
+    expect(store.sessionsWithPendingConfirmations.has('session-other')).toBe(true)
+
+    // 快照整体替换清空激活会话 → 审阅位与计数归零
+    emit({ type: 'confirmations-updated', sessionId: 'session-current', confirmations: [] })
+    expect(store.activeWriteConfirmation).toBeNull()
+    expect(store.pendingConfirmationCount).toBe(0)
+    // 非激活会话的徽标不受影响
+    expect(store.sessionsWithPendingConfirmations.has('session-other')).toBe(true)
+  })
+
   it('候选项选择：单选替换、多选按候选项顺序保持完整集合', async () => {
     const store = useChatStore()
     mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
