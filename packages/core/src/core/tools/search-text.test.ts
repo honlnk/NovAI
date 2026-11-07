@@ -230,10 +230,13 @@ describe('SearchFiles 参数校验', () => {
     expect(clamped.limit).toBe(500)
   })
 
-  it('路径边界：.novel/ 禁读，.novel/spill/ 放行（D11）', () => {
-    expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novel' })).toThrow('内部目录')
-    expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novel/logs' })).toThrow('内部目录')
-    expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novai' })).toThrow('内部目录')
+  it('路径边界：.novel/ 禁读，.novel/spill/ 放行（D11；报错文案为教学式，D5）', () => {
+    expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novel' }))
+      .toThrow('SearchFiles.path 不能指向应用内部文件')
+    expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novel/logs' }))
+      .toThrow('SearchFiles.path 不能指向应用内部文件')
+    expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novai' }))
+      .toThrow('SearchFiles.path 不能指向应用内部文件')
     expect(() => searchFilesTool.validateInput({ query: 'x', path: '.novel/spill' })).not.toThrow()
   })
 

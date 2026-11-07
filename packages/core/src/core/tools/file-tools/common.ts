@@ -1,4 +1,11 @@
-import { assertTextFilePath, assertWritableTextFilePath, normalizeProjectPath } from '../path'
+import {
+  assertTextFilePath,
+  assertWritableTextFilePath,
+  internalPathError,
+  isInternalPath,
+  isSpillReadablePath,
+  normalizeProjectPath,
+} from '../path'
 
 export function asRecord(input: unknown) {
   if (!input || typeof input !== 'object') {
@@ -17,69 +24,47 @@ export function readString(value: unknown, label: string) {
 }
 
 /**
- * 内部路径硬底线的统一判定。比较前统一小写：macOS APFS 大小写不敏感，
- * `Novel.Config.JSON` / `.NOVEL/` 变体同样命中真实内部文件，必须一并拦截。
+ * 内部路径判定与教学式报错全部来自 path.ts 的单一来源模块（内部文件屏蔽计划 D1/D5），
+ * 本文件不再保留私有副本——名单与文案变更只改 path.ts 一处。
  */
-function foldInternalPath(path: string) {
-  return path.toLowerCase()
-}
-
-function isInternalPath(folded: string) {
-  // .novai/ 为项目级隐藏配置目录（要素管理员快捷选项等，要素整理参数化 W2），与 novel.config.json 同级保护
-  return folded === 'novel.config.json' || folded.startsWith('.novel/') || folded.startsWith('.novai/')
-}
-
-/** spill 目录是内部目录中唯一放行读取的例外（详见 spill 重设计：省略标记必须可取回）。 */
-const SPILL_DIR_PREFIX = '.novel/spill/'
 
 export function assertMutableDocumentPath(path: string, label: string) {
   assertTextFilePath(path)
 
-  if (isInternalPath(foldInternalPath(path))) {
-    throw new Error(`${label} 不能指向项目内部文件（novel.config.json、.novel、.novai）`)
+  if (isInternalPath(path)) {
+    throw internalPathError(label)
   }
 }
 
 export function assertWritableDocumentPath(path: string, label: string) {
   assertWritableTextFilePath(path)
 
-  if (isInternalPath(foldInternalPath(path))) {
-    throw new Error(`${label} 不能指向项目内部文件（novel.config.json、.novel、.novai）`)
+  if (isInternalPath(path)) {
+    throw internalPathError(label)
   }
 }
 
 /**
- * 读路径断言（ReadFile 专用）：`.novel/` 仍整体禁读，唯独 `.novel/spill/` 放行——
+ * 读路径断言（ReadFile 专用）：内部路径整体禁读，唯独 `.novel/spill/` 放行——
  * spill 省略标记指引模型分段读回完整内容，这个口子就是取回通道。
  * spill 文件仍禁止写/改/删（写断言不含此例外）。
  */
 export function assertReadableDocumentPath(path: string, label: string) {
   assertTextFilePath(path)
 
-  const folded = foldInternalPath(path)
-  if (isInternalPath(folded) && !folded.startsWith(SPILL_DIR_PREFIX)) {
-    throw new Error(`${label} 不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）`)
+  if (isInternalPath(path) && !isSpillReadablePath(path)) {
+    throw internalPathError(label)
   }
 }
 
 /**
  * 读路径断言的目录版（SearchFiles 的搜索范围用）：与文件版同一套内部目录边界，
- * `.novel/spill/` 同样放行（模型可显式在 spill 目录内搜索）。目录路径不带尾斜杠，
- * spill 目录自身（`.novel/spill`）也算放行范围。
+ * `.novel/spill/` 同样放行（模型可显式在 spill 目录内搜索）。
  */
 export function assertReadableDirectoryPath(path: string, label: string) {
-  const folded = foldInternalPath(path)
-  // 目录路径不带尾斜杠：裸目录名（.novel、.novai 本身）也算内部目录
-  const isInternal = folded === '.novel' || folded === '.novai' || isInternalPath(folded)
-
-  if (isInternal && !isSpillDirectory(folded)) {
-    throw new Error(`${label} 不能指向项目内部目录（novel.config.json、.novel、.novai；.novel/spill/ 除外）`)
+  if (isInternalPath(path) && !isSpillReadablePath(path)) {
+    throw internalPathError(label)
   }
-}
-
-/** 是否落在放行的 spill 目录内（目录本身或其子路径）。 */
-function isSpillDirectory(folded: string) {
-  return folded === SPILL_DIR_PREFIX.slice(0, -1) || folded.startsWith(SPILL_DIR_PREFIX)
 }
 
 export function normalizeTextFilePath(value: unknown, label: string) {

@@ -471,37 +471,37 @@ describe('file tools', () => {
       await expect(createFileTool.run({
         path: '.novel/spill/abc.txt',
         content: '写入内部目录',
-      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      }, runtime)).rejects.toThrow('不能指向应用内部文件')
 
       await expect(createFileTool.run({
         path: '.novel/logs/today.json',
         content: '{}',
-      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      }, runtime)).rejects.toThrow('不能指向应用内部文件')
 
       // validateInput 层同样拦（第一道闸）
       expect(() => createFileTool.validateInput({
         path: '.novel/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('.novai/ 配置目录整体禁写（与 novel.config.json 同级受保护，仅 app service 层可写）', () => {
       expect(() => createFileTool.validateInput({
         path: '.novai/session-state.json',
         content: '{}',
-      })).toThrow('不能指向项目内部文件')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: '.novai/session-state.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件')
+      })).toThrow('不能指向应用内部文件')
 
       // 大小写变体同样被拒（APFS 大小写不敏感）
       expect(() => createFileTool.validateInput({
         path: '.NOVAI/other.json',
         content: 'x',
-      })).toThrow('不能指向项目内部文件')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('EditFile 禁止改 .novel/ 与 novel.config.json（validateInput 层拦截）', () => {
@@ -509,39 +509,46 @@ describe('file tools', () => {
         path: 'novel.config.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: '.novel/sessions/s1.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('大小写变体同样被拒（APFS 大小写不敏感，Novel.Config.JSON 命中真实配置）', () => {
       expect(() => createFileTool.validateInput({
         path: '.NOVEL/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: 'Novel.Config.JSON',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: '.Novel/Spill/abc.txt',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('spill 文件仍禁写/删/改名（只放行读）', () => {
       expect(() => deleteFileTool.validateInput({ path: '.novel/spill/abc.txt' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+        .toThrow('不能指向应用内部文件')
       expect(() => renameFileTool.validateInput({ fromPath: 'a.md', toPath: '.novel/spill/b.txt' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+        .toThrow('不能指向应用内部文件')
+    })
+
+    it('报错为教学式文案（D5）：参数标签前缀 + 边界 + 密钥原因 + 出路', () => {
+      expect(() => createFileTool.validateInput({ path: 'novel.config.json', content: 'x' }))
+        .toThrow('CreateFile.path 不能指向应用内部文件。novel.config.json（项目配置，含模型密钥）')
+      expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
+        .toThrow('其余请直接询问用户，不要尝试读取配置文件')
     })
   })
 
@@ -608,14 +615,14 @@ describe('file tools', () => {
       expect(output.content).toBe('spill 完整内容')
 
       expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
       expect(() => readFileTool.validateInput({ path: '.novel/sessions/s1.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
       expect(() => readFileTool.validateInput({ path: 'novel.config.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
       // 大小写变体同规则
       expect(() => readFileTool.validateInput({ path: '.NOVEL/logs/today.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
     })
   })
 
