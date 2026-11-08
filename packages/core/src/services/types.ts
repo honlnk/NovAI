@@ -643,7 +643,7 @@ export type AgentUiEvent =
   | { type: 'tool-call'; sessionId: string; toolCall: ToolCallView }
   | { type: 'tool-result'; sessionId: string; toolResult: ToolResultView }
   /** 写工具落盘后广播（载荷为完整账本记录）；文件树刷新用。 */
-  | { type: 'file-changed'; sessionId: string; file: FileChangeRecordView }
+  | { type: 'file-changed'; projectId: string; sessionId: string; file: FileChangeRecordView }
   /** 收件箱任何变化（入队/抽干/编辑/删除）时广播全量快照。 */
   | { type: 'queue-updated'; sessionId: string; queue: QueuedMessageView[] }
   | { type: 'confirmation-required'; sessionId: string; request: FileChangeConfirmationView }

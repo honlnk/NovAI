@@ -810,6 +810,7 @@ function createSessionEventForwarder(session: ChatSessionState, ledgerBaseline: 
     for (; emittedLedgerCount < ledger.length; emittedLedgerCount += 1) {
       broadcastAgentEvent({
         type: 'file-changed',
+        projectId: session.projectId,
         sessionId: session.sessionId,
         file: toFileChangeRecordView(ledger[emittedLedgerCount]),
       })

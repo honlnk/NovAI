@@ -334,12 +334,13 @@ export const useProjectStore = defineStore('project', () => {
    */
   async function probeFile(
     path: string,
+    targetProjectId?: string,
   ): Promise<
     | { kind: 'ok'; file: FileContentView }
     | { kind: 'missing' }
     | { kind: 'unreadable'; message: string }
   > {
-    const projectId = currentProject.value?.id
+    const projectId = targetProjectId ?? currentProject.value?.id
     if (!projectId) {
       return { kind: 'unreadable', message: '没有打开的项目' }
     }
@@ -369,12 +370,12 @@ export const useProjectStore = defineStore('project', () => {
   async function saveFile(
     path: string,
     content: string,
-    options?: { expectedUpdatedAt?: string; force?: boolean },
+    options?: { expectedUpdatedAt?: string; force?: boolean; projectId?: string },
   ): Promise<SaveFileOutcome> {
-    if (!currentProject.value) {
+    const projectId = options?.projectId ?? currentProject.value?.id
+    if (!projectId) {
       return { ok: false, conflict: false, message: '没有打开的项目' }
     }
-    const projectId = currentProject.value.id
 
     errorMessage.value = ''
 
@@ -406,11 +407,15 @@ export const useProjectStore = defineStore('project', () => {
    * 用。目标已存在时失败（exists=true，提示另选名称），绝不覆盖既有文件；
    * 不触碰 activeFile——打开新文件由调用方决定。
    */
-  async function createFileCopy(path: string, content: string): Promise<CreateFileOutcome> {
-    if (!currentProject.value) {
+  async function createFileCopy(
+    path: string,
+    content: string,
+    options?: { projectId?: string },
+  ): Promise<CreateFileOutcome> {
+    const projectId = options?.projectId ?? currentProject.value?.id
+    if (!projectId) {
       return { ok: false, exists: false, message: '没有打开的项目' }
     }
-    const projectId = currentProject.value.id
 
     errorMessage.value = ''
 
@@ -444,10 +449,15 @@ export const useProjectStore = defineStore('project', () => {
 
     errorMessage.value = ''
 
+    const projectId = currentProject.value.id
     try {
+      const files = await refreshFiles(projectId)
+      if (currentProject.value?.id !== projectId) {
+        return
+      }
       currentProject.value = {
         ...currentProject.value,
-        files: await refreshFiles(currentProject.value.id),
+        files,
       }
       await syncRecentProjectCounts()
       statusMessage.value = '文件树已刷新'

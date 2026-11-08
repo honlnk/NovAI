@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   _setDraftBackupStoreForTest,
+  buildDraftKey,
+  loadProjectDraftBackups,
   type DraftBackupStore,
   type PersistedDraftRecord,
 } from './draft-backup'
@@ -94,6 +96,15 @@ describe('useFileDrafts 草稿表', () => {
     expect(entry?.content).toBe('草稿内容')
     expect(entry?.baseContent).toBe('磁盘基线')
     expect(entry?.originPath).toBe('chapters/old.txt')
+  })
+
+  it('重命名迁移后继续编辑仍保留来源路径与持久化元数据', async () => {
+    setFileDraft('proj-a', 'chapters/old.txt', '草稿内容', '磁盘基线')
+    moveFileDraft('proj-a', 'chapters/old.txt', 'chapters/new.txt')
+    setFileDraft('proj-a', 'chapters/new.txt', '继续编辑', '新文件基线')
+    expect(getFileDraftEntry('proj-a', 'chapters/new.txt')?.originPath).toBe('chapters/old.txt')
+    await loadProjectDraftBackups('proj-a')
+    expect(store.records.get(buildDraftKey('proj-a', 'chapters/new.txt'))?.originPath).toBe('chapters/old.txt')
   })
 
   it('moveFileDraft 对无草稿路径是安全空操作', () => {

@@ -250,6 +250,26 @@ describe('projectStore.openFile 文件选择代次（验收2 文件面）', () =
   })
 })
 
+describe('projectStore 文件树刷新归属', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    writeFile.mockReset()
+  })
+
+  it('旧项目刷新晚到：不得把当前项目替换回旧项目快照', async () => {
+    const store = useProjectStore()
+    store.currentProject = fakeProject('proj-甲', '甲')
+    const refreshFiles = vi.mocked((await import('@novai/core/services/file-service')).refreshFiles)
+    let releaseOld!: (value: never) => void
+    refreshFiles.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve }))
+    const refreshing = store.refreshTree()
+    store.currentProject = fakeProject('proj-乙', '乙')
+    releaseOld([] as never)
+    await refreshing
+    expect(store.currentProject.id).toBe('proj-乙')
+  })
+})
+
 describe('projectStore.createFileCopy 副本新建语义', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

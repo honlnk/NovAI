@@ -130,6 +130,7 @@ function captureListener(): (event: AgentUiEvent) => void {
 describe('chat store（W4 事件总线版）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'project-1', name: '项目一', files: [] } as never
     vi.clearAllMocks()
     vi.unstubAllGlobals()
     mockedListSessions.mockResolvedValue([])
@@ -314,10 +315,10 @@ describe('chat store（W4 事件总线版）', () => {
       at: '2026-09-19T00:00:00.000Z',
       change: { type: 'updated' as const, path },
     })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-1', 'a.md') })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-2', 'b.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-1', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-2', 'b.md') })
     // 同文件再改一次：不重复占位
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-3', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-3', 'a.md') })
     expect(store.changedFiles).toEqual([
       { type: 'updated', path: 'b.md' },
       { type: 'updated', path: 'a.md' },
@@ -337,14 +338,14 @@ describe('chat store（W4 事件总线版）', () => {
       at: '2026-09-19T00:00:00.000Z',
       change: { type: 'updated' as const, path },
     })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-1', 'a.md') })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-2', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-1', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-2', 'a.md') })
     // 清单层去重后 a.md 只占一位；lastFileChange 仍逐条前进（内容面板每次都要重读）
     expect(store.changedFiles).toHaveLength(1)
     expect(store.lastFileChange).toMatchObject({ id: 'c-2' })
 
     // 别的会话的事件不串扰
-    emit({ type: 'file-changed', sessionId: 'session-stale', file: record('c-x', 'x.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-stale', file: record('c-x', 'x.md') })
     expect(store.lastFileChange).toMatchObject({ id: 'c-2' })
 
     // 切换会话重置，避免旧会话残留触发误重读
@@ -533,6 +534,27 @@ describe('chat store（W4 事件总线版）', () => {
     await second
     expect(store.messages).toHaveLength(200)
     expect(store.loadingOlder).toBe(false)
+  })
+
+  it('翻页等待期间新消息到达：旧页只 prepend，不回退当前消息与标题', async () => {
+    const store = useChatStore()
+    const { windowedView, allMessages, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+    const emit = captureListener()
+    let resolvePage!: (page: { messages: ChatSessionView['messages']; start: number }) => void
+    mockedLoadOlderMessages.mockImplementation(() => new Promise((resolve) => { resolvePage = resolve }))
+    const loading = store.loadOlderHistory()
+    emit({
+      type: 'message', sessionId: 'session-current',
+      message: { id: 'new-live', role: 'assistant', kind: 'text', text: '等待翻页时的新消息', createdAt: '2026-11-08T12:00:00.000Z' },
+    })
+    store.sessionView = { ...store.sessionView!, title: '最新标题' }
+    resolvePage({ messages: allMessages.slice(start - HISTORY_PAGE_SIZE, start), start: start - HISTORY_PAGE_SIZE })
+    await loading
+    expect(store.sessionView?.title).toBe('最新标题')
+    expect(store.messages.some((message) => message.id === 'new-live')).toBe(true)
+    expect(store.messages).toHaveLength(201)
   })
 
   it('loadOlderHistory 翻到顶：空页落地后 hasMoreHistory 归 false', async () => {
@@ -880,6 +902,7 @@ describe('chat store（W4 事件总线版）', () => {
     } as const
 
     // 未打开项目（currentProject 为空）：不进列表
+    useProjectStore().currentProject = null
     emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
     expect(store.sessions.some((s) => s.sessionId === 'session-em')).toBe(false)
     expect(mockedListSessions).not.toHaveBeenCalled()
@@ -913,6 +936,7 @@ describe('chat store（W4 事件总线版）', () => {
 describe('initSessions 首选会话恢复（工作区现场恢复 §3.4）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'project-1', name: '项目一', files: [] } as never
     vi.clearAllMocks()
     mockedIsAgentRunActive.mockReturnValue(false)
     mockedSubscribeAgentEvents.mockReturnValue(() => {})
@@ -980,6 +1004,7 @@ describe('initSessions 首选会话恢复（工作区现场恢复 §3.4）', () 
 describe('会话归档（交互优化计划 §3）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'project-1', name: '项目一', files: [] } as never
     vi.clearAllMocks()
     mockedIsAgentRunActive.mockReturnValue(false)
     mockedSubscribeAgentEvents.mockReturnValue(() => {})

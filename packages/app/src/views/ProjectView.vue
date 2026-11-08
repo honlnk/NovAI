@@ -270,6 +270,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  workspaceGeneration += 1
   indexStore.dispose()
   teardownDraftBackup?.()
   window.removeEventListener('beforeunload', handleBeforeUnload)
@@ -614,7 +615,11 @@ async function handleSelectFile(path: string) {
  * ——成功由面板「已保存」承载，失败/版本冲突在面板内保留草稿并给出出口，不再弹 toast。
  * 写盘后由 store 更新 activeFile（同步最新 updatedAt），草稿 isDirty 自动回落。
  */
-function handleFileSave(path: string, content: string, options?: { expectedUpdatedAt?: string; force?: boolean }) {
+function handleFileSave(
+  path: string,
+  content: string,
+  options?: { expectedUpdatedAt?: string; force?: boolean; projectId?: string },
+) {
   return projectStore.saveFile(path, content, options)
 }
 

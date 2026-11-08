@@ -119,6 +119,38 @@ export function _setDraftBackupStoreForTest(replacement: DraftBackupStore | null
 
 const pendingWrites = new Map<string, PersistedDraftRecord>()
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** 同一草稿键的写入、删除与 flush 串行，避免旧写晚到覆盖新稿或复活已清除记录。 */
+const backupOperations = new Map<string, Promise<void>>()
+
+function enqueueBackupOperation(key: string, operation: () => Promise<void>): Promise<void> {
+  const previous = backupOperations.get(key) ?? Promise.resolve()
+  const run = previous.catch(() => {}).then(operation)
+  backupOperations.set(key, run)
+  const cleanup = () => {
+    if (backupOperations.get(key) === run) {
+      backupOperations.delete(key)
+    }
+  }
+  void run.then(cleanup, cleanup)
+  return run
+}
+
+async function writeLatestPending(key: string): Promise<void> {
+  const record = pendingWrites.get(key)
+  if (!record) {
+    return
+  }
+  try {
+    await store.put(record)
+    // 写入期间又产生了新稿：只确认本次快照，不得吞掉较新的待写记录。
+    if (pendingWrites.get(key) === record) {
+      pendingWrites.delete(key)
+    }
+  } catch (error) {
+    // 写入失败保留在 pending，由下一次调度或 flushDraftBackup 重试。
+    console.warn('[novai] 草稿备份写入失败，将在下次时机重试', error)
+  }
+}
 
 /** 记录一条草稿备份（去抖）；草稿表每次变更（set/move）调用 */
 export function scheduleDraftBackup(
@@ -144,24 +176,9 @@ export function scheduleDraftBackup(
     key,
     setTimeout(() => {
       debounceTimers.delete(key)
-      void writePending(key)
+      void enqueueBackupOperation(key, () => writeLatestPending(key))
     }, DRAFT_BACKUP_DEBOUNCE_MS),
   )
-}
-
-async function writePending(key: string): Promise<void> {
-  const record = pendingWrites.get(key)
-  if (!record) {
-    return
-  }
-  try {
-    await store.put(record)
-    pendingWrites.delete(key)
-  } catch (error) {
-    // 写入失败保留在 pending，由下一次调度或 flushDraftBackup 重试；
-    // 备份失败不阻断编辑（内存表仍是本会话的权威状态）
-    console.warn('[novai] 草稿备份写入失败，将在下次时机重试', error)
-  }
 }
 
 /** 删除一条草稿备份（保存成功清除本次绑定的草稿、用户明确放弃时调用）——立即执行 */
@@ -173,8 +190,12 @@ export function removeDraftBackup(projectId: string, path: string): void {
     debounceTimers.delete(key)
   }
   pendingWrites.delete(key)
-  void store.delete(key).catch((error) => {
-    console.warn('[novai] 草稿备份删除失败', error)
+  void enqueueBackupOperation(key, async () => {
+    try {
+      await store.delete(key)
+    } catch (error) {
+      console.warn('[novai] 草稿备份删除失败', error)
+    }
   })
 }
 
@@ -186,14 +207,7 @@ export async function flushDraftBackup(): Promise<void> {
   debounceTimers.clear()
   const records = [...pendingWrites.values()]
   await Promise.all(
-    records.map(async (record) => {
-      try {
-        await store.put(record)
-        pendingWrites.delete(record.key)
-      } catch (error) {
-        console.warn('[novai] 草稿备份落盘失败，保留待重试', error)
-      }
-    }),
+    records.map((record) => enqueueBackupOperation(record.key, () => writeLatestPending(record.key))),
   )
 }
 
@@ -234,4 +248,5 @@ export function _resetDraftBackupForTest(): void {
   }
   debounceTimers.clear()
   pendingWrites.clear()
+  backupOperations.clear()
 }

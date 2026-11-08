@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { AgentUiEvent, ChatSessionView } from '@novai/core/services/types'
 
 import { useChatStore } from './chat'
+import { useProjectStore } from './project'
 
 /**
  * 选择归属与运行身份的乱序事件序（数据安全计划第二波 F6/F8/F9 自动化验收 1/2/5/6/7）：
@@ -73,6 +74,7 @@ function emitEvent(event: AgentUiEvent) {
 describe('F6 会话选择代次（验收1：甲慢乙快，最终只展示乙）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
     getAgentSession.mockReset()
     createAgentSession.mockReset()
     listAgentSessions.mockReset().mockResolvedValue([])
@@ -161,6 +163,7 @@ describe('F6 会话选择代次（验收1：甲慢乙快，最终只展示乙）
 describe('F8 运行身份（验收5：旧运行完成晚于新运行消息）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
     getAgentSession.mockReset()
     createAgentSession.mockReset()
     listAgentSessions.mockReset().mockResolvedValue([])
@@ -261,6 +264,7 @@ describe('F8 运行身份（验收5：旧运行完成晚于新运行消息）', 
 describe('F9 后台会话归属（验收7：后台变化不清当前确认与现场）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
     getAgentSession.mockReset()
     createAgentSession.mockReset()
     listAgentSessions.mockReset().mockResolvedValue([])
@@ -282,6 +286,7 @@ describe('F9 后台会话归属（验收7：后台变化不清当前确认与现
     // 后台委派会话的文件改动与队列变化
     emitEvent({
       type: 'file-changed',
+      projectId: 'proj-1',
       sessionId: '后台会话',
       file: {
         id: 'r1',

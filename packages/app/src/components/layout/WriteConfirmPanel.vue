@@ -15,6 +15,7 @@ import { clearFileDraft, getFileDraftEntry, type DraftEntry } from '../../compos
 import { buildLineDiffRows, countLineDiff } from '../../utils/text-diff'
 import { applyEditCandidate, resolveConfirmDraftBranch, type ConfirmDraftBranch } from '../../utils/confirm-draft'
 import { suggestCopyPath } from '../../utils/file-tree'
+import { applyDraftAfterSave, resolveDraftAfterSave } from '../../utils/save-outcome'
 
 /**
  * 内容写入确认面板（交互优化计划 §8 + 数据安全计划 §3-5）：新建与正文编辑确认
@@ -138,17 +139,24 @@ let probeGeneration = 0
 
 async function loadDisk() {
   const c = candidate.value
-  if (!c) return
+  const projectIdNow = projectId.value
+  if (!c || !projectIdNow) return
+  const confirmationId = props.confirmation.id
+  const path = c.path
   const generation = ++probeGeneration
   loadingDisk.value = true
   diskUnreadableMessage.value = ''
   draftActionError.value = ''
   try {
-    const projectIdNow = projectId.value
-    draftEntry.value = projectIdNow ? getFileDraftEntry(projectIdNow, c.path) ?? null : null
-    const probe = await projectStore.probeFile(c.path)
+    draftEntry.value = getFileDraftEntry(projectIdNow, c.path) ?? null
+    const probe = await projectStore.probeFile(c.path, projectIdNow)
     // 读取期间已切到别的确认/项目：本次结果过期，直接丢弃
-    if (generation !== probeGeneration) {
+    if (
+      generation !== probeGeneration
+      || projectId.value !== projectIdNow
+      || props.confirmation.id !== confirmationId
+      || candidate.value?.path !== path
+    ) {
       return
     }
     if (probe.kind === 'ok') {
@@ -164,7 +172,7 @@ async function loadDisk() {
       probe: probe.kind === 'ok'
         ? { kind: 'ok', content: probe.file.content }
         : probe.kind === 'missing'
-          ? { kind: 'missing' }
+          ? (isCreate.value ? { kind: 'ok', content: '' } : { kind: 'missing' })
           : { kind: 'unreadable' },
       draftEntry: draftEntry.value,
       isCreate: isCreate.value,
@@ -183,7 +191,7 @@ async function loadDisk() {
 }
 
 watch(
-  () => props.confirmation.id,
+  () => [props.confirmation.id, projectId.value, candidate.value?.path] as const,
   () => {
     staleState.value = 'idle'
     draftBranch.value = 'none'
@@ -204,25 +212,31 @@ watch(
 async function handleSaveDraft() {
   const c = candidate.value
   const entry = draftEntry.value
-  if (!c || !entry || draftActionBusy.value) return
+  const targetProjectId = projectId.value
+  if (!c || !entry || !targetProjectId || draftActionBusy.value) return
   const confirmationId = props.confirmation.id
   draftActionBusy.value = true
   draftActionError.value = ''
   try {
-    const outcome = await projectStore.saveFile(c.path, entry.content)
-    // 写盘期间已切到别的确认：草稿清除按路径照做，错误反馈不污染新确认
-    if (props.confirmation.id !== confirmationId) {
-      if (outcome.ok && projectId.value) {
-        clearFileDraft(projectId.value, c.path)
-      }
+    const outcome = await projectStore.saveFile(c.path, entry.content, {
+      projectId: targetProjectId,
+      ...(draftBranch.value === 'draft-diverged' ? { force: true } : {}),
+    })
+    // 草稿清除固定属于写入的项目；跨项目返回不得触碰新项目同路径草稿。
+    if (outcome.ok) {
+      // 只清理本次落盘快照；等待期间若草稿已更新，保留更新并按已保存内容重定基线。
+      applyDraftAfterSave(
+        targetProjectId,
+        c.path,
+        resolveDraftAfterSave(getFileDraftEntry(targetProjectId, c.path)?.content, outcome.file.content),
+      )
+    }
+    if (props.confirmation.id !== confirmationId || projectId.value !== targetProjectId) {
       return
     }
     if (!outcome.ok) {
       draftActionError.value = outcome.message
       return
-    }
-    if (projectId.value) {
-      clearFileDraft(projectId.value, c.path)
     }
     copySavedNotice.value = ''
     await loadDisk()
@@ -238,7 +252,8 @@ async function handleSaveDraft() {
 async function handleKeepCopyDraft() {
   const c = candidate.value
   const entry = draftEntry.value
-  if (!c || !entry || draftActionBusy.value) return
+  const targetProjectId = projectId.value
+  if (!c || !entry || !targetProjectId || draftActionBusy.value) return
   if (!copyTarget.value.trim()) {
     draftActionError.value = '请填写副本文件名'
     return
@@ -247,8 +262,8 @@ async function handleKeepCopyDraft() {
   draftActionError.value = ''
   const confirmationId = props.confirmation.id
   try {
-    const outcome = await projectStore.createFileCopy(copyTarget.value.trim(), entry.content)
-    if (props.confirmation.id !== confirmationId) {
+    const outcome = await projectStore.createFileCopy(copyTarget.value.trim(), entry.content, { projectId: targetProjectId })
+    if (props.confirmation.id !== confirmationId || projectId.value !== targetProjectId) {
       // 已切确认：副本按新建语义照常存在，反馈不污染新确认
       return
     }
@@ -258,7 +273,7 @@ async function handleKeepCopyDraft() {
     }
     copySavedNotice.value = `草稿已另存为副本：${copyTarget.value.trim()}`
     if (projectId.value) {
-      clearFileDraft(projectId.value, c.path)
+      clearFileDraft(targetProjectId, c.path)
     }
     copyRenameOpen.value = false
     await loadDisk()
@@ -283,28 +298,83 @@ function openCopyRename() {
  */
 async function handleConfirm() {
   const c = candidate.value
-  if (!c || deciding.value || staleState.value !== 'idle' || !canDirectConfirm.value) return
+  const targetProjectId = projectId.value
+  if (!c || !targetProjectId || deciding.value) return
+  // 「文件不存在」横幅内的「仍要同意」也走本复检（不直接 emit）：有人工草稿或
+  // 磁盘不可读时仍不能同意；missing 分支放行由下方 fresh 复核决定。
+  if (!canDirectConfirm.value && draftBranch.value !== 'missing') return
   const confirmationId = props.confirmation.id
+  const path = c.path
   deciding.value = true
   try {
-    const fresh = await projectStore.peekFile(c.path)
-    // 复检期间已切确认：结果不进入新确认的预览（confirm 不发出）
-    if (props.confirmation.id !== confirmationId) {
+    const fresh = await projectStore.probeFile(c.path, targetProjectId)
+    // 复检期间切确认/项目/目标路径：旧结果不进入新现场确认或触发同意。
+    if (
+      props.confirmation.id !== confirmationId
+      || candidate.value?.path !== path
+      || projectId.value !== targetProjectId
+    ) {
+      return
+    }
+    // 草稿表是运行期权威：归属核对后再读一次，不能凭初始快照绕过后来出现的草稿。
+    const freshDraftEntry = getFileDraftEntry(targetProjectId, c.path) ?? null
+    draftEntry.value = freshDraftEntry
+    if (fresh.kind === 'unreadable') {
+      diskUnreadableMessage.value = fresh.message
+      draftBranch.value = 'unreadable'
+      return
+    }
+    if (fresh.kind === 'missing') {
+      if (c.kind === 'create' && draftBranch.value === 'missing' && diskFile.value !== null && !freshDraftEntry) {
+        // 此前因目标被占用而暂停；复检时已释放，可回到正常新建确认。
+        draftBranch.value = freshDraftEntry ? 'draft-clean' : 'none'
+        diskFile.value = null
+        staleState.value = 'idle'
+        return
+      }
+      if (draftBranch.value === 'missing' && diskFile.value === null && !freshDraftEntry) {
+        // 编辑目标在初次复检和本次明确「仍要同意」时均不存在，交给工具真实执行。
+        emit('confirm')
+        return
+      }
+      if (draftBranch.value === 'missing' && diskFile.value !== null && freshDraftEntry) {
+        draftBranch.value = freshDraftEntry.baseContent === diskFile.value.content ? 'draft-clean' : 'draft-diverged'
+      } else {
+        draftBranch.value = 'missing'
+      }
+      staleState.value = 'missing'
+      return
+    }
+    if (c.kind === 'create') {
+      diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
+      staleState.value = 'missing'
+      draftBranch.value = 'missing'
+      return
+    }
+    if (freshDraftEntry) {
+      // 无论初次审阅还是「仍要同意」，最新人工草稿都必须先处理。
+      draftBranch.value = freshDraftEntry.baseContent === fresh.file.content ? 'draft-clean' : 'draft-diverged'
+      diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
+      staleState.value = fresh.file.content.includes(c.oldText) ? 'idle' : 'missing'
+      return
+    }
+    if (draftBranch.value === 'missing' && diskFile.value === null) {
+      // 已明确点击「文件不存在→仍要同意」，但复检时文件已恢复：按最新版本重新审阅。
+      diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
+      draftBranch.value = 'none'
+      staleState.value = fresh.file.content.includes(c.oldText) ? 'idle' : 'missing'
       return
     }
     if (c.kind === 'edit') {
-      if (!fresh || !fresh.content.includes(c.oldText)) {
+      if (!fresh.file.content.includes(c.oldText)) {
         staleState.value = 'missing'
         return
       }
-      if (hashContent(fresh.content) !== diskFile.value?.hash) {
+      if (hashContent(fresh.file.content) !== diskFile.value?.hash) {
         staleState.value = 'changed'
-        diskFile.value = { content: fresh.content, hash: hashContent(fresh.content) }
+        diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
         return
       }
-    } else if (fresh) {
-      staleState.value = 'missing'
-      return
     }
     emit('confirm')
   } finally {
@@ -443,7 +513,8 @@ const staleExplain = computed(() => {
       <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
       <div class="min-w-0 flex-1 leading-5">
         <p>{{ isCreate ? '目标文件已存在，无法按「新建」写入。' : '目标文件在磁盘上已不存在。' }}</p>
-        <p>可拒绝此请求，或仍要同意（以真实工具结果为准，工具会自行报错或按实际情况执行）。</p>
+        <p v-if="isCreate">可拒绝此请求，或等待目标路径释放后重新校验；新建操作不会覆盖已有文件。</p>
+        <p v-else>可拒绝此请求，或仍要同意（以真实工具结果为准，工具会自行报错或按实际情况执行）。</p>
       </div>
       <div class="flex shrink-0 gap-2">
         <button
@@ -452,9 +523,10 @@ const staleExplain = computed(() => {
           @click="loadDisk"
         >重新校验</button>
         <button
+          v-if="!isCreate"
           type="button"
           class="rounded px-2 py-0.5 font-medium text-amber-800 underline-offset-2 hover:underline"
-          @click="emit('confirm')"
+          @click="handleConfirm"
         >仍要同意（以工具结果为准）</button>
       </div>
     </div>
@@ -478,7 +550,7 @@ const staleExplain = computed(() => {
           <button
             type="button"
             class="rounded px-2 py-0.5 font-medium text-amber-800 underline-offset-2 hover:underline"
-            @click="emit('confirm')"
+            @click="handleConfirm"
           >仍要同意（以工具结果为准）</button>
         </div>
       </div>

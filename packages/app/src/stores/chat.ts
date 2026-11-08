@@ -43,6 +43,7 @@ export type RunStatusType = 'idle' | 'running' | 'error'
 
 /** 实时文件改动 + 产生它的会话（定位高亮据此判定「是否当前会话的改动」） */
 export type RecentFileChange = {
+  projectId: string
   sessionId: string
   record: FileChangeRecordView
 }
@@ -140,6 +141,9 @@ export const useChatStore = defineStore('chat', () => {
   // 当前激活会话 id（高亮 + 事件路由用）
   const activeSessionId = ref<string | null>(null)
   const isLoadingSessions = ref(false)
+  /** 列表读取按项目与发起序隔离；项目切换也会使旧选择失效。 */
+  let sessionListGeneration = 0
+  let activeProjectId: string | null = null
   /**
    * 各会话的运行中标记（事件驱动，会话列表「进行中」筛选与状态徽标的实时来源）：
    * run-start 记入、run-finish/run-error 以 driver 注册表真实状态收敛。
@@ -204,9 +208,13 @@ export const useChatStore = defineStore('chat', () => {
   /** 登记一条后台保存失败（同会话最新一次覆盖） */
   function recordSessionSaveFailure(event: {
     sessionId: string
+    projectId: string
     reason: string
     message: string
   }) {
+    if (useProjectStore().currentProject?.id !== event.projectId) {
+      return
+    }
     sessionSaveFailures.value = new Map(sessionSaveFailures.value).set(event.sessionId, {
       sessionId: event.sessionId,
       reason: event.reason,
@@ -250,8 +258,15 @@ export const useChatStore = defineStore('chat', () => {
    * 记录缺失/失效回退最近一条，无历史则新建。
    * 取代旧的 ensureSessionView（后者只支持单会话）。
    */
+  /** 测试与独立列表场景建立项目归属，不创建或切换会话。 */
+  function setSessionProjectForTest(projectId: string): void {
+    activeProjectId = projectId
+  }
+
   async function initSessions(projectId: string, preferredSessionId?: string | null): Promise<ChatSessionView> {
     // 进入新项目：上一项目的后台保存失败记录、运行身份与删除墓碑不再有意义（§3-4/F8/F12）
+    activeProjectId = projectId
+    sessionSelectionGeneration += 1
     sessionSaveFailures.value = new Map()
     latestRunIdBySession.clear()
     deletedSessionIds.clear()
@@ -287,11 +302,20 @@ export const useChatStore = defineStore('chat', () => {
    * （如 deleteSession）自行处理，避免列表刷新与激活态维护耦合产生的竞态误清。
    */
   async function loadSessions(projectId: string) {
+    const generation = ++sessionListGeneration
+    const initialProjectId = activeProjectId
+    const hasCurrentProject = useProjectStore().currentProject !== null
     isLoadingSessions.value = true
     try {
-      sessions.value = await listAgentSessions(projectId)
+      const loaded = await listAgentSessions(projectId)
+      const currentProjectId = useProjectStore().currentProject?.id
+      if (generation === sessionListGeneration && activeProjectId === projectId && initialProjectId === projectId && (!hasCurrentProject || currentProjectId === projectId)) {
+        sessions.value = loaded
+      }
     } finally {
-      isLoadingSessions.value = false
+      if (generation === sessionListGeneration) {
+        isLoadingSessions.value = false
+      }
     }
   }
 
@@ -315,13 +339,16 @@ export const useChatStore = defineStore('chat', () => {
 
   /** 切换到指定历史会话：只装尾部一页消息窗口（长会话分页防线）并设为激活。 */
   async function selectSession(projectId: string, sessionId: string): Promise<ChatSessionView | null> {
+    if (activeProjectId === null) {
+      activeProjectId = projectId
+    }
     const generation = ++sessionSelectionGeneration
     const view = await getAgentSession(projectId, sessionId, { tailMessages: HISTORY_PAGE_SIZE })
     if (!view) {
       return null
     }
-    // 读取期间已有更新的选择意图：过期结果不改变当前现场
-    if (generation !== sessionSelectionGeneration) {
+    // 读取期间已有更新的选择意图或已切项目：过期结果不改变当前现场
+    if (generation !== sessionSelectionGeneration || activeProjectId !== projectId) {
       return null
     }
 
@@ -368,8 +395,8 @@ export const useChatStore = defineStore('chat', () => {
         return false
       }
       sessionView.value = {
-        ...view,
-        messages: [...page.messages, ...view.messages],
+        ...sessionView.value,
+        messages: [...page.messages, ...sessionView.value.messages],
       }
       historyStart.value = page.start
       return true
@@ -391,6 +418,9 @@ export const useChatStore = defineStore('chat', () => {
     projectId: string,
     options: { skipReload?: boolean; agent?: AgentRoleId } = {},
   ): Promise<ChatSessionView> {
+    if (activeProjectId === null) {
+      activeProjectId = projectId
+    }
     const generation = ++sessionSelectionGeneration
     const view = await createAgentSession(
       projectId,
@@ -398,7 +428,7 @@ export const useChatStore = defineStore('chat', () => {
     )
     // 连续新建（无会话时快速点两次）：后发起的创建是最新意图，先完成的旧结果不抢占
     // 激活现场；会话本身已落盘，列表仍要如实反映
-    if (generation === sessionSelectionGeneration) {
+    if (generation === sessionSelectionGeneration && activeProjectId === projectId) {
       sessionView.value = view
       activeSessionId.value = view.sessionId
       changedFiles.value = []
@@ -410,7 +440,7 @@ export const useChatStore = defineStore('chat', () => {
       isStopping.value = false
     }
 
-    if (options.skipReload) {
+    if (options.skipReload && activeProjectId === projectId) {
       sessions.value = [{
         sessionId: view.sessionId,
         projectId,
@@ -421,7 +451,7 @@ export const useChatStore = defineStore('chat', () => {
         updatedAt: view.updatedAt ?? new Date().toISOString(),
         messageCount: 0,
       }, ...sessions.value]
-    } else {
+    } else if (!options.skipReload && activeProjectId === projectId) {
       await loadSessions(projectId)
     }
     return view
@@ -692,9 +722,12 @@ export const useChatStore = defineStore('chat', () => {
     // 文件变更的反馈队列全局保留（F9/F10）：后台会话的改动也带归属进通知（不抢现场）；
     // 会话级清单与 lastFileChange 仍只跟随激活会话
     if (event.type === 'file-changed') {
+      if (useProjectStore().currentProject?.id !== event.projectId) {
+        return
+      }
       recentFileChanges.value = [
         ...recentFileChanges.value.slice(-29),
-        { sessionId: event.sessionId, record: event.file },
+        { projectId: event.projectId, sessionId: event.sessionId, record: event.file },
       ]
     }
 
@@ -1083,6 +1116,7 @@ export const useChatStore = defineStore('chat', () => {
     removeQueuedMessage,
     renameSession,
     selectSession,
+    setSessionProjectForTest,
     sendMessage,
     setRunStatus,
     skipCurrentQuestion,

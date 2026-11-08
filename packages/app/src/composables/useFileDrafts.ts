@@ -65,8 +65,18 @@ export function setFileDraft(projectId: string, path: string, content: string, b
     clearFileDraft(projectId, path)
     return
   }
-  projectBucket(projectId).set(path, { content, baseContent, updatedAt: new Date().toISOString() })
-  scheduleDraftBackup(projectId, path, { content, baseContent })
+  const previous = getFileDraftEntry(projectId, path)
+  projectBucket(projectId).set(path, {
+    content,
+    baseContent,
+    ...(previous?.originPath !== undefined ? { originPath: previous.originPath } : {}),
+    updatedAt: new Date().toISOString(),
+  })
+  scheduleDraftBackup(projectId, path, {
+    content,
+    baseContent,
+    ...(previous?.originPath !== undefined ? { originPath: previous.originPath } : {}),
+  })
 }
 
 /**

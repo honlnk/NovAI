@@ -28,6 +28,8 @@
     "@types/diff": "^8.0.0",
     "@types/markdown-it": "^14.1.2",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.5.1",
+    "happy-dom": "^21.0.4",
     "sass": "^1.98.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",

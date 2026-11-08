@@ -66,6 +66,7 @@ function seedActiveSession(store: ReturnType<typeof useChatStore>) {
 describe('F11 后台完成与失败（验收1：乙的摘要和通知更新，当前现场不变）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
     getAgentSession.mockReset()
     createAgentSession.mockReset()
     listAgentSessions.mockReset().mockResolvedValue([])
@@ -155,6 +156,7 @@ describe('F11 后台完成与失败（验收1：乙的摘要和通知更新，�
 describe('F12 删除运行中后台会话：残留清理与晚到不复活（验收3）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
     getAgentSession.mockReset()
     createAgentSession.mockReset()
     listAgentSessions.mockReset().mockResolvedValue([])
@@ -181,6 +183,7 @@ describe('F12 删除运行中后台会话：残留清理与晚到不复活（验
     })
     emitEvent({
       type: 'file-changed',
+      projectId: 'proj-1',
       sessionId: '乙',
       file: {
         id: 'r-乙',
@@ -219,6 +222,7 @@ describe('F12 删除运行中后台会话：残留清理与晚到不复活（验
     })
     emitEvent({
       type: 'file-changed',
+      projectId: 'proj-1',
       sessionId: '乙',
       file: {
         id: 'r-乙-2',
@@ -248,9 +252,72 @@ describe('F12 删除运行中后台会话：残留清理与晚到不复活（验
   })
 })
 
+describe('跨项目反馈隔离返修', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-2', name: '项目二', files: [] } as never
+    getAgentSession.mockReset()
+    createAgentSession.mockReset()
+    listAgentSessions.mockReset().mockResolvedValue([])
+    isAgentRunActive.mockReset().mockReturnValue(false)
+  })
+
+  it('旧项目文件变更与保存失败不进入新项目通知', () => {
+    const store = useChatStore()
+    seedActiveSession(store)
+    emitEvent({
+      type: 'file-changed', projectId: 'proj-1', sessionId: '乙',
+      file: { id: 'old', change: { type: 'updated', path: 'chapters/a.txt' }, coords: null, diff: null } as never,
+    })
+    emitEvent({ type: 'session-save-failed', projectId: 'proj-1', sessionId: '乙', reason: 'io', message: '旧项目失败' })
+    expect(store.recentFileChanges).toHaveLength(0)
+    expect(store.sessionSaveFailures.size).toBe(0)
+  })
+
+  it('旧项目新建会话晚到：不抢占现场，也不把旧项目摘要插入新列表', async () => {
+    const store = useChatStore()
+    store.activeSessionId = 'new'
+    store.sessionView = fakeView('new', 'proj-2')
+    store.sessions = [{ sessionId: 'new', title: '新项目', updatedAt: '2' }] as never
+    let releaseOld!: (value: ChatSessionView) => void
+    createAgentSession.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve }))
+    const creating = store.createNewSession('proj-1', { skipReload: true })
+    createAgentSession.mockResolvedValue(fakeView('new', 'proj-2'))
+    await store.initSessions('proj-2')
+    releaseOld(fakeView('old', 'proj-1'))
+    await creating
+
+    expect(store.activeSessionId).toBe('new')
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['new'])
+  })
+
+  it('旧项目列表读取晚于新项目列表：最终只保留新项目摘要', async () => {
+    getAgentSession.mockResolvedValue(fakeView('new', 'proj-2'))
+    createAgentSession.mockResolvedValue(fakeView('new', 'proj-2'))
+    const store = useChatStore()
+    const newProject = { id: 'proj-2', name: '项目二', files: [] } as never
+    useProjectStore().currentProject = newProject
+    store.sessionView = fakeView('new', 'proj-2')
+    store.activeSessionId = 'new'
+    // 独立列表刷新场景只建立项目归属，不创建或切换会话。
+    store.setSessionProjectForTest('proj-2')
+    let releaseOld!: (value: never) => void
+    listAgentSessions.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve }))
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
+    const oldLoad = store.loadSessions('proj-1')
+    useProjectStore().currentProject = { id: 'proj-2', name: '项目二', files: [] } as never
+    listAgentSessions.mockResolvedValueOnce([{ sessionId: 'new', title: '新项目', updatedAt: '2' }] as never)
+    await store.loadSessions('proj-2')
+    releaseOld([{ sessionId: 'old', title: '旧项目', updatedAt: '1' }] as never)
+    await oldLoad
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['new'])
+  })
+})
+
 describe('F11 保存失败与进入现场（错误持续性出口）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'proj-1', name: '项目一', files: [] } as never
     getAgentSession.mockReset()
     createAgentSession.mockReset()
     listAgentSessions.mockReset().mockResolvedValue([])

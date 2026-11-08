@@ -117,6 +117,60 @@ describe('draft-backup 草稿备份', () => {
     expect(store.records.get(buildDraftKey('p1', 'a.txt'))?.content).toBe('甲')
   })
 
+  it('同键旧写在途时继续编辑：旧写完成不吞掉新稿，flush 最终留下最新内容', async () => {
+    let releaseFirst!: () => void
+    let writes = 0
+    _setDraftBackupStoreForTest({
+      async put(record) {
+        writes += 1
+        if (writes === 1) {
+          await new Promise<void>((resolve) => { releaseFirst = resolve })
+        }
+        store.records.set(record.key, { ...record })
+      },
+      async delete(key) { store.records.delete(key) },
+      async listByProject(projectId) {
+        return [...store.records.values()].filter((record) => record.projectId === projectId)
+      },
+    })
+    scheduleDraftBackup('p1', 'a.txt', { content: '第一版', baseContent: '原' })
+    const first = flushDraftBackup()
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    expect(releaseFirst).toBeTypeOf('function')
+    scheduleDraftBackup('p1', 'a.txt', { content: '第二版', baseContent: '原' })
+    expect(releaseFirst).toBeTypeOf('function')
+    releaseFirst()
+    await first
+    expect(store.records.get(buildDraftKey('p1', 'a.txt'))?.content).toBe('第一版')
+    expect(_getPendingBackupKeysForTest()).toEqual([buildDraftKey('p1', 'a.txt')])
+
+    await flushDraftBackup()
+    expect(store.records.get(buildDraftKey('p1', 'a.txt'))?.content).toBe('第二版')
+    expect(_getPendingBackupKeysForTest()).toHaveLength(0)
+  })
+
+  it('同键旧写在途时明确清除：删除排在旧写之后，刷新不复活草稿', async () => {
+    let releaseFirst!: () => void
+    _setDraftBackupStoreForTest({
+      async put(record) {
+        await new Promise<void>((resolve) => { releaseFirst = resolve })
+        store.records.set(record.key, { ...record })
+      },
+      async delete(key) { store.records.delete(key) },
+      async listByProject(projectId) {
+        return [...store.records.values()].filter((record) => record.projectId === projectId)
+      },
+    })
+    scheduleDraftBackup('p1', 'a.txt', { content: '待清除', baseContent: '原' })
+    const writing = flushDraftBackup()
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    expect(releaseFirst).toBeTypeOf('function')
+    removeDraftBackup('p1', 'a.txt')
+    releaseFirst()
+    await writing
+    await vi.waitFor(() => expect(store.records.size).toBe(0))
+  })
+
   it('loadProjectDraftBackups 读失败抛错（调用方可感知，不静默置空）', async () => {
     _setDraftBackupStoreForTest({
       async put() {},
