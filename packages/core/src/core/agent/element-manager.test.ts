@@ -165,6 +165,42 @@ describe('createElementManagerTools', () => {
       toPath: 'prompts/角色甲.md',
     })).toThrowError(/源文件与目标文件都必须在 elements\//)
   })
+
+  it('创作心智目录不可见闸：ReadFile/FindFiles 撞 foreshadowing|rhythm 教学式报错', () => {
+    const tools = createElementManagerTools()
+
+    expect(() => tools.ReadFile!.core.validateInput({ path: 'foreshadowing/F-001-旧照片之谜.md' }))
+      .toThrowError(/创作心智目录/)
+    expect(() => tools.ReadFile!.core.validateInput({ path: 'rhythm/R-001-第001章节奏.md' }))
+      .toThrowError(/创作心智目录/)
+    expect(() => tools.FindFiles!.core.validateInput({ pattern: 'foreshadowing/**' }))
+      .toThrowError(/创作心智目录/)
+    expect(() => tools.FindFiles!.core.validateInput({ pattern: '**/rhythm/*.md' }))
+      .toThrowError(/创作心智目录/)
+    expect(() => tools.ListDirectory!.core.validateInput({ path: 'foreshadowing' }))
+      .toThrowError(/创作心智目录/)
+
+    // 大小写变体同样命中
+    expect(() => tools.ReadFile!.core.validateInput({ path: 'Foreshadowing/F-001.md' }))
+      .toThrowError(/创作心智目录/)
+  })
+
+  it('创作心智目录不可见闸：其余路径照常放行', () => {
+    const tools = createElementManagerTools()
+
+    expect(() => tools.ReadFile!.core.validateInput({ path: 'elements/characters/角色甲.md' })).not.toThrow()
+    expect(() => tools.FindFiles!.core.validateInput({ pattern: 'elements/**/*.md' })).not.toThrow()
+    expect(() => tools.FindFiles!.core.validateInput({ pattern: '**/*.md' })).not.toThrow()
+    expect(() => tools.ListDirectory!.core.validateInput({ path: 'elements' })).not.toThrow()
+  })
+
+  it('要素管理员 system prompt 不提及创作心智目录（结构段共用常量未污染）', () => {
+    const prompt = buildElementManagerSystemPrompt({ model: 'test-model' })
+    expect(prompt).not.toContain('foreshadowing')
+    expect(prompt).not.toContain('伏笔账本')
+    expect(prompt).not.toContain('rhythm')
+    expect(prompt).not.toContain('节奏卡')
+  })
 })
 
 describe('isAgentToolName', () => {

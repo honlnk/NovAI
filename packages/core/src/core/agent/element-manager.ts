@@ -116,8 +116,76 @@ export function buildElementSchemaReminder(content: string): string {
 }
 
 /**
+ * 创作心智目录（伏笔 foreshadowing/、节奏卡 rhythm/）对要素管理员整体不可见：
+ * 这些目录是「作者意图的登记」，要素管理员的工作方式（概括、合并、精简）对它们是灾难
+ * （设定账本管「是什么」，伏笔账本管「欠了什么」，两本账不能混）。读工具撞上即教学式报错。
+ */
+const CREATION_MIND_DIRECTORIES = ['foreshadowing', 'rhythm'] as const
+
+function isCreationMindPath(path: string): boolean {
+  const folded = path.toLowerCase()
+  return CREATION_MIND_DIRECTORIES.some(
+    (directory) => folded === directory || folded.startsWith(`${directory}/`),
+  )
+}
+
+function creationMindError(label: string): Error {
+  return new Error(
+    `${label} 不能指向创作心智目录（foreshadowing/ 伏笔、rhythm/ 节奏卡）。这些是作者对读者的「承诺账本」，`
+    + '由主智能体维护、对要素管理不可见，也不在要素整理范围内。如需了解伏笔或节奏安排，请列入汇报交用户处理。',
+  )
+}
+
+/** 读工具的路径参数做创作心智目录检查（ReadFile/FindFiles/ListDirectory 的 path 类字段）。 */
+function guardCreationMindInvisible(tool: AgentRunnableTool): AgentRunnableTool {
+  const pathFields: Record<string, readonly string[]> = {
+    ReadFile: ['path'],
+    FindFiles: ['pattern', 'path'],
+    ListDirectory: ['path'],
+  }
+  const fields = pathFields[tool.name]
+  if (!fields) {
+    return tool
+  }
+
+  return {
+    ...tool,
+    core: {
+      ...tool.core,
+      validateInput(input: unknown) {
+        const validated = tool.core.validateInput(input)
+        const record = validated as Record<string, unknown>
+
+        for (const field of fields) {
+          const value = record[field]
+          if (typeof value !== 'string' || !value.trim()) {
+            continue
+          }
+          // FindFiles 的 pattern 是 glob：命中创作心智目录前缀（目录本身或其子路径）即拦
+          if (isCreationMindPath(value.trim()) || (field === 'pattern' && patternTouchesCreationMind(value))) {
+            throw creationMindError(`${tool.name}.${field}`)
+          }
+        }
+
+        return validated
+      },
+    },
+  }
+}
+
+// glob 是否会触达创作心智目录：任一路径段包含目录名即拦（foreshadowing、rhythm
+// 出现在 pattern 的任何一段——前缀、中缀、后缀——都算触达）。
+function patternTouchesCreationMind(pattern: string): boolean {
+  return pattern
+    .split('/')
+    .some((segment) => CREATION_MIND_DIRECTORIES.some((directory) => segment.includes(directory)))
+}
+
+/**
  * 组装要素管理员工具面：全量工具表按 profile 白名单过滤，可写工具包一层 validateInput 路径闸——
  * 写目标不在 elements/ 下直接报错回灌（运行层强制，模型越界请求只会收到失败结果）。
+ * 读工具（ReadFile/FindFiles/ListDirectory）另加创作心智目录不可见闸；ListDirectory 的目录清单
+ * 同步过滤掉这两个目录名。
  */
 export function createElementManagerTools(): AgentRunnableToolMap {
   const full = createAgentTools()
@@ -132,7 +200,28 @@ export function createElementManagerTools(): AgentRunnableToolMap {
   for (const name of ELEMENT_MANAGER_PROFILE.writableTools) {
     tools[name] = guardElementsScope(tools[name]!)
   }
+  for (const name of ['ReadFile', 'FindFiles', 'ListDirectory'] as const) {
+    tools[name] = guardCreationMindInvisible(tools[name]!)
+  }
+  tools.ListDirectory = filterCreationMindEntries(tools.ListDirectory!)
   return tools
+}
+
+/** ListDirectory 结果过滤创作心智目录（根目录清单里也不暴露这两个目录名）。 */
+function filterCreationMindEntries(tool: AgentRunnableTool): AgentRunnableTool {
+  return {
+    ...tool,
+    core: {
+      ...tool.core,
+      async run(input: unknown, runtime) {
+        const output = await tool.core.run(input, runtime) as { entries?: Array<{ name: string; path: string; kind: string }> }
+        if (output && Array.isArray(output.entries)) {
+          output.entries = output.entries.filter((entry) => !isCreationMindPath(entry.name))
+        }
+        return output
+      },
+    },
+  }
 }
 
 /**

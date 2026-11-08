@@ -71,6 +71,8 @@ describe('主角色声明与重构前装配等价', () => {
       'ReadFile', 'EditFile', 'CreateFile', 'RenameFile', 'DeleteFile',
       'ListDirectory', 'FindFiles', 'SearchFiles', 'RagSearch', 'LoadElements',
       'ListPlans', 'ReadPlan', 'CreatePlan', 'UpdatePlan', 'DeletePlan',
+      'ListForeshadowing', 'ReadForeshadowing', 'ReadForeshadowingForPlanning',
+      'CreateForeshadowing', 'UpdateForeshadowing', 'DeleteForeshadowing',
       'GetFileChangeHistory',
       'WebSearch', 'WebFetch', 'KnowledgeLookup',
     ]

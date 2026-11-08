@@ -16,6 +16,14 @@ import {
   readPlanTool,
   updatePlanTool,
 } from '../tools/plan-tools'
+import {
+  createForeshadowingTool,
+  deleteForeshadowingTool,
+  listForeshadowingTool,
+  readForeshadowingForPlanningTool,
+  readForeshadowingTool,
+  updateForeshadowingTool,
+} from '../tools/foreshadowing-tools'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
 import { webSearchTool } from '../tools/web-search'
 import { webFetchTool } from '../tools/web-fetch'
@@ -43,6 +51,12 @@ import type {
   CreatePlanOutput,
   UpdatePlanOutput,
   DeletePlanOutput,
+  ListForeshadowingOutput,
+  ReadForeshadowingOutput,
+  ReadForeshadowingForPlanningOutput,
+  CreateForeshadowingOutput,
+  UpdateForeshadowingOutput,
+  DeleteForeshadowingOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -694,6 +708,319 @@ export function createAgentTools(): AgentRunnableToolMap {
         return `已将计划 ${output.sourcePath} 移入回收站 ${output.trashPath}`
       },
     },
+    ListForeshadowing: {
+      name: 'ListForeshadowing',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ListForeshadowing',
+          description: '查询伏笔账本摘要（伏笔名、状态、埋设章节、回收窗口、读者视角摘要），可按状态筛选。摘要不含作者真相。写作前了解「欠了读者什么」先查这里。',
+          parameters: {
+            type: 'object',
+            properties: {
+              status: {
+                type: 'string',
+                enum: ['planted', 'hinted', 'developed', 'revealed', 'resolved', 'abandoned'],
+                description: '可选，按状态筛选：planted=埋入、hinted=暗示、developed=发展、revealed=揭晓、resolved=解决、abandoned=放弃。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: listForeshadowingTool,
+      formatResult(output: ListForeshadowingOutput) {
+        if (output.foreshadowing.length === 0) {
+          return '伏笔账本为空（或该状态下没有伏笔）。'
+        }
+        const lines = output.foreshadowing.map((item, index) => [
+          `#${index + 1} ${item.name || '（未命名）'}`,
+          `id: ${item.id}`,
+          `status: ${item.status}${item.isRedHerring ? '（红鲱鱼）' : ''}`,
+          `planted_at: ${item.plantedAt || '未知'}`,
+          `payoff_window: ${item.payoffWindow ? item.payoffWindow.join(' ~ ') : '未设定'}`,
+          `updatedAt: ${item.updatedAt || '未知'}`,
+          `summary: ${item.summary || '无'}`,
+        ].join('\n'))
+        return [`共 ${output.totalCount} 条伏笔：`, '', lines.join('\n\n')].join('\n')
+      },
+    },
+    ReadForeshadowing: {
+      name: 'ReadForeshadowing',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ReadForeshadowing',
+          description: '按稳定标识读取一条伏笔的读者视角与元数据（返回 contentHash，更新正文时必须回传）。永远不含「作者真相」——写正文时只依赖读者视角，防止剧透提前泄漏进正文。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '伏笔的稳定标识（来自 ListForeshadowing 返回的 id，形如 F-001）。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: readForeshadowingTool,
+      formatResult(output: ReadForeshadowingOutput) {
+        if ('notFound' in output) {
+          return `伏笔 ${output.id} 不存在。请用 ListForeshadowing 重新查询。`
+        }
+        return [
+          `「${output.name || '（未命名）'}」（读者视角，作者真相已隐藏）`,
+          `id: ${output.id}`,
+          `status: ${output.status}${output.isRedHerring ? '（红鲱鱼）' : ''}`,
+          `planted_at: ${output.plantedAt || '未知'}`,
+          `payoff_window: ${output.payoffWindow ? output.payoffWindow.join(' ~ ') : '未设定'}`,
+          `related_characters: ${output.relatedCharacters.join(', ') || '无'}`,
+          `related_entities: ${output.relatedEntities.join(', ') || '无'}`,
+          `related_chapters（暗示历史）: ${output.relatedChapters.join(', ') || '无'}`,
+          `resolved_at: ${output.resolvedAt ?? '未回收'}`,
+          `sourcePath: ${output.sourcePath}`,
+          `contentHash: ${output.contentHash}`,
+          `updatedAt: ${output.updatedAt || '未知'}`,
+          '',
+          output.body || '（读者视角为空）',
+          '',
+          '（作者视角的真相已按权限隐藏；规划伏笔走向请改用 ReadForeshadowingForPlanning。）',
+        ].filter(Boolean).join('\n')
+      },
+    },
+    ReadForeshadowingForPlanning: {
+      name: 'ReadForeshadowingForPlanning',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ReadForeshadowingForPlanning',
+          description: '按稳定标识读取一条伏笔的完整内容（含「作者真相」剧透）。仅在规划伏笔走向、设计回收方案、与作者讨论全书结构时使用；写正文章节前/中禁用——正文创作只能依赖 ReadForeshadowing 的读者视角。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '伏笔的稳定标识。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: readForeshadowingForPlanningTool,
+      formatResult(output: ReadForeshadowingForPlanningOutput) {
+        if ('notFound' in output) {
+          return `伏笔 ${output.id} 不存在。请用 ListForeshadowing 重新查询。`
+        }
+        return [
+          `「${output.name || '（未命名）'}」（完整内容，含作者真相——仅限规划使用）`,
+          `id: ${output.id}`,
+          `status: ${output.status}${output.isRedHerring ? '（红鲱鱼）' : ''}`,
+          `planted_at: ${output.plantedAt || '未知'}`,
+          `payoff_window: ${output.payoffWindow ? output.payoffWindow.join(' ~ ') : '未设定'}`,
+          `related_characters: ${output.relatedCharacters.join(', ') || '无'}`,
+          `related_entities: ${output.relatedEntities.join(', ') || '无'}`,
+          `related_chapters（暗示历史）: ${output.relatedChapters.join(', ') || '无'}`,
+          `resolved_at: ${output.resolvedAt ?? '未回收'}`,
+          `sourcePath: ${output.sourcePath}`,
+          `contentHash: ${output.contentHash}`,
+          `updatedAt: ${output.updatedAt || '未知'}`,
+          '',
+          output.body || '（正文为空）',
+        ].join('\n')
+      },
+    },
+    CreateForeshadowing: {
+      name: 'CreateForeshadowing',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'CreateForeshadowing',
+          description: '登记一条新伏笔。必须提供：伏笔名、埋设章节、读者视角（读者当时能看到什么）；作者真相（剧透）强烈建议同登——读者视角与作者真相分开记是伏笔系统的核心。用户埋设新伏笔、或写作中自然埋下需要登记的线索时使用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: '伏笔名（作者可改，文件名同步），如「旧照片之谜」。',
+              },
+              readerView: {
+                type: 'string',
+                description: '读者视角：这一章读者能看到什么（只写当时可见事实，不写真相）。',
+              },
+              authorTruth: {
+                type: 'string',
+                description: '可选但强烈建议：作者真相（剧透）——这条伏笔最终要还的账是什么。',
+              },
+              plantedAt: {
+                type: 'string',
+                description: '埋设章节，完整路径（卷/章），如 第一卷/第012章。',
+              },
+              status: {
+                type: 'string',
+                enum: ['planted', 'hinted', 'developed', 'revealed', 'resolved', 'abandoned'],
+                description: '可选，初始状态；默认 planted（埋入）。补登历史伏笔时可选更靠后的状态。',
+              },
+              payoffWindow: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 2,
+                maxItems: 2,
+                description: '可选，预计回收窗口 [起, 止]（区间而非单点，连载节奏会调整），如 [第二卷/第080章, 第二卷/第090章]。',
+              },
+              relatedCharacters: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，关联角色名数组。',
+              },
+              relatedEntities: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，关联物品/实体名数组。',
+              },
+              isRedHerring: {
+                type: 'boolean',
+                description: '可选，是否故意误导（红鲱鱼）；默认 false。',
+              },
+            },
+            required: ['name', 'readerView', 'plantedAt'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: createForeshadowingTool,
+      formatResult(output: CreateForeshadowingOutput) {
+        return `已登记伏笔「${output.name || output.id}」（id: ${output.id}，文件：${output.sourcePath}）`
+      },
+    },
+    UpdateForeshadowing: {
+      name: 'UpdateForeshadowing',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'UpdateForeshadowing',
+          description: '按稳定标识更新一条伏笔：名称、读者视角、作者真相、状态、回收窗口、关联角色、暗示历史（addRelatedChapters 追加）分别可选。修改读者视角或作者真相前必须先读取并回传 contentHash（expectedContentHash）；只改状态或元数据时不传正文。状态改 abandoned 必须给 abandonedReason。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '伏笔的稳定标识。',
+              },
+              name: {
+                type: 'string',
+                description: '可选，新伏笔名（文件名同步）。',
+              },
+              readerView: {
+                type: 'string',
+                description: '可选，替换后的读者视角全文（不是片段追加）。',
+              },
+              authorTruth: {
+                type: 'string',
+                description: '可选，替换后的作者真相全文；空串 = 清除真相节。',
+              },
+              status: {
+                type: 'string',
+                enum: ['planted', 'hinted', 'developed', 'revealed', 'resolved', 'abandoned'],
+                description: '可选，目标状态。',
+              },
+              plantedAt: {
+                type: 'string',
+                description: '可选，修正埋设章节。',
+              },
+              payoffWindow: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 2,
+                maxItems: 2,
+                description: '可选，调整回收窗口 [起, 止]；传 null 清除。',
+              },
+              relatedCharacters: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，整体替换关联角色列表。',
+              },
+              relatedEntities: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，整体替换关联物品列表。',
+              },
+              addRelatedChapters: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，追加暗示历史（本次再提及的章节，去重保序）。',
+              },
+              isRedHerring: {
+                type: 'boolean',
+                description: '可选，标记/取消红鲱鱼。',
+              },
+              resolvedAt: {
+                type: 'string',
+                description: '可选，实际回收章节；标记 revealed/resolved 时建议提供。',
+              },
+              abandonedReason: {
+                type: 'string',
+                description: '放弃原因；状态改 abandoned 时必填。',
+              },
+              afterId: {
+                type: 'string',
+                description: '可选，移动到目标列中某条伏笔之后；不传默认列末尾。',
+              },
+              expectedContentHash: {
+                type: 'string',
+                description: '上次读取返回的 contentHash；更新 readerView 或 authorTruth 时必传。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: updateForeshadowingTool,
+      formatResult(output: UpdateForeshadowingOutput) {
+        return `已更新伏笔「${output.name || output.id}」（id: ${output.id}，状态 ${output.status}，文件：${output.sourcePath}）`
+      },
+    },
+    DeleteForeshadowing: {
+      name: 'DeleteForeshadowing',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'DeleteForeshadowing',
+          description: '按稳定标识删除一条伏笔（移入项目回收站）。只在用户明确要求删除时使用；伏笔已收或已放弃不构成删除理由（账本要留痕）。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '伏笔的稳定标识。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: deleteForeshadowingTool,
+      formatResult(output: DeleteForeshadowingOutput) {
+        return `已将伏笔 ${output.sourcePath} 移入回收站 ${output.trashPath}`
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -882,6 +1209,12 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'CreatePlan'
     || value === 'UpdatePlan'
     || value === 'DeletePlan'
+    || value === 'ListForeshadowing'
+    || value === 'ReadForeshadowing'
+    || value === 'ReadForeshadowingForPlanning'
+    || value === 'CreateForeshadowing'
+    || value === 'UpdateForeshadowing'
+    || value === 'DeleteForeshadowing'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'

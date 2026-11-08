@@ -2,6 +2,7 @@ import type { ProjectSnapshot } from '../../types/project'
 import type { FileChangeCoords, FileChangeRecord } from '../../types/chat'
 import type { ElementType } from '../../types/rag'
 import type { PlanStatus } from '../../types/plans'
+import type { ForeshadowingStatus } from '../../types/foreshadowing'
 import type { KnowledgePlatformName } from './knowledge-platforms'
 
 /**
@@ -25,6 +26,12 @@ export type CoreToolName =
   | 'CreatePlan'
   | 'UpdatePlan'
   | 'DeletePlan'
+  | 'ListForeshadowing'
+  | 'ReadForeshadowing'
+  | 'ReadForeshadowingForPlanning'
+  | 'CreateForeshadowing'
+  | 'UpdateForeshadowing'
+  | 'DeleteForeshadowing'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -435,6 +442,149 @@ export type DeletePlanInput = {
 }
 
 export type DeletePlanOutput = {
+  id: string
+  sourcePath: string
+  trashPath: string
+  contentLength: number
+  linesRemoved: number
+}
+
+/** ===== 伏笔工具（主 Agent 专属，要素管理员不装配；创作心智模块计划 §五） ===== */
+
+export type ListForeshadowingInput = {
+  status?: ForeshadowingStatus
+}
+
+export type ListForeshadowingOutput = {
+  foreshadowing: Array<{
+    id: string
+    name: string
+    status: ForeshadowingStatus
+    plantedAt: string
+    payoffWindow: [string, string] | null
+    isRedHerring: boolean
+    updatedAt: string
+    /** 读者视角摘要（不含作者真相）。 */
+    summary: string
+  }>
+  totalCount: number
+}
+
+export type ReadForeshadowingInput = {
+  id: string
+}
+
+/**
+ * 写正文链路的读取结果：永远不含作者真相（正文为读者视角形态，带隐藏提示）。
+ * 真相要拿 ForeshadowingReadForPlanning（规划阶段专用）。
+ */
+export type ReadForeshadowingOutput =
+  | { id: string; notFound: true }
+  | {
+      id: string
+      name: string
+      status: ForeshadowingStatus
+      plantedAt: string
+      payoffWindow: [string, string] | null
+      relatedCharacters: string[]
+      relatedEntities: string[]
+      relatedChapters: string[]
+      isRedHerring: boolean
+      resolvedAt: string | null
+      abandonedReason: string | null
+      /** 读者视角正文（作者真相已剥离）。 */
+      body: string
+      sourcePath: string
+      contentHash: string
+      updatedAt: string
+      truthHidden: true
+    }
+
+/** 规划阶段的完整读取结果（含作者真相与完整正文）。 */
+export type ReadForeshadowingForPlanningOutput =
+  | { id: string; notFound: true }
+  | {
+      id: string
+      name: string
+      status: ForeshadowingStatus
+      plantedAt: string
+      payoffWindow: [string, string] | null
+      relatedCharacters: string[]
+      relatedEntities: string[]
+      relatedChapters: string[]
+      isRedHerring: boolean
+      resolvedAt: string | null
+      abandonedReason: string | null
+      /** 完整正文（读者视角 + 作者真相两节）。 */
+      body: string
+      /** 作者真相节内容（单独字段方便直接取用）。 */
+      authorTruth: string
+      sourcePath: string
+      contentHash: string
+      updatedAt: string
+    }
+
+export type CreateForeshadowingInput = {
+  name: string
+  /** 读者视角（当时可见事实）：伏笔登记时必须写下读者当时能看到什么。 */
+  readerView: string
+  /** 作者真相（剧透）；可省略后补。 */
+  authorTruth?: string
+  plantedAt: string
+  status?: ForeshadowingStatus
+  payoffWindow?: [string, string]
+  relatedCharacters?: string[]
+  relatedEntities?: string[]
+  isRedHerring?: boolean
+}
+
+export type CreateForeshadowingOutput = {
+  id: string
+  name: string
+  status: ForeshadowingStatus
+  sourcePath: string
+  /** 完整文件内容（frontmatter + 正文）；改动账本 diff 用。 */
+  content: string
+  contentLength: number
+  linesAdded: number
+  created: true
+}
+
+export type UpdateForeshadowingInput = {
+  id: string
+  name?: string
+  readerView?: string
+  /** 空串 = 清除真相节。 */
+  authorTruth?: string
+  status?: ForeshadowingStatus
+  plantedAt?: string
+  payoffWindow?: [string, string] | null
+  relatedCharacters?: string[]
+  relatedEntities?: string[]
+  /** 追加暗示历史章节（去重保序）。 */
+  addRelatedChapters?: string[]
+  isRedHerring?: boolean
+  resolvedAt?: string | null
+  abandonedReason?: string | null
+  afterId?: string | null
+  /** 上次读取返回的 contentHash；改正文（readerView/authorTruth）时必传。 */
+  expectedContentHash?: string
+}
+
+export type UpdateForeshadowingOutput = {
+  id: string
+  name: string
+  status: ForeshadowingStatus
+  sourcePath: string
+  content: string
+  contentLength: number
+}
+
+export type DeleteForeshadowingInput = {
+  id: string
+}
+
+export type DeleteForeshadowingOutput = {
   id: string
   sourcePath: string
   trashPath: string

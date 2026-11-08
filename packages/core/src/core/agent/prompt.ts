@@ -26,6 +26,16 @@ const PROJECT_STRUCTURE_LINES = [
   '- .novel/：应用内部数据（会话、日志、回收站、RAG 索引），不要直接读写。',
 ]
 
+/**
+ * 创作心智目录（伏笔/节奏卡）的结构描述：只进主 Agent 的 system prompt。
+ * 这两个目录对要素管理员整体不可见（element-manager 有运行层目录闸），
+ * 共用的 PROJECT_STRUCTURE_SECTION 不提及，主 Agent 在此单独补充。
+ */
+const CREATION_MIND_STRUCTURE_LINES = [
+  '- foreshadowing/：伏笔账本——作者对读者的承诺。一条伏笔一个 .md 文件（F-XXX-名称.md），frontmatter 记状态/埋设章节/回收窗口/关联角色，正文分「读者视角」（当时可见事实）与「作者真相」（剧透）两节。',
+  '- rhythm/：节奏卡——作者对读者感受的规划。一章一卡（R-XXX-名称.md），frontmatter 记计划值（冲突强度/情绪基调/章末钩子/爽点类型）与写后回写的实际值，正文记节奏意图与上下文衔接。',
+]
+
 export const PROJECT_STRUCTURE_SECTION = PROJECT_STRUCTURE_LINES.join('\n')
 
 /**
@@ -55,7 +65,9 @@ export function buildAgentSystemPrompt(input: {
   const parts: string[] = [
     identity,
     '',
-    ...PROJECT_STRUCTURE_LINES,
+    ...PROJECT_STRUCTURE_LINES.slice(0, -1),
+    ...CREATION_MIND_STRUCTURE_LINES,
+    PROJECT_STRUCTURE_LINES[PROJECT_STRUCTURE_LINES.length - 1]!,
     '',
     '工具使用规则：',
     '- 所有工具 path 都是项目根目录内部的相对路径；不要把项目文件夹名写进 path。查看项目根目录时，ListDirectory 不传 path 或传空字符串。',
@@ -70,6 +82,7 @@ export function buildAgentSystemPrompt(input: {
     '- SearchFiles 用于按文件内容搜索：找到某个词、名字或句子出现在哪些文件的哪些行，返回匹配行及前后上下文。默认字面匹配；需要正则时设 regex: true。常用 include: "*.txt" 限定只搜章节。与 RagSearch 的分工：精确查某个词/人名出现在哪几章正文用本工具；按语义近似找剧情线索、时间线事件用 RagSearch。',
     '- LoadElements：批量加载角色/地点/实体/世界观要素的完整定义。当上下文的要素清单中出现与当前任务相关的要素时，先用本工具加载再写作。',
     '- 计划工具（ListPlans/ReadPlan/CreatePlan/UpdatePlan/DeletePlan）维护创作计划板，按稳定标识定位卡片：ListPlans 查摘要、ReadPlan 读全文（返回 contentHash）。用户明确要求记录、修改或删除计划时使用相应工具；对话中形成明确的后续创作意图时可以创建计划，但不要把每段对话自动转成卡片。写作涉及已有计划时先查摘要再读相关卡片；只有已有明确依据证明某项计划已落实时才更新状态。计划板不是待执行队列：不因看板存在未完成项而主动推进故事，不批量生成章节，不为清空看板写作。计划文件也可用普通文件工具读写（同一份文件），专用工具负责更安全的标识定位、元数据与排序操作。',
+    '- 伏笔工具（ListForeshadowing/ReadForeshadowing/ReadForeshadowingForPlanning/CreateForeshadowing/UpdateForeshadowing/DeleteForeshadowing）维护伏笔账本——作者对读者的承诺（欠了什么、什么时候该还）。伏笔登记必须分两栏：读者视角（当时可见事实）与作者真相（剧透）。写正文章节前/中只用 ReadForeshadowing（永远不含真相，防止剧透提前泄漏进正文）；规划伏笔走向、设计回收方案时才用 ReadForeshadowingForPlanning。正文里埋下或推进了线索后，用 UpdateForeshadowing 的 addRelatedChapters 登记暗示历史、必要时推进状态；标记揭晓/解决时提供 resolvedAt；放弃必须给原因。伏笔不因「该收了」而自动推进——先在回复里向作者说明，经确认再动账本。伏笔文件也可用普通文件工具读写（同一份文件），但更新走专用工具才有冲突检测与真相节保护。',
     '- RagSearch：从情节（plots）和时间线（timeline）索引中语义检索剧情线索与章节事件。返回的 sourcePath 可用于 ReadFile 精读。章节正文不在本索引内；查「某个人名/词语出现在哪些章节正文」请用 SearchFiles。',
     '- WebSearch 用于联网查询项目之外的信息（时事、外部资料、常识核查）。一次可给 1-4 个不同角度的 query。WebSearch 只返回摘要列表，需要阅读某条结果全文时用 WebFetch 抓取该 URL。',
     '- KnowledgeLookup 用于一步直达知识平台条目（platform + term）：查人物事迹、历史事件、字词含义、古籍原文、ACG 设定等优先用它，比 WebSearch 后再 WebFetch 两步更快。term 是条目名而非问题；未命中时按提示换标准条目名重试，或改用 WebSearch。',

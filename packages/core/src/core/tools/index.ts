@@ -16,6 +16,14 @@ import {
   readPlanTool,
   updatePlanTool,
 } from './plan-tools'
+import {
+  createForeshadowingTool,
+  deleteForeshadowingTool,
+  listForeshadowingTool,
+  readForeshadowingForPlanningTool,
+  readForeshadowingTool,
+  updateForeshadowingTool,
+} from './foreshadowing-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
@@ -51,6 +59,17 @@ import type {
   UpdatePlanOutput,
   DeletePlanInput,
   DeletePlanOutput,
+  ListForeshadowingInput,
+  ListForeshadowingOutput,
+  ReadForeshadowingInput,
+  ReadForeshadowingOutput,
+  ReadForeshadowingForPlanningOutput,
+  CreateForeshadowingInput,
+  CreateForeshadowingOutput,
+  UpdateForeshadowingInput,
+  UpdateForeshadowingOutput,
+  DeleteForeshadowingInput,
+  DeleteForeshadowingOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -100,6 +119,17 @@ export type {
   UpdatePlanOutput,
   DeletePlanInput,
   DeletePlanOutput,
+  ListForeshadowingInput,
+  ListForeshadowingOutput,
+  ReadForeshadowingInput,
+  ReadForeshadowingOutput,
+  ReadForeshadowingForPlanningOutput,
+  CreateForeshadowingInput,
+  CreateForeshadowingOutput,
+  UpdateForeshadowingInput,
+  UpdateForeshadowingOutput,
+  DeleteForeshadowingInput,
+  DeleteForeshadowingOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -133,6 +163,12 @@ type ToolOutputMap = {
   CreatePlan: CreatePlanOutput
   UpdatePlan: UpdatePlanOutput
   DeletePlan: DeletePlanOutput
+  ListForeshadowing: ListForeshadowingOutput
+  ReadForeshadowing: ReadForeshadowingOutput
+  ReadForeshadowingForPlanning: ReadForeshadowingForPlanningOutput
+  CreateForeshadowing: CreateForeshadowingOutput
+  UpdateForeshadowing: UpdateForeshadowingOutput
+  DeleteForeshadowing: DeleteForeshadowingOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -155,6 +191,12 @@ const tools = {
   CreatePlan: createPlanTool,
   UpdatePlan: updatePlanTool,
   DeletePlan: deletePlanTool,
+  ListForeshadowing: listForeshadowingTool,
+  ReadForeshadowing: readForeshadowingTool,
+  ReadForeshadowingForPlanning: readForeshadowingForPlanningTool,
+  CreateForeshadowing: createForeshadowingTool,
+  UpdateForeshadowing: updateForeshadowingTool,
+  DeleteForeshadowing: deleteForeshadowingTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

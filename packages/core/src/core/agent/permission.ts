@@ -7,10 +7,11 @@ import type { PermissionPreset, ProjectSnapshot } from '../../types/project'
  * 用户选一个档位，控制「哪些修改不需要每次弹确认卡」。
  *
  * 判定按「动作 + 路径」双重进行：
- * - 内容修改（EditFile 改正文）：看路径——chapters/ 走章节档、elements/ 与 plans/ 走素材档；
- * - 结构操作（CreateFile/DeleteFile/RenameFile、CreatePlan/DeletePlan）：除「完全访问」外一律弹卡，
+ * - 内容修改（EditFile 改正文）：看路径——chapters/ 走章节档、elements/ 与 plans/ 及创作心智
+ *   目录（foreshadowing/、rhythm/）走素材档；
+ * - 结构操作（CreateFile/DeleteFile/RenameFile、CreatePlan/DeletePlan、伏笔新建/删除）：除「完全访问」外一律弹卡，
  *   不管操作对象是不是章节/素材（移动即改名，RenameFile 归结构操作）；
- * - UpdatePlan 不改变文件位置与存在性（状态/顺序在 frontmatter 里），按素材内容档处理；
+ * - UpdatePlan/UpdateForeshadowing 不改变文件位置与存在性（状态/顺序在 frontmatter 里），按素材内容档处理；
  * - 「仅审阅」不是拒绝：弹卡询问，批一次改一次（无 always-allow）。
  *
  * 硬底线不在此层：.novel/ 写保护、novel.config.json 保护、chapters 命名规范等
@@ -37,13 +38,15 @@ export type ApprovalOutcome =
 /** 写动作分类：EditFile/UpdatePlan=内容修改；结构操作与计划新建/删除归 structure。 */
 type WriteAction = 'content-edit' | 'structure'
 
-/** 结构操作工具集：新建/删除/重命名（含计划卡片的新建与删除）。 */
+/** 结构操作工具集：新建/删除/重命名（含计划/伏笔卡片的新建与删除）。 */
 const STRUCTURE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'CreateFile',
   'DeleteFile',
   'RenameFile',
   'CreatePlan',
   'DeletePlan',
+  'CreateForeshadowing',
+  'DeleteForeshadowing',
 ])
 
 function classifyWriteAction(toolName: string): WriteAction {
@@ -61,6 +64,15 @@ function presetCoversMaterials(preset: PermissionPreset) {
 }
 
 /**
+ * 创作心智目录（伏笔 foreshadowing/、节奏卡 rhythm/）：作者的意图登记，
+ * 只对主智能体开放。通用文件工具按素材档处理；要素管理员的可见性闸另见
+ * element-manager（那里整体不可见）。
+ */
+function isCreationMindPath(path: string) {
+  return path.startsWith('foreshadowing/') || path.startsWith('rhythm/')
+}
+
+/**
  * 对写工具的已校验 input 做整体决策：先取当前档位（持久化在 config.settings.permissionPreset，
  * 旧配置由 normalizeProjectConfig 回填默认值），再按「动作 + 路径」规则判定 allow/ask。
  */
@@ -71,20 +83,22 @@ export function decideWriteToolPermission(
 ): PermissionDecision {
   const preset = readPermissionPreset(project)
 
-  // 计划专用工具以稳定标识定位（input 无 path 字段），单独判定：
-  // - CreatePlan/DeletePlan 走结构确认（改变文件存在性）；仅「完全访问」免确认；
-  // - UpdatePlan 只改 frontmatter 元数据/正文，不改变文件位置与存在性，按素材档处理。
-  if (toolName === 'CreatePlan' || toolName === 'DeletePlan') {
+  // 计划与伏笔专用工具以稳定标识定位（input 无 path 字段），单独判定：
+  // - Create*/Delete* 走结构确认（改变文件存在性）；仅「完全访问」免确认；
+  // - Update* 只改 frontmatter 元数据/正文，不改变文件位置与存在性，按素材档处理。
+  if (toolName === 'CreatePlan' || toolName === 'DeletePlan'
+    || toolName === 'CreateForeshadowing' || toolName === 'DeleteForeshadowing') {
     if (preset === 'full') {
       return { kind: 'allow' }
     }
+    const domain = toolName.endsWith('Foreshadowing') ? '伏笔' : '计划'
     return {
       kind: 'ask',
-      reason: '新建/删除计划属于结构操作，当前档位需逐次确认（仅「完全访问」档免确认）',
+      reason: `新建/删除${domain}属于结构操作，当前档位需逐次确认（仅「完全访问」档免确认）`,
     }
   }
 
-  if (toolName === 'UpdatePlan') {
+  if (toolName === 'UpdatePlan' || toolName === 'UpdateForeshadowing') {
     if (preset === 'full') {
       return { kind: 'allow' }
     }
@@ -94,7 +108,8 @@ export function decideWriteToolPermission(
     if (presetCoversMaterials(preset)) {
       return { kind: 'allow' }
     }
-    return { kind: 'ask', reason: '修改计划属于素材类内容，当前档位需逐次确认（「素材内容」「章节与素材」「完全访问」档免确认）' }
+    const domain = toolName === 'UpdateForeshadowing' ? '伏笔' : '计划'
+    return { kind: 'ask', reason: `修改${domain}属于素材类内容，当前档位需逐次确认（「素材内容」「章节与素材」「完全访问」档免确认）` }
   }
 
   const paths = collectPathFields(validatedInput)
@@ -134,12 +149,12 @@ export function decideWriteToolPermission(
     if (path.startsWith('chapters/') && presetCoversChapters(preset)) {
       continue
     }
-    if ((path.startsWith('elements/') || path.startsWith('plans/')) && presetCoversMaterials(preset)) {
+    if ((path.startsWith('elements/') || path.startsWith('plans/') || isCreationMindPath(path)) && presetCoversMaterials(preset)) {
       continue
     }
     return {
       kind: 'ask',
-      reason: `修改 ${path} 不在当前档位的免确认范围内（章节档管 chapters/、素材档管 elements/ 与 plans/，提示词与配置类文件总是需确认）`,
+      reason: `修改 ${path} 不在当前档位的免确认范围内（章节档管 chapters/、素材档管 elements/、plans/ 与创作心智目录，提示词与配置类文件总是需确认）`,
     }
   }
 
