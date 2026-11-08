@@ -224,6 +224,7 @@ describe('chat store（W4 事件总线版）', () => {
     }
     emit({
       type: 'run-finish',
+      runId: 'run-1',
       sessionId: 'session-current',
       result: createRunResult(finishedView, { sessionChangedFileCount: 1 }),
     })
@@ -251,6 +252,7 @@ describe('chat store（W4 事件总线版）', () => {
     mockedIsAgentRunActive.mockReturnValue(true)
     emit({
       type: 'run-finish',
+      runId: 'run-old',
       sessionId: 'session-current',
       result: createRunResult(view),
     })
@@ -259,6 +261,7 @@ describe('chat store（W4 事件总线版）', () => {
     // run-error 同病同治：旧 driver 的 run-error 晚到也不打掉新 run
     emit({
       type: 'run-error',
+      runId: 'run-old',
       sessionId: 'session-current',
       error: { code: 'UNKNOWN_ERROR', message: '旧 run 的错误', recoverable: true },
     })
@@ -268,6 +271,7 @@ describe('chat store（W4 事件总线版）', () => {
     mockedIsAgentRunActive.mockReturnValue(false)
     emit({
       type: 'run-finish',
+      runId: 'run-new',
       sessionId: 'session-current',
       result: createRunResult(view),
     })
@@ -431,6 +435,7 @@ describe('chat store（W4 事件总线版）', () => {
 
     emit({
       type: 'run-error',
+      runId: 'run-1',
       sessionId: 'session-current',
       error: { code: 'UNKNOWN_ERROR', message: '炸了', recoverable: true },
     })
@@ -570,8 +575,10 @@ describe('chat store（W4 事件总线版）', () => {
     await store.loadOlderHistory()
     expect(store.messages).toHaveLength(200)
 
+    emit({ type: 'run-start', runId: 'run-a', sessionId: 'session-current' })
     emit({
       type: 'run-finish',
+      runId: 'run-a',
       sessionId: 'session-current',
       // 全量比 select 时多一条（本轮新产生的 assistant 回答）
       result: createRunResult({ ...fullView, messages: [...allMessages, createTextMessageView(250)] }),
@@ -1059,23 +1066,25 @@ describe('会话归档（交互优化计划 §3）', () => {
     const emit = captureListener()
 
     // 后台委派会话运行：不在激活会话也要点亮
-    emit({ type: 'run-start', sessionId: 'session-em' } as AgentUiEvent)
+    emit({ type: 'run-start', runId: 'run-em', sessionId: 'session-em' } as AgentUiEvent)
     expect(store.runningSessionIds.has('session-em')).toBe(true)
 
     // 收尾时注册表已无该 driver：移除
     mockedIsAgentRunActive.mockReturnValue(false)
     emit({
       type: 'run-finish',
+      runId: 'run-em',
       sessionId: 'session-em',
       result: { projectId: 'project-1', sessionId: 'session-em', turnChanges: [], sessionChangedFileCount: 0, session: createSessionView('session-em') },
     } as unknown as AgentUiEvent)
     expect(store.runningSessionIds.has('session-em')).toBe(false)
 
     // 新 run 的 run-start 先于旧 driver 收尾到达时：注册表仍有 driver，不误清
-    emit({ type: 'run-start', sessionId: 'session-x' } as AgentUiEvent)
+    emit({ type: 'run-start', runId: 'run-x', sessionId: 'session-x' } as AgentUiEvent)
     mockedIsAgentRunActive.mockReturnValue(true)
     emit({
       type: 'run-error',
+      runId: 'run-x-old',
       sessionId: 'session-x',
       error: new Error('旧 driver 的迟到报错'),
     } as unknown as AgentUiEvent)

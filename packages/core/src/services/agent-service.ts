@@ -828,6 +828,8 @@ async function finalizeSuccessfulRun(options: {
   session: ChatSessionState
   ledgerBaseline: number
   titleContext?: DriverTitleContext
+  /** 本次连续运行的标识（driver-start 时生成）：随 run-finish 广播，UI 据此识别过期收尾 */
+  runId: string
 }): Promise<void> {
   const { project, session, ledgerBaseline } = options
 
@@ -856,7 +858,7 @@ async function finalizeSuccessfulRun(options: {
     sessionChangedFileCount: countSessionChangedFiles(session),
     session: toChatSessionView(session),
   }
-  broadcastAgentEvent({ type: 'run-finish', sessionId: session.sessionId, result })
+  broadcastAgentEvent({ type: 'run-finish', runId: options.runId, sessionId: session.sessionId, result })
 }
 
 /** driver 出错的统一收尾：清理该会话未决确认与提问（避免注册表泄漏/UI 卡等待态）→ 落盘 → run-error。 */
@@ -864,6 +866,8 @@ async function handleFailedRun(options: {
   project: ProjectSnapshot
   session: ChatSessionState
   error: unknown
+  /** 本次连续运行的标识（driver-start 时生成）：随 run-error 广播，UI 据此识别过期收尾 */
+  runId: string
 }): Promise<void> {
   const { project, session } = options
   rejectPendingSessionConfirmations(session.sessionId)
@@ -873,7 +877,7 @@ async function handleFailedRun(options: {
     return
   }
   await enqueueSessionSave({ project, session })
-  broadcastAgentEvent({ type: 'run-error', sessionId: session.sessionId, error: toNovAiError(options.error) })
+  broadcastAgentEvent({ type: 'run-error', runId: options.runId, sessionId: session.sessionId, error: toNovAiError(options.error) })
 }
 
 /**
@@ -893,6 +897,11 @@ async function wakeSessionDriver(options: {
 
   const turnInput = await buildSessionTurnInput({ project, session })
 
+  // 本次连续运行的标识：driver-start 时生成一次，start/finish/error 三处广播同值——
+  // UI 据此识别收尾事件是否属于当前运行（F8 运行身份），不受「停止后立即重发」的
+  // 旧 driver 晚到收尾干扰
+  let runId = createRunId()
+
   wakeChatDriver({
     session,
     input: {
@@ -905,15 +914,16 @@ async function wakeSessionDriver(options: {
     onEvent: createSessionEventForwarder(session, ledgerBaseline),
     onLifecycle(event) {
       if (event.type === 'driver-start') {
-        broadcastAgentEvent({ type: 'run-start', runId: createRunId(), sessionId: session.sessionId })
+        runId = createRunId()
+        broadcastAgentEvent({ type: 'run-start', runId, sessionId: session.sessionId })
         return
       }
       void (async () => {
         if (event.type === 'driver-error') {
-          await handleFailedRun({ project, session, error: event.error })
+          await handleFailedRun({ project, session, error: event.error, runId })
           return
         }
-        await finalizeSuccessfulRun({ project, session, ledgerBaseline, titleContext })
+        await finalizeSuccessfulRun({ project, session, ledgerBaseline, titleContext, runId })
       })()
     },
   })
@@ -959,7 +969,9 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
 
   const ledgerBaseline = session.changeLedger?.length ?? 0
   const turnInput = await buildSessionTurnInput({ project, session, activeFilePath: null })
-  broadcastAgentEvent({ type: 'run-start', runId: createRunId(), sessionId: session.sessionId })
+  // 运行身份（F8）：委派会话的 start/finish/error 同值 runId
+  const runId = createRunId()
+  broadcastAgentEvent({ type: 'run-start', runId, sessionId: session.sessionId })
 
   try {
     // 主 driver 的停止信号随 input 传入：用户停主会话时，委派会话一并优雅停止
@@ -969,11 +981,11 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
       onEvent: createSessionEventForwarder(session, ledgerBaseline),
     })
   } catch (error) {
-    await handleFailedRun({ project, session, error })
+    await handleFailedRun({ project, session, error, runId })
     return toDelegationResult(session, true)
   }
 
-  await finalizeSuccessfulRun({ project, session, ledgerBaseline })
+  await finalizeSuccessfulRun({ project, session, ledgerBaseline, runId })
   return toDelegationResult(session)
 }
 

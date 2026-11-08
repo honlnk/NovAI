@@ -148,6 +148,13 @@ export const useChatStore = defineStore('chat', () => {
   const runningSessionIds = ref(new Set<string>())
 
   /**
+   * 各会话最新运行 id（数据安全计划 F8 运行身份）：run-start 记入、当前运行收尾时
+   * 清除。run-finish/run-error 的 runId 与之不符 = 旧 driver 晚到收尾，其整份
+   * 快照不被接受（新运行的流式视图/队列/状态不被覆盖）。内存态，刷新后重建。
+   */
+  const latestRunIdBySession = new Map<string, string>()
+
+  /**
    * 历史窗口起点：sessionView.messages[0] 在全量历史中的下标（append-only 数组下标游标）。
    * 0 = 已加载全部；>0 = 之上还有更早历史可翻页。
    */
@@ -236,9 +243,16 @@ export const useChatStore = defineStore('chat', () => {
    * 取代旧的 ensureSessionView（后者只支持单会话）。
    */
   async function initSessions(projectId: string, preferredSessionId?: string | null): Promise<ChatSessionView> {
-    // 进入新项目：上一项目的后台保存失败记录不再有意义（§3-4）
+    // 进入新项目：上一项目的后台保存失败记录与运行身份不再有意义（§3-4/F8）
     sessionSaveFailures.value = new Map()
+    latestRunIdBySession.clear()
+    // 恢复中手动切换（F6 验收2）：列表加载期间用户已发起别的选择（代次前进）时，
+    // 初始化不再自动接管会话位——用户的最新意图优先，不被初始化拉回
+    const entryGeneration = sessionSelectionGeneration
     await loadSessions(projectId)
+    if (sessionSelectionGeneration !== entryGeneration && activeSessionId.value) {
+      return sessionView.value!
+    }
 
     if (preferredSessionId && sessions.value.some((s) => s.sessionId === preferredSessionId)) {
       const restored = await selectSession(projectId, preferredSessionId)
@@ -283,10 +297,22 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = rest
   }
 
+  /**
+   * 会话选择代次（数据安全计划 F6）：每次发起新的选择/新建递增。会话甲读取慢、
+   * 用户已切到乙时，甲的读取结果属于过期代次——直接丢弃，不得覆盖当前现场
+   * （activeSessionId/视图/队列/运行态全部不动）。
+   */
+  let sessionSelectionGeneration = 0
+
   /** 切换到指定历史会话：只装尾部一页消息窗口（长会话分页防线）并设为激活。 */
   async function selectSession(projectId: string, sessionId: string): Promise<ChatSessionView | null> {
+    const generation = ++sessionSelectionGeneration
     const view = await getAgentSession(projectId, sessionId, { tailMessages: HISTORY_PAGE_SIZE })
     if (!view) {
+      return null
+    }
+    // 读取期间已有更新的选择意图：过期结果不改变当前现场
+    if (generation !== sessionSelectionGeneration) {
       return null
     }
 
@@ -353,19 +379,24 @@ export const useChatStore = defineStore('chat', () => {
     projectId: string,
     options: { skipReload?: boolean; agent?: AgentRoleId } = {},
   ): Promise<ChatSessionView> {
+    const generation = ++sessionSelectionGeneration
     const view = await createAgentSession(
       projectId,
       options.agent !== undefined ? { agent: options.agent } : undefined,
     )
-    sessionView.value = view
-    activeSessionId.value = view.sessionId
-    changedFiles.value = []
-    lastFileChange.value = null
-    queue.value = []
-    historyStart.value = 0
-    loadingOlder.value = false
-    isRunning.value = false
-    isStopping.value = false
+    // 连续新建（无会话时快速点两次）：后发起的创建是最新意图，先完成的旧结果不抢占
+    // 激活现场；会话本身已落盘，列表仍要如实反映
+    if (generation === sessionSelectionGeneration) {
+      sessionView.value = view
+      activeSessionId.value = view.sessionId
+      changedFiles.value = []
+      lastFileChange.value = null
+      queue.value = []
+      historyStart.value = 0
+      loadingOlder.value = false
+      isRunning.value = false
+      isStopping.value = false
+    }
 
     if (options.skipReload) {
       sessions.value = [{
@@ -602,11 +633,23 @@ export const useChatStore = defineStore('chat', () => {
     // run-start 可能先于旧 driver 的收尾事件到达，无条件删除会误清新 run。
     if (event.type === 'run-start') {
       runningSessionIds.value = new Set(runningSessionIds.value).add(event.sessionId)
+      // 运行身份（F8）：该会话最新运行。旧 driver 的收尾晚于新 run-start 到达时，
+      // 其 runId 与此不符 = 过期收尾，整份快照不被接受
+      latestRunIdBySession.set(event.sessionId, event.runId)
     } else if ((event.type === 'run-finish' || event.type === 'run-error')
       && !isAgentRunActive(event.sessionId)) {
       const next = new Set(runningSessionIds.value)
       next.delete(event.sessionId)
       runningSessionIds.value = next
+    }
+
+    // 文件变更的反馈队列全局保留（F9/F10）：后台会话的改动也带归属进通知（不抢现场）；
+    // 会话级清单与 lastFileChange 仍只跟随激活会话
+    if (event.type === 'file-changed') {
+      recentFileChanges.value = [
+        ...recentFileChanges.value.slice(-29),
+        { sessionId: event.sessionId, record: event.file },
+      ]
     }
 
     // 全局事件（与会话激活态无关，先于激活会话过滤处理）：
@@ -666,6 +709,13 @@ export const useChatStore = defineStore('chat', () => {
     if (!activeSessionId.value || event.sessionId !== activeSessionId.value) {
       return
     }
+
+    // 运行身份判别（F8）：收尾事件的 runId 与该会话最新运行不符 = 旧 driver 晚到收尾。
+    // 运行态集合已在上方按注册表收敛；此处再跳过对视图/队列/状态栏的整份覆盖——
+    // 新 run 的流式视图与状态不得被旧快照打掉。列表标题刷新照旧（历史事实仍有效）。
+    const staleRun = event.type === 'run-finish' || event.type === 'run-error'
+      ? latestRunIdBySession.get(event.sessionId) !== event.runId
+      : false
 
     if (event.type === 'run-start') {
       isRunning.value = true
@@ -747,15 +797,11 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'file-changed') {
-      // 实时合并（文件树自动刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖。
+      // 实时合并（文件树刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖。
       // lastFileChange 逐条记录原文，供内容面板判断是否重读当前打开的文件。
+      // （反馈队列已在全局段带归属记录，此处只跟随激活会话的会话级状态）
       applyFileChangeRecord(event.file)
       lastFileChange.value = event.file
-      // 反馈队列（§7）：逐条保留供定位高亮消费，上限 30 防长任务堆积
-      recentFileChanges.value = [
-        ...recentFileChanges.value.slice(-29),
-        { sessionId: event.sessionId, record: event.file },
-      ]
       return
     }
 
@@ -768,6 +814,10 @@ export const useChatStore = defineStore('chat', () => {
       // 以 driver 注册表真实状态为准：停止后立刻再发送时，pendingWake 再唤醒的新 run 的
       // run-start 可能先于旧 driver 的 run-error 到达，无条件置 false 会把新 run 的运行态打掉
       isRunning.value = isAgentRunActive(event.sessionId)
+      if (staleRun) {
+        // 旧运行晚到的失败：不打断新运行的流式态与状态栏，注册表收敛已在上面完成
+        return
+      }
       isStopping.value = false
       streamingMessageId.value = null
       setRunStatus(event.error.message, 'error')
@@ -777,6 +827,15 @@ export const useChatStore = defineStore('chat', () => {
     if (event.type === 'run-finish') {
       // 同上：旧 driver 收尾事件晚到时，新 driver 可能已在注册表中（isRunning 保持 true）
       isRunning.value = isAgentRunActive(event.sessionId)
+      if (staleRun) {
+        // 旧运行晚到的完成快照：视图/队列/状态栏保持新运行现场；列表标题仍如实刷新
+        const entry = sessions.value.find((s) => s.sessionId === event.sessionId)
+        if (entry && event.result.session.title && entry.title !== event.result.session.title) {
+          void loadSessions(event.result.projectId)
+        }
+        return
+      }
+      latestRunIdBySession.delete(event.sessionId)
       isStopping.value = false
       streamingMessageId.value = null
       // 历史窗口兼容：run-finish 携带全量视图，按当前窗口起点切片，翻页成果不被冲掉

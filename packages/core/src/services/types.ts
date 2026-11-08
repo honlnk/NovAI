@@ -625,6 +625,14 @@ export type FileChangeConfirmationView = {
 
 export type AgentUiEvent =
   | { type: 'run-start'; runId: string; sessionId: string }
+  /**
+   * driver 出错收尾（数据安全计划 F8 运行身份）：runId 标识本次连续运行——
+   * 停止后立即重发时旧 driver 的收尾可能晚于新 run 的事件到达，UI 据此识别
+   * 过期收尾，不接受其整份快照。
+   */
+  | { type: 'run-error'; runId: string; sessionId: string; error: NovAiError }
+  /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
+  | { type: 'run-finish'; runId: string; sessionId: string; result: RunAgentTurnResult }
   | { type: 'message'; sessionId: string; message: ChatMessageView }
   /** 模型流式输出的文本增量（瞬态渲染态）；同一条 assistant 消息共享稳定 messageId，最终由 message 事件原位落盘。 */
   | { type: 'message-delta'; sessionId: string; messageId: string; text: string }
@@ -654,9 +662,6 @@ export type AgentUiEvent =
    * 切换会话后仍能恢复等待态（与 confirmations-updated 同构）。
    */
   | { type: 'questions-updated'; sessionId: string; questions: AskUserQuestionRequestView[] }
-  | { type: 'run-error'; sessionId: string; error: NovAiError }
-  /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
-  | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }
   /**
    * 服务端新落盘了一个会话（委派会话在主会话运行中创建）：载荷自带列表摘要，
    * 前端直接 upsert 进会话列表——事件后再遍历文件系统会在创建方连发落盘的

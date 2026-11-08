@@ -87,10 +87,21 @@ export const useProjectStore = defineStore('project', () => {
   const isReady = computed(() => currentProject.value !== null)
   const isFileSystemSupported = computed(() => isProjectAccessSupported())
 
+  /**
+   * 项目选择代次（数据安全计划 F6）：每次发起打开/创建/恢复项目递增，关闭项目同样
+   * 递增。恢复流程（restoreRecentProject 等）挂起期间用户已切到别的项目（或回到首页）
+   * 时，晚到的恢复结果不覆盖新现场——只完成自己的只读工作，不 setCurrentProject。
+   */
+  let projectSelectionGeneration = 0
+
   async function createNewProject(projectName: string) {
+    const generation = ++projectSelectionGeneration
     return runProjectAction(
       async () => {
         const project = await createProject(projectName)
+        if (generation !== projectSelectionGeneration) {
+          return null
+        }
         await setCurrentProject(project)
         statusMessage.value = `已创建项目「${project.name}」`
         return project
@@ -100,9 +111,13 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   async function openExistingProject() {
+    const generation = ++projectSelectionGeneration
     return runProjectAction(
       async () => {
         const project = await openProject()
+        if (generation !== projectSelectionGeneration) {
+          return null
+        }
         await setCurrentProject(project)
         statusMessage.value = `已打开项目「${project.name}」`
         return project
@@ -112,12 +127,16 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   async function restoreLastOpenedProject() {
+    const generation = ++projectSelectionGeneration
     return runProjectAction(
       async () => {
         const project = await restoreLastProject()
 
         if (!project) {
           notice.value = { kind: 'info', message: '没有可恢复的上次项目记录' }
+          return null
+        }
+        if (generation !== projectSelectionGeneration) {
           return null
         }
 
@@ -130,12 +149,16 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   async function openRecentProject(projectId: string) {
+    const generation = ++projectSelectionGeneration
     return runProjectAction(
       async () => {
         const project = await restoreRecentProject(projectId)
 
         if (!project) {
           notice.value = { kind: 'info', message: '没有找到该最近项目记录' }
+          return null
+        }
+        if (generation !== projectSelectionGeneration) {
           return null
         }
 
@@ -247,6 +270,8 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     const project = currentProject.value
+    // 关闭也是一次项目选择意图：此后晚到的恢复结果不得复活已关闭的项目现场
+    projectSelectionGeneration += 1
 
     await runProjectAction(async () => {
       await closeProject(project.id)
@@ -256,18 +281,33 @@ export const useProjectStore = defineStore('project', () => {
     })
   }
 
+  /**
+   * 文件选择代次（数据安全计划 F6）：每次发起新的打开递增。读取完成时已有更新的
+   * 选择意图（读了甲又读乙、甲后完成）或项目已切走，结果直接丢弃——当前面板
+   * 不被过期读取覆盖。
+   */
+  let fileSelectionGeneration = 0
+
   async function openFile(path: string) {
     if (!currentProject.value) {
       return null
     }
+    const projectId = currentProject.value.id
+    const generation = ++fileSelectionGeneration
 
     errorMessage.value = ''
 
     try {
-      activeFile.value = await readFile(currentProject.value.id, path)
-      return activeFile.value
+      const content = await readFile(projectId, path)
+      if (generation !== fileSelectionGeneration || currentProject.value?.id !== projectId) {
+        return null
+      }
+      activeFile.value = content
+      return content
     } catch (error) {
-      errorMessage.value = toMessage(error, '读取文件失败')
+      if (currentProject.value?.id === projectId) {
+        errorMessage.value = toMessage(error, '读取文件失败')
+      }
       return null
     }
   }
@@ -285,6 +325,33 @@ export const useProjectStore = defineStore('project', () => {
       return await readFile(currentProject.value.id, path)
     } catch {
       return null
+    }
+  }
+
+  /**
+   * 带失败原因的只读探测（数据安全计划 §3-5：磁盘读取失败与文件不存在必须分开提示，
+   * 不能把所有异常都解释为「文件不存在」）。项目未打开时返回 unreadable。
+   */
+  async function probeFile(
+    path: string,
+  ): Promise<
+    | { kind: 'ok'; file: FileContentView }
+    | { kind: 'missing' }
+    | { kind: 'unreadable'; message: string }
+  > {
+    const projectId = currentProject.value?.id
+    if (!projectId) {
+      return { kind: 'unreadable', message: '没有打开的项目' }
+    }
+    try {
+      const file = await readFile(projectId, path)
+      return { kind: 'ok', file }
+    } catch (error) {
+      // 文件系统 API 的「不存在」信号（getFileHandle/getDirectoryHandle 抛 NotFoundError）
+      if (error instanceof DOMException && error.name === 'NotFoundError') {
+        return { kind: 'missing' }
+      }
+      return { kind: 'unreadable', message: toMessage(error, '读取文件失败') }
     }
   }
 
@@ -581,6 +648,7 @@ export const useProjectStore = defineStore('project', () => {
     openExistingProject,
     openFile,
     peekFile,
+    probeFile,
     openRecentProject,
     refreshTree,
     removeRecentProject,

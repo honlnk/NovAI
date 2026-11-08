@@ -167,10 +167,13 @@ async function restoreWorkspaceState() {
   const sessionFallback = preferredSessionId !== null
     && !chatStore.sessions.some((s) => s.sessionId === preferredSessionId)
 
-  // 文件恢复：仅记录存在时接管；undefined（旧记录/无记录）沿用 core 的默认首文件行为
+  // 文件恢复：仅记录存在时接管；undefined（旧记录/无记录）沿用 core 的默认首文件行为。
+  // 恢复中手动切换（F6 验收2）：用户已手动打开别的文件时不再拉回记录的路径
   let fileFallback = false
   if (record && record.activeFilePath !== undefined) {
-    if (record.activeFilePath === null) {
+    if (projectStore.activeFile) {
+      // 用户已选择：尊重当前现场
+    } else if (record.activeFilePath === null) {
       projectStore.clearActiveFile()
     } else {
       const opened = await projectStore.openFile(record.activeFilePath)

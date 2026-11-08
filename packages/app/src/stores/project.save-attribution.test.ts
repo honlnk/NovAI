@@ -12,6 +12,8 @@ import { useProjectStore } from './project'
  */
 
 const writeFile = vi.hoisted(() => vi.fn())
+const restoreRecentProject = vi.hoisted(() => vi.fn())
+const closeProjectMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@novai/core/services/file-service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@novai/core/services/file-service')>()
@@ -21,6 +23,15 @@ vi.mock('@novai/core/services/file-service', async (importOriginal) => {
     readFile: vi.fn(),
     createFile: vi.fn(),
     refreshFiles: vi.fn(),
+  }
+})
+
+vi.mock('@novai/core/services/project-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@novai/core/services/project-service')>()
+  return {
+    ...actual,
+    restoreRecentProject,
+    closeProject: closeProjectMock,
   }
 })
 
@@ -134,6 +145,108 @@ describe('projectStore.saveFile 保存归属固定', () => {
     await store.saveFile('chapters/a.txt', '覆盖内容', { force: true })
 
     expect(writeFile).toHaveBeenCalledWith('proj-甲', 'chapters/a.txt', '覆盖内容', {})
+  })
+})
+
+describe('projectStore 项目恢复代次（验收2 项目面：恢复中手动切换）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    writeFile.mockReset()
+    restoreRecentProject.mockReset()
+  })
+
+  it('项目甲恢复慢、项目乙恢复快（发起序甲后乙）：甲晚到不覆盖乙的现场', async () => {
+    const store = useProjectStore()
+
+    let releaseA!: (value: ProjectView) => void
+    let releaseB!: (value: ProjectView) => void
+    restoreRecentProject
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseA = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseB = resolve
+      }))
+
+    const openA = store.openRecentProject('proj-甲')
+    const openB = store.openRecentProject('proj-乙')
+    releaseB(fakeProject('proj-乙', '乙'))
+    await openB
+    // 甲的恢复此时才完成（用户已在乙的现场）
+    releaseA(fakeProject('proj-甲', '甲'))
+    await openA
+
+    expect(store.currentProject?.id).toBe('proj-乙')
+  })
+
+  it('关闭项目后晚到的恢复结果不复活已关闭现场', async () => {
+    const store = useProjectStore()
+    store.currentProject = fakeProject('proj-乙', '乙')
+    closeProjectMock.mockResolvedValue(undefined)
+
+    let releaseA!: (value: ProjectView) => void
+    restoreRecentProject.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseA = resolve
+    }))
+    const openA = store.openRecentProject('proj-甲')
+    // 恢复挂起期间用户关闭项目回到首页（closeCurrentProject 递增项目代次）
+    await store.closeCurrentProject()
+    releaseA(fakeProject('proj-甲', '甲'))
+    await openA
+
+    expect(store.currentProject).toBeNull()
+  })
+})
+
+describe('projectStore.openFile 文件选择代次（验收2 文件面）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    writeFile.mockReset()
+  })
+
+  it('甲慢乙快（点击序甲后乙）：甲后完成不得覆盖乙的读取结果', async () => {
+    const store = useProjectStore()
+    store.currentProject = fakeProject('proj-甲', '甲')
+
+    const readFile = vi.mocked((await import('@novai/core/services/file-service')).readFile)
+    let releaseA!: (value: ReturnType<typeof savedView>) => void
+    let releaseB!: (value: ReturnType<typeof savedView>) => void
+    readFile
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseA = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseB = resolve
+      }))
+
+    const openA = store.openFile('chapters/甲.txt')
+    const openB = store.openFile('chapters/乙.txt')
+    releaseB(savedView('chapters/乙.txt', '乙的内容', '2026-11-08T12:00:00.000Z'))
+    await openB
+    releaseA(savedView('chapters/甲.txt', '甲的内容', '2026-11-08T12:00:01.000Z'))
+    await openA
+
+    // 乙是最新选择意图：面板保持乙，甲的晚到读取被丢弃
+    expect(store.activeFile?.path).toBe('chapters/乙.txt')
+    expect(store.activeFile?.content).toBe('乙的内容')
+  })
+
+  it('读取期间项目已切走：结果不写入新项目的面板', async () => {
+    const store = useProjectStore()
+    store.currentProject = fakeProject('proj-甲', '甲')
+
+    const readFile = vi.mocked((await import('@novai/core/services/file-service')).readFile)
+    let releaseA!: (value: ReturnType<typeof savedView>) => void
+    readFile.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseA = resolve
+    }))
+
+    const openA = store.openFile('chapters/甲.txt')
+    store.currentProject = fakeProject('proj-乙', '乙') // 保存/读取在途切项目
+    releaseA(savedView('chapters/甲.txt', '甲的内容', '2026-11-08T12:00:00.000Z'))
+    await expect(openA).resolves.toBeNull()
+
+    expect(store.activeFile).toBeNull()
   })
 })
 

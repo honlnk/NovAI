@@ -11,17 +11,29 @@ import {
   buildPendingReplaceSegments,
   type TextHighlightSegment,
 } from '../../composables/useChangeHighlights'
+import { clearFileDraft, getFileDraftEntry, type DraftEntry } from '../../composables/useFileDrafts'
+import { buildLineDiffRows, countLineDiff } from '../../utils/text-diff'
+import { applyEditCandidate, resolveConfirmDraftBranch, type ConfirmDraftBranch } from '../../utils/confirm-draft'
+import { suggestCopyPath } from '../../utils/file-tree'
 
 /**
- * 内容写入确认面板（交互优化计划 §8）：新建与正文编辑确认从聊天黄色双块卡迁入
- * 现有右侧内容面板——全文只读展示局部红绿差异（绿 = 候选新内容，红 = 将被替换的
- * 原文，均未写盘），底部固定「同意写入 / 拒绝」。聊天区只留「等待审阅」标记与
- * 返回入口；离开（关闭面板）不取消请求。
+ * 内容写入确认面板（交互优化计划 §8 + 数据安全计划 §3-5）：新建与正文编辑确认
+ * 从聊天黄色双块卡迁入现有右侧内容面板——全文只读展示局部红绿差异（绿 = 候选
+ * 新内容，红 = 将被替换的原文，均未写盘），底部固定「同意写入 / 拒绝」。聊天区
+ * 只留「等待审阅」标记与返回入口；离开（关闭面板）不取消请求。
+ *
+ * 人工草稿接入（§3-5 五分支）：按「磁盘版本」与「人工草稿」两条信息分别判断——
+ * - 无草稿：保留现有候选差异与版本复检，可直接同意；
+ * - 有草稿（磁盘未变/已变）：默认并列展示「人工草稿 × AI 候选写盘结果」，阻止
+ *   直接同意——磁盘写入不会自动保存人工草稿；先「保存人工草稿后重审」或
+ *   「保留副本后放弃草稿」再重新校验；磁盘已变时额外说明三方关系；
+ * - 磁盘读取失败与文件不存在分开提示；无法确认安全时默认不能同意。
  *
  * 版本复检（§8「确认前重新校验版本」）：面板打开与点击「同意写入」时各读一次磁盘，
  * 候选原文消失 / 文件被外部修改 / create 目标已被占用时暂停并展示失配原因，由用户
  * 决定重新校验、仍要同意（以真实工具结果为准——EditFile 自身的旧文匹配闸仍然生效）
- * 或拒绝。同意/拒绝只唤醒 Agent Loop，真实写盘由工具执行（服务层不把本地点击当成已执行）。
+ * 或拒绝。同意/拒绝只唤醒 Agent Loop，真实写盘由工具执行（服务层不把本地点击当成
+ * 已执行）。「仍要同意」不绕过草稿冲突，也不绕过工具自身的原文匹配与版本保护。
  */
 const props = defineProps<{
   /** 当前待审阅的 create/edit 确认（队首） */
@@ -47,11 +59,51 @@ const isCreate = computed(() => candidate.value?.kind === 'create')
 
 /** 目标文件当前磁盘内容（create 时探测占用；读不到为 null） */
 const diskFile = ref<{ content: string; hash: string } | null>(null)
+/** 磁盘读取失败原因（与「文件不存在」分开提示，§3-5） */
+const diskUnreadableMessage = ref('')
 const loadingDisk = ref(false)
 /** 版本失配状态：idle 正常；changed = 文件被外部修改但候选原文仍在；missing = 候选原文已不存在 / 目标已被占用 */
 const staleState = ref<'idle' | 'changed' | 'missing'>('idle')
 /** 防重复提交（§8 每个请求独立锁定提交） */
 const deciding = ref(false)
+
+/** 目标路径的人工草稿条目（§3-5 草稿维度） */
+const draftEntry = ref<DraftEntry | null>(null)
+/** 草稿分支（none/clean/diverged/unreadable/missing；判定见 utils/confirm-draft） */
+const draftBranch = ref<ConfirmDraftBranch>('none')
+/** 草稿处理动作（保存/副本）在途与失败反馈 */
+const draftActionBusy = ref(false)
+const draftActionError = ref('')
+/** 副本改名输入（目标被占用时展开） */
+const copyTarget = ref('')
+const copyRenameOpen = ref(false)
+const copySavedNotice = ref('')
+
+const canDirectConfirm = computed(() => draftBranch.value === 'none')
+
+const projectId = computed(() => projectStore.currentProject?.id ?? null)
+
+/** 有草稿时并列展示「人工草稿 × AI 候选写盘结果」的行级差异（红=仅草稿，绿=仅候选结果） */
+const draftConflictRows = computed(() => {
+  const c = candidate.value
+  const entry = draftEntry.value
+  const disk = diskFile.value
+  if (!c || !entry || !disk) {
+    return null
+  }
+  const applied = applyEditCandidate(disk.content, c)
+  return buildLineDiffRows(entry.content, applied)
+})
+
+/** 磁盘已变时的三方关系说明（人工基线 × 当前磁盘差异统计） */
+const baselineDrift = computed(() => {
+  const entry = draftEntry.value
+  const disk = diskFile.value
+  if (!entry || !disk || draftBranch.value !== 'draft-diverged') {
+    return null
+  }
+  return countLineDiff(entry.baseContent, disk.content)
+})
 
 /** 预览切分段：edit 在磁盘内容上定位候选原文；create 整篇候选内容绿显 */
 const segments = computed<TextHighlightSegment[] | null>(() => {
@@ -81,21 +133,49 @@ const fileName = computed(() => {
   return path.split('/').pop() ?? path
 })
 
+/** 探测代次（F6 验收3）：确认甲尚未读完时切到确认乙/另一项目，甲的读取结果不进入乙的预览 */
+let probeGeneration = 0
+
 async function loadDisk() {
   const c = candidate.value
   if (!c) return
+  const generation = ++probeGeneration
   loadingDisk.value = true
+  diskUnreadableMessage.value = ''
+  draftActionError.value = ''
   try {
-    const file = await projectStore.peekFile(c.path)
-    diskFile.value = file ? { content: file.content, hash: hashContent(file.content) } : null
-    // 重新载入后重算失配状态：候选原文仍在即恢复可正常同意
-    if (c.kind === 'edit') {
-      staleState.value =
-        file && file.content.includes(c.oldText)
-          ? 'idle'
-          : 'missing'
+    const projectIdNow = projectId.value
+    draftEntry.value = projectIdNow ? getFileDraftEntry(projectIdNow, c.path) ?? null : null
+    const probe = await projectStore.probeFile(c.path)
+    // 读取期间已切到别的确认/项目：本次结果过期，直接丢弃
+    if (generation !== probeGeneration) {
+      return
+    }
+    if (probe.kind === 'ok') {
+      const file = probe.file
+      diskFile.value = { content: file.content, hash: hashContent(file.content) }
     } else {
-      staleState.value = file ? 'missing' : 'idle'
+      diskFile.value = null
+      if (probe.kind === 'unreadable') {
+        diskUnreadableMessage.value = probe.message
+      }
+    }
+    draftBranch.value = resolveConfirmDraftBranch({
+      probe: probe.kind === 'ok'
+        ? { kind: 'ok', content: probe.file.content }
+        : probe.kind === 'missing'
+          ? { kind: 'missing' }
+          : { kind: 'unreadable' },
+      draftEntry: draftEntry.value,
+      isCreate: isCreate.value,
+    })
+    // 版本失配（审阅期间外部修改/候选原文消失）：与草稿维度并列判断
+    if (probe.kind === 'ok' && c.kind === 'edit') {
+      staleState.value = probe.file.content.includes(c.oldText) ? 'idle' : 'missing'
+    } else if (probe.kind === 'ok' && c.kind === 'create') {
+      staleState.value = 'missing' // create 探测到内容 = 目标被占用
+    } else {
+      staleState.value = 'idle' // missing/unreadable 由草稿分支横幅独立提示
     }
   } finally {
     loadingDisk.value = false
@@ -106,21 +186,112 @@ watch(
   () => props.confirmation.id,
   () => {
     staleState.value = 'idle'
+    draftBranch.value = 'none'
+    draftEntry.value = null
+    copySavedNotice.value = ''
+    copyRenameOpen.value = false
+    copyTarget.value = ''
     void loadDisk()
   },
   { immediate: true },
 )
 
 /**
+ * 「保存人工草稿后重审」（§3-5）：把草稿显式落盘（用户主动保存，草稿随之清除），
+ * 然后重新校验磁盘与候选——回到无草稿分支再决定同意与否。磁盘已变（AI 已写盘）
+ * 时保存会覆盖磁盘修改，按钮文案已警示。
+ */
+async function handleSaveDraft() {
+  const c = candidate.value
+  const entry = draftEntry.value
+  if (!c || !entry || draftActionBusy.value) return
+  const confirmationId = props.confirmation.id
+  draftActionBusy.value = true
+  draftActionError.value = ''
+  try {
+    const outcome = await projectStore.saveFile(c.path, entry.content)
+    // 写盘期间已切到别的确认：草稿清除按路径照做，错误反馈不污染新确认
+    if (props.confirmation.id !== confirmationId) {
+      if (outcome.ok && projectId.value) {
+        clearFileDraft(projectId.value, c.path)
+      }
+      return
+    }
+    if (!outcome.ok) {
+      draftActionError.value = outcome.message
+      return
+    }
+    if (projectId.value) {
+      clearFileDraft(projectId.value, c.path)
+    }
+    copySavedNotice.value = ''
+    await loadDisk()
+  } finally {
+    draftActionBusy.value = false
+  }
+}
+
+/**
+ * 「保留副本后放弃草稿」（§3-5）：草稿以新建文件语义另存副本（不覆盖任何已有
+ * 文件，占用时要求改名），原草稿清除后重新审阅。副本留在项目里供用户处理。
+ */
+async function handleKeepCopyDraft() {
+  const c = candidate.value
+  const entry = draftEntry.value
+  if (!c || !entry || draftActionBusy.value) return
+  if (!copyTarget.value.trim()) {
+    draftActionError.value = '请填写副本文件名'
+    return
+  }
+  draftActionBusy.value = true
+  draftActionError.value = ''
+  const confirmationId = props.confirmation.id
+  try {
+    const outcome = await projectStore.createFileCopy(copyTarget.value.trim(), entry.content)
+    if (props.confirmation.id !== confirmationId) {
+      // 已切确认：副本按新建语义照常存在，反馈不污染新确认
+      return
+    }
+    if (!outcome.ok) {
+      draftActionError.value = outcome.exists ? `「${copyTarget.value.trim()}」已存在，请换个名字` : outcome.message
+      return
+    }
+    copySavedNotice.value = `草稿已另存为副本：${copyTarget.value.trim()}`
+    if (projectId.value) {
+      clearFileDraft(projectId.value, c.path)
+    }
+    copyRenameOpen.value = false
+    await loadDisk()
+    await projectStore.refreshTree()
+  } finally {
+    draftActionBusy.value = false
+  }
+}
+
+function openCopyRename() {
+  const c = candidate.value
+  if (!c) return
+  copyTarget.value = suggestCopyPath(projectStore.currentProject?.files ?? [], c.path)
+  copyRenameOpen.value = true
+  draftActionError.value = ''
+}
+
+/**
  * 同意写入：先做确认前版本复检（§8），失配则暂停展示原因，由用户决定；
- * 版本相符才唤醒 Agent Loop 交给工具真实执行。
+ * 版本相符才唤醒 Agent Loop 交给工具真实执行。有人工草稿时不得直接同意
+ * （§3-5 阻止危险同意——「仍要同意」同样不绕过草稿冲突）。
  */
 async function handleConfirm() {
   const c = candidate.value
-  if (!c || deciding.value || staleState.value !== 'idle') return
+  if (!c || deciding.value || staleState.value !== 'idle' || !canDirectConfirm.value) return
+  const confirmationId = props.confirmation.id
   deciding.value = true
   try {
     const fresh = await projectStore.peekFile(c.path)
+    // 复检期间已切确认：结果不进入新确认的预览（confirm 不发出）
+    if (props.confirmation.id !== confirmationId) {
+      return
+    }
     if (c.kind === 'edit') {
       if (!fresh || !fresh.content.includes(c.oldText)) {
         staleState.value = 'missing'
@@ -179,9 +350,119 @@ const staleExplain = computed(() => {
       <span v-if="replaceCount > 1" class="ml-1 text-amber-600">（共 {{ replaceCount }} 处替换）</span>
     </div>
 
-    <!-- 版本失配提示（§8「失配则暂停并展示新版本与候选差异」）：不自动决定，给出出口 -->
+    <!-- 人工草稿分支横幅（§3-5）：有草稿阻止直接同意，先处理草稿再重审 -->
     <div
-      v-if="staleState !== 'idle'"
+      v-if="draftBranch === 'draft-clean' || draftBranch === 'draft-diverged'"
+      class="flex shrink-0 flex-col gap-2 border-b border-amber-200 bg-amber-50/80 px-4 py-2.5"
+      role="alert"
+    >
+      <div class="flex items-start gap-1.5 text-xs text-amber-800">
+        <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+        <div class="min-w-0 flex-1 leading-5">
+          <p class="font-medium">这个文件有你的未保存草稿</p>
+          <p v-if="draftBranch === 'draft-clean'">
+            同意写入只改磁盘正文，不会自动保存你的草稿；草稿会保留，之后保存时会出现两个版本的对比。
+            需要先处理草稿才能同意。
+          </p>
+          <p v-else>
+            磁盘正文在你编辑之后已被修改（AI 或外部）。三方关系：你的草稿基于较早的磁盘版本
+            <span v-if="baselineDrift">（与当前磁盘相差 {{ baselineDrift.onlyLeft + baselineDrift.onlyRight }} 行）</span>，
+            当前磁盘即将被写入 AI 候选。禁止直接同意——先处理草稿，再重新校验。
+          </p>
+        </div>
+      </div>
+      <p v-if="draftActionError" class="pl-5 text-xs text-red-600">{{ draftActionError }}</p>
+      <p v-if="copySavedNotice" class="pl-5 text-xs text-green-700">{{ copySavedNotice }}（原草稿已清除，可重新审阅）</p>
+      <div v-if="draftEntry" class="flex flex-wrap items-center gap-2 pl-5">
+        <button
+          type="button"
+          class="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
+          :disabled="draftActionBusy"
+          @click="handleSaveDraft"
+        >
+          {{ draftActionBusy ? '处理中…' : draftBranch === 'draft-diverged' ? '保存草稿后重审（将覆盖磁盘上的修改）' : '保存草稿后重审' }}
+        </button>
+        <button
+          v-if="!copyRenameOpen"
+          type="button"
+          class="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
+          @click="openCopyRename"
+        >
+          保留副本后放弃草稿
+        </button>
+        <template v-if="copyRenameOpen">
+          <input
+            v-model="copyTarget"
+            type="text"
+            class="min-w-0 flex-1 rounded-md border border-amber-300 bg-white px-2 py-1 font-mono text-xs text-gray-800 focus:border-amber-500 focus:outline-none"
+            placeholder="副本文件路径"
+          >
+          <button
+            type="button"
+            class="shrink-0 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
+            :disabled="draftActionBusy || !copyTarget.trim()"
+            @click="handleKeepCopyDraft"
+          >
+            保存副本
+          </button>
+          <button
+            type="button"
+            class="shrink-0 rounded-md px-1.5 py-1 text-xs text-amber-700 hover:underline"
+            @click="copyRenameOpen = false; draftActionError = ''"
+          >
+            取消
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <!-- 磁盘读取失败（§3-5 与文件不存在分开提示）：无法确认安全，默认不能同意 -->
+    <div
+      v-if="draftBranch === 'unreadable'"
+      class="flex shrink-0 items-start gap-1.5 border-b border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700"
+      role="alert"
+    >
+      <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+      <div class="min-w-0 flex-1 leading-5">
+        <p class="font-medium">磁盘读取失败：{{ diskUnreadableMessage || '未知原因' }}</p>
+        <p>无法确认写入是否安全，默认不能同意。可重新校验，或拒绝此请求。</p>
+      </div>
+      <button
+        type="button"
+        class="shrink-0 rounded border border-red-300 bg-white px-2 py-0.5 font-medium text-red-700 hover:bg-red-100"
+        @click="loadDisk"
+      >重新校验</button>
+    </div>
+
+    <!-- 文件不存在（与读取失败分开）：沿用版本失配出口 -->
+    <div
+      v-if="draftBranch === 'missing'"
+      class="flex shrink-0 items-start gap-1.5 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800"
+      role="alert"
+    >
+      <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+      <div class="min-w-0 flex-1 leading-5">
+        <p>{{ isCreate ? '目标文件已存在，无法按「新建」写入。' : '目标文件在磁盘上已不存在。' }}</p>
+        <p>可拒绝此请求，或仍要同意（以真实工具结果为准，工具会自行报错或按实际情况执行）。</p>
+      </div>
+      <div class="flex shrink-0 gap-2">
+        <button
+          type="button"
+          class="rounded border border-amber-300 bg-white px-2 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+          @click="loadDisk"
+        >重新校验</button>
+        <button
+          type="button"
+          class="rounded px-2 py-0.5 font-medium text-amber-800 underline-offset-2 hover:underline"
+          @click="emit('confirm')"
+        >仍要同意（以工具结果为准）</button>
+      </div>
+    </div>
+
+    <!-- 版本失配提示（§8「失配则暂停并展示新版本与候选差异」）：不自动决定，给出出口。
+         有草稿分支时「仍要同意」隐藏（§3-5 不绕过草稿冲突） -->
+    <div
+      v-if="staleState !== 'idle' && draftBranch === 'none'"
       class="flex shrink-0 items-start gap-1.5 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800"
       role="alert"
     >
@@ -203,9 +484,40 @@ const staleExplain = computed(() => {
       </div>
     </div>
 
-    <!-- 全文只读预览：绿 = 候选新内容，红 = 将被替换的原文（均未写盘） -->
+    <!-- 全文只读预览：有草稿时并列「人工草稿 × AI 候选写盘结果」（§3-5）；
+         无草稿保持「绿 = 候选新内容，红 = 将被替换的原文」（均未写盘） -->
     <div class="relative min-h-0 flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-4 mx-4 my-3">
       <div v-if="loadingDisk" class="py-8 text-center text-xs text-gray-400">正在读取目标文件…</div>
+
+      <!-- 有草稿：两栏并列对比（红=仅人工草稿，绿=仅 AI 候选结果） -->
+      <template v-else-if="draftConflictRows && (draftBranch === 'draft-clean' || draftBranch === 'draft-diverged')">
+        <div class="grid grid-cols-2 gap-2 overflow-hidden" :style="{ maxHeight: '100%' }">
+          <div class="flex flex-col rounded border border-gray-200 bg-white">
+            <p class="border-b border-gray-100 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-600">人工草稿（未保存）</p>
+            <div class="overflow-y-auto p-2">
+              <div
+                v-for="(row, index) in draftConflictRows"
+                :key="`l${index}`"
+                class="whitespace-pre-wrap text-xs leading-5"
+                :class="row.kind === 'left' ? 'confirm-draft-red' : 'text-gray-400'"
+              >{{ row.kind === 'right' ? '' : row.text }}&nbsp;</div>
+            </div>
+          </div>
+          <div class="flex flex-col rounded border border-gray-200 bg-white">
+            <p class="border-b border-gray-100 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-600">AI 写入后的结果（未写盘）</p>
+            <div class="overflow-y-auto p-2">
+              <div
+                v-for="(row, index) in draftConflictRows"
+                :key="`r${index}`"
+                class="whitespace-pre-wrap text-xs leading-5"
+                :class="row.kind === 'right' ? 'confirm-hl-green' : 'text-gray-400'"
+              >{{ row.kind === 'left' ? '' : row.text }}&nbsp;</div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- 无草稿：现有候选差异预览 -->
       <pre
         v-else-if="segments"
         class="change-hl-scope whitespace-pre-wrap text-sm leading-6 text-gray-800"
@@ -219,10 +531,12 @@ const staleExplain = computed(() => {
       </div>
     </div>
 
-    <!-- 底部固定操作（§8）：同意写入 / 拒绝；拒绝不写入，Agent 收到拒绝结果后可调整 -->
+    <!-- 底部固定操作（§8）：同意写入 / 拒绝；有人工草稿时同意被阻止（§3-5） -->
     <div class="flex shrink-0 items-center justify-between gap-3 border-t border-gray-200 px-4 py-3">
       <p class="min-w-0 text-[11px] leading-4 text-gray-400">
-        拒绝不写入；同意后由 Agent 真实执行写盘，结果以工具返回为准。
+        {{ canDirectConfirm
+          ? '拒绝不写入；同意后由 Agent 真实执行写盘，结果以工具返回为准。'
+          : '目标文件有你的未保存草稿（或磁盘不可读）：先处理上方草稿分支，才能同意写入。' }}
       </p>
       <div class="flex shrink-0 items-center gap-2">
         <button
@@ -233,7 +547,8 @@ const staleExplain = computed(() => {
         <button
           type="button"
           class="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
-          :disabled="staleState !== 'idle' || deciding || loadingDisk"
+          :disabled="staleState !== 'idle' || deciding || loadingDisk || !canDirectConfirm"
+          :title="canDirectConfirm ? undefined : '先处理人工草稿（或等待磁盘可读）才能同意'"
           @click="handleConfirm"
         >同意写入</button>
       </div>
@@ -247,10 +562,18 @@ const staleExplain = computed(() => {
   background-color: rgb(187 247 208 / 0.9);
   border-radius: 2px;
 }
+
 .confirm-hl-red {
   background-color: rgb(254 202 202 / 0.9);
   text-decoration: line-through;
   text-decoration-color: rgb(220 38 38 / 0.55);
   border-radius: 2px;
+}
+
+/* 草稿×候选两栏对比中的「仅人工草稿」行：是保留内容而非被替换文本，不加删除线 */
+.confirm-draft-red {
+  background-color: rgb(254 202 202 / 0.7);
+  border-radius: 2px;
+  color: rgb(153 27 27);
 }
 </style>
