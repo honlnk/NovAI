@@ -112,3 +112,52 @@ export function resolveActiveFileEffect(
 
   return change.path === activeFilePath ? { action: 'reload', path: change.path } : null
 }
+
+/**
+ * 为「把人工草稿另存为副本」建议一个不冲突的目标路径（数据安全计划 §3-6/§3-3）。
+ *
+ * 副本是新建文件语义：目标存在时保存会被拒绝并要求另选名称，建议名只做预填——
+ * 以现有文件树为参照，在源文件同目录下取「<主干>-草稿副本<扩展名>」，
+ * 被占用时依次追加 -2、-3 …，全部占用则退到时间戳后缀（必然唯一）。
+ *
+ * @param files 全量嵌套树（当前项目）
+ * @param sourcePath 源文件路径（草稿所在路径）
+ * @returns 建议的目标路径（仅预填，提交时仍按新建语义校验）
+ */
+export function suggestCopyPath(files: ProjectFileNodeView[], sourcePath: string): string {
+  const existing = new Set(collectAllFilePaths(files))
+
+  const slash = sourcePath.lastIndexOf('/')
+  const dir = slash >= 0 ? sourcePath.slice(0, slash) : ''
+  const base = slash >= 0 ? sourcePath.slice(slash + 1) : sourcePath
+  const dot = base.lastIndexOf('.')
+  const stem = dot > 0 ? base.slice(0, dot) : base
+  const ext = dot > 0 ? base.slice(dot) : ''
+  const prefix = dir ? `${dir}/` : ''
+
+  for (let attempt = 1; attempt <= 99; attempt += 1) {
+    const candidate = attempt === 1
+      ? `${prefix}${stem}-草稿副本${ext}`
+      : `${prefix}${stem}-草稿副本-${attempt}${ext}`
+    if (!existing.has(candidate)) {
+      return candidate
+    }
+  }
+  return `${prefix}${stem}-草稿副本-${Date.now()}${ext}`
+}
+
+function collectAllFilePaths(files: ProjectFileNodeView[]): string[] {
+  const paths: string[] = []
+  const visit = (nodes: ProjectFileNodeView[]) => {
+    for (const node of nodes) {
+      if (node.kind === 'file') {
+        paths.push(node.path)
+      }
+      if (node.kind === 'directory' && node.children?.length) {
+        visit(node.children)
+      }
+    }
+  }
+  visit(files)
+  return paths
+}

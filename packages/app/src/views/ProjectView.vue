@@ -7,7 +7,15 @@ import { useIndexStore } from '../stores/index'
 import { usePlanStore } from '../stores/plan'
 import { useToast } from '../composables/useToast'
 import { useConversationFilter } from '../composables/useConversationFilter'
-import { hasDirtyDrafts } from '../composables/useFileDrafts'
+import {
+  clearFileDraft,
+  flushDraftBackupsNow,
+  hasDirtyDrafts,
+  isFileDraftDirty,
+  moveFileDraft,
+  restorePersistedDrafts,
+} from '../composables/useFileDrafts'
+import { setupDraftBackupLifecycle } from '../composables/draft-backup'
 import {
   clearChangeHighlights,
   pushChangeNotice,
@@ -20,7 +28,7 @@ import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
 import ContentPanel from '../components/layout/ContentPanel.vue'
-import FilePanelBody from '../components/layout/FilePanelBody.vue'
+import FilePanelBody, { type DraftGuardState } from '../components/layout/FilePanelBody.vue'
 import IndexStatusBar from '../components/layout/IndexStatusBar.vue'
 import WriteConfirmPanel from '../components/layout/WriteConfirmPanel.vue'
 import PlanBoardPanel from '../components/plan/PlanBoardPanel.vue'
@@ -68,6 +76,13 @@ const isRagOpen = ref(false)
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
 /** 内容面板空态提示（AI 删除了正打开的文件时置入，指向回收站去向；打开新文件时清空） */
 const panelNotice = ref<{ name: string; trashPath?: string } | null>(null)
+/**
+ * 草稿守护（数据安全计划 §3-3）：AI 删除/重命名有人工草稿的当前文件时置入——
+ * 不自动清空编辑现场、不静默迁移草稿，由 FilePanelBody 横幅给出明确去向选择。
+ */
+const draftGuard = ref<DraftGuardState | null>(null)
+/** 草稿恢复令牌：IndexedDB 恢复完成后递增，驱动 FilePanelBody 重读当前路径草稿 */
+const draftRestoreToken = ref(0)
 
 /**
  * 内容面板宽度（R7）：从 localStorage 读取，clamp 到 240~720，无记录时默认 320。
@@ -226,6 +241,19 @@ onMounted(async () => {
   // 初始化聊天会话并恢复上次工作区现场（恢复内部含会话首选/回退与文件恢复）
   await restoreWorkspaceState()
 
+  // 刷新后恢复持久化草稿（数据安全计划 §3-2）：IndexedDB 备份回填内存表，绝不写
+  // 正文文件；有恢复项时递增令牌让面板重读当前路径草稿并亮「已恢复」横幅。
+  // 读取失败明确提示（保留当前页面内容，不静默置空）。
+  try {
+    const report = await restorePersistedDrafts(projectId.value)
+    if (report.restored.length > 0) {
+      draftRestoreToken.value += 1
+      toast.info(`已恢复 ${report.restored.length} 份未保存草稿（未写盘）`, { duration: 5000 })
+    }
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : '读取草稿备份失败')
+  }
+
   // 初始化 RAG 索引状态栏（订阅事件 + 首次读取 meta）
   await indexStore.init(projectId.value)
 
@@ -240,8 +268,31 @@ onMounted(async () => {
 
 onUnmounted(() => {
   indexStore.dispose()
+  teardownDraftBackup?.()
   window.removeEventListener('beforeunload', handleBeforeUnload)
 })
+
+// 草稿备份生命周期（数据安全计划 §3-2）：页面隐藏/关闭前立即落盘待写备份
+let teardownDraftBackup: (() => void) | null = null
+onMounted(() => {
+  teardownDraftBackup = setupDraftBackupLifecycle()
+})
+
+// 后台会话保存失败到达（§3-4 保存失败可见）：立即 toast 提示；持续展示面（错误条
+// 常驻、按会话处理）由第三波 F11 承接，本处保证失败绝不静默
+watch(
+  () => chatStore.sessionSaveFailures.size,
+  (size, previous) => {
+    if (size <= (previous ?? 0)) {
+      return
+    }
+    const latest = [...chatStore.sessionSaveFailures.values()]
+      .sort((left, right) => right.at.localeCompare(left.at))[0]
+    if (latest) {
+      toast.error(`会话保存失败：${latest.message}`, { duration: 8000 })
+    }
+  },
+)
 
 // 未保存内容保护的刷新风险口（§6）：项目内有任何未保存编辑草稿时，刷新/关闭
 // 标签页给出浏览器原生确认（正文不自动保存，离开即丢——必须让用户明确选择）
@@ -320,10 +371,24 @@ async function processChangeRecord(entry: RecentFileChange) {
   const effect = resolveActiveFileEffect(panel?.path ?? projectStore.activeFile?.path ?? null, change)
   const isActiveSession = entry.sessionId === chatStore.activeSessionId
 
-  // 删除命中当前打开文件：清空面板——快照再留着就是幽灵文件（编辑保存还会复活它），
-  // 清空后由空态提示回收站去向
+  // 删除命中当前打开文件：有未保存草稿时置入草稿守护（数据安全计划 §3-3）——
+  // 不清空编辑现场、草稿原样保留，由 FilePanelBody 横幅给出「恢复为草稿副本/
+  // 放弃草稿并关闭」的去向选择；无草稿才清空面板——快照再留着就是幽灵文件
+  // （编辑保存还会复活它），清空后由空态提示回收站去向
   if (effect?.action === 'clear') {
     const deleted = change.type === 'deleted' ? change : null
+    const deletedPath = projectStore.activeFile?.path
+    if (deleted && deletedPath && isFileDraftDirty(projectId.value, deletedPath)) {
+      draftGuard.value = {
+        kind: 'deleted',
+        path: deletedPath,
+        name: projectStore.activeFile?.name ?? '当前文件',
+        ...(deleted.trashPath !== undefined ? { trashPath: deleted.trashPath } : {}),
+      }
+      isContentPanelOpen.value = true
+      toast.info(`「${draftGuard.value.name}」已被删除，你的未保存草稿已保留`)
+      return
+    }
     panelNotice.value = {
       name: projectStore.activeFile?.name ?? '当前文件',
       trashPath: deleted?.trashPath,
@@ -334,6 +399,23 @@ async function processChangeRecord(entry: RecentFileChange) {
 
   // 命中当前打开的文件：重读 + 尝试自动播放
   if (effect?.action === 'reload') {
+    // 重命名命中且有未保存草稿：暂停自动接管（§3-3）——静默重读会让草稿挂在已不
+    // 存在的旧路径上；置入守护，由用户选「迁移草稿/放弃并打开新文件」
+    if (change.type === 'renamed') {
+      if (isFileDraftDirty(projectId.value, change.fromPath)) {
+        draftGuard.value = {
+          kind: 'renamed',
+          path: change.fromPath,
+          name: change.fromPath.split('/').pop() ?? change.fromPath,
+          toPath: change.toPath,
+        }
+        isContentPanelOpen.value = true
+        toast.info(`「${draftGuard.value.name}」已被重命名，你的未保存草稿已保留`)
+        return
+      }
+      await projectStore.openFile(change.toPath)
+      return
+    }
     // 未保存内容保护（§6）：有草稿不静默覆盖，保留草稿并提醒；通知给出查看入口
     if (panel?.dirty) {
       toast.info(`「${projectStore.activeFile?.name ?? effect.path}」已被 AI 更新，你的未保存草稿已保留`)
@@ -342,7 +424,7 @@ async function processChangeRecord(entry: RecentFileChange) {
       }
       return
     }
-    // 编辑模式不打断输入：入通知队列（改名除外——旧路径已不存在，仍需静默重读）
+    // 编辑模式不打断输入：入通知队列（重命名已在上面分支处理完毕）
     if (panel?.viewMode === 'edit' && isContentChange) {
       pushChangeNotice(projectId.value, buildChangeNotice(record))
       return
@@ -417,13 +499,18 @@ async function handleLocateChange(notice: ChangeNotice) {
   toast.info(`「${notice.fileName}」内容已再次变化，无法定位该处修改`)
 }
 
-// 切项目：清空上一项目的反馈队列与高亮状态（跨项目不串扰）
+// 切项目：清空上一项目的反馈队列、高亮状态与草稿守护（跨项目不串扰）；
+// 切走前把待写草稿备份立即落盘（§3-2 立即落盘时机）
 watch(
   projectId,
-  () => {
+  (next, previous) => {
+    if (previous !== undefined) {
+      void flushDraftBackupsNow()
+    }
     processedChangeIds.clear()
     chatStore.clearRecentFileChanges()
     clearChangeHighlights(projectId.value)
+    draftGuard.value = null
   },
   { immediate: true },
 )
@@ -441,6 +528,8 @@ watch(
 )
 
 function handleBackToHome() {
+  // 离开项目：待写草稿备份立即落盘（§3-2），内存草稿表保留（回来即恢复）
+  void flushDraftBackupsNow()
   projectStore.closeCurrentProject()
   router.push('/')
 }
@@ -522,6 +611,47 @@ function handleReloadFile(path: string) {
   void projectStore.openFile(path)
 }
 
+// ===== 草稿守护动作（数据安全计划 §3-3）：去向由用户明确选择，AI 不代决 =====
+
+/** 「放弃草稿」：删草稿（含持久化备份）并按守护类型收尾（清空面板 / 打开新文件） */
+async function handleGuardDiscard() {
+  const guard = draftGuard.value
+  if (!guard) {
+    return
+  }
+  clearFileDraft(projectId.value, guard.path)
+  draftGuard.value = null
+  if (guard.kind === 'deleted') {
+    panelNotice.value = {
+      name: guard.name,
+      ...(guard.trashPath !== undefined ? { trashPath: guard.trashPath } : {}),
+    }
+    projectStore.clearActiveFile()
+    return
+  }
+  if (guard.toPath) {
+    await projectStore.openFile(guard.toPath)
+  }
+}
+
+/** 重命名守护「把草稿迁移到新文件」：迁移草稿（保留旧路径关联）并打开新路径 */
+async function handleGuardMigrate() {
+  const guard = draftGuard.value
+  if (!guard || guard.kind !== 'renamed' || !guard.toPath) {
+    return
+  }
+  moveFileDraft(projectId.value, guard.path, guard.toPath)
+  draftGuard.value = null
+  await projectStore.openFile(guard.toPath)
+  toast.info('草稿已迁移，以「未保存」标记出现在新文件上')
+}
+
+/** 守护已在面板内解决（「恢复为草稿副本」建副本并打开）：清守护与空态提示 */
+function handleGuardResolved() {
+  draftGuard.value = null
+  panelNotice.value = null
+}
+
 /** FilePanelBody 实例引用：AI 改动重读守卫读它的未保存草稿状态 */
 const filePanelRef = useTemplateRef('filePanelRef')
 
@@ -601,6 +731,8 @@ function handleCloseContentPanel() {
   const target = panelCloseTarget(workspacePanel.value.kind)
   if (target === 'file') {
     isContentPanelOpen.value = false
+    // 关闭文件面板：当前文件的草稿仍留在草稿表（重开即恢复），备份立即落盘（§3-2）
+    void flushDraftBackupsNow()
   } else if (target === 'plan') {
     isPlanPanelOpen.value = false
   }
@@ -934,10 +1066,15 @@ function handleGoToSettings() {
           :notice="panelNotice"
           :save-file="handleFileSave"
           :locate-token="locateToken"
+          :draft-guard="draftGuard"
+          :draft-restore-token="draftRestoreToken"
           @close="handleCloseContentPanel"
           @reload="handleReloadFile"
           @select-quote="handleSelectQuote"
           @locate-change="handleLocateChange"
+          @guard-discard="handleGuardDiscard"
+          @guard-migrate="handleGuardMigrate"
+          @guard-resolved="handleGuardResolved"
         />
         <!-- 写入确认面板（§8）：接管内容面板时 FilePanelBody 由 v-show 隐藏（保持挂载、草稿不丢） -->
         <WriteConfirmPanel

@@ -663,6 +663,12 @@ export type AgentUiEvent =
    * 写窗口内漏掉新会话文件，不可靠。
    */
   | { type: 'session-created'; sessionId: string; projectId: string; summary: ChatSessionSummaryView }
+  /**
+   * 会话后台保存失败（fire-and-forget 路径，如提问卡/回答落盘）：没有调用方接收
+   * 异常，失败必须广播给 UI 可观测展示，不得静默吞掉（数据安全计划 §3-4）。
+   * reason 说明是哪条链路的保存（如「提问卡落盘」「回答落盘」）。
+   */
+  | { type: 'session-save-failed'; sessionId: string; projectId: string; reason: string; message: string }
 
 export type NovAiErrorCode =
   | 'PROJECT_NOT_OPEN'

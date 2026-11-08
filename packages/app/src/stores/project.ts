@@ -16,7 +16,9 @@ import {
   updateRecentProjectCounts,
 } from '@novai/core/services/project-service'
 import {
+  FileExistsError,
   FileSaveConflictError,
+  createFile,
   readFile,
   refreshFiles,
   writeFile,
@@ -59,6 +61,14 @@ export type ProjectActionNotice = {
 export type SaveFileOutcome =
   | { ok: true; file: FileContentView }
   | { ok: false; conflict: boolean; message: string; diskUpdatedAt?: string }
+
+/**
+ * 新建文件语义写入的结果（数据安全计划 §3-3「恢复为草稿副本」/ §3-6「将草稿另存为副本」）：
+ * exists=true 表示目标已被占用——副本保存绝不覆盖，调用方提示另选名称。
+ */
+export type CreateFileOutcome =
+  | { ok: true; file: FileContentView }
+  | { ok: false; exists: boolean; message: string }
 
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<ProjectView | null>(null)
@@ -279,12 +289,15 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
-   * 保存内容面板编辑模式的草稿到磁盘。
-   * 写盘成功后更新 activeFile（同步最新 updatedAt），不刷新整个文件树
-   *（文件树结构未变，仅内容更新）。
+   * 保存内容面板编辑模式的草稿到磁盘（数据安全计划 §3-1：保存绑定完整请求上下文）。
    *
-   * 返回判别结果供面板保存状态机使用（§6「真实成功才报已更新」）：冲突（文件被外部
-   * 修改/删除）单独标出，草稿的保留与覆盖选择由面板呈现。
+   * - 目标项目在调用开始时固定：等待写盘期间切换项目，写盘仍落在原项目，
+   *   不会写入乙项目；
+   * - 结果只应用仍有效的归属：等待期间当前文件已被切走时不回写 activeFile
+   *   （不把面板拉回被保存的文件）；面板按返回的 file 处理本次保存绑定的草稿。
+   *
+   * 返回判别结果供面板保存状态机使用：冲突（文件被外部修改/删除）单独标出，
+   * 由面板的冲突界面（版本比较与选择）呈现，本 store 不再提供覆盖出口。
    */
   async function saveFile(
     path: string,
@@ -294,14 +307,18 @@ export const useProjectStore = defineStore('project', () => {
     if (!currentProject.value) {
       return { ok: false, conflict: false, message: '没有打开的项目' }
     }
+    const projectId = currentProject.value.id
 
     errorMessage.value = ''
 
     try {
-      activeFile.value = await writeFile(currentProject.value.id, path, content, {
+      const saved = await writeFile(projectId, path, content, {
         ...(options?.force ? {} : { expectedUpdatedAt: options?.expectedUpdatedAt }),
       })
-      return { ok: true, file: activeFile.value }
+      if (currentProject.value?.id === projectId && activeFile.value?.path === path) {
+        activeFile.value = saved
+      }
+      return { ok: true, file: saved }
     } catch (error) {
       if (error instanceof FileSaveConflictError) {
         return {
@@ -314,6 +331,32 @@ export const useProjectStore = defineStore('project', () => {
       const message = toMessage(error, '保存文件失败')
       errorMessage.value = message
       return { ok: false, conflict: false, message }
+    }
+  }
+
+  /**
+   * 新建文件语义的写入（数据安全计划 §3-3/§3-6）：「恢复为草稿副本」「将草稿另存为副本」
+   * 用。目标已存在时失败（exists=true，提示另选名称），绝不覆盖既有文件；
+   * 不触碰 activeFile——打开新文件由调用方决定。
+   */
+  async function createFileCopy(path: string, content: string): Promise<CreateFileOutcome> {
+    if (!currentProject.value) {
+      return { ok: false, exists: false, message: '没有打开的项目' }
+    }
+    const projectId = currentProject.value.id
+
+    errorMessage.value = ''
+
+    try {
+      const created = await createFile(projectId, path, content)
+      return { ok: true, file: created }
+    } catch (error) {
+      if (error instanceof FileExistsError) {
+        return { ok: false, exists: true, message: error.message }
+      }
+      const message = toMessage(error, '保存副本失败')
+      errorMessage.value = message
+      return { ok: false, exists: false, message }
     }
   }
 
@@ -529,6 +572,7 @@ export const useProjectStore = defineStore('project', () => {
     changeReasoningEffort,
     clearActiveFile,
     closeCurrentProject,
+    createFileCopy,
     createNewProject,
     dismissNotice,
     forgetLastOpenedProject,

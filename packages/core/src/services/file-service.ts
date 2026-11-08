@@ -96,3 +96,33 @@ export async function writeFile(
   await writeProjectTextFile(project.handle, path, content)
   return toFileContentView(await readProjectFile(project, path))
 }
+
+/**
+ * 新建文件语义的写入（数据安全计划 §3-3）：目标已存在时抛 FileExistsError，
+ * 绝不覆盖。「恢复为草稿副本」「将草稿另存为副本」走这里——副本保存必须是
+ * 用户明确触发的新文件，与 writeFile（可覆盖既有路径）严格区分。
+ */
+export async function createFile(
+  projectId: string,
+  path: string,
+  content: string,
+): Promise<FileContentView> {
+  const project = requireRuntimeProject(projectId)
+  const existing = await readProjectFile(project, path).catch(() => null)
+  if (existing) {
+    throw new FileExistsError(path)
+  }
+  await writeProjectTextFile(project.handle, path, content)
+  return toFileContentView(await readProjectFile(project, path))
+}
+
+/** createFile 的目标占用错误：调用方提示另选名称，不允许覆盖。 */
+export class FileExistsError extends Error {
+  readonly path: string
+
+  constructor(path: string) {
+    super(`文件 ${path} 已存在，请另选名称`)
+    this.name = 'FileExistsError'
+    this.path = path
+  }
+}

@@ -170,13 +170,45 @@ export const useChatStore = defineStore('chat', () => {
   )
 
   /** 有待回答提问的会话 id 集（会话列表「待回答」徽标）。 */
-  const sessionsWithPendingQuestions = computed(() =>
+  const sessionsWithPendingQuestions = computed<Set<string>>(() =>
     new Set(
       [...pendingQuestionsBySession.value.entries()]
         .filter(([, list]) => list.length > 0)
         .map(([sessionId]) => sessionId),
     ),
   )
+
+  /**
+   * 会话后台保存失败记录（数据安全计划 §3-4 会话保存失败可见）：
+   * 前台保存（用户在等）由调用方 await 直接呈现；后台落盘（归档收尾、提问卡等）
+   * 失败时 core 广播 session-save-failed，这里按会话去重登记（最新一次覆盖）。
+   * 列表常驻供错误条持续展示（F11），用户处理后 dismiss。
+   */
+  const sessionSaveFailures = ref(new Map<string, { sessionId: string; reason: string; message: string; at: string }>())
+
+  /** 登记一条后台保存失败（同会话最新一次覆盖） */
+  function recordSessionSaveFailure(event: {
+    sessionId: string
+    reason: string
+    message: string
+  }) {
+    sessionSaveFailures.value = new Map(sessionSaveFailures.value).set(event.sessionId, {
+      sessionId: event.sessionId,
+      reason: event.reason,
+      message: event.message,
+      at: new Date().toISOString(),
+    })
+  }
+
+  /** 用户已处理（重试成功/知悉）后移除该会话的失败记录 */
+  function dismissSessionSaveFailure(sessionId: string) {
+    if (!sessionSaveFailures.value.has(sessionId)) {
+      return
+    }
+    const next = new Map(sessionSaveFailures.value)
+    next.delete(sessionId)
+    sessionSaveFailures.value = next
+  }
 
   /**
    * 任务组折叠态：组 id（= 组首 user 消息 id）→ 显式展开/收起，优先级高于默认
@@ -204,6 +236,8 @@ export const useChatStore = defineStore('chat', () => {
    * 取代旧的 ensureSessionView（后者只支持单会话）。
    */
   async function initSessions(projectId: string, preferredSessionId?: string | null): Promise<ChatSessionView> {
+    // 进入新项目：上一项目的后台保存失败记录不再有意义（§3-4）
+    sessionSaveFailures.value = new Map()
     await loadSessions(projectId)
 
     if (preferredSessionId && sessions.value.some((s) => s.sessionId === preferredSessionId)) {
@@ -621,6 +655,13 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    // 后台保存失败（§3-4）：登记供持续展示，任何会话（含后台委派）都记；
+    // 切项目时由 initSessions 清空重置
+    if (event.type === 'session-save-failed') {
+      recordSessionSaveFailure(event)
+      return
+    }
+
     // 其余事件只消费当前激活会话的（后台会话的 driver 仍在跑，UI 不跟随）
     if (!activeSessionId.value || event.sessionId !== activeSessionId.value) {
       return
@@ -919,5 +960,7 @@ export const useChatStore = defineStore('chat', () => {
     unarchiveSession,
     toggleQuestionOption,
     toggleProcessGroup,
+    sessionSaveFailures,
+    dismissSessionSaveFailure,
   }
 })
