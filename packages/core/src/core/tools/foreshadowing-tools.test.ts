@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   createForeshadowingTool,
   deleteForeshadowingTool,
+  foreshadowingCheckTool,
+  foreshadowingSyncTool,
   listForeshadowingTool,
   readForeshadowingForPlanningTool,
   readForeshadowingTool,
@@ -252,5 +254,135 @@ describe('DeleteForeshadowing', () => {
     expect(deleteForeshadowingTool.extractFileChange(output)).toMatchObject({ type: 'deleted', path: created.sourcePath })
     const scan = await scanForeshadowingCards({ handle: root })
     expect(scan.cards).toHaveLength(0)
+  })
+})
+
+describe('ForeshadowingCheck / ForeshadowingSync（写前/写后高层工具）', () => {
+  /** 第二条伏笔：第 10 章埋、窗口 12~15（覆盖第 12 章） */
+  async function createDueSample() {
+    return createForeshadowingTool.run(
+      createForeshadowingTool.validateInput({
+        name: '门后钥匙',
+        readerView: '门后挂着一把锈钥匙，没人提起它的来历。',
+        authorTruth: '钥匙通向母亲被封存的实验室。',
+        plantedAt: '第一卷/第010章',
+        payoffWindow: ['第一卷/第012章', '第一卷/第015章'],
+      }),
+      runtime(),
+    )
+  }
+
+  /** 带章节树的 runtime（Sync 的章节文件定位走 project.tree） */
+  function runtimeWithChapters(): ToolRuntime {
+    return {
+      project: {
+        handle: root,
+        tree: [
+          {
+            kind: 'directory',
+            name: 'chapters',
+            path: 'chapters',
+            children: [
+              {
+                kind: 'directory',
+                name: '第一卷',
+                path: 'chapters/第一卷',
+                children: [
+                  { kind: 'file', name: '第012章-旧书店.txt', path: 'chapters/第一卷/第012章-旧书店.txt' },
+                ],
+              },
+            ],
+          },
+        ],
+      } as never,
+    }
+  }
+
+  it('Check：窗口覆盖本章且未收 → 预计回收；埋设/暗示命中 → 本章已关联；只含读者视角', async () => {
+    await createSample() // F-001 埋于第 12 章，窗口 80~90（不覆盖本章）
+    await createDueSample() // F-002 埋于第 10 章，窗口 12~15（覆盖本章）
+
+    const output = await foreshadowingCheckTool.run(
+      foreshadowingCheckTool.validateInput({ chapter: 12 }),
+      runtime(),
+    )
+
+    expect(output.dueForPayoff.map((card) => card.id)).toEqual(['F-002'])
+    expect(output.relatedToChapter.map((card) => card.id)).toEqual(['F-001'])
+    expect(output.relatedToChapter[0]!.matchedBy).toBe('planted')
+    // 防剧透边界：整个输出不出现任何作者真相
+    expect(JSON.stringify(output)).not.toContain('复制体')
+    expect(JSON.stringify(output)).not.toContain('实验室')
+  })
+
+  it('Check：暗示历史命中本章按 mentioned 归类', async () => {
+    const created = await createSample()
+    await updateForeshadowingTool.run(
+      updateForeshadowingTool.validateInput({ id: created.id, addRelatedChapters: ['第一卷/第015章'] }),
+      runtime(),
+    )
+
+    const output = await foreshadowingCheckTool.run(
+      foreshadowingCheckTool.validateInput({ chapter: 15 }),
+      runtime(),
+    )
+
+    expect(output.relatedToChapter.map((card) => card.id)).toEqual([created.id])
+    expect(output.relatedToChapter[0]!.matchedBy).toBe('mentioned')
+    expect(output.dueForPayoff).toHaveLength(0) // 窗口 80~90 不覆盖第 15 章
+  })
+
+  it('Check：章号非法（0/小数/字符串）校验失败', () => {
+    expect(() => foreshadowingCheckTool.validateInput({ chapter: 0 })).toThrow('chapter')
+    expect(() => foreshadowingCheckTool.validateInput({ chapter: 1.5 })).toThrow('chapter')
+    expect(() => foreshadowingCheckTool.validateInput({ chapter: '12' })).toThrow('chapter')
+  })
+
+  it('Sync：本章关联含真相与 contentHash，该收未收单列，当量标准与章节路径齐备', async () => {
+    await createSample() // F-001 埋于第 12 章
+    await createDueSample() // F-002 窗口覆盖第 12 章、未收
+    await writeProjectTextFile(root, 'chapters/第一卷/第012章-旧书店.txt', '第012章 旧书店\n\n正文……')
+
+    const output = await foreshadowingSyncTool.run(
+      foreshadowingSyncTool.validateInput({ chapter: 12 }),
+      runtimeWithChapters(),
+    )
+
+    expect(output.chapterPath).toBe('chapters/第一卷/第012章-旧书店.txt')
+    expect(output.related.map((card) => card.id)).toEqual(['F-001'])
+    expect(output.related[0]!.authorTruth).toContain('复制体')
+    expect(output.related[0]!.contentHash).toBeTruthy()
+    expect(output.dueUnresolved.map((card) => card.id)).toEqual(['F-002'])
+    expect(output.payoffEquityStandard).toContain('改变')
+    expect(output.payoffEquityStandard).toContain('代价')
+    expect(output.payoffEquityStandard).toContain('重新解释')
+    expect(output.guidance).toContain('不自动推进')
+  })
+
+  it('Sync：章节文件缺失时 chapterPath 为 null，伏笔上下文照常返回', async () => {
+    const created = await createDueSample()
+
+    const output = await foreshadowingSyncTool.run(
+      foreshadowingSyncTool.validateInput({ chapter: 12 }),
+      runtime(), // 无 tree
+    )
+
+    expect(output.chapterPath).toBeNull()
+    expect(output.dueUnresolved.map((card) => card.id)).toEqual([created.id])
+  })
+
+  it('Sync：已收（resolved）的伏笔不进该收未收', async () => {
+    const created = await createDueSample()
+    await updateForeshadowingTool.run(
+      updateForeshadowingTool.validateInput({ id: created.id, status: 'resolved', resolvedAt: '第一卷/第012章' }),
+      runtime(),
+    )
+
+    const output = await foreshadowingSyncTool.run(
+      foreshadowingSyncTool.validateInput({ chapter: 12 }),
+      runtime(),
+    )
+
+    expect(output.dueUnresolved).toHaveLength(0)
   })
 })

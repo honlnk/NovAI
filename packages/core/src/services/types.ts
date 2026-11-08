@@ -1,7 +1,8 @@
-import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
+import type { ForeshadowingStatusMode, PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
 import type { ReasoningEffort } from '../types/ai'
 import type { AgentRoleId } from '../core/agent/roles'
 import type { PlanScanIssue } from '../types/plans'
+import type { ForeshadowingScanIssue, ForeshadowingStatus } from '../types/foreshadowing'
 import type { FileChangeCoords } from '../types/chat'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
@@ -72,6 +73,8 @@ export type ProjectConfigView = {
     embeddingTextVersion: number
     enableDebugLogging: boolean
     activeOutlinePath: string | null
+    /** 伏笔看板列模式（default 4 列 / full 6 列；语义见 types/project.ts） */
+    foreshadowingStatusMode: ForeshadowingStatusMode
   }
 }
 
@@ -271,6 +274,63 @@ export type PlanBoardView = {
 
 export type PlanScanIssueView = PlanScanIssue
 
+/** 伏笔卡片状态（与核心域 ForeshadowingStatus 同值域：六状态精确值，四列视图由 UI 折叠）。 */
+export type ForeshadowingStatusView = ForeshadowingStatus
+
+/**
+ * 伏笔卡片摘要：看板列、列表与 AI ListForeshadowing 使用，不携带正文分节。
+ * 必须含 plantedAt/payoffWindow/isRedHerring：看板卡片与「该收了」高亮依赖它们。
+ */
+export type ForeshadowingCardSummaryView = {
+  id: string
+  name: string
+  status: ForeshadowingStatusView
+  order: number
+  createdAt: string
+  updatedAt: string
+  /** 埋设章节（完整路径「卷/章」）。 */
+  plantedAt: string
+  /** 预计回收窗口（区间两端）；未设置为 null。 */
+  payoffWindow: readonly [string, string] | null
+  /** 是否故意误导（红鲱鱼）。 */
+  isRedHerring: boolean
+  /**
+   * 暗示历史（再提及的章节「卷/章」列表）：章节侧栏「本章相关伏笔」实时反查依赖它，
+   * 摘要也必须携带（否则非埋设章看不到相关伏笔）。
+   */
+  relatedChapters: string[]
+  /** 摘要（读者视角正文首个非标题非空行，不含作者真相）。 */
+  summary: string
+  sourcePath: string
+}
+
+/**
+ * 完整伏笔卡片（详情编辑使用）。直接携带作者真相：UI 是作者本人的界面，
+ * truth-hidden 防线（写正文链路只见 readerBody）在 AI 工具链路上，不在 view 层。
+ */
+export type ForeshadowingCardView = ForeshadowingCardSummaryView & {
+  relatedCharacters: string[]
+  relatedEntities: string[]
+  /** 实际回收章节；未回收为 null。 */
+  resolvedAt: string | null
+  /** 放弃原因（避免日后误以为漏写）；未放弃为 null。 */
+  abandonedReason: string | null
+  /** 读者视角正文（正文去掉「作者真相」节）。 */
+  readerBody: string
+  /** 作者真相正文（无该节时为空串）。 */
+  authorTruth: string
+  /** 读取时文件全文 hash：保存时回传做冲突检测（外部修改守卫）。 */
+  contentHash: string
+}
+
+/** 伏笔看板视图：列固定为六个 frontmatter 状态精确值 + 目录扫描异常报告。 */
+export type ForeshadowingBoardView = {
+  columns: Readonly<Record<ForeshadowingStatusView, readonly ForeshadowingCardSummaryView[]>>
+  issues: readonly ForeshadowingScanIssueView[]
+}
+
+export type ForeshadowingScanIssueView = ForeshadowingScanIssue
+
 export type ProjectIssueView =
   | 'missing-config'
   | 'invalid-config'
@@ -304,6 +364,8 @@ export type ToolNameView =
   | 'CreateForeshadowing'
   | 'UpdateForeshadowing'
   | 'DeleteForeshadowing'
+  | 'ForeshadowingCheck'
+  | 'ForeshadowingSync'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'

@@ -8,14 +8,22 @@ import {
 import { serializeForeshadowingCard, splitForeshadowingBody } from '../foreshadowing/parser'
 import { countDiffLines } from './file-tools/diff-line-stats'
 import { asRecord, readString } from './file-tools/common'
+import { parseChapterNumber } from './chapter-name'
 import { isForeshadowingStatus } from '../../types/foreshadowing'
 import { FORESHADOWING_STATUS_LABELS } from '../../types/foreshadowing'
-import type { ForeshadowingStatus } from '../../types/foreshadowing'
+import type { ForeshadowingCardView, ForeshadowingStatus } from '../../types/foreshadowing'
+import type { TreeNode } from '../../types/project'
 import type {
   CreateForeshadowingInput,
   CreateForeshadowingOutput,
   DeleteForeshadowingInput,
   DeleteForeshadowingOutput,
+  ForeshadowingCheckCard,
+  ForeshadowingCheckInput,
+  ForeshadowingCheckOutput,
+  ForeshadowingSyncCard,
+  ForeshadowingSyncInput,
+  ForeshadowingSyncOutput,
   ListForeshadowingInput,
   ListForeshadowingOutput,
   ReadForeshadowingForPlanningOutput,
@@ -498,5 +506,199 @@ export const deleteForeshadowingTool: ToolDefinition<'DeleteForeshadowing', Dele
   },
   buildConfirmation(input) {
     return { kind: 'delete', path: `foreshadowing/（伏笔 ${input.id}）` }
+  },
+}
+
+// ---------- 高层工具：写前检查 / 写后同步（创作心智模块计划 §六） ----------
+//
+// 两个工具都是只读的上下文组装器：
+// - Check（写前）：该收哪些 + 本章已提及，只含读者视角——写作链路的防剧透边界不变。
+// - Sync（写后）：提案所需的完整上下文（含真相 + contentHash + 当量标准），提案由模型
+//   整理后交作者审阅；落盘仍走带确认的 Create/UpdateForeshadowing——一条确认链路，
+//   不为批量提案另做审批 UI。
+// 章号匹配统一走「第N章」数值比较：全本连续编号是主流；卷内独立编号可能漏报/误报
+// （与 UI「该收了」高亮同一简化口径）。
+
+const PAYOFF_EQUITY_STANDARD = [
+  '回收当量三问（至少占一样才算够分量的回收）：',
+  '- 改变：局面变了，有人的立场变了，有条路打开了；',
+  '- 代价：真相出来的同时有人失去了什么；',
+  '- 重新解释：让读者此前读过的一批内容忽然有了另一层意思。',
+  '最弱的还账形式是解释——一样不占的回收，提案时要标注「这次回收只是解释，当量偏弱」。',
+].join('\n')
+
+/** 未收口径：还没揭晓/解决/放弃（planted / hinted / developed）。 */
+function isForeshadowingUnresolved(status: ForeshadowingStatus): boolean {
+  return status === 'planted' || status === 'hinted' || status === 'developed'
+}
+
+/** 窗口是否覆盖某章：起点可解析且 ≤ N；终点可解析时 N ≤ 终点（不可解析按开放区间）。 */
+function payoffWindowCovers(window: readonly [string, string] | null, chapter: number): boolean {
+  if (!window) {
+    return false
+  }
+  const start = parseChapterNumber(window[0])
+  if (start === null || chapter < start) {
+    return false
+  }
+  const end = parseChapterNumber(window[1])
+  return end === null || chapter <= end
+}
+
+function toCheckCard(card: ForeshadowingCardView): ForeshadowingCheckCard {
+  return {
+    id: card.id,
+    name: card.name,
+    status: card.status,
+    plantedAt: card.plantedAt,
+    payoffWindow: copyPayoffWindow(card.payoffWindow),
+    summary: card.summary,
+  }
+}
+
+/** 窗口元组拷贝：直接展开会把 [string, string] 放宽成 string[]。 */
+function copyPayoffWindow(window: readonly [string, string] | null): [string, string] | null {
+  return window ? [window[0], window[1]] : null
+}
+
+function readChapterInput(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} 必须是正整数章号（如 12 表示第 12 章）`)
+  }
+  return value
+}
+
+/** chapters/ 树里按章号找章节文件路径；找不到返回 null（重章号取第一个命中）。 */
+function findChapterPath(tree: readonly TreeNode[], chapter: number): string | null {
+  const stack = [...tree]
+  while (stack.length > 0) {
+    const node = stack.shift()
+    if (!node) {
+      continue
+    }
+    if (node.kind === 'file' && node.path.startsWith('chapters/') && parseChapterNumber(node.path) === chapter) {
+      return node.path
+    }
+    if (node.children?.length) {
+      stack.unshift(...node.children)
+    }
+  }
+  return null
+}
+
+export const foreshadowingCheckTool: ToolDefinition<'ForeshadowingCheck', ForeshadowingCheckInput, ForeshadowingCheckOutput> = {
+  name: 'ForeshadowingCheck',
+  description: '写前检查（写第 N 章前主动调用）：返回预计在本章回收的伏笔（回收窗口覆盖本章且未收）+ 本章已埋/已提及的伏笔（读者视角摘要）。结果只含读者视角，防剧透边界不变；设计具体回收方案需要真相时再用 ReadForeshadowingForPlanning 单条读取。',
+  validateInput(input) {
+    const value = asRecord(input)
+    return { chapter: readChapterInput(value.chapter, 'ForeshadowingCheck.chapter') }
+  },
+  async run(input, runtime) {
+    const scan = await scanForeshadowingCards(runtime.project)
+    const chapter = input.chapter
+
+    const dueForPayoff = scan.cards
+      .filter((card) => isForeshadowingUnresolved(card.status) && payoffWindowCovers(card.payoffWindow, chapter))
+      .map(toCheckCard)
+
+    const relatedToChapter = scan.cards
+      .filter((card) => {
+        if (parseChapterNumber(card.plantedAt) === chapter) {
+          return true
+        }
+        return card.relatedChapters.some((ref) => parseChapterNumber(ref) === chapter)
+      })
+      .map((card) => ({
+        ...toCheckCard(card),
+        matchedBy: parseChapterNumber(card.plantedAt) === chapter ? ('planted' as const) : ('mentioned' as const),
+        relatedChapters: [...card.relatedChapters],
+      }))
+
+    return {
+      chapter,
+      dueForPayoff,
+      relatedToChapter,
+      guidance: [
+        '写作提示：本章可考虑回收列出的「预计回收」伏笔（读者目前只知道各卡 summary 的事实）；',
+        '「本章已关联」是读者已知内容，写作时保持一致，不要矛盾重提。',
+        '需要设计回收细节（涉及真相）时改用 ReadForeshadowingForPlanning 按稳定标识读取。',
+      ].join('\n'),
+    }
+  },
+  summarizeInput(input) {
+    return `写前检查第 ${input.chapter} 章伏笔`
+  },
+  summarizeOutput(output) {
+    const parts = [`${output.dueForPayoff.length} 条预计回收`, `${output.relatedToChapter.length} 条本章已关联`]
+    return `第 ${output.chapter} 章：${parts.join('、')}`
+  },
+}
+
+export const foreshadowingSyncTool: ToolDefinition<'ForeshadowingSync', ForeshadowingSyncInput, ForeshadowingSyncOutput> = {
+  name: 'ForeshadowingSync',
+  description: '写后同步（写完第 N 章后主动调用）：通读本章后组装伏笔提案上下文——本章关联伏笔（含作者真相与 contentHash）+ 该收未收提醒 + 回收当量标准。本工具只读不落盘：把整理好的提案（新增伏笔 / 追加暗示历史 / 状态推进 / resolvedAt）先列给作者，作者批准后逐条用 CreateForeshadowing / UpdateForeshadowing 执行（写确认会再拦一道）。',
+  validateInput(input) {
+    const value = asRecord(input)
+    return { chapter: readChapterInput(value.chapter, 'ForeshadowingSync.chapter') }
+  },
+  async run(input, runtime) {
+    const chapter = input.chapter
+    const scan = await scanForeshadowingCards(runtime.project)
+
+    const relatedCards = scan.cards.filter((card) =>
+      parseChapterNumber(card.plantedAt) === chapter
+      || card.relatedChapters.some((ref) => parseChapterNumber(ref) === chapter))
+
+    // 逐条读取拿磁盘 contentHash：随后 UpdateForeshadowing 直接回传，省一次先读
+    const related: ForeshadowingSyncCard[] = []
+    for (const card of relatedCards) {
+      const result = await readForeshadowingCard(runtime.project, card.id)
+      if (!result) {
+        continue
+      }
+      const { readerBody, truthBody } = splitForeshadowingBody(result.card.body)
+      related.push({
+        id: result.card.id,
+        name: result.card.name,
+        status: result.card.status,
+        plantedAt: result.card.plantedAt,
+        relatedChapters: [...result.card.relatedChapters],
+        payoffWindow: copyPayoffWindow(result.card.payoffWindow),
+        isRedHerring: result.card.isRedHerring,
+        resolvedAt: result.card.resolvedAt,
+        readerBody,
+        authorTruth: truthBody,
+        contentHash: result.contentHash,
+      })
+    }
+
+    const dueUnresolved = scan.cards
+      .filter((card) => isForeshadowingUnresolved(card.status) && payoffWindowCovers(card.payoffWindow, chapter))
+      .map((card) => ({
+        id: card.id,
+        name: card.name,
+        status: card.status,
+        payoffWindow: copyPayoffWindow(card.payoffWindow),
+      }))
+
+    return {
+      chapter,
+      chapterPath: findChapterPath(runtime.project.tree ?? [], chapter),
+      related,
+      dueUnresolved,
+      payoffEquityStandard: PAYOFF_EQUITY_STANDARD,
+      guidance: [
+        '对照本章正文整理提案：本章新埋的线索（CreateForeshadowing）、再提及的既有伏笔（addRelatedChapters）、',
+        '本章回收的（status→revealed/resolved + resolvedAt，并回答当量三问）、「该收未收」里本章没碰到的（向作者说明，不自动推进）。',
+        '提案先列给作者审阅，批准后逐条执行；related 里已带 contentHash，更新正文可直接作为 expectedContentHash 回传。',
+      ].join('\n'),
+    }
+  },
+  summarizeInput(input) {
+    return `写后同步第 ${input.chapter} 章伏笔`
+  },
+  summarizeOutput(output) {
+    const parts = [`${output.related.length} 条本章关联`, `${output.dueUnresolved.length} 条该收未收`]
+    return `第 ${output.chapter} 章伏笔提案上下文：${parts.join('、')}`
   },
 }

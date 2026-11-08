@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ProjectFileNodeView } from '@novai/core/services/types'
+import type { ForeshadowingCardSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
+import { chapterRelatedForeshadowing, FORESHADOWING_STATUS_SHORT_LABELS } from '../../constants/foreshadowing'
 import { pickDirectoryChildren } from '../../utils/file-tree'
 import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   files: ProjectFileNodeView[]
   activeFilePath?: string
+  /** 全量伏笔摘要（实时反查「本章相关伏笔」用；不传则不显示该区块） */
+  foreshadowingCards?: ForeshadowingCardSummaryView[]
 }>()
 
 const emit = defineEmits<{
   selectFile: [path: string]
+  openForeshadowing: [id: string]
 }>()
 
 /**
@@ -20,6 +24,14 @@ const emit = defineEmits<{
 const chapterNodes = computed(() => pickDirectoryChildren(props.files, 'chapters'))
 
 const hasChapters = computed(() => chapterNodes.value.length > 0)
+
+/**
+ * 本章相关伏笔（施工计划 §七）：根据伏笔 frontmatter 实时反查——埋设章是本章，
+ * 或暗示历史包含本章。不写入章节文件，章节正文保持纯净（§九）。
+ */
+const relatedForeshadowing = computed(() =>
+  chapterRelatedForeshadowing(props.foreshadowingCards ?? [], props.activeFilePath),
+)
 
 /** 每个目录节点的展开状态，key = 目录 path */
 const expandedDirs = ref<Set<string>>(new Set())
@@ -44,6 +56,23 @@ function isDirExpanded(path: string) {
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
+      <!-- 本章相关伏笔：选中章节后实时反查（frontmatter），不写入章节文件 -->
+      <div v-if="relatedForeshadowing.length" class="mb-2 rounded-md bg-white/5 px-2 py-2" data-testid="chapter-related-foreshadowing">
+        <p class="px-1 pb-1 text-xs font-medium text-gray-500">本章相关伏笔</p>
+        <ul class="space-y-0.5">
+          <li v-for="card in relatedForeshadowing" :key="card.id">
+            <button
+              class="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+              @click="emit('openForeshadowing', card.id)"
+            >
+              <AppIcon name="eye-off" :size="12" class="h-3 w-3 shrink-0 text-gray-600" />
+              <span class="flex-1 truncate">{{ card.name }}</span>
+              <span class="shrink-0 text-gray-600">{{ FORESHADOWING_STATUS_SHORT_LABELS[card.status] }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <!-- 空状态：chapters/ 目录为空或不存在 -->
       <div v-if="!hasChapters" class="px-2 py-8 text-center">
         <p class="mb-1 text-sm text-gray-400">还没有章节</p>

@@ -33,7 +33,7 @@ import type {
 } from '@novai/core/services/types'
 import { ProjectPermissionRequiredError } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
-import type { PermissionPreset } from '@novai/core/types/project'
+import type { ForeshadowingStatusMode, PermissionPreset } from '@novai/core/types/project'
 import type { RecentProject } from '@novai/core/types/project'
 
 /**
@@ -599,6 +599,28 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 切换伏笔看板列模式（创作心智模块 §七：看板顶栏与设置页共用写回链路）：
+   * 写盘 + 同步 currentProject 快照，伏笔看板列口径即时切换。
+   */
+  async function changeForeshadowingStatusMode(
+    projectId: string,
+    mode: ForeshadowingStatusMode,
+  ): Promise<boolean> {
+    errorMessage.value = ''
+
+    try {
+      const savedConfig = await updateConfig(projectId, {
+        settings: { foreshadowingStatusMode: mode },
+      })
+      updateCurrentProjectConfig(savedConfig)
+      return true
+    } catch (error) {
+      errorMessage.value = toMessage(error, '切换伏笔列模式失败')
+      return false
+    }
+  }
+
   async function runProjectAction<T>(
     action: () => Promise<T>,
     options: { cancelNotice?: string; permissionRetryTarget?: string } = {},
@@ -647,6 +669,7 @@ export const useProjectStore = defineStore('project', () => {
     changeActiveOutlinePath,
     changePermissionPreset,
     changeReasoningEffort,
+    changeForeshadowingStatusMode,
     clearActiveFile,
     closeCurrentProject,
     createFileCopy,

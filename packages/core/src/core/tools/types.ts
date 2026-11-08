@@ -32,6 +32,8 @@ export type CoreToolName =
   | 'CreateForeshadowing'
   | 'UpdateForeshadowing'
   | 'DeleteForeshadowing'
+  | 'ForeshadowingCheck'
+  | 'ForeshadowingSync'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -590,6 +592,80 @@ export type DeleteForeshadowingOutput = {
   trashPath: string
   contentLength: number
   linesRemoved: number
+}
+
+/**
+ * 写前检查（§六 写第 N 章前）：回收窗口覆盖本章且未收的伏笔 + 本章已关联的伏笔。
+ * 只读、只含读者视角——写作链路的防剧透边界不变（要真相用 ReadForeshadowingForPlanning）。
+ * 章号匹配简化为「第N章」数值比较（全本连续编号；卷内独立编号的作品可能漏报/误报）。
+ */
+export type ForeshadowingCheckInput = {
+  /** 章节编号（正整数），如 12 表示第 12 章。 */
+  chapter: number
+}
+
+export type ForeshadowingCheckCard = {
+  id: string
+  name: string
+  status: ForeshadowingStatus
+  plantedAt: string
+  payoffWindow: [string, string] | null
+  /** 读者视角摘要（不含作者真相）。 */
+  summary: string
+}
+
+export type ForeshadowingCheckOutput = {
+  chapter: number
+  /** 预计本章回收：窗口起点章号 ≤ N ≤ 窗口终点章号，且状态未揭晓/解决/放弃。 */
+  dueForPayoff: ForeshadowingCheckCard[]
+  /** 本章已关联：埋设章或暗示历史命中本章（写作时保持读者已知事实一致）。 */
+  relatedToChapter: Array<ForeshadowingCheckCard & {
+    /** 命中方式：planted=埋设章 / mentioned=暗示历史提及。 */
+    matchedBy: 'planted' | 'mentioned'
+    relatedChapters: string[]
+  }>
+  guidance: string
+}
+
+/**
+ * 写后同步（§六 写完第 N 章后）：组装提案所需的完整上下文——本章关联伏笔（含
+ * 作者真相与 contentHash，供直接走 UpdateForeshadowing）+ 该收未收提醒 + 回收
+ * 当量标准。只读不落盘：提案由模型整理后交作者审阅，作者批准再走带确认的
+ * CreateForeshadowing / UpdateForeshadowing（一条确认链路，不做批量审批 UI）。
+ */
+export type ForeshadowingSyncInput = {
+  /** 章节编号（正整数）。 */
+  chapter: number
+}
+
+export type ForeshadowingSyncCard = {
+  id: string
+  name: string
+  status: ForeshadowingStatus
+  plantedAt: string
+  relatedChapters: string[]
+  payoffWindow: [string, string] | null
+  isRedHerring: boolean
+  resolvedAt: string | null
+  /** 读者视角正文（含本节因为评估要对照「读者已知什么」）。 */
+  readerBody: string
+  /** 作者真相正文（写后评估属于规划链路，允许可见）。 */
+  authorTruth: string
+  /** 供随后 UpdateForeshadowing 直接回传 expectedContentHash。 */
+  contentHash: string
+}
+
+export type ForeshadowingSyncOutput = {
+  chapter: number
+  /** 章节文件路径（chapters/ 下按章号匹配；找不到为 null，伏笔上下文照常返回）。 */
+  chapterPath: string | null
+  /** 本章关联的伏笔（埋设/暗示命中本章），含真相。 */
+  related: ForeshadowingSyncCard[]
+  /** 该收未收：窗口覆盖本章、仍未揭晓/解决/放弃（提醒模型评估本章是否回收了它）。 */
+  dueUnresolved: Array<{ id: string; name: string; status: ForeshadowingStatus; payoffWindow: [string, string] | null }>
+  /** 回收当量标准（§六：改变 / 代价 / 重新解释，最弱的是解释）。 */
+  payoffEquityStandard: string
+  guidance: string
 }
 
 export type GetFileChangeHistoryInput = {

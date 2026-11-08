@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { ChatSessionSummaryView, PlanCardSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
+import type { ChatSessionSummaryView, ForeshadowingCardSummaryView, PlanCardSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
 import type { Category } from '../../constants/category'
 import ChapterList from '../category/ChapterList.vue'
 import ElementList from '../category/ElementList.vue'
 import PromptList from '../category/PromptList.vue'
 import ConversationList from '../category/ConversationList.vue'
 import PlanList from '../category/PlanList.vue'
+import ForeshadowingList from '../category/ForeshadowingList.vue'
 import AppIcon from '../ui/AppIcon.vue'
 
 defineProps<{
@@ -25,6 +26,12 @@ defineProps<{
   isPlanLoading: boolean
   /** 当前打开详情的计划卡片 id（侧栏最近计划选中态与详情一致） */
   selectedPlanCardId?: string | null
+  /** 伏笔卡片摘要（伏笔分类面板计数与最近列表用） */
+  foreshadowingCards: ForeshadowingCardSummaryView[]
+  /** 伏笔板读取中 */
+  isForeshadowingLoading: boolean
+  /** 当前打开详情的伏笔 id（侧栏最近列表选中态与详情一致） */
+  selectedForeshadowingId?: string | null
   /** 有待回答提问卡的会话 id 集（会话列表「待回答」徽标；提问按会话路由） */
   pendingQuestionIds?: Set<string>
   /** 实时运行中的会话 id 集（会话列表「进行中」筛选与徽标） */
@@ -53,6 +60,14 @@ const emit = defineEmits<{
   openPlanCard: [id: string]
   /** 新建计划（侧栏摘要卡下方入口） */
   openPlanCreate: []
+  /** 打开主内容区伏笔看板 */
+  openForeshadowingBoard: []
+  /** 刷新伏笔（左侧标题行入口） */
+  refreshForeshadowing: []
+  /** 打开某条伏笔详情 */
+  openForeshadowingCard: [id: string]
+  /** 登记伏笔（侧栏摘要卡下方入口） */
+  openForeshadowingCreate: []
 }>()
 </script>
 
@@ -93,7 +108,9 @@ const emit = defineEmits<{
       v-else-if="activeCategory === 'chapter'"
       :files="files"
       :active-file-path="activeFilePath"
+      :foreshadowing-cards="foreshadowingCards"
       @select-file="emit('selectFile', $event)"
+      @open-foreshadowing="emit('openForeshadowingCard', $event)"
     />
     <ElementList
       v-else-if="activeCategory === 'element'"
@@ -118,6 +135,16 @@ const emit = defineEmits<{
       @refresh="emit('refreshPlan')"
       @open-create="emit('openPlanCreate')"
       @open-card="emit('openPlanCard', $event)"
+    />
+    <ForeshadowingList
+      v-else-if="activeCategory === 'foreshadowing'"
+      :cards="foreshadowingCards"
+      :is-loading="isForeshadowingLoading"
+      :selected-card-id="selectedForeshadowingId"
+      @open-board="emit('openForeshadowingBoard')"
+      @refresh="emit('refreshForeshadowing')"
+      @open-create="emit('openForeshadowingCreate')"
+      @open-card="emit('openForeshadowingCard', $event)"
     />
   </aside>
 </template>

@@ -19,6 +19,8 @@ import {
 import {
   createForeshadowingTool,
   deleteForeshadowingTool,
+  foreshadowingCheckTool,
+  foreshadowingSyncTool,
   listForeshadowingTool,
   readForeshadowingForPlanningTool,
   readForeshadowingTool,
@@ -70,6 +72,10 @@ import type {
   UpdateForeshadowingOutput,
   DeleteForeshadowingInput,
   DeleteForeshadowingOutput,
+  ForeshadowingCheckInput,
+  ForeshadowingCheckOutput,
+  ForeshadowingSyncInput,
+  ForeshadowingSyncOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -130,6 +136,10 @@ export type {
   UpdateForeshadowingOutput,
   DeleteForeshadowingInput,
   DeleteForeshadowingOutput,
+  ForeshadowingCheckInput,
+  ForeshadowingCheckOutput,
+  ForeshadowingSyncInput,
+  ForeshadowingSyncOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -169,6 +179,8 @@ type ToolOutputMap = {
   CreateForeshadowing: CreateForeshadowingOutput
   UpdateForeshadowing: UpdateForeshadowingOutput
   DeleteForeshadowing: DeleteForeshadowingOutput
+  ForeshadowingCheck: ForeshadowingCheckOutput
+  ForeshadowingSync: ForeshadowingSyncOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -197,6 +209,8 @@ const tools = {
   CreateForeshadowing: createForeshadowingTool,
   UpdateForeshadowing: updateForeshadowingTool,
   DeleteForeshadowing: deleteForeshadowingTool,
+  ForeshadowingCheck: foreshadowingCheckTool,
+  ForeshadowingSync: foreshadowingSyncTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

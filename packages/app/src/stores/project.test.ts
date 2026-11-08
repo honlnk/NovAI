@@ -70,6 +70,7 @@ function createProjectView(files: ProjectView['files']): ProjectView {
         embeddingTextVersion: 1,
         enableDebugLogging: false,
         activeOutlinePath: null,
+        foreshadowingStatusMode: 'default',
       },
     },
   }

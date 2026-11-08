@@ -29,6 +29,12 @@ export type PermissionPreset = 'review' | 'chapter' | 'material' | 'chapter-mate
  */
 export type ElementManagerPermissionPreset = Extract<PermissionPreset, 'review' | 'material' | 'full'>
 
+/**
+ * 伏笔看板列模式（创作心智模块施工计划 §三/§七）：frontmatter 恒存 6 状态，
+ * 看板列数可配——default 四列（按展示口径分组）/ full 六列（每状态一列）。
+ */
+export type ForeshadowingStatusMode = 'default' | 'full'
+
 export type ProjectSummary = {
   id: string
   name: string
@@ -168,6 +174,11 @@ export type ProjectConfig = {
      * （W2 注入机制 + W3 改名迁移；旧配置 activeScenePromptPath 读取时自动映射）。
      */
     activeOutlinePath: string | null
+    /**
+     * 伏笔看板列模式（创作心智模块 §七）：default=4 列分组 / full=6 状态列；
+     * 旧配置缺省回填 default。
+     */
+    foreshadowingStatusMode: ForeshadowingStatusMode
   }
 }
 

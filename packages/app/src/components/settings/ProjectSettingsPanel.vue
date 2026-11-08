@@ -15,6 +15,7 @@ defineProps<{
     agentMaxTurns: number
     permissionPreset: 'review' | 'chapter' | 'material' | 'chapter-material' | 'full'
     enableDebugLogging: boolean
+    foreshadowingStatusMode: 'default' | 'full'
   }
 }>()
 
@@ -119,6 +120,19 @@ defineProps<{
               <p class="mt-0.5 text-xs text-gray-500">记录模型配置、请求摘要和工具调用解析诊断；正式使用建议关闭</p>
             </div>
             <ToggleSwitch v-model="form.enableDebugLogging" label="开发调试日志" />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">伏笔看板列模式</label>
+            <select
+              v-model="form.foreshadowingStatusMode"
+              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+            >
+              <option value="default">默认 4 列（已埋 / 推进中 / 已收 / 已放弃）</option>
+              <option value="full">完整 6 列（埋入 / 暗示 / 发展 / 揭晓 / 解决 / 放弃）</option>
+            </select>
+            <p class="mt-1.5 text-xs text-gray-500">
+              伏笔文件始终按 6 状态存储，这里只切换看板的展示口径；4 列模式下「推进中」合并暗示与发展
+            </p>
           </div>
         </div>
       </div>

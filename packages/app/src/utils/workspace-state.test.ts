@@ -34,6 +34,7 @@ describe('workspace-state', () => {
       categoryOpen: false,
       contentPanelOpen: true,
       planPanelOpen: true,
+      foreshadowingPanelOpen: false,
       contentPanelWidth: 480,
     })
 
@@ -44,6 +45,7 @@ describe('workspace-state', () => {
       categoryOpen: false,
       contentPanelOpen: true,
       planPanelOpen: true,
+      foreshadowingPanelOpen: false,
       contentPanelWidth: 480,
     })
     // 按项目隔离：另一个项目读不到
@@ -58,6 +60,7 @@ describe('workspace-state', () => {
       categoryOpen: true,
       contentPanelOpen: false,
       planPanelOpen: false,
+      foreshadowingPanelOpen: false,
     })
 
     const state = loadWorkspaceState('p1')
@@ -97,6 +100,7 @@ describe('workspace-state', () => {
       categoryOpen: true,
       contentPanelOpen: false,
       planPanelOpen: false,
+      foreshadowingPanelOpen: false,
     })
     expect(state!.contentPanelWidth).toBeUndefined()
   })
@@ -119,6 +123,7 @@ describe('workspace-state', () => {
         categoryOpen: true,
         contentPanelOpen: false,
         planPanelOpen: false,
+        foreshadowingPanelOpen: false,
       }),
     ).not.toThrow()
   })

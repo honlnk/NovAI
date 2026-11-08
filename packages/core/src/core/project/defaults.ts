@@ -95,10 +95,11 @@ export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 
 ## frontmatter 维护规范
 
-要素文件以 YAML frontmatter 开头，字段：id / type / name / summary / tags / lastUpdatedChapter / relatedChapters / updatedAt。整理时：
+要素文件以 YAML frontmatter 开头，字段：id / type / name / summary / tags / lastUpdatedChapter / relatedChapters / related_foreshadowing / updatedAt。整理时：
 
 - tags：去除重复与无意义标签；标签是可检索的分类词，不写成要素类型名。
 - relatedChapters：与已有列表取并集，绝不覆盖丢失已有章节；格式如「第12章」。
+- related_foreshadowing：主 Agent 登记的关联伏笔标识（如 [F-001]），从人物/物品视角标记「牵动了哪些伏笔」。伏笔账本不在你的可见范围，这枚字段照原样保留——不新增、不删改、不合并，缺失时也不要补写。
 - lastUpdatedChapter：取涉及章节中最新的一章。
 - summary：一句话概括该要素当前状态；合并信息后同步更新。
 - updatedAt：整理时更新为当前时间。
@@ -221,6 +222,7 @@ export const DEFAULT_CONFIG = {
     embeddingTextVersion: 1,
     enableDebugLogging: false,
     activeOutlinePath: null,
+    foreshadowingStatusMode: 'default',
   },
 } as const
 
@@ -231,6 +233,15 @@ export const DEFAULT_PERMISSION_PRESET = DEFAULT_CONFIG.settings.permissionPrese
 
 export function isPermissionPreset(value: unknown): value is (typeof PERMISSION_PRESETS)[number] {
   return typeof value === 'string' && (PERMISSION_PRESETS as readonly string[]).includes(value)
+}
+
+/** 伏笔看板列模式的合法值表与默认值（语义见 types/project.ts 的 ForeshadowingStatusMode）。 */
+export const FORESHADOWING_STATUS_MODES = ['default', 'full'] as const
+
+export const DEFAULT_FORESHADOWING_STATUS_MODE = DEFAULT_CONFIG.settings.foreshadowingStatusMode
+
+export function isForeshadowingStatusMode(value: unknown): value is (typeof FORESHADOWING_STATUS_MODES)[number] {
+  return typeof value === 'string' && (FORESHADOWING_STATUS_MODES as readonly string[]).includes(value)
 }
 
 /** 要素管理员档位合法值表（Phase 2 计划 D3 裁剪三档，语义见 types/project.ts 的 ElementManagerPermissionPreset）。 */

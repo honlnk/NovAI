@@ -1,4 +1,4 @@
-import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, isElementManagerPermissionPreset, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
+import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELEMENT_SCHEMA, DEFAULT_OUTLINE_TEMPLATE, DEFAULT_SYSTEM_PROMPT, isElementManagerPermissionPreset, isForeshadowingStatusMode, isModelProtocol, isPermissionPreset, isReasoningEffort, isSearchProvider } from '../project/defaults'
 
 import type {
   ProjectInspection,
@@ -400,6 +400,10 @@ function normalizeProjectConfig(config: ProjectConfig): ProjectConfig {
       permissionPreset: isPermissionPreset(config.settings?.permissionPreset)
         ? config.settings.permissionPreset
         : DEFAULT_CONFIG.settings.permissionPreset,
+      // 伏笔看板列模式（创作心智模块 §七）：旧配置无此字段回填默认 4 列；非法值同回退
+      foreshadowingStatusMode: isForeshadowingStatusMode(config.settings?.foreshadowingStatusMode)
+        ? config.settings.foreshadowingStatusMode
+        : DEFAULT_CONFIG.settings.foreshadowingStatusMode,
       // agentMaxTurns：0=不限（现行默认）。恰为 8 是旧版出厂默认，视为需要迁移的旧值按 0 处理
       // （用户显式选过其他值如 5 的尊重保留）；缺字段/非法值回退 0。下次保存设置自然落盘为 0。
       agentMaxTurns: normalizeAgentMaxTurns(config.settings?.agentMaxTurns),

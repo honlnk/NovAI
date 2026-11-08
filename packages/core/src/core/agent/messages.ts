@@ -22,6 +22,8 @@ export type AgentToolName =
   | 'CreateForeshadowing'
   | 'UpdateForeshadowing'
   | 'DeleteForeshadowing'
+  | 'ForeshadowingCheck'
+  | 'ForeshadowingSync'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'

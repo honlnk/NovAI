@@ -29,6 +29,8 @@ export type ChatToolName =
   | 'CreateForeshadowing'
   | 'UpdateForeshadowing'
   | 'DeleteForeshadowing'
+  | 'ForeshadowingCheck'
+  | 'ForeshadowingSync'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'

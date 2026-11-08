@@ -106,6 +106,7 @@ const projectForm = reactive({
   agentMaxTurns: 0,
   permissionPreset: 'chapter-material' as 'review' | 'chapter' | 'material' | 'chapter-material' | 'full',
   enableDebugLogging: false,
+  foreshadowingStatusMode: 'default' as 'default' | 'full',
 })
 
 /** 自动保存状态，聚合展示在 footer 左侧。 */
@@ -181,6 +182,7 @@ onMounted(async () => {
         agentMaxTurns: settings.agentMaxTurns ?? 0,
         permissionPreset: settings.permissionPreset ?? 'chapter-material',
         enableDebugLogging: settings.enableDebugLogging ?? false,
+        foreshadowingStatusMode: settings.foreshadowingStatusMode ?? 'default',
       })
     }
   }

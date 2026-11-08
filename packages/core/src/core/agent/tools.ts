@@ -19,11 +19,14 @@ import {
 import {
   createForeshadowingTool,
   deleteForeshadowingTool,
+  foreshadowingCheckTool,
+  foreshadowingSyncTool,
   listForeshadowingTool,
   readForeshadowingForPlanningTool,
   readForeshadowingTool,
   updateForeshadowingTool,
 } from '../tools/foreshadowing-tools'
+import { FORESHADOWING_STATUS_LABELS } from '../../types/foreshadowing'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
 import { webSearchTool } from '../tools/web-search'
 import { webFetchTool } from '../tools/web-fetch'
@@ -57,6 +60,8 @@ import type {
   CreateForeshadowingOutput,
   UpdateForeshadowingOutput,
   DeleteForeshadowingOutput,
+  ForeshadowingCheckOutput,
+  ForeshadowingSyncOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -1021,6 +1026,106 @@ export function createAgentTools(): AgentRunnableToolMap {
         return `已将伏笔 ${output.sourcePath} 移入回收站 ${output.trashPath}`
       },
     },
+    ForeshadowingCheck: {
+      name: 'ForeshadowingCheck',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ForeshadowingCheck',
+          description: '写前检查（接到「写第 N 章」指令后、动笔前主动调用）：返回预计在本章回收的伏笔（回收窗口覆盖本章且未收）+ 本章已埋/已提及的伏笔。结果只含读者视角摘要；设计回收细节需要真相时再用 ReadForeshadowingForPlanning。',
+          parameters: {
+            type: 'object',
+            properties: {
+              chapter: {
+                type: 'integer',
+                minimum: 1,
+                description: '章节编号（正整数），如 12 表示第 12 章。',
+              },
+            },
+            required: ['chapter'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: foreshadowingCheckTool,
+      formatResult(output: ForeshadowingCheckOutput) {
+        const sections: string[] = [`第 ${output.chapter} 章伏笔写前检查：`]
+        if (output.dueForPayoff.length === 0) {
+          sections.push('预计本章回收：无（没有伏笔的回收窗口覆盖本章）。')
+        } else {
+          sections.push(`预计本章回收（${output.dueForPayoff.length} 条）：`)
+          sections.push(output.dueForPayoff.map((card) => [
+            `- ${card.name || '（未命名）'}（${card.id}，${FORESHADOWING_STATUS_LABELS[card.status]}）`,
+            `  窗口 ${card.payoffWindow ? card.payoffWindow.join(' ~ ') : '未设定'}；读者已知：${card.summary || '无'}`,
+          ].join('\n')).join('\n'))
+        }
+        if (output.relatedToChapter.length === 0) {
+          sections.push('本章已关联：无。')
+        } else {
+          sections.push(`本章已关联（${output.relatedToChapter.length} 条，写作时保持读者已知事实一致）：`)
+          sections.push(output.relatedToChapter.map((card) => [
+            `- ${card.name || '（未命名）'}（${card.id}，${card.matchedBy === 'planted' ? '埋设于本章' : '暗示历史含本章'}，${FORESHADOWING_STATUS_LABELS[card.status]}）`,
+            `  读者已知：${card.summary || '无'}`,
+          ].join('\n')).join('\n'))
+        }
+        sections.push('', output.guidance)
+        return sections.join('\n')
+      },
+    },
+    ForeshadowingSync: {
+      name: 'ForeshadowingSync',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'ForeshadowingSync',
+          description: '写后同步（写完第 N 章后主动调用）：组装伏笔提案上下文——本章关联伏笔（含作者真相与 contentHash）+ 该收未收提醒 + 回收当量标准。只读不落盘：整理好提案先列给作者审阅，批准后逐条用 CreateForeshadowing / UpdateForeshadowing 执行。',
+          parameters: {
+            type: 'object',
+            properties: {
+              chapter: {
+                type: 'integer',
+                minimum: 1,
+                description: '章节编号（正整数）。',
+              },
+            },
+            required: ['chapter'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: foreshadowingSyncTool,
+      formatResult(output: ForeshadowingSyncOutput) {
+        const sections: string[] = [
+          `第 ${output.chapter} 章伏笔写后同步（章节文件：${output.chapterPath ?? '未找到，按章号未匹配到 chapters/ 文件'}）：`,
+        ]
+        if (output.related.length === 0) {
+          sections.push('本章关联伏笔：无（本章没有埋设/提及登记在账的伏笔）。')
+        } else {
+          sections.push(`本章关联伏笔（${output.related.length} 条，含作者真相）：`)
+          sections.push(output.related.map((card) => [
+            `- ${card.name || '（未命名）'}（${card.id}，${FORESHADOWING_STATUS_LABELS[card.status]}${card.isRedHerring ? '，红鲱鱼' : ''}）`,
+            `  埋设 ${card.plantedAt || '未知'}；暗示历史：${card.relatedChapters.join('、') || '无'}${card.resolvedAt ? `；已回收于 ${card.resolvedAt}` : ''}`,
+            `  读者视角：${card.readerBody || '（空）'}`,
+            `  作者真相：${card.authorTruth || '（未登记）'}`,
+            `  contentHash: ${card.contentHash}`,
+          ].join('\n')).join('\n'))
+        }
+        if (output.dueUnresolved.length === 0) {
+          sections.push('该收未收：无。')
+        } else {
+          sections.push(`该收未收（窗口覆盖本章且未收，评估本章是否回收了它们）：`)
+          sections.push(output.dueUnresolved.map((card) =>
+            `- ${card.name || '（未命名）'}（${card.id}，${FORESHADOWING_STATUS_LABELS[card.status]}，窗口 ${card.payoffWindow ? card.payoffWindow.join(' ~ ') : '未设定'}）`,
+          ).join('\n'))
+        }
+        sections.push('', output.payoffEquityStandard, '', output.guidance)
+        return sections.join('\n')
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -1215,6 +1320,8 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'CreateForeshadowing'
     || value === 'UpdateForeshadowing'
     || value === 'DeleteForeshadowing'
+    || value === 'ForeshadowingCheck'
+    || value === 'ForeshadowingSync'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'

@@ -34,6 +34,9 @@ import WriteConfirmPanel from '../components/layout/WriteConfirmPanel.vue'
 import PlanBoardPanel from '../components/plan/PlanBoardPanel.vue'
 import PlanDetailPanel from '../components/plan/PlanDetailPanel.vue'
 import PlanCreatePanel from '../components/plan/PlanCreatePanel.vue'
+import ForeshadowingBoardPanel from '../components/foreshadowing/ForeshadowingBoardPanel.vue'
+import ForeshadowingDetailPanel from '../components/foreshadowing/ForeshadowingDetailPanel.vue'
+import ForeshadowingCreatePanel from '../components/foreshadowing/ForeshadowingCreatePanel.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
@@ -44,10 +47,12 @@ import {
   loadWorkspaceState,
   saveWorkspaceState,
 } from '../utils/workspace-state'
-import type { ChangedFileView, FileChangeRecordView, PlanStatusView } from '@novai/core/services/types'
+import type { ChangedFileView, FileChangeRecordView, ForeshadowingStatusView, PlanStatusView } from '@novai/core/services/types'
 import type { RecentFileChange } from '../stores/chat'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
+import { useForeshadowingStore } from '../stores/foreshadowing'
+import { foreshadowingChapterNumber, type ForeshadowingColumnMode } from '../constants/foreshadowing'
 
 const route = useRoute()
 const router = useRouter()
@@ -55,6 +60,7 @@ const projectStore = useProjectStore()
 const chatStore = useChatStore()
 const indexStore = useIndexStore()
 const planStore = usePlanStore()
+const foreshadowingStore = useForeshadowingStore()
 const toast = useToast()
 // 「查看已归档」动作经模块级单例切换对话列表筛选（不跨组件转发 ref）
 const { showArchived: showArchivedFilter } = useConversationFilter()
@@ -67,6 +73,8 @@ const isMobileCategoryOpen = ref(false)
 const isContentPanelOpen = ref(false)
 /** 计划面板（详情/新建）展开偏好（跨分类保留；进入计划默认收起，点击卡片或新建后展开） */
 const isPlanPanelOpen = ref(false)
+/** 伏笔面板（详情/新建）展开偏好（跨分类保留；与计划面板同构） */
+const isForeshadowingPanelOpen = ref(false)
 /** 写入确认面板开关（§8）：仅在安全时机自动打开，用户可随时离开（关闭面板不取消请求） */
 const isConfirmPanelOpen = ref(false)
 const showGuide = ref(false)
@@ -127,6 +135,7 @@ function persistWorkspaceState() {
     categoryOpen: isCategoryOpen.value,
     contentPanelOpen: isContentPanelOpen.value,
     planPanelOpen: isPlanPanelOpen.value,
+    foreshadowingPanelOpen: isForeshadowingPanelOpen.value,
     contentPanelWidth: contentPanelWidth.value,
   })
 }
@@ -151,6 +160,7 @@ async function restoreWorkspaceState() {
     isCategoryOpen.value = record.categoryOpen
     isContentPanelOpen.value = record.contentPanelOpen
     isPlanPanelOpen.value = record.planPanelOpen
+    isForeshadowingPanelOpen.value = record.foreshadowingPanelOpen
     // 面板宽度：项目记录优先，回退旧全局 key（历史 installations 只有全局一份）
     const width = record.contentPanelWidth ?? loadLegacyContentPanelWidth()
     if (width !== null) {
@@ -202,6 +212,7 @@ watch(
     isCategoryOpen,
     isContentPanelOpen,
     isPlanPanelOpen,
+    isForeshadowingPanelOpen,
     contentPanelWidth,
     () => chatStore.activeSessionId,
     () => projectStore.activeFile?.path,
@@ -243,6 +254,15 @@ onMounted(async () => {
 
   // 初始化聊天会话并恢复上次工作区现场（恢复内部含会话首选/回退与文件恢复）
   await restoreWorkspaceState()
+
+  // 恢复后停留在伏笔/章节分类时补一次伏笔看板加载：恢复不改分类值则上面的
+  // 分类 watch 不触发，章节侧栏「本章相关伏笔」与伏笔面板都没有数据
+  if (
+    projectStore.currentProject
+    && (activeCategory.value === 'foreshadowing' || activeCategory.value === 'chapter')
+  ) {
+    await foreshadowingStore.loadBoard(projectId.value)
+  }
 
   // 刷新后恢复持久化草稿（数据安全计划 §3-2）：IndexedDB 备份回填内存表，绝不写
   // 正文文件；有恢复项时递增令牌让面板重读当前路径草稿并亮「已恢复」横幅。
@@ -706,6 +726,9 @@ const planRecentCards = computed(() => {
 watch(activeCategory, async (category) => {
   if (category === 'plan' && projectStore.currentProject) {
     await planStore.loadBoard(projectId.value)
+  } else if ((category === 'foreshadowing' || category === 'chapter') && projectStore.currentProject) {
+    // 章节分类也要伏笔数据：章节侧栏「本章相关伏笔」实时反查依赖看板摘要
+    await foreshadowingStore.loadBoard(projectId.value)
   }
 })
 
@@ -713,6 +736,8 @@ watch(activeCategory, async (category) => {
 watch(() => projectStore.currentProject?.id, () => {
   planStore.reset()
   isPlanPanelOpen.value = false
+  foreshadowingStore.reset()
+  isForeshadowingPanelOpen.value = false
 })
 
 /** 右侧面板当前应展示的内容与可见性（文件 / 计划详情 / 新建互斥，规则见 workspace-panel） */
@@ -724,6 +749,9 @@ const workspacePanel = computed(() => {
     isPlanPanelOpen: isPlanPanelOpen.value,
     isCreateOpen: planStore.isCreateOpen,
     hasActiveCard: planStore.activeCard !== null,
+    isForeshadowingPanelOpen: isForeshadowingPanelOpen.value,
+    isForeshadowingCreateOpen: foreshadowingStore.isCreateOpen,
+    hasActiveForeshadowing: foreshadowingStore.activeCard !== null,
   })
   // 写入确认覆盖（§8）：不进 resolveWorkspacePanel（那里不知道确认状态）。基础解析为
   // 文件类或空（面板未开/未开文件）即接管——聊天条「去审阅」必须总能打开；可见的
@@ -752,6 +780,8 @@ function handleCloseContentPanel() {
     void flushDraftBackupsNow()
   } else if (target === 'plan') {
     isPlanPanelOpen.value = false
+  } else if (target === 'foreshadowing') {
+    isForeshadowingPanelOpen.value = false
   }
 }
 
@@ -934,6 +964,209 @@ async function handlePlanSaveDraft() {
   }
 }
 
+// ===== 伏笔账本（创作心智模块阶段二：与计划板同构的看板分类） =====
+
+/** 伏笔分类侧栏用的卡片摘要（按更新时间倒序取最近） */
+const foreshadowingRecentCards = computed(() => {
+  if (!foreshadowingStore.board) {
+    return []
+  }
+  return [...(Object.values(foreshadowingStore.board.columns) as import('@novai/core/services/types').ForeshadowingCardSummaryView[][])
+    .flat()]
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+})
+
+/** 当前最新章号（该收了高亮的判定基准）：chapters 树里最大章号 */
+const latestChapterNumber = computed(() => {
+  const files = projectStore.currentProject?.files ?? []
+  let latest: number | null = null
+  const visit = (nodes: typeof files) => {
+    for (const node of nodes) {
+      if (node.kind === 'directory') {
+        visit(node.children ?? [])
+      } else if (node.path.startsWith('chapters/')) {
+        const number = foreshadowingChapterNumber(node.name)
+        if (number !== null && (latest === null || number > latest)) {
+          latest = number
+        }
+      }
+    }
+  }
+  visit(files)
+  return latest
+})
+
+/** 伏笔看板列模式（项目设置 foreshadowingStatusMode；看板顶栏按钮切换即保存设置） */
+const foreshadowingColumnMode = computed<ForeshadowingColumnMode>(() =>
+  projectStore.currentProject?.config.settings.foreshadowingStatusMode === 'full' ? 'full' : 'default')
+
+/** 打开伏笔详情（看板卡片 / 侧栏最近列表 / 章节侧栏「本章相关伏笔」共用同一入口）：
+ *  面板随点击展开；从其他分类（章节侧栏）进入时先切到伏笔分类——详情面板按分类归属展示 */
+async function handleOpenForeshadowingCard(id: string) {
+  const openingProjectId = projectId.value
+  if (activeCategory.value !== 'foreshadowing') {
+    selectCategory('foreshadowing')
+  }
+  isForeshadowingPanelOpen.value = true
+  await foreshadowingStore.openCard(openingProjectId, id)
+  const error = foreshadowingStore.detailError
+  if (error?.cardId === id && projectId.value === openingProjectId) {
+    toast.error(`读取所选伏笔失败：${error.message}`)
+    if (!foreshadowingStore.activeCard) isForeshadowingPanelOpen.value = false
+  }
+}
+
+/** 打开新建面板（侧栏摘要卡下方 / 看板空状态共用）：与详情互斥切换，两侧草稿各自保留 */
+function handleOpenForeshadowingCreate() {
+  isForeshadowingPanelOpen.value = true
+  foreshadowingStore.openCreate()
+}
+
+/** 看板顶栏的内容面板收起/展开开关：展开时无选中也不在新建则落到新建表单（与计划同约定） */
+function handleToggleForeshadowingPanel() {
+  if (workspacePanel.value.visible) {
+    handleCloseContentPanel()
+    return
+  }
+  if (foreshadowingStore.activeCard || foreshadowingStore.isCreateOpen) {
+    isForeshadowingPanelOpen.value = true
+    return
+  }
+  handleOpenForeshadowingCreate()
+}
+
+/** AI 或外部写入伏笔文件后：看板可见时自动刷新（文件变更账本事件驱动） */
+watch(
+  () => chatStore.changedFiles.length,
+  async (newLength, oldLength) => {
+    if (
+      newLength > oldLength
+      && activeCategory.value === 'foreshadowing'
+      && projectStore.currentProject
+      && chatStore.changedFiles.some((file) => resolveForeshadowingPathFromChange(file) !== null)
+    ) {
+      await foreshadowingStore.refreshBoard(projectId.value)
+    }
+  },
+)
+
+/** 详情打开、不在编辑且不在新建时，外部修改到达：重新读取最新内容（不覆盖用户草稿） */
+watch(
+  () => chatStore.lastFileChange?.change,
+  async (change) => {
+    if (
+      activeCategory.value !== 'foreshadowing'
+      || !change
+      || !foreshadowingStore.activeCard
+      || foreshadowingStore.hasUnsavedChanges
+      || foreshadowingStore.isCreateOpen
+    ) {
+      return
+    }
+    if (resolveForeshadowingPathFromChange(change) === foreshadowingStore.activeCard.sourcePath) {
+      await foreshadowingStore.openCard(projectId.value, foreshadowingStore.activeCard.id)
+    }
+  },
+)
+
+/** change.path / fromPath→toPath 统一取伏笔路径（renamed 的 toPath 落在 foreshadowing/ 才算） */
+function resolveForeshadowingPathFromChange(change: ChangedFileView): string | null {
+  if (change.type === 'renamed') {
+    return change.toPath.startsWith('foreshadowing/') ? change.toPath : null
+  }
+  return change.path.startsWith('foreshadowing/') ? change.path : null
+}
+
+/** 伏笔看板重试入口（首载失败横幅 / 后台刷新失败保留旧看板时的重试） */
+async function handleForeshadowingRetryLoad() {
+  await handleForeshadowingRefresh()
+}
+
+/** 左侧伏笔标题行的刷新入口：忙碌态由 isLoading 承载并防重复 */
+async function handleForeshadowingRefresh() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  await foreshadowingStore.refreshBoard(projectId.value, { source: 'manual' })
+}
+
+/** 新建面板提交：失败保留输入，成功由 store 转入详情预览 */
+async function handleForeshadowingSubmitCreate() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const submittingProjectId = projectId.value
+  const card = await foreshadowingStore.submitCreate(submittingProjectId)
+  if (projectId.value !== submittingProjectId || projectStore.currentProject?.id !== submittingProjectId) return
+  if (card) {
+    toast.success('已登记伏笔')
+  } else if (!foreshadowingStore.isCreateOpen) {
+    return
+  } else {
+    toast.error(foreshadowingStore.actionError || '新建伏笔失败')
+  }
+}
+
+async function handleForeshadowingMove(id: string, status: ForeshadowingStatusView, afterId: string | null) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const movingProjectId = projectId.value
+  const ok = await foreshadowingStore.moveCard(movingProjectId, id, status, afterId)
+  if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
+  if (!ok) {
+    toast.error(foreshadowingStore.actionError || '移动伏笔失败')
+  }
+}
+
+async function handleForeshadowingRemove(id: string) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const removingProjectId = projectId.value
+  const ok = await foreshadowingStore.removeCard(removingProjectId, id)
+  if (projectId.value !== removingProjectId || projectStore.currentProject?.id !== removingProjectId) return
+  if (ok) {
+    toast.success('已移入回收站')
+  } else {
+    toast.error(foreshadowingStore.actionError || '删除伏笔失败')
+  }
+}
+
+async function handleForeshadowingSaveDraft() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const savingProjectId = projectId.value
+  const previousPath = foreshadowingStore.activeCard?.sourcePath
+  const ok = await foreshadowingStore.saveDraft(savingProjectId)
+  if (projectId.value !== savingProjectId || projectStore.currentProject?.id !== savingProjectId) return
+  if (ok) {
+    toast.success('已保存')
+    // 伏笔名改动会重命名文件：以保存完成的原卡片为准决定是否刷新文件树
+    const savedCard = foreshadowingStore.lastSavedCard
+    if (savedCard && savedCard.sourcePath !== previousPath) {
+      await projectStore.refreshTree()
+    }
+  } else if (foreshadowingStore.detailNotice) {
+    toast.error(foreshadowingStore.detailNotice.message)
+  } else if (!foreshadowingStore.conflictNotice) {
+    toast.error(foreshadowingStore.actionError || '保存失败')
+  }
+}
+
+/** 看板顶栏列模式切换：写回项目设置（novel.config.json），所有伏笔视图随之换口径 */
+async function handleToggleForeshadowingColumnMode() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const nextMode: ForeshadowingColumnMode = foreshadowingColumnMode.value === 'full' ? 'default' : 'full'
+  const saved = await projectStore.changeForeshadowingStatusMode(projectId.value, nextMode)
+  if (!saved) {
+    toast.error(projectStore.errorMessage || '切换伏笔列模式失败')
+  }
+}
+
 function selectCategory(category: Category) {
   activeCategory.value = category
   // 切换分类时确保面板展开
@@ -1002,6 +1235,9 @@ function handleGoToSettings() {
         :plan-cards="planRecentCards"
         :is-plan-loading="planStore.isLoading"
         :selected-plan-card-id="planStore.selectedCardId"
+        :foreshadowing-cards="foreshadowingRecentCards"
+        :is-foreshadowing-loading="foreshadowingStore.isLoading"
+        :selected-foreshadowing-id="foreshadowingStore.selectedCardId"
         :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :running-ids="chatStore.runningSessionIds"
         :is-open="isCategoryOpen"
@@ -1019,9 +1255,13 @@ function handleGoToSettings() {
         @refresh-plan="handlePlanRefresh"
         @open-plan-create="handleOpenPlanCreate"
         @open-plan-card="(id) => { selectCategory('plan'); handleOpenPlanCard(id) }"
+        @open-foreshadowing-board="selectCategory('foreshadowing')"
+        @refresh-foreshadowing="handleForeshadowingRefresh"
+        @open-foreshadowing-create="handleOpenForeshadowingCreate"
+        @open-foreshadowing-card="(id) => { selectCategory('foreshadowing'); handleOpenForeshadowingCard(id) }"
       />
 
-      <!-- 中间主内容区：计划分类显示看板（始终保留），其余分类为对话 -->
+      <!-- 中间主内容区：看板分类（计划/伏笔）显示看板（始终保留），其余分类为对话 -->
       <PlanBoardPanel
         v-if="activeCategory === 'plan'"
         :board="planStore.board"
@@ -1039,6 +1279,25 @@ function handleGoToSettings() {
         @toggle-sidebar="toggleSidebar"
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @toggle-content-panel="handleTogglePlanPanel"
+      />
+      <ForeshadowingBoardPanel
+        v-else-if="activeCategory === 'foreshadowing'"
+        :board="foreshadowingStore.board"
+        :is-loading="foreshadowingStore.isLoading"
+        :error-message="foreshadowingStore.errorMessage"
+        :selected-card-id="foreshadowingStore.selectedCardId"
+        :column-mode="foreshadowingColumnMode"
+        :latest-chapter-number="latestChapterNumber"
+        :is-sidebar-open="isCategoryOpen"
+        :is-content-panel-open="workspacePanel.visible"
+        @open-create="handleOpenForeshadowingCreate"
+        @open-card="handleOpenForeshadowingCard"
+        @move-card="handleForeshadowingMove"
+        @retry-load="handleForeshadowingRetryLoad"
+        @toggle-column-mode="handleToggleForeshadowingColumnMode"
+        @toggle-sidebar="toggleSidebar"
+        @toggle-mobile-sidebar="toggleMobileSidebar"
+        @toggle-content-panel="handleToggleForeshadowingPanel"
       />
       <ChatPanel
         v-else
@@ -1134,6 +1393,46 @@ function handleGoToSettings() {
           @update-create-draft="(title, body) => planStore.updateCreateDraft(title, body)"
           @submit-create="handlePlanSubmitCreate"
           @cancel="planStore.closeCreate(false)"
+        />
+        <!-- 伏笔详情 -->
+        <ForeshadowingDetailPanel
+          v-if="workspacePanel.kind === 'foreshadowing-detail' && foreshadowingStore.activeCard"
+          :active-card="foreshadowingStore.activeCard"
+          :draft-name="foreshadowingStore.draftName"
+          :draft-reader-view="foreshadowingStore.draftReaderView"
+          :draft-author-truth="foreshadowingStore.draftAuthorTruth"
+          :detail-mode="foreshadowingStore.detailMode"
+          :is-saving="foreshadowingStore.isSaving"
+          :conflict-notice="foreshadowingStore.conflictNotice"
+          :action-error="foreshadowingStore.actionError"
+          :has-unsaved-changes="foreshadowingStore.hasUnsavedChanges"
+          @close="handleCloseContentPanel"
+          @update-draft-name="foreshadowingStore.updateDraftName"
+          @update-draft-reader-view="foreshadowingStore.updateDraftReaderView"
+          @update-draft-author-truth="foreshadowingStore.updateDraftAuthorTruth"
+          @set-detail-mode="foreshadowingStore.setDetailMode"
+          @save-draft="handleForeshadowingSaveDraft"
+          @reload-from-conflict="foreshadowingStore.reloadFromConflict(projectId)"
+          @keep-draft="foreshadowingStore.keepDraft()"
+          @move-card="handleForeshadowingMove"
+          @remove-card="handleForeshadowingRemove"
+        />
+        <!-- 登记伏笔 -->
+        <ForeshadowingCreatePanel
+          v-if="workspacePanel.kind === 'foreshadowing-create'"
+          :new-name="foreshadowingStore.newCardName"
+          :new-reader-view="foreshadowingStore.newCardReaderView"
+          :new-author-truth="foreshadowingStore.newCardAuthorTruth"
+          :new-planted-at="foreshadowingStore.newCardPlantedAt"
+          :new-payoff-start="foreshadowingStore.newCardPayoffStart"
+          :new-payoff-end="foreshadowingStore.newCardPayoffEnd"
+          :can-submit="foreshadowingStore.hasRequiredCreateInput"
+          :is-creating="foreshadowingStore.isCreating"
+          :action-error="foreshadowingStore.actionError"
+          @close="handleCloseContentPanel"
+          @update-create-draft="foreshadowingStore.updateCreateDraft"
+          @submit-create="handleForeshadowingSubmitCreate"
+          @cancel="foreshadowingStore.closeCreate(false)"
         />
       </ContentPanel>
     </div>

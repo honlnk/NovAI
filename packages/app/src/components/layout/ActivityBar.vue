@@ -23,7 +23,7 @@ const emit = defineEmits<{
 
 /**
  * 顶部分类项（设置走单独的 openSettings，不在此列）。
- * 顺序按产品决策：对话 → 章节 → 要素 → 提示词 → 计划（提示词之后、设置之前）。
+ * 顺序按产品决策：对话 → 章节 → 要素 → 提示词 → 计划 → 伏笔（提示词之后、设置之前）。
  */
 const categoryItems: { key: Category; label: string; icon: string }[] = [
   { key: 'conversation', label: '对话', icon: 'chat' },
@@ -31,6 +31,7 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
   { key: 'element', label: '要素', icon: 'tag' },
   { key: 'prompt', label: '提示词', icon: 'note' },
   { key: 'plan', label: '计划', icon: 'clipboard' },
+  { key: 'foreshadowing', label: '伏笔', icon: 'foreshadowing' },
 ]
 
 /**
@@ -94,7 +95,9 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           <!-- 提示词 -->
           <AppIcon name="clipboard-check" :size="20" class="h-5 w-5" v-else-if="item.icon === 'note'" />
           <!-- 计划（剪贴板清单） -->
-          <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else />
+          <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'clipboard'" />
+          <!-- 伏笔（遮眼——隐藏的线索与真相） -->
+          <AppIcon name="eye-off" :size="20" class="h-5 w-5" v-else />
         </button>
       </Tooltip>
     </div>
