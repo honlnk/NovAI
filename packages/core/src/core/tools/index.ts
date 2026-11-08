@@ -26,6 +26,13 @@ import {
   readForeshadowingTool,
   updateForeshadowingTool,
 } from './foreshadowing-tools'
+import {
+  rhythmCreateTool,
+  rhythmDeleteTool,
+  rhythmListTool,
+  rhythmReadTool,
+  rhythmUpdateTool,
+} from './rhythm-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
@@ -76,6 +83,16 @@ import type {
   ForeshadowingCheckOutput,
   ForeshadowingSyncInput,
   ForeshadowingSyncOutput,
+  RhythmListInput,
+  RhythmListOutput,
+  RhythmReadInput,
+  RhythmReadOutput,
+  RhythmCreateInput,
+  RhythmCreateOutput,
+  RhythmUpdateInput,
+  RhythmUpdateOutput,
+  RhythmDeleteInput,
+  RhythmDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -140,6 +157,16 @@ export type {
   ForeshadowingCheckOutput,
   ForeshadowingSyncInput,
   ForeshadowingSyncOutput,
+  RhythmListInput,
+  RhythmListOutput,
+  RhythmReadInput,
+  RhythmReadOutput,
+  RhythmCreateInput,
+  RhythmCreateOutput,
+  RhythmUpdateInput,
+  RhythmUpdateOutput,
+  RhythmDeleteInput,
+  RhythmDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -181,6 +208,11 @@ type ToolOutputMap = {
   DeleteForeshadowing: DeleteForeshadowingOutput
   ForeshadowingCheck: ForeshadowingCheckOutput
   ForeshadowingSync: ForeshadowingSyncOutput
+  RhythmList: RhythmListOutput
+  RhythmRead: RhythmReadOutput
+  RhythmCreate: RhythmCreateOutput
+  RhythmUpdate: RhythmUpdateOutput
+  RhythmDelete: RhythmDeleteOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -211,6 +243,11 @@ const tools = {
   DeleteForeshadowing: deleteForeshadowingTool,
   ForeshadowingCheck: foreshadowingCheckTool,
   ForeshadowingSync: foreshadowingSyncTool,
+  RhythmList: rhythmListTool,
+  RhythmRead: rhythmReadTool,
+  RhythmCreate: rhythmCreateTool,
+  RhythmUpdate: rhythmUpdateTool,
+  RhythmDelete: rhythmDeleteTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

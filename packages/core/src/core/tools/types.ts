@@ -3,6 +3,7 @@ import type { FileChangeCoords, FileChangeRecord } from '../../types/chat'
 import type { ElementType } from '../../types/rag'
 import type { PlanStatus } from '../../types/plans'
 import type { ForeshadowingStatus } from '../../types/foreshadowing'
+import type { RhythmHook, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
 import type { KnowledgePlatformName } from './knowledge-platforms'
 
 /**
@@ -34,6 +35,11 @@ export type CoreToolName =
   | 'DeleteForeshadowing'
   | 'ForeshadowingCheck'
   | 'ForeshadowingSync'
+  | 'RhythmList'
+  | 'RhythmRead'
+  | 'RhythmCreate'
+  | 'RhythmUpdate'
+  | 'RhythmDelete'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -666,6 +672,148 @@ export type ForeshadowingSyncOutput = {
   /** 回收当量标准（§六：改变 / 代价 / 重新解释，最弱的是解释）。 */
   payoffEquityStandard: string
   guidance: string
+}
+
+/** ===== 节奏卡工具（主 Agent 专属，要素管理员不装配；创作心智模块计划 §五） ===== */
+
+export type RhythmListInput = {
+  status?: RhythmStatus
+  volume?: string
+  /** 章号范围筛选（含端点）：按 chapter_ref 里的「第N章」数值比较。 */
+  chapterFrom?: number
+  chapterTo?: number
+}
+
+export type RhythmListOutput = {
+  rhythm: Array<{
+    id: string
+    name: string
+    status: RhythmStatus
+    chapterRef: string
+    volume: string
+    plannedConflict: number
+    plannedMood: RhythmMood
+    plannedHook: RhythmHook
+    plannedPayoff: RhythmPayoff
+    deviationFlag: boolean
+    updatedAt: string
+    /** 摘要（节奏意图首个非空行）。 */
+    summary: string
+  }>
+  totalCount: number
+}
+
+export type RhythmReadInput = {
+  id: string
+}
+
+export type RhythmReadOutput =
+  | { id: string; notFound: true }
+  | {
+      id: string
+      name: string
+      status: RhythmStatus
+      chapterRef: string
+      volume: string
+      plannedConflict: number
+      plannedMood: RhythmMood
+      plannedHook: RhythmHook
+      plannedPayoff: RhythmPayoff
+      plannedCharacters: string[]
+      plannedNote: string
+      actualConflict: number | null
+      actualMood: RhythmMood | null
+      actualHook: RhythmHook | null
+      actualPayoff: RhythmPayoff | null
+      actualNote: string | null
+      deviationFlag: boolean
+      deviationNote: string | null
+      /** 正文三节（节奏意图 / 上下文衔接 / 作者备注）。 */
+      intentBody: string
+      linkBody: string
+      authorNoteBody: string
+      sourcePath: string
+      contentHash: string
+      createdAt: string
+      updatedAt: string
+    }
+
+export type RhythmCreateInput = {
+  /** 节奏卡名；缺省按 chapterRef 章段生成（如「第083章节奏」）。 */
+  name?: string
+  chapterRef: string
+  plannedConflict: number
+  plannedMood: RhythmMood
+  plannedHook: RhythmHook
+  plannedPayoff: RhythmPayoff
+  volume?: string
+  plannedCharacters?: string[]
+  plannedNote?: string
+  intentBody?: string
+  linkBody?: string
+  authorNoteBody?: string
+}
+
+export type RhythmCreateOutput = {
+  id: string
+  name: string
+  status: RhythmStatus
+  sourcePath: string
+  content: string
+  contentLength: number
+  linesAdded: number
+  created: true
+}
+
+export type RhythmUpdateInput = {
+  id: string
+  name?: string
+  chapterRef?: string
+  volume?: string
+  plannedConflict?: number
+  plannedMood?: RhythmMood
+  plannedHook?: RhythmHook
+  plannedPayoff?: RhythmPayoff
+  plannedCharacters?: string[]
+  plannedNote?: string
+  /** 替换后的节奏意图正文；不传保持原样。 */
+  intentBody?: string
+  /** 替换后的上下文衔接正文；空串 = 清除该节。 */
+  linkBody?: string
+  /** 替换后的作者备注正文；空串 = 清除该节。 */
+  authorNoteBody?: string
+  /** 写后回写：实际值。传 null 清除（五项全清则节奏卡回到规划中）。 */
+  actualConflict?: number | null
+  actualMood?: RhythmMood | null
+  actualHook?: RhythmHook | null
+  actualPayoff?: RhythmPayoff | null
+  actualNote?: string | null
+  afterId?: string | null
+  /** 上次读取返回的 contentHash；更新正文三节时必传。 */
+  expectedContentHash?: string
+}
+
+export type RhythmUpdateOutput = {
+  id: string
+  name: string
+  status: RhythmStatus
+  deviationFlag: boolean
+  deviationNote: string | null
+  sourcePath: string
+  content: string
+  contentLength: number
+}
+
+export type RhythmDeleteInput = {
+  id: string
+}
+
+export type RhythmDeleteOutput = {
+  id: string
+  sourcePath: string
+  trashPath: string
+  contentLength: number
+  linesRemoved: number
 }
 
 export type GetFileChangeHistoryInput = {

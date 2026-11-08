@@ -106,6 +106,39 @@ describe('五档判定：完全访问', () => {
   })
 })
 
+describe('创作心智专用工具（伏笔/节奏卡，以稳定标识定位无 path 字段）', () => {
+  it('Update* 按素材档：material/chapter-material/full 放行，chapter/review 要确认', () => {
+    const updateInput = { id: 'F-001', status: 'hinted' }
+    expect(decideWriteToolPermission('UpdateForeshadowing', updateInput, makeProject('material'))).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('UpdateForeshadowing', updateInput, makeProject('chapter-material'))).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('UpdateForeshadowing', updateInput, makeProject('full'))).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('UpdateForeshadowing', updateInput, makeProject('chapter')).kind).toBe('ask')
+    expect(decideWriteToolPermission('UpdateForeshadowing', updateInput, makeProject('review')).kind).toBe('ask')
+
+    expect(decideWriteToolPermission('RhythmUpdate', { id: 'R-001', actualConflict: 7 }, makeProject('material'))).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('RhythmUpdate', { id: 'R-001', actualConflict: 7 }, makeProject('chapter')).kind).toBe('ask')
+  })
+
+  it('Create*/Delete* 走结构档：仅 full 放行，其余档位都要确认且提示语带领域名', () => {
+    for (const tool of ['CreateForeshadowing', 'DeleteForeshadowing', 'RhythmCreate', 'RhythmDelete'] as const) {
+      expect(decideWriteToolPermission(tool, { id: 'X-001' }, makeProject('full'))).toEqual({ kind: 'allow' })
+      for (const preset of ['review', 'chapter', 'material', 'chapter-material'] as const) {
+        const decision = decideWriteToolPermission(tool, { id: 'X-001' }, makeProject(preset))
+        expect(decision.kind).toBe('ask')
+        if (decision.kind === 'ask') {
+          expect(decision.reason).toContain(tool.startsWith('Rhythm') ? '节奏卡' : '伏笔')
+        }
+      }
+    }
+  })
+
+  it('通用文件工具写创作心智目录按素材档处理', () => {
+    expect(decideWriteToolPermission('EditFile', { path: 'foreshadowing/F-001-信物.md' }, makeProject('material'))).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('EditFile', { path: 'rhythm/R-001-第083章节奏.md' }, makeProject('material'))).toEqual({ kind: 'allow' })
+    expect(decideWriteToolPermission('EditFile', { path: 'rhythm/R-001-第083章节奏.md' }, makeProject('chapter')).kind).toBe('ask')
+  })
+})
+
 describe('toApprovalOutcome', () => {
   it('授权永远一次性：accepted → allowed-once，拒绝 → rejected，无确认通道 → unavailable', () => {
     expect(toApprovalOutcome({ accepted: true })).toBe('allowed-once')

@@ -38,7 +38,7 @@ export type ApprovalOutcome =
 /** 写动作分类：EditFile/UpdatePlan=内容修改；结构操作与计划新建/删除归 structure。 */
 type WriteAction = 'content-edit' | 'structure'
 
-/** 结构操作工具集：新建/删除/重命名（含计划/伏笔卡片的新建与删除）。 */
+/** 结构操作工具集：新建/删除/重命名（含计划/伏笔/节奏卡的新建与删除）。 */
 const STRUCTURE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'CreateFile',
   'DeleteFile',
@@ -47,6 +47,8 @@ const STRUCTURE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'DeletePlan',
   'CreateForeshadowing',
   'DeleteForeshadowing',
+  'RhythmCreate',
+  'RhythmDelete',
 ])
 
 function classifyWriteAction(toolName: string): WriteAction {
@@ -83,22 +85,23 @@ export function decideWriteToolPermission(
 ): PermissionDecision {
   const preset = readPermissionPreset(project)
 
-  // 计划与伏笔专用工具以稳定标识定位（input 无 path 字段），单独判定：
+  // 计划、伏笔与节奏卡专用工具以稳定标识定位（input 无 path 字段），单独判定：
   // - Create*/Delete* 走结构确认（改变文件存在性）；仅「完全访问」免确认；
   // - Update* 只改 frontmatter 元数据/正文，不改变文件位置与存在性，按素材档处理。
   if (toolName === 'CreatePlan' || toolName === 'DeletePlan'
-    || toolName === 'CreateForeshadowing' || toolName === 'DeleteForeshadowing') {
+    || toolName === 'CreateForeshadowing' || toolName === 'DeleteForeshadowing'
+    || toolName === 'RhythmCreate' || toolName === 'RhythmDelete') {
     if (preset === 'full') {
       return { kind: 'allow' }
     }
-    const domain = toolName.endsWith('Foreshadowing') ? '伏笔' : '计划'
+    const domain = toolName.startsWith('Rhythm') ? '节奏卡' : toolName.endsWith('Foreshadowing') ? '伏笔' : '计划'
     return {
       kind: 'ask',
       reason: `新建/删除${domain}属于结构操作，当前档位需逐次确认（仅「完全访问」档免确认）`,
     }
   }
 
-  if (toolName === 'UpdatePlan' || toolName === 'UpdateForeshadowing') {
+  if (toolName === 'UpdatePlan' || toolName === 'UpdateForeshadowing' || toolName === 'RhythmUpdate') {
     if (preset === 'full') {
       return { kind: 'allow' }
     }
@@ -108,7 +111,7 @@ export function decideWriteToolPermission(
     if (presetCoversMaterials(preset)) {
       return { kind: 'allow' }
     }
-    const domain = toolName === 'UpdateForeshadowing' ? '伏笔' : '计划'
+    const domain = toolName === 'RhythmUpdate' ? '节奏卡' : toolName === 'UpdateForeshadowing' ? '伏笔' : '计划'
     return { kind: 'ask', reason: `修改${domain}属于素材类内容，当前档位需逐次确认（「素材内容」「章节与素材」「完全访问」档免确认）` }
   }
 

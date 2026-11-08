@@ -26,7 +26,15 @@ import {
   readForeshadowingTool,
   updateForeshadowingTool,
 } from '../tools/foreshadowing-tools'
+import {
+  rhythmCreateTool,
+  rhythmDeleteTool,
+  rhythmListTool,
+  rhythmReadTool,
+  rhythmUpdateTool,
+} from '../tools/rhythm-tools'
 import { FORESHADOWING_STATUS_LABELS } from '../../types/foreshadowing'
+import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_PAYOFFS } from '../../types/rhythm'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
 import { webSearchTool } from '../tools/web-search'
 import { webFetchTool } from '../tools/web-fetch'
@@ -62,6 +70,11 @@ import type {
   DeleteForeshadowingOutput,
   ForeshadowingCheckOutput,
   ForeshadowingSyncOutput,
+  RhythmListOutput,
+  RhythmReadOutput,
+  RhythmCreateOutput,
+  RhythmUpdateOutput,
+  RhythmDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -1126,6 +1139,332 @@ export function createAgentTools(): AgentRunnableToolMap {
         return sections.join('\n')
       },
     },
+    RhythmList: {
+      name: 'RhythmList',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmList',
+          description: '查询节奏卡摘要（关联章节、计划冲突强度/情绪基调/章末钩子/爽点类型、偏差标记、节奏意图首行），可按状态（planned=规划中/written=已写/deviated=偏差）、卷、章号范围筛选。了解全本节奏规划先查这里。',
+          parameters: {
+            type: 'object',
+            properties: {
+              status: {
+                type: 'string',
+                enum: ['planned', 'written', 'deviated'],
+                description: '可选，按状态筛选：planned=规划中、written=已写、deviated=偏差。',
+              },
+              volume: {
+                type: 'string',
+                description: '可选，按卷筛选（如 第一卷）。',
+              },
+              chapterFrom: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，章号范围起点（含）；与 chapterTo 搭配用。',
+              },
+              chapterTo: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，章号范围终点（含）。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmListTool,
+      formatResult(output: RhythmListOutput) {
+        if (output.rhythm.length === 0) {
+          return '没有符合条件的节奏卡。'
+        }
+        const lines = output.rhythm.map((item, index) => [
+          `#${index + 1} ${item.name || '（未命名）'}（${item.id}）`,
+          `章节: ${item.chapterRef || '未知'}（${item.volume}）`,
+          `计划: 冲突 ${item.plannedConflict} · ${item.plannedMood} · 钩子 ${item.plannedHook} · 爽点 ${item.plannedPayoff}`,
+          `status: ${item.status}${item.deviationFlag ? '（有偏差）' : ''}`,
+          `summary: ${item.summary || '无'}`,
+        ].join('\n'))
+        return [`共 ${output.totalCount} 张节奏卡：`, '', lines.join('\n\n')].join('\n')
+      },
+    },
+    RhythmRead: {
+      name: 'RhythmRead',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmRead',
+          description: '按稳定标识读取一张节奏卡完整内容：计划值、实际值（写后回写）、偏差说明、正文三节（节奏意图/上下文衔接/作者备注）与 contentHash。回写实际值或改正文前必须先读取。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '节奏卡的稳定标识（来自 RhythmList 返回的 id，形如 R-001）。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmReadTool,
+      formatResult(output: RhythmReadOutput) {
+        if ('notFound' in output) {
+          return `节奏卡 ${output.id} 不存在。请用 RhythmList 重新查询。`
+        }
+        const actual = output.actualConflict === null && output.actualMood === null && output.actualHook === null && output.actualPayoff === null
+          ? '未回写'
+          : [
+              output.actualConflict !== null ? `冲突 ${output.actualConflict}` : null,
+              output.actualMood !== null ? `情绪 ${output.actualMood}` : null,
+              output.actualHook !== null ? `钩子 ${output.actualHook}` : null,
+              output.actualPayoff !== null ? `爽点 ${output.actualPayoff}` : null,
+            ].filter(Boolean).join(' · ')
+        return [
+          `「${output.name || '（未命名）'}」（${RHYTHM_COLUMN_LABELS[output.status]}${output.deviationFlag ? '·有偏差' : ''}）`,
+          `id: ${output.id}`,
+          `章节: ${output.chapterRef || '未知'}（${output.volume}）`,
+          `计划: 冲突 ${output.plannedConflict} · ${output.plannedMood} · 钩子 ${output.plannedHook} · 爽点 ${output.plannedPayoff}`,
+          `出场: ${output.plannedCharacters.join('、') || '未登记'}${output.plannedNote ? `；备注：${output.plannedNote}` : ''}`,
+          `实际: ${actual}`,
+          output.deviationNote ? `偏差: ${output.deviationNote}` : null,
+          `sourcePath: ${output.sourcePath}`,
+          `contentHash: ${output.contentHash}`,
+          `updatedAt: ${output.updatedAt || '未知'}`,
+          '',
+          '## 节奏意图',
+          output.intentBody || '（空）',
+          output.linkBody ? '\n## 上下文衔接' : null,
+          output.linkBody || null,
+          output.authorNoteBody ? '\n## 作者备注' : null,
+          output.authorNoteBody || null,
+        ].filter((line) => line !== null).join('\n')
+      },
+    },
+    RhythmCreate: {
+      name: 'RhythmCreate',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmCreate',
+          description: '规划一张节奏卡（一章一卡）。必须提供关联章节（卷/章）与计划值：冲突强度 1~10、情绪基调、章末钩子、爽点类型；节奏意图正文建议同写（本章要什么温度、不要什么）。作者排布后续章节节奏或写作前规划时使用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: '可选，节奏卡名；不传按章节名自动生成（如「第083章节奏」）。',
+              },
+              chapterRef: {
+                type: 'string',
+                description: '关联章节，完整路径（卷/章），如 第二卷/第083章。',
+              },
+              plannedConflict: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 10,
+                description: '计划冲突强度（1~10 整数）：1 最低，10 最高。',
+              },
+              plannedMood: {
+                type: 'string',
+                enum: [...RHYTHM_MOODS],
+                description: '计划情绪基调。',
+              },
+              plannedHook: {
+                type: 'string',
+                enum: [...RHYTHM_HOOKS],
+                description: '计划章末钩子类型；「无」表示章末收束。',
+              },
+              plannedPayoff: {
+                type: 'string',
+                enum: [...RHYTHM_PAYOFFS],
+                description: '计划爽点类型；「无」表示本章无明确爽点。',
+              },
+              volume: {
+                type: 'string',
+                description: '可选，所属卷；不传按 chapterRef 卷段推导。',
+              },
+              plannedCharacters: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，计划出场主要角色。',
+              },
+              plannedNote: {
+                type: 'string',
+                description: '可选，自然语言补充（如「大高潮后的喘息章」）。',
+              },
+              intentBody: {
+                type: 'string',
+                description: '可选，节奏意图正文：本章要什么温度、不要什么。',
+              },
+              linkBody: {
+                type: 'string',
+                description: '可选，上下文衔接正文：上一章/下一章的温度差。',
+              },
+              authorNoteBody: {
+                type: 'string',
+                description: '可选，作者备注。',
+              },
+            },
+            required: ['chapterRef', 'plannedConflict', 'plannedMood', 'plannedHook', 'plannedPayoff'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmCreateTool,
+      formatResult(output: RhythmCreateOutput) {
+        return `已创建节奏卡「${output.name || output.id}」（id: ${output.id}，文件：${output.sourcePath}）`
+      },
+    },
+    RhythmUpdate: {
+      name: 'RhythmUpdate',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmUpdate',
+          description: '按稳定标识更新一张节奏卡：计划值、正文三节、写后回写实际值（actual_*）分别可选。改正文前必须先读取并回传 contentHash；只改计划值时不传正文。回写任一 actual_* 时系统自动判定偏差并流转状态（written=已写/deviated=偏差）；五项 actual_* 全传 null 可撤销回写（回到规划中）。status 与偏差标记不接受外部设置。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '节奏卡的稳定标识。',
+              },
+              name: {
+                type: 'string',
+                description: '可选，新节奏卡名（文件名同步）。',
+              },
+              chapterRef: {
+                type: 'string',
+                description: '可选，修正关联章节。',
+              },
+              volume: {
+                type: 'string',
+                description: '可选，修正所属卷；空串按新 chapterRef 推导。',
+              },
+              plannedConflict: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 10,
+                description: '可选，调整计划冲突强度。',
+              },
+              plannedMood: {
+                type: 'string',
+                enum: [...RHYTHM_MOODS],
+                description: '可选，调整计划情绪基调。',
+              },
+              plannedHook: {
+                type: 'string',
+                enum: [...RHYTHM_HOOKS],
+                description: '可选，调整计划章末钩子。',
+              },
+              plannedPayoff: {
+                type: 'string',
+                enum: [...RHYTHM_PAYOFFS],
+                description: '可选，调整计划爽点类型。',
+              },
+              plannedCharacters: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，整体替换计划出场角色列表。',
+              },
+              plannedNote: {
+                type: 'string',
+                description: '可选，替换自然语言补充。',
+              },
+              intentBody: {
+                type: 'string',
+                description: '可选，替换后的节奏意图全文（不是片段追加）。',
+              },
+              linkBody: {
+                type: 'string',
+                description: '可选，替换后的上下文衔接全文；空串 = 清除该节。',
+              },
+              authorNoteBody: {
+                type: 'string',
+                description: '可选，替换后的作者备注全文；空串 = 清除该节。',
+              },
+              actualConflict: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 10,
+                description: '可选，回写实际冲突强度；null 清除。',
+              },
+              actualMood: {
+                type: 'string',
+                enum: [...RHYTHM_MOODS],
+                description: '可选，回写实际情绪基调；null 清除。',
+              },
+              actualHook: {
+                type: 'string',
+                enum: [...RHYTHM_HOOKS],
+                description: '可选，回写实际章末钩子；null 清除。',
+              },
+              actualPayoff: {
+                type: 'string',
+                enum: [...RHYTHM_PAYOFFS],
+                description: '可选，回写实际爽点类型；null 清除。',
+              },
+              actualNote: {
+                type: 'string',
+                description: '可选，本章节奏自评；null 清除。',
+              },
+              afterId: {
+                type: 'string',
+                description: '可选，移动到目标列中某张卡之后；不传默认列末尾。',
+              },
+              expectedContentHash: {
+                type: 'string',
+                description: '上次读取返回的 contentHash；更新正文三节时必传。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmUpdateTool,
+      formatResult(output: RhythmUpdateOutput) {
+        const deviation = output.deviationFlag && output.deviationNote ? `；${output.deviationNote}` : ''
+        return `已更新节奏卡「${output.name || output.id}」（id: ${output.id}，状态 ${RHYTHM_COLUMN_LABELS[output.status]}，文件：${output.sourcePath}）${deviation}`
+      },
+    },
+    RhythmDelete: {
+      name: 'RhythmDelete',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmDelete',
+          description: '按稳定标识删除一张节奏卡（移入项目回收站）。只在用户明确要求删除时使用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '节奏卡的稳定标识。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmDeleteTool,
+      formatResult(output: RhythmDeleteOutput) {
+        return `已将节奏卡 ${output.sourcePath} 移入回收站 ${output.trashPath}`
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -1322,6 +1661,11 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'DeleteForeshadowing'
     || value === 'ForeshadowingCheck'
     || value === 'ForeshadowingSync'
+    || value === 'RhythmList'
+    || value === 'RhythmRead'
+    || value === 'RhythmCreate'
+    || value === 'RhythmUpdate'
+    || value === 'RhythmDelete'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'
