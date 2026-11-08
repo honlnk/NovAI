@@ -9,7 +9,7 @@ export interface ToastAction {
 }
 
 export interface ToastOptions {
-  /** 展示时长（毫秒），缺省 3000；带撤销动作的提示建议 5000 */
+  /** 展示时长（毫秒），缺省 3000；带撤销动作的提示建议 5000。error 缺省持续显示（见 ToastMessage.persistent） */
   duration?: number
   /** 内联动作按钮（可多个，如归档的「撤销」「查看已归档」）；多条提示并存时各自动作互不影响 */
   actions?: ToastAction[]
@@ -19,6 +19,14 @@ export interface ToastMessage {
   id: number
   message: string
   type: ToastType
+  /** 自动关闭时长（毫秒）；渲染层缺省 3000。显式传 duration 时记录在此供渲染层使用 */
+  duration?: number
+  /**
+   * 持续显示（数据安全计划 F11）：不自动关闭，出口是用户手动关闭或进入对应现场。
+   * error 未显式指定 duration 时默认持续——错误原因不能在用户读完之前消失；
+   * success / info / warning 保持既定时长不回归。
+   */
+  persistent?: boolean
   actions?: ToastAction[]
 }
 
@@ -32,6 +40,8 @@ export function useToast() {
       id,
       message,
       type,
+      ...(options?.duration !== undefined ? { duration: options.duration } : {}),
+      ...(type === 'error' && options?.duration === undefined ? { persistent: true } : {}),
       ...(options?.actions?.length ? { actions: options.actions } : {}),
     })
   }

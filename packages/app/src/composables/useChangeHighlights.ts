@@ -46,6 +46,12 @@ export type ChangeNotice = {
   canLocate: boolean
   /** 重播所需的定位载荷（canLocate 时存在） */
   locate?: NoticeLocatePayload
+  /**
+   * 来源会话归属（F10）：后台会话的改动标注会话标题，让用户知道是谁改的；
+   * 当前激活会话的改动不标（上下文自明）。创建时的快照，不随后续切换更新。
+   */
+  sessionId?: string
+  sessionTitle?: string
 }
 
 export type ChangeHighlightJob = {

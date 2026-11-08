@@ -6,7 +6,8 @@ import AppIcon from './AppIcon.vue'
 const props = defineProps<{
   message: string
   type?: 'success' | 'error' | 'info' | 'warning'
-  duration?: number
+  /** 自动关闭时长（毫秒），缺省 3000；null = 持续显示（错误提示，数据安全计划 F11），由用户手动关闭 */
+  duration?: number | null
   /** 内联动作按钮（撤销 / 查看已归档等）；缺省不渲染按钮 */
   actions?: ToastAction[]
 }>()
@@ -28,6 +29,8 @@ function runAction(action: ToastAction) {
 }
 
 onMounted(() => {
+  // null = 持续显示（错误提示）：不安排自动关闭，唯一出口是用户点击关闭
+  if (props.duration === null) return
   const duration = props.duration ?? 3000
   setTimeout(dismiss, duration)
 })

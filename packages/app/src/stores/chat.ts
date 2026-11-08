@@ -36,6 +36,7 @@ import type {
 import { buildRenderItems, type ChatRenderItem } from './chat-render'
 import { useProjectStore } from './project'
 import { getOrCreateClientId } from '../utils/client-id'
+import { useToast } from '../composables/useToast'
 
 /** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
 export type RunStatusType = 'idle' | 'running' | 'error'
@@ -155,6 +156,13 @@ export const useChatStore = defineStore('chat', () => {
   const latestRunIdBySession = new Map<string, string>()
 
   /**
+   * 已删除会话的墓碑（数据安全计划 F12 删除不复活）：core 侧收尾已静默，但删除与
+   * 在途唤醒/广播并发时仍可能有晚到事件（典型 run-start）到达——据此直接丢弃，
+   * 已删会话不得在运行标记、待确认或最近变更里复活。initSessions（进入新项目）清空。
+   */
+  const deletedSessionIds = new Set<string>()
+
+  /**
    * 历史窗口起点：sessionView.messages[0] 在全量历史中的下标（append-only 数组下标游标）。
    * 0 = 已加载全部；>0 = 之上还有更早历史可翻页。
    */
@@ -243,9 +251,10 @@ export const useChatStore = defineStore('chat', () => {
    * 取代旧的 ensureSessionView（后者只支持单会话）。
    */
   async function initSessions(projectId: string, preferredSessionId?: string | null): Promise<ChatSessionView> {
-    // 进入新项目：上一项目的后台保存失败记录与运行身份不再有意义（§3-4/F8）
+    // 进入新项目：上一项目的后台保存失败记录、运行身份与删除墓碑不再有意义（§3-4/F8/F12）
     sessionSaveFailures.value = new Map()
     latestRunIdBySession.clear()
+    deletedSessionIds.clear()
     // 恢复中手动切换（F6 验收2）：列表加载期间用户已发起别的选择（代次前进）时，
     // 初始化不再自动接管会话位——用户的最新意图优先，不被初始化拉回
     const entryGeneration = sessionSelectionGeneration
@@ -328,6 +337,9 @@ export const useChatStore = defineStore('chat', () => {
     loadingOlder.value = false
     isRunning.value = isAgentRunActive(sessionId)
     isStopping.value = false
+    // 进入现场（F11 错误持续性的出口之一）：该会话的保存失败记录随进入清除，
+    // 用户已在现场处理，不再保留全局提醒来源
+    dismissSessionSaveFailure(sessionId)
     return view
   }
 
@@ -438,6 +450,34 @@ export const useChatStore = defineStore('chat', () => {
     const wasActive = activeSessionId.value === sessionId
     // 先从本地列表移除，避免 await 期间 UI 闪烁残留项
     sessions.value = sessions.value.filter((s) => s.sessionId !== sessionId)
+
+    // 残留标记一并清理（F12 删除不复活）：运行标记、运行身份、待确认/待回答、
+    // 保存失败与最近变更都不能把已删会话留在界面上；墓碑拦住删除后仍在途的晚到事件
+    deletedSessionIds.add(sessionId)
+    if (runningSessionIds.value.has(sessionId)) {
+      const nextRunning = new Set(runningSessionIds.value)
+      nextRunning.delete(sessionId)
+      runningSessionIds.value = nextRunning
+    }
+    latestRunIdBySession.delete(sessionId)
+    if (pendingConfirmationsBySession.value.has(sessionId)) {
+      const nextConfirmations = new Map(pendingConfirmationsBySession.value)
+      nextConfirmations.delete(sessionId)
+      pendingConfirmationsBySession.value = nextConfirmations
+    }
+    if (pendingQuestionsBySession.value.has(sessionId)) {
+      const nextQuestions = new Map(pendingQuestionsBySession.value)
+      nextQuestions.delete(sessionId)
+      pendingQuestionsBySession.value = nextQuestions
+    }
+    if (sessionSaveFailures.value.has(sessionId)) {
+      dismissSessionSaveFailure(sessionId)
+    }
+    if (recentFileChanges.value.some((entry) => entry.sessionId === sessionId)) {
+      recentFileChanges.value = recentFileChanges.value.filter(
+        (entry) => entry.sessionId !== sessionId,
+      )
+    }
 
     if (!wasActive) {
       return
@@ -628,6 +668,12 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
+    // 已删会话的晚到事件（F12 不复活）：core 侧收尾已静默，这里兜住删除与在途
+    // 唤醒/广播并发的残余——运行标记、待确认、最近变更都不得被已删会话的事件重建
+    if (deletedSessionIds.has(event.sessionId)) {
+      return
+    }
+
     // 运行态集合全局维护（先于激活会话过滤）：后台委派会话运行时列表同样要点亮「进行中」。
     // run-finish/run-error 以注册表真实状态收敛——停止后立刻再发送时，新 run 的
     // run-start 可能先于旧 driver 的收尾事件到达，无条件删除会误清新 run。
@@ -703,6 +749,32 @@ export const useChatStore = defineStore('chat', () => {
     if (event.type === 'session-save-failed') {
       recordSessionSaveFailure(event)
       return
+    }
+
+    // 后台会话的完成与失败（F11 列表摘要）：只做摘要级反馈，不动当前现场——
+    // 完成刷新列表（标题/updatedAt 重排），失败给持续错误 toast（用户不在该现场，
+    // 失败不能静默）。激活会话的完整收尾处理在下方激活过滤之后。
+    if (event.type === 'run-finish' || event.type === 'run-error') {
+      const isForeground = activeSessionId.value === event.sessionId
+      if (!isForeground) {
+        // 事件可能来自已切走的项目（后台 driver 收尾晚于项目切换）：只消费当前项目
+        const projectStore = useProjectStore()
+        if (event.type === 'run-finish') {
+          if (projectStore.currentProject?.id !== event.result.projectId) {
+            return
+          }
+          void loadSessions(event.result.projectId)
+          return
+        }
+        // run-error 不带 projectId：以当前项目的会话列表识别归属，列表无此会话
+        // （已切项目）则静默丢弃，不向别的项目现场弹错误
+        const entry = sessions.value.find((s) => s.sessionId === event.sessionId)
+        if (!entry) {
+          return
+        }
+        useToast().error(`后台会话「${entry.title}」运行失败：${event.error.message}`)
+        return
+      }
     }
 
     // 其余事件只消费当前激活会话的（后台会话的 driver 仍在跑，UI 不跟随）

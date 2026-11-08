@@ -791,7 +791,7 @@ function handleContentMouseup() {
         >
           <AppIcon name="square-pen" :size="14" class="h-3.5 w-3.5 shrink-0 text-blue-500" />
           <span class="min-w-0 flex-1 truncate text-gray-700">
-            AI {{ n.status === 'created' ? '新建' : '修改' }}了「{{ n.fileName }}」<span v-if="n.count > 1" class="text-gray-400">（{{ n.count }} 处）</span>
+            AI {{ n.status === 'created' ? '新建' : '修改' }}了「{{ n.fileName }}」<span v-if="n.count > 1" class="text-gray-400">（{{ n.count }} 处）</span><span v-if="n.sessionTitle" class="text-gray-400">（来自会话「{{ n.sessionTitle }}」）</span>
           </span>
           <button
             type="button"

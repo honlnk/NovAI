@@ -281,8 +281,9 @@ onMounted(() => {
   teardownDraftBackup = setupDraftBackupLifecycle()
 })
 
-// 后台会话保存失败到达（§3-4 保存失败可见）：立即 toast 提示；持续展示面（错误条
-// 常驻、按会话处理）由第三波 F11 承接，本处保证失败绝不静默
+// 后台会话保存失败到达（§3-4 保存失败可见 / F11 错误持续）：错误 toast 默认持续显示
+// 到用户关闭；进入对应会话现场时数据源记录随之清除（chatStore.selectSession），
+// 不再重复提醒。
 watch(
   () => chatStore.sessionSaveFailures.size,
   (size, previous) => {
@@ -292,7 +293,7 @@ watch(
     const latest = [...chatStore.sessionSaveFailures.values()]
       .sort((left, right) => right.at.localeCompare(left.at))[0]
     if (latest) {
-      toast.error(`会话保存失败：${latest.message}`, { duration: 8000 })
+      toast.error(`会话保存失败：${latest.message}`)
     }
   },
 )
@@ -335,11 +336,16 @@ const highlights = useChangeHighlights(projectId.value)
 /** 已消费的实时改动 id（防最近队列重复处理） */
 const processedChangeIds = new Set<string>()
 
-/** 账本记录 → 反馈通知（携带重播所需的定位载荷） */
-function buildChangeNotice(record: FileChangeRecordView): ChangeNotice {
+/** 账本记录 → 反馈通知（携带重播所需的定位载荷与后台会话归属） */
+function buildChangeNotice(record: FileChangeRecordView, entry: RecentFileChange): ChangeNotice {
   const change = record.change
   const path = change.type === 'renamed' ? change.toPath : change.path
   const canLocate = Boolean(record.coords && record.coords.ranges.length > 0)
+  // 来源归属（F10）：后台会话的改动标注会话标题；当前会话的改动上下文自明不标
+  const fromBackground = entry.sessionId !== chatStore.activeSessionId
+  const sessionTitle = fromBackground
+    ? chatStore.sessions.find((s) => s.sessionId === entry.sessionId)?.title
+    : undefined
   return {
     recordId: record.id,
     path,
@@ -355,6 +361,9 @@ function buildChangeNotice(record: FileChangeRecordView): ChangeNotice {
             afterHash: record.coords!.afterVersion?.contentHash,
           },
         }
+      : {}),
+    ...(fromBackground && sessionTitle !== undefined
+      ? { sessionId: entry.sessionId, sessionTitle }
       : {}),
   }
 }
@@ -423,13 +432,13 @@ async function processChangeRecord(entry: RecentFileChange) {
     if (panel?.dirty) {
       toast.info(`「${projectStore.activeFile?.name ?? effect.path}」已被 AI 更新，你的未保存草稿已保留`)
       if (isContentChange) {
-        pushChangeNotice(projectId.value, buildChangeNotice(record))
+        pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
       }
       return
     }
     // 编辑模式不打断输入：入通知队列（重命名已在上面分支处理完毕）
     if (panel?.viewMode === 'edit' && isContentChange) {
-      pushChangeNotice(projectId.value, buildChangeNotice(record))
+      pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
       return
     }
     await projectStore.openFile(effect.path)
@@ -454,14 +463,14 @@ async function processChangeRecord(entry: RecentFileChange) {
       return
     }
     if (isContentChange) {
-      pushChangeNotice(projectId.value, buildChangeNotice(record))
+      pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
     }
     return
   }
 
   // 未命中当前文件：只入通知队列，不跳转不抢占（§7.4）
   if (isContentChange) {
-    pushChangeNotice(projectId.value, buildChangeNotice(record))
+    pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
   }
 }
 
@@ -1153,6 +1162,7 @@ function handleGoToSettings() {
         <Toast
           :message="t.message"
           :type="t.type"
+          :duration="t.persistent ? null : t.duration"
           :actions="t.actions"
           @close="toast.remove(t.id)"
         />

@@ -914,6 +914,11 @@ async function wakeSessionDriver(options: {
     onEvent: createSessionEventForwarder(session, ledgerBaseline),
     onLifecycle(event) {
       if (event.type === 'driver-start') {
+        // 会话已删（删除与在途唤醒并发）：不广播 run-start——UI 的运行标记不复活；
+        // driver 会继续跑到收尾，finalize/handleFailed 的墓碑静默兜底
+        if (deletedSessionIds.has(session.sessionId)) {
+          return
+        }
         runId = createRunId()
         broadcastAgentEvent({ type: 'run-start', runId, sessionId: session.sessionId })
         return
