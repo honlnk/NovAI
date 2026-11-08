@@ -1,9 +1,6 @@
 import {
-  readProjectTextFile,
-  removeProjectFile,
-  writeProjectTextFile,
-} from '../fs/project-fs'
-import { createTrashPath } from '../fs/trash'
+  locateCardContent, nextCardSequence, trashCardFile, writeCardFile,
+} from '../card-board/store'
 import { parsePlanFile, replacePlanTitleLine, serializePlanCard } from './parser'
 import {
   createPlanId,
@@ -30,6 +27,8 @@ import type { PlanCard, PlanStatus } from '../../types/plans'
  * - 冲突检测：调用方持有 expectedContentHash（上次读取的文件全文 hash）；
  *   文件已被外部编辑器 / 用户改过时抛 PlanConflictError，阻止静默覆盖。
  * - 删除 = 移入 .novel/trash/ 回收站（与 DeleteFile 同语义）。
+ *
+ * 定位/落盘/回收站/序号原语来自 card-board/store（通用底层，计划/伏笔/节奏卡共用）。
  */
 
 export type CreatePlanOptions = {
@@ -68,7 +67,7 @@ export async function createPlanCard(project: ProjectSnapshotLike, options: Crea
   const status = options.status ?? 'inbox'
   const existing = await scanPlanCards(project)
   const order = nextOrderInColumn(existing.cards, status)
-  const sequence = nextSequence(existing.cards.map((card) => card.sourcePath))
+  const sequence = nextCardSequence(existing.cards.map((card) => card.sourcePath), extractPlanSequence)
   const id = createPlanId(now)
   const path = createPlanPath(sequence, body)
   const card: Omit<PlanCard, 'sourcePath'> = {
@@ -80,13 +79,20 @@ export async function createPlanCard(project: ProjectSnapshotLike, options: Crea
     body,
   }
 
-  await writeProjectTextFile(project.handle, path, serializePlanCard(card))
+  await writeCardFile(project, {
+    currentPath: null,
+    nextPath: path,
+    content: serializePlanCard(card),
+    existingPaths: [],
+    errors: planFileErrors(),
+  })
 
   return { ...card, sourcePath: path }
 }
 
 export async function readPlanCard(project: ProjectSnapshotLike, id: string): Promise<{ card: PlanCard; contentHash: string } | null> {
-  const found = await locatePlanFile(project, id)
+  const scan = await scanPlanCards(project)
+  const found = await locateCardContent(project, scan.cards, id)
 
   if (!found) {
     return null
@@ -100,7 +106,8 @@ export async function readPlanCard(project: ProjectSnapshotLike, id: string): Pr
 }
 
 export async function updatePlanCard(project: ProjectSnapshotLike, options: UpdatePlanOptions): Promise<PlanCard> {
-  const found = await locatePlanFile(project, options.id)
+  const scan = await scanPlanCards(project)
+  const found = await locateCardContent(project, scan.cards, options.id)
 
   if (!found) {
     throw new PlanError(`计划不存在：${options.id}`)
@@ -117,7 +124,7 @@ export async function updatePlanCard(project: ProjectSnapshotLike, options: Upda
   }
 
   const now = (options.now ?? new Date()).toISOString()
-  const allCards = await scanPlanCards(project)
+  const allCards = scan.cards
   const bodyChanged = options.body !== undefined
   const titleChanged = options.title !== undefined
   let nextBody = (bodyChanged ? options.body ?? '' : current.card.body).trim()
@@ -142,7 +149,7 @@ export async function updatePlanCard(project: ProjectSnapshotLike, options: Upda
   // 不传 afterId 的新状态按列末尾处理；状态未变且未指定位置时不重算 order。
   const nextOrder = positionChanged
     ? orderAfter(
-        allCards.cards.filter((card) => card.id !== options.id),
+        allCards.filter((card) => card.id !== options.id),
         options.status ?? current.card.status,
         options.afterId ?? null,
       )
@@ -159,35 +166,26 @@ export async function updatePlanCard(project: ProjectSnapshotLike, options: Upda
   }
 
   const nextContent = serializePlanCard(card)
-  const nextPath = resolveRenamedPath(found.path, card, titleChanged ? options.title : undefined, allCards.cards)
+  const nextPath = resolveRenamedPath(found.path, card, titleChanged ? options.title : undefined)
 
-  if (nextPath === found.path) {
-    // 名称未变化 / 清理后等价：只更新内容，不重命名
-    await writeProjectTextFile(project.handle, found.path, nextContent)
-    return { ...card, sourcePath: found.path }
-  }
-
-  // 目标占用检查（同路径 no-op 已排除）：改名不得覆盖任何已有文件
-  if (allCards.cards.some((existing) => existing.sourcePath === nextPath)) {
-    throw new PlanError(`目标文件已存在：${nextPath}；请换一个计划名`)
-  }
-  if (await fileExists(project, nextPath)) {
-    throw new PlanError(`目标文件已存在：${nextPath}；请换一个计划名`)
-  }
-
-  // 无原子重命名原语（浏览器 FSA）：写完整新文件 → 删旧文件；
-  // 删旧失败时清理刚写入的新文件再报错，避免留下同 ID 双卡。
-  await writeProjectTextFile(project.handle, nextPath, nextContent)
-
-  try {
-    await removeProjectFile(project.handle, found.path)
-  } catch (error) {
-    await removeProjectFile(project.handle, nextPath).catch(() => {})
-    const reason = error instanceof Error ? `：${error.message}` : ''
-    throw new PlanError(`重命名失败，旧文件删除出错，已回滚：${found.path} → ${nextPath}${reason}`)
-  }
+  await writeCardFile(project, {
+    currentPath: found.path,
+    nextPath,
+    content: nextContent,
+    existingPaths: allCards.map((card) => card.sourcePath),
+    errors: planFileErrors(),
+  })
 
   return { ...card, sourcePath: nextPath }
+}
+
+/** 计划领域落盘错误文案（占用/回滚），与历史行为一致。 */
+function planFileErrors() {
+  return {
+    occupied: (path: string) => new PlanError(`目标文件已存在：${path}；请换一个计划名`),
+    renameFailed: (from: string, to: string, reason: string) =>
+      new PlanError(`重命名失败，旧文件删除出错，已回滚：${from} → ${to}${reason}`),
+  }
 }
 
 /**
@@ -198,7 +196,6 @@ function resolveRenamedPath(
   currentPath: string,
   card: Omit<PlanCard, 'sourcePath'>,
   title: string | undefined,
-  allCards: readonly PlanCard[],
 ): string {
   if (title === undefined) {
     return currentPath
@@ -218,66 +215,24 @@ function resolveRenamedPath(
     return currentPath
   }
 
-  // 同 ID 卡片不算占用（目标与现路径不同说明名称确实变了）
-  void allCards
   return `plans/${nextName}`
 }
 
-async function fileExists(project: ProjectSnapshotLike, path: string): Promise<boolean> {
-  try {
-    await readProjectTextFile(project.handle, path)
-    return true
-  } catch {
-    return false
-  }
-}
-
 export async function deletePlanCard(project: ProjectSnapshotLike, id: string): Promise<{ card: PlanCard; trashPath: string }> {
-  const found = await locatePlanFile(project, id)
+  const scan = await scanPlanCards(project)
+  const found = await locateCardContent(project, scan.cards, id)
 
   if (!found) {
     throw new PlanError(`计划不存在：${id}`)
   }
 
   const parsed = parsePlanFile(found.path, found.content)
-  const trashPath = createTrashPath(found.path)
-
-  await writeProjectTextFile(project.handle, trashPath, found.content)
-  await removeProjectFile(project.handle, found.path)
+  const trashPath = await trashCardFile(project, found.path, found.content)
 
   return {
     card: { ...parsed.card, id: parsed.card.id || id, sourcePath: found.path },
     trashPath,
   }
-}
-
-/** 按稳定标识定位计划文件：扫描目录，按 frontmatter.id 匹配。 */
-async function locatePlanFile(project: ProjectSnapshotLike, id: string): Promise<{ path: string; content: string } | null> {
-  const scan = await scanPlanCards(project)
-
-  for (const card of scan.cards) {
-    if (card.id !== id) {
-      continue
-    }
-
-    try {
-      return { path: card.sourcePath, content: await readProjectTextFile(project.handle, card.sourcePath) }
-    } catch {
-      return null
-    }
-  }
-
-  return null
-}
-
-/** 下一个创建时序号：现有文件序号最大值 + 1（从 1 开始；删除后允许不连续）。 */
-function nextSequence(paths: readonly string[]): number {
-  const max = paths.reduce((current, path) => {
-    const sequence = extractPlanSequence(path)
-    return sequence === null ? current : Math.max(current, sequence)
-  }, 0)
-
-  return max + 1
 }
 
 /** 排序导出（服务层看板视图组装用，保持单一排序事实来源）。 */

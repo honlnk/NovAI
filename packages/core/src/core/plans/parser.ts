@@ -1,4 +1,5 @@
 import { hashContent } from '../util/hash'
+import { firstNonEmptyLine, normalizeOrder, normalizeTime, parseFrontmatterLines, splitFrontmatter } from '../card-board/parser'
 import { isPlanStatus } from '../../types/plans'
 import type { PlanCard, PlanCardView } from '../../types/plans'
 
@@ -8,6 +9,7 @@ import type { PlanCard, PlanCardView } from '../../types/plans'
  * frontmatter 为自研行式解析（与要素 parser 同风格：`key: value`，不支持嵌套），
  * 字段只有五个标量：id/status/order/createdAt/updatedAt。
  * 缺失或非法的元数据不丢正文：status 回退收集箱、非法时间置空串、order 置 0。
+ * 拆分/行解析/规范化原语来自 card-board（计划/伏笔/节奏卡共用的通用底层）。
  */
 
 export type ParsedPlanFile = {
@@ -111,73 +113,4 @@ export function toPlanCardView(card: PlanCard): PlanCardView {
     title: derivePlanTitle(card.body),
     summary: derivePlanSummary(card.body),
   }
-}
-
-function splitFrontmatter(content: string) {
-  const normalized = content.replace(/\r\n/g, '\n')
-
-  if (!normalized.startsWith('---\n')) {
-    return { frontmatter: '', body: normalized }
-  }
-
-  const endIndex = normalized.indexOf('\n---\n', 4)
-
-  if (endIndex === -1) {
-    return { frontmatter: '', body: normalized }
-  }
-
-  return {
-    frontmatter: normalized.slice(4, endIndex),
-    body: normalized.slice(endIndex + 5),
-  }
-}
-
-function firstNonEmptyLine(body: string): string {
-  return body
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line.length > 0) ?? ''
-}
-
-function parseFrontmatterLines(raw: string): Record<string, string> {
-  const record: Record<string, string> = {}
-
-  for (const sourceLine of raw.split('\n')) {
-    const line = sourceLine.trim()
-
-    if (!line) {
-      continue
-    }
-
-    const separatorIndex = line.indexOf(':')
-
-    if (separatorIndex === -1) {
-      continue
-    }
-
-    record[line.slice(0, separatorIndex).trim()] = line.slice(separatorIndex + 1).trim()
-  }
-
-  return record
-}
-
-function normalizeOrder(value: string | undefined): number {
-  const parsed = Number((value ?? '').trim())
-
-  if (!Number.isFinite(parsed)) {
-    return 0
-  }
-
-  return parsed
-}
-
-/** 非法时间不影响正文读取：解析失败置空串（展示层按「未知」处理）。 */
-function normalizeTime(value: string | undefined): string {
-  const trimmed = (value ?? '').trim()
-
-  if (!trimmed) {
-    return ''
-  }
-
-  return Number.isNaN(Date.parse(trimmed)) ? '' : trimmed
 }

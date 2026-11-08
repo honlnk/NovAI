@@ -1,4 +1,6 @@
 import { hashContent } from '../util/hash'
+import { sanitizeFileNameFragment } from '../card-board/parser'
+import { nextOrderInColumn as genericNextOrderInColumn, orderAfter as genericOrderAfter, sortBoardCards } from '../card-board/ordering'
 import { PLANS_DIRECTORY } from '../../types/plans'
 import type { PlanCard, PlanCardView } from '../../types/plans'
 
@@ -8,6 +10,7 @@ import type { PlanCard, PlanCardView } from '../../types/plans'
  * 文件名「计划-<创建时序号>-<稳定短标识>.md」在创建时确定，后续修改正文不重命名。
  * 稳定标识 = 时间戳 + 随机串 + 内容 hash 片段，独立于文件名存在（文件改名不影响定位，
  * 因为读取时以 frontmatter.id 为准；文件名只用于外部浏览友好）。
+ * 排序/列内取值原语来自 card-board/ordering（通用底层，计划/伏笔/节奏卡共用）。
  */
 
 /** 生成新的稳定标识（plan-<毫秒时间戳>-<随机串>）。 */
@@ -47,24 +50,10 @@ function deriveTitleFromContent(content: string): string {
 }
 
 /**
- * 计划名清理为文件名安全片段：去掉首尾空白、路径分隔符、路径段（. ..）、
- * 控制字符与跨平台文件系统非法字符，压缩连续空白为下划线；清理后为空返回 null。
+ * 计划名清理为文件名安全片段（通用清理原语见 card-board/parser）。
  */
 export function sanitizePlanTitleForFileName(title: string): string | null {
-  const cleaned = title
-    .trim()
-    // 控制字符
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    // 路径分隔符与 Windows 保留字符（等宽冒号之外的形态一并处理）
-    .replace(/[\\/:*?"<>|]/g, '')
-    // 连续空白压缩为单个下划线
-    .replace(/\s+/g, '_')
-
-  if (!cleaned || cleaned === '.' || cleaned === '..') {
-    return null
-  }
-
-  return cleaned.slice(0, 60)
+  return sanitizeFileNameFragment(title)
 }
 
 /**
@@ -111,26 +100,12 @@ export function isPlanCardPath(path: string): boolean {
  * 同列排序：order 升序；order 相同再按 createdAt、id 排序，保证结果确定。
  */
 export function sortPlanCards<T extends Pick<PlanCard, 'order' | 'createdAt' | 'id'>>(cards: readonly T[]): T[] {
-  return [...cards].sort((a, b) => {
-    if (a.order !== b.order) {
-      return a.order - b.order
-    }
-
-    if (a.createdAt !== b.createdAt) {
-      return a.createdAt < b.createdAt ? -1 : 1
-    }
-
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-  })
+  return sortBoardCards(cards)
 }
 
 /** 目标列末尾的新 order 值：比该列当前最大 order 大一个步长。 */
 export function nextOrderInColumn(cards: readonly Pick<PlanCard, 'status' | 'order'>[], status: PlanCard['status'], step = 100): number {
-  const max = cards
-    .filter((card) => card.status === status)
-    .reduce((current, card) => Math.max(current, card.order), Number.NEGATIVE_INFINITY)
-
-  return max === Number.NEGATIVE_INFINITY ? 0 : max + step
+  return genericNextOrderInColumn(cards, status, step)
 }
 
 /** 拖到同列某卡片之后应取的 order 值：取相邻两卡 order 的中点；无右侧邻居时 + 步长。 */
@@ -140,26 +115,7 @@ export function orderAfter(
   afterId: string | null,
   step = 100,
 ): number {
-  const column = sortPlanCards(cards.filter((card) => card.status === status))
-
-  if (afterId === null) {
-    return column.length === 0 ? 0 : (column[column.length - 1]?.order ?? 0) + step
-  }
-
-  const index = column.findIndex((card) => card.id === afterId)
-  const target = column[index]
-
-  if (!target) {
-    return nextOrderInColumn(column, status, step)
-  }
-
-  const next = column[index + 1]
-
-  if (!next) {
-    return target.order + step
-  }
-
-  return (target.order + next.order) / 2
+  return genericOrderAfter(cards, status, afterId, step)
 }
 
 export type PlanCardWithView = PlanCardView

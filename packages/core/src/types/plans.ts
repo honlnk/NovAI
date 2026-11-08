@@ -4,7 +4,12 @@
  * 一张计划卡片 = 项目根目录 plans/ 直接子级的一个 Markdown 文件：
  * 元数据放 frontmatter（id/status/order/createdAt/updatedAt），正文为自由 Markdown。
  * 展示标题取正文首个非空行并去掉行首 Markdown 标题标记，没有独立标题字段。
+ *
+ * 卡片骨架泛化在 types/card-board.ts（CardBoardCard<TStatus>，计划/伏笔/节奏卡共用）；
+ * 计划状态枚举与错误类型是计划领域自己的声明。
  */
+
+import { CardBoardCard, CardBoardError } from './card-board'
 
 /** 计划目录名（项目根目录下）。 */
 export const PLANS_DIRECTORY = 'plans'
@@ -22,19 +27,8 @@ export function isPlanStatus(value: string): value is PlanStatus {
   return (PLAN_STATUSES as readonly string[]).includes(value)
 }
 
-export type PlanCard = {
-  /** 稳定标识：创建后不因正文或文件名改变。 */
-  id: string
-  status: PlanStatus
-  /** 同列排列顺序值（可插入间隔的数值，越小越靠前）。 */
-  order: number
-  createdAt: string
-  updatedAt: string
-  /** 正文（不含 frontmatter 块）。 */
-  body: string
-  /** 项目内相对路径（plans/xxx.md）。 */
-  sourcePath: string
-}
+/** 计划卡片 = 通用看板卡片骨架（状态枚举具体化为 PlanStatus）。 */
+export type PlanCard = CardBoardCard<PlanStatus>
 
 export type PlanCardView = PlanCard & {
   /** 展示标题：正文首个非空行去掉行首标题标记；空正文为空串。 */
@@ -71,8 +65,8 @@ export type PlanScanIssue =
   | { kind: 'duplicate-id'; id: string; paths: string[] }
   | { kind: 'unreadable-file'; path: string; reason: string }
 
-/** 计划领域操作失败。 */
-export class PlanError extends Error {
+/** 计划领域操作失败（基类为通用看板错误，便于跨领域统一捕获）。 */
+export class PlanError extends CardBoardError {
   constructor(message: string) {
     super(message)
     this.name = 'PlanError'
