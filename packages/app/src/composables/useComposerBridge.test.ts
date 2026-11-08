@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { $setSelection } from 'lexical'
+import { $setSelection, COMMAND_PRIORITY_CRITICAL, KEY_ENTER_COMMAND } from 'lexical'
 
 import { useComposerBridge } from './useComposerBridge'
 
@@ -15,6 +15,21 @@ function createBridge() {
   const changes: string[] = []
   const bridge = useComposerBridge({ onTextChange: (text) => changes.push(text) })
   return { bridge, changes }
+}
+
+/** headless 环境没有 KeyboardEvent，命令层只读这几个字段 + preventDefault */
+function enterEvent(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
+  return {
+    key: 'Enter',
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    isComposing: false,
+    keyCode: 13,
+    preventDefault: () => {},
+    ...overrides,
+  } as KeyboardEvent
 }
 
 describe('useComposerBridge 投影与写入', () => {
@@ -70,6 +85,58 @@ describe('useComposerBridge 光标映射', () => {
     bridge.setDraft('abc')
     bridge.setCaretOffset(99)
     expect(bridge.caretOffset()).toBe(3)
+  })
+})
+
+describe('useComposerBridge Enter 命令兜底', () => {
+  it('非 Shift Enter 在命令层被消费，不落入 plain-text 换行 fallback（发送残行回归）', () => {
+    const { bridge } = createBridge()
+    bridge.setDraft('发送内容')
+    // 同优先级探针注册在兜底监听之后：兜底返回 true 时探针不该再收到事件
+    const seen: boolean[] = []
+    bridge.editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        seen.push(event?.shiftKey ?? false)
+        return true
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    )
+    const consumed = bridge.editor.dispatchCommand(KEY_ENTER_COMMAND, enterEvent())
+    expect(consumed).toBe(true)
+    expect(seen).toEqual([])
+    expect(bridge.draft.value).toBe('发送内容')
+  })
+
+  it('Shift+Enter 与无事件的内部派发放行，保留换行语义', () => {
+    const shiftBridge = createBridge().bridge
+    shiftBridge.setDraft('ab')
+    const shiftSeen: (boolean | null)[] = []
+    shiftBridge.editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        shiftSeen.push(event?.shiftKey ?? null)
+        return true
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    )
+    shiftBridge.editor.dispatchCommand(KEY_ENTER_COMMAND, enterEvent({ shiftKey: true }))
+    expect(shiftSeen).toEqual([true])
+
+    const nullBridge = createBridge().bridge
+    nullBridge.setDraft('ab')
+    const nullSeen: (boolean | null)[] = []
+    nullBridge.editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        nullSeen.push(event?.shiftKey ?? null)
+        return true
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    )
+    nullBridge.editor.dispatchCommand(KEY_ENTER_COMMAND, null)
+    expect(nullSeen).toEqual([null])
+    expect(nullBridge.draft.value).toBe('ab')
   })
 })
 
