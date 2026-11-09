@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  rhythmCheckTool,
   rhythmCreateTool,
+  rhythmCurveTool,
   rhythmDeleteTool,
   rhythmListTool,
   rhythmReadTool,
+  rhythmSyncTool,
   rhythmUpdateTool,
 } from './rhythm-tools'
 import type { ToolRuntime } from './types'
@@ -270,5 +273,96 @@ describe('RhythmDelete', () => {
 
     const list = await rhythmListTool.run(rhythmListTool.validateInput({}), runtime())
     expect(list.totalCount).toBe(0)
+  })
+})
+
+describe('RhythmCheck / RhythmSync / RhythmCurve', () => {
+  async function createThreeChapters() {
+    // 082（前一章，回写实际值）、083（本章样例）、090（后一章）
+    await rhythmCreateTool.run(rhythmCreateTool.validateInput({
+      chapterRef: '第二卷/第082章',
+      plannedConflict: 8, plannedMood: '紧张', plannedHook: '危机', plannedPayoff: '无',
+    }), runtime())
+    const current = await createSample() // 第083章
+    await rhythmCreateTool.run(rhythmCreateTool.validateInput({
+      chapterRef: '第二卷/第090章',
+      plannedConflict: 6, plannedMood: '悬疑', plannedHook: '揭秘', plannedPayoff: '揭秘',
+    }), runtime())
+    await rhythmUpdateTool.run(rhythmUpdateTool.validateInput({
+      id: 'R-001', actualConflict: 8, actualMood: '紧张', actualHook: '危机', actualPayoff: '无',
+    }), runtime())
+    return current
+  }
+
+  it('Check：本章计划 + 前一章实际值 + 后一章计划；无卡时前后章仍返回', async () => {
+    await createThreeChapters()
+
+    const output = await rhythmCheckTool.run(rhythmCheckTool.validateInput({ chapter: 83 }), runtime())
+    expect(output.planned?.plannedConflict).toBe(3)
+    expect(output.planned?.intentBody).toContain('喘息章')
+    expect(output.previous?.chapterRef).toBe('第二卷/第082章')
+    expect(output.previous?.actualConflict).toBe(8)
+    expect(output.next?.chapterRef).toBe('第二卷/第090章')
+
+    const missing = await rhythmCheckTool.run(rhythmCheckTool.validateInput({ chapter: 85 }), runtime())
+    expect(missing.planned).toBeNull()
+    expect(missing.previous?.chapterRef).toBe('第二卷/第083章')
+    expect(missing.next?.chapterRef).toBe('第二卷/第090章')
+    expect(missing.guidance).toContain('没有节奏卡')
+  })
+
+  it('Sync：组装回写提案上下文（contentHash + 阈值 + 规则）；无卡返回 notFound', async () => {
+    await createThreeChapters()
+
+    const output = await rhythmSyncTool.run(rhythmSyncTool.validateInput({ chapter: 83 }), runtime())
+    expect('notFound' in output && output.notFound).toBeFalsy()
+    if (!('notFound' in output)) {
+      expect(output.plannedConflict).toBe(3)
+      expect(output.conflictThreshold).toBe(3)
+      expect(output.deviationRules).toContain('阈值 3')
+      expect(output.deviationRules).toContain('有 ↔ 无')
+      expect(output.contentHash).toBeTruthy()
+      expect(output.guidance).toContain('RhythmUpdate')
+    }
+
+    const missing = await rhythmSyncTool.run(rhythmSyncTool.validateInput({ chapter: 85 }), runtime())
+    expect('notFound' in missing && missing.notFound).toBe(true)
+  })
+
+  it('Curve：按章号升序返回计划/实际对照，范围过滤生效', async () => {
+    await createThreeChapters()
+
+    const all = await rhythmCurveTool.run(rhythmCurveTool.validateInput({}), runtime())
+    expect(all.totalCount).toBe(3)
+    expect(all.curve.map((card) => card.chapterRef)).toEqual(['第二卷/第082章', '第二卷/第083章', '第二卷/第090章'])
+    expect(all.curve[0]!.actualConflict).toBe(8)
+    expect(all.curve[1]!.actualConflict).toBeNull()
+
+    const range = await rhythmCurveTool.run(rhythmCurveTool.validateInput({ chapterFrom: 83, chapterTo: 89 }), runtime())
+    expect(range.totalCount).toBe(1)
+    expect(range.curve[0]!.chapterRef).toBe('第二卷/第083章')
+
+    expect(() => rhythmCurveTool.validateInput({ chapterFrom: 90, chapterTo: 80 })).toThrow('chapterFrom')
+  })
+
+  it('RhythmUpdate 的偏差阈值从项目设置读取（默认 3，可收紧到 1）', async () => {
+    await createSample()
+    // 默认阈值 3：|3-4|=1 不判偏差
+    const defaultOutcome = await rhythmUpdateTool.run(
+      rhythmUpdateTool.validateInput({ id: 'R-001', actualConflict: 4 }),
+      runtime(),
+    )
+    expect(defaultOutcome.deviationFlag).toBe(false)
+
+    // 收紧到 1：|3-4|=1 ≥ 1 判偏差
+    const strictRuntime = (): ToolRuntime => ({
+      project: { handle: root, config: { settings: { rhythmDeviationThreshold: 1 } } } as never,
+    })
+    await createSample()
+    const strict = await rhythmUpdateTool.run(
+      rhythmUpdateTool.validateInput({ id: 'R-002', actualConflict: 4 }),
+      strictRuntime(),
+    )
+    expect(strict.deviationFlag).toBe(true)
   })
 })

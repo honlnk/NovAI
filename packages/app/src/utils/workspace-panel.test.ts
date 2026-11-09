@@ -139,6 +139,50 @@ describe('resolveWorkspacePanel 面板归属与显示规则（布局统一计划
   })
 })
 
+describe('resolveWorkspacePanel 节奏分类（创作心智阶段四，与计划/伏笔同构）', () => {
+  function rhythmInput(overrides: Partial<WorkspacePanelInput> = {}): WorkspacePanelInput {
+    return baseInput({
+      category: 'rhythm',
+      isRhythmPanelOpen: true,
+      isRhythmCreateOpen: false,
+      hasActiveRhythm: true,
+      ...overrides,
+    })
+  }
+
+  it('进入节奏分类：无选中详情且未新建时默认收起（D10）', () => {
+    expect(resolveWorkspacePanel(rhythmInput({
+      isRhythmPanelOpen: false,
+      hasActiveRhythm: false,
+    }))).toEqual({ visible: false, kind: null })
+  })
+
+  it('节奏分类点击卡片展开详情（D2）', () => {
+    expect(resolveWorkspacePanel(rhythmInput())).toEqual({ visible: true, kind: 'rhythm-detail' })
+  })
+
+  it('节奏分类新建与详情互斥：新建优先展示（D3）', () => {
+    expect(resolveWorkspacePanel(rhythmInput({ isRhythmCreateOpen: true }))).toEqual({ visible: true, kind: 'rhythm-create' })
+  })
+
+  it('节奏分类偏好开但详情与新建都清空后收起（不悬挂空面板）', () => {
+    expect(resolveWorkspacePanel(rhythmInput({
+      isRhythmCreateOpen: false,
+      hasActiveRhythm: false,
+    }))).toEqual({ visible: false, kind: null })
+  })
+
+  it('节奏分类偏好关时即使详情仍在也不展示（§2.8 关闭只影响可见性）', () => {
+    expect(resolveWorkspacePanel(rhythmInput({ isRhythmPanelOpen: false }))).toEqual({ visible: false, kind: null })
+  })
+
+  it('跨分类恢复：节奏开着详情切到章节显示文件，切回节奏恢复详情（§2.3/§2.5）', () => {
+    expect(resolveWorkspacePanel(rhythmInput())).toEqual({ visible: true, kind: 'rhythm-detail' })
+    expect(resolveWorkspacePanel(rhythmInput({ category: 'chapter' }))).toEqual({ visible: true, kind: 'file' })
+    expect(resolveWorkspacePanel(rhythmInput())).toEqual({ visible: true, kind: 'rhythm-detail' })
+  })
+})
+
 describe('panelCloseTarget 关闭收敛目标', () => {
   it('文件内容关闭收敛文件偏好', () => {
     expect(panelCloseTarget('file')).toBe('file')
@@ -147,6 +191,13 @@ describe('panelCloseTarget 关闭收敛目标', () => {
   it('计划详情/新建关闭收敛计划偏好', () => {
     expect(panelCloseTarget('plan-detail')).toBe('plan')
     expect(panelCloseTarget('plan-create')).toBe('plan')
+  })
+
+  it('伏笔与节奏的详情/新建关闭分别收敛各自偏好', () => {
+    expect(panelCloseTarget('foreshadowing-detail')).toBe('foreshadowing')
+    expect(panelCloseTarget('foreshadowing-create')).toBe('foreshadowing')
+    expect(panelCloseTarget('rhythm-detail')).toBe('rhythm')
+    expect(panelCloseTarget('rhythm-create')).toBe('rhythm')
   })
 
   it('面板本就收起时不动作', () => {

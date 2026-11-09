@@ -179,6 +179,11 @@ export type ProjectConfig = {
      * 旧配置缺省回填 default。
      */
     foreshadowingStatusMode: ForeshadowingStatusMode
+    /**
+     * 节奏卡偏差阈值（创作心智模块 §四）：|计划冲突强度 - 实际| ≥ 阈值判偏差；
+     * 1~10 整数，旧配置缺省回填 3。影响 RhythmUpdate 回写判定与节奏看板落偏差列。
+     */
+    rhythmDeviationThreshold: number
   }
 }
 

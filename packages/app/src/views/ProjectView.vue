@@ -37,6 +37,9 @@ import PlanCreatePanel from '../components/plan/PlanCreatePanel.vue'
 import ForeshadowingBoardPanel from '../components/foreshadowing/ForeshadowingBoardPanel.vue'
 import ForeshadowingDetailPanel from '../components/foreshadowing/ForeshadowingDetailPanel.vue'
 import ForeshadowingCreatePanel from '../components/foreshadowing/ForeshadowingCreatePanel.vue'
+import RhythmBoardPanel from '../components/rhythm/RhythmBoardPanel.vue'
+import RhythmDetailPanel from '../components/rhythm/RhythmDetailPanel.vue'
+import RhythmCreatePanel from '../components/rhythm/RhythmCreatePanel.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import Toast from '../components/ui/Toast.vue'
@@ -47,11 +50,12 @@ import {
   loadWorkspaceState,
   saveWorkspaceState,
 } from '../utils/workspace-state'
-import type { ChangedFileView, FileChangeRecordView, ForeshadowingStatusView, PlanStatusView } from '@novai/core/services/types'
+import type { ChangedFileView, FileChangeRecordView, ForeshadowingStatusView, PlanStatusView, RhythmStatusView } from '@novai/core/services/types'
 import type { RecentFileChange } from '../stores/chat'
 import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
 import { useForeshadowingStore } from '../stores/foreshadowing'
+import { useRhythmStore } from '../stores/rhythm'
 import { foreshadowingChapterNumber, type ForeshadowingColumnMode } from '../constants/foreshadowing'
 
 const route = useRoute()
@@ -61,6 +65,7 @@ const chatStore = useChatStore()
 const indexStore = useIndexStore()
 const planStore = usePlanStore()
 const foreshadowingStore = useForeshadowingStore()
+const rhythmStore = useRhythmStore()
 const toast = useToast()
 // 「查看已归档」动作经模块级单例切换对话列表筛选（不跨组件转发 ref）
 const { showArchived: showArchivedFilter } = useConversationFilter()
@@ -75,6 +80,10 @@ const isContentPanelOpen = ref(false)
 const isPlanPanelOpen = ref(false)
 /** 伏笔面板（详情/新建）展开偏好（跨分类保留；与计划面板同构） */
 const isForeshadowingPanelOpen = ref(false)
+/** 节奏面板（详情/新建）展开偏好（跨分类保留；与伏笔面板同构） */
+const isRhythmPanelOpen = ref(false)
+/** 节奏看板卷筛选（'' = 全部卷；默认最新卷在数据到达后回填） */
+const rhythmVolumeFilter = ref('')
 /** 写入确认面板开关（§8）：仅在安全时机自动打开，用户可随时离开（关闭面板不取消请求） */
 const isConfirmPanelOpen = ref(false)
 const showGuide = ref(false)
@@ -136,6 +145,7 @@ function persistWorkspaceState() {
     contentPanelOpen: isContentPanelOpen.value,
     planPanelOpen: isPlanPanelOpen.value,
     foreshadowingPanelOpen: isForeshadowingPanelOpen.value,
+    rhythmPanelOpen: isRhythmPanelOpen.value,
     contentPanelWidth: contentPanelWidth.value,
   })
 }
@@ -161,6 +171,7 @@ async function restoreWorkspaceState() {
     isContentPanelOpen.value = record.contentPanelOpen
     isPlanPanelOpen.value = record.planPanelOpen
     isForeshadowingPanelOpen.value = record.foreshadowingPanelOpen
+    isRhythmPanelOpen.value = record.rhythmPanelOpen
     // 面板宽度：项目记录优先，回退旧全局 key（历史 installations 只有全局一份）
     const width = record.contentPanelWidth ?? loadLegacyContentPanelWidth()
     if (width !== null) {
@@ -213,6 +224,7 @@ watch(
     isContentPanelOpen,
     isPlanPanelOpen,
     isForeshadowingPanelOpen,
+    isRhythmPanelOpen,
     contentPanelWidth,
     () => chatStore.activeSessionId,
     () => projectStore.activeFile?.path,
@@ -262,6 +274,15 @@ onMounted(async () => {
     && (activeCategory.value === 'foreshadowing' || activeCategory.value === 'chapter')
   ) {
     await foreshadowingStore.loadBoard(projectId.value)
+  }
+
+  // 节奏同理：恢复后停留在节奏/章节分类时补一次节奏看板加载（章节侧栏「本章节奏卡」）
+  if (
+    projectStore.currentProject
+    && (activeCategory.value === 'rhythm' || activeCategory.value === 'chapter')
+  ) {
+    await rhythmStore.loadBoard(projectId.value)
+    ensureRhythmVolumeDefault()
   }
 
   // 刷新后恢复持久化草稿（数据安全计划 §3-2）：IndexedDB 备份回填内存表，绝不写
@@ -730,6 +751,10 @@ watch(activeCategory, async (category) => {
     // 章节分类也要伏笔数据：章节侧栏「本章相关伏笔」实时反查依赖看板摘要
     await foreshadowingStore.loadBoard(projectId.value)
   }
+  if ((category === 'rhythm' || category === 'chapter') && projectStore.currentProject) {
+    // 章节分类也要节奏数据：章节侧栏「本章节奏卡」实时反查依赖看板摘要
+    await rhythmStore.loadBoard(projectId.value)
+  }
 })
 
 /** 切换/关闭项目时清理上一个项目的计划板状态（含编辑会话）与面板展开偏好 */
@@ -738,6 +763,9 @@ watch(() => projectStore.currentProject?.id, () => {
   isPlanPanelOpen.value = false
   foreshadowingStore.reset()
   isForeshadowingPanelOpen.value = false
+  rhythmStore.reset()
+  isRhythmPanelOpen.value = false
+  rhythmVolumeFilter.value = ''
 })
 
 /** 右侧面板当前应展示的内容与可见性（文件 / 计划详情 / 新建互斥，规则见 workspace-panel） */
@@ -752,6 +780,9 @@ const workspacePanel = computed(() => {
     isForeshadowingPanelOpen: isForeshadowingPanelOpen.value,
     isForeshadowingCreateOpen: foreshadowingStore.isCreateOpen,
     hasActiveForeshadowing: foreshadowingStore.activeCard !== null,
+    isRhythmPanelOpen: isRhythmPanelOpen.value,
+    isRhythmCreateOpen: rhythmStore.isCreateOpen,
+    hasActiveRhythm: rhythmStore.activeCard !== null,
   })
   // 写入确认覆盖（§8）：不进 resolveWorkspacePanel（那里不知道确认状态）。基础解析为
   // 文件类或空（面板未开/未开文件）即接管——聊天条「去审阅」必须总能打开；可见的
@@ -782,6 +813,8 @@ function handleCloseContentPanel() {
     isPlanPanelOpen.value = false
   } else if (target === 'foreshadowing') {
     isForeshadowingPanelOpen.value = false
+  } else if (target === 'rhythm') {
+    isRhythmPanelOpen.value = false
   }
 }
 
@@ -1167,6 +1200,195 @@ async function handleToggleForeshadowingColumnMode() {
   }
 }
 
+// ===== 节奏卡看板（创作心智模块阶段四：三列状态机 + 卷筛选 + 列内重排） =====
+
+/** 节奏侧栏摘要（按更新时间倒序取最近） */
+const rhythmRecentCards = computed(() => {
+  if (!rhythmStore.board) {
+    return []
+  }
+  return [...(Object.values(rhythmStore.board.columns) as import('@novai/core/services/types').RhythmCardSummaryView[][])
+    .flat()]
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+})
+
+/** 卷筛选默认最新卷：数据到达且未选择过时回填（各卷最大章号最大者；无卷不筛） */
+function ensureRhythmVolumeDefault() {
+  if (rhythmVolumeFilter.value !== '' || !rhythmStore.board) {
+    return
+  }
+  const cards = rhythmRecentCards.value
+  if (cards.length === 0) {
+    return
+  }
+  const bestChapterByVolume = new Map<string, number>()
+  for (const card of cards) {
+    const volume = card.volume || ''
+    if (!volume) {
+      continue
+    }
+    const chapter = Number(/第(\d+)章/.exec(card.chapterRef)?.[1] ?? 0)
+    bestChapterByVolume.set(volume, Math.max(bestChapterByVolume.get(volume) ?? 0, chapter))
+  }
+  if (bestChapterByVolume.size > 0) {
+    const latest = [...bestChapterByVolume.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+    rhythmVolumeFilter.value = latest
+  }
+}
+
+/** 看板数据到达后回填默认卷（首载与刷新都走这里） */
+watch(() => rhythmStore.board, ensureRhythmVolumeDefault)
+
+/** 打开节奏卡详情（看板卡片 / 侧栏最近列表 / 章节侧栏「本章节奏卡」共用同一入口） */
+async function handleOpenRhythmCard(id: string) {
+  const openingProjectId = projectId.value
+  if (activeCategory.value !== 'rhythm') {
+    selectCategory('rhythm')
+  }
+  isRhythmPanelOpen.value = true
+  await rhythmStore.openCard(openingProjectId, id)
+  const error = rhythmStore.detailError
+  if (error?.cardId === id && projectId.value === openingProjectId) {
+    toast.error(`读取所选节奏卡失败：${error.message}`)
+    if (!rhythmStore.activeCard) isRhythmPanelOpen.value = false
+  }
+}
+
+/** 打开新建面板（侧栏摘要卡下方 / 看板空状态共用）：与详情互斥切换，草稿保留 */
+function handleOpenRhythmCreate() {
+  isRhythmPanelOpen.value = true
+  rhythmStore.openCreate()
+}
+
+/** 看板顶栏的内容面板收起/展开开关：展开时无选中也不在新建则落到新建表单（与计划/伏笔同约定） */
+function handleToggleRhythmPanel() {
+  if (workspacePanel.value.visible) {
+    handleCloseContentPanel()
+    return
+  }
+  if (rhythmStore.activeCard || rhythmStore.isCreateOpen) {
+    isRhythmPanelOpen.value = true
+    return
+  }
+  handleOpenRhythmCreate()
+}
+
+/** AI 或外部写入节奏文件后：看板可见时自动刷新（文件变更账本事件驱动） */
+watch(
+  () => chatStore.changedFiles.length,
+  async (newLength, oldLength) => {
+    if (
+      newLength > oldLength
+      && activeCategory.value === 'rhythm'
+      && projectStore.currentProject
+      && chatStore.changedFiles.some((file) => resolveRhythmPathFromChange(file) !== null)
+    ) {
+      await rhythmStore.refreshBoard(projectId.value)
+    }
+  },
+)
+
+/** 详情打开、不在编辑且不在新建时，外部修改到达：重新读取最新内容（不覆盖用户草稿） */
+watch(
+  () => chatStore.lastFileChange?.change,
+  async (change) => {
+    if (
+      activeCategory.value !== 'rhythm'
+      || !change
+      || !rhythmStore.activeCard
+      || rhythmStore.hasUnsavedChanges
+      || rhythmStore.isCreateOpen
+    ) {
+      return
+    }
+    if (resolveRhythmPathFromChange(change) === rhythmStore.activeCard.sourcePath) {
+      await rhythmStore.openCard(projectId.value, rhythmStore.activeCard.id)
+    }
+  },
+)
+
+/** change.path / fromPath→toPath 统一取节奏卡路径（renamed 的 toPath 落在 rhythm/ 才算） */
+function resolveRhythmPathFromChange(change: ChangedFileView): string | null {
+  if (change.type === 'renamed') {
+    return change.toPath.startsWith('rhythm/') ? change.toPath : null
+  }
+  return change.path.startsWith('rhythm/') ? change.path : null
+}
+
+/** 节奏看板重试/刷新入口 */
+async function handleRhythmRefresh() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  await rhythmStore.refreshBoard(projectId.value, { source: 'manual' })
+}
+
+/** 新建面板提交：失败保留输入，成功由 store 转入详情预览 */
+async function handleRhythmSubmitCreate() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const submittingProjectId = projectId.value
+  const card = await rhythmStore.submitCreate(submittingProjectId)
+  if (projectId.value !== submittingProjectId || projectStore.currentProject?.id !== submittingProjectId) return
+  if (card) {
+    toast.success('已登记节奏卡')
+  } else if (!rhythmStore.isCreateOpen) {
+    return
+  } else {
+    toast.error(rhythmStore.actionError || '新建节奏卡失败')
+  }
+}
+
+/** 看板列内重排（跨列拖拽在 constants/rhythm.ts 落点放行处已被忽略） */
+async function handleRhythmMove(id: string, status: RhythmStatusView, afterId: string | null) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const movingProjectId = projectId.value
+  const ok = await rhythmStore.moveCard(movingProjectId, id, status, afterId)
+  if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
+  if (!ok) {
+    toast.error(rhythmStore.actionError || '移动节奏卡失败')
+  }
+}
+
+async function handleRhythmRemove(id: string) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const removingProjectId = projectId.value
+  const ok = await rhythmStore.removeCard(removingProjectId, id)
+  if (projectId.value !== removingProjectId || projectStore.currentProject?.id !== removingProjectId) return
+  if (ok) {
+    toast.success('已移入回收站')
+  } else {
+    toast.error(rhythmStore.actionError || '删除节奏卡失败')
+  }
+}
+
+async function handleRhythmSaveDraft() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  const savingProjectId = projectId.value
+  const previousPath = rhythmStore.activeCard?.sourcePath
+  const ok = await rhythmStore.saveDraft(savingProjectId)
+  if (projectId.value !== savingProjectId || projectStore.currentProject?.id !== savingProjectId) return
+  if (ok) {
+    toast.success('已保存')
+    // 节奏卡名改动会重命名文件：以保存完成的原卡片为准决定是否刷新文件树
+    const savedCard = rhythmStore.lastSavedCard
+    if (savedCard && savedCard.sourcePath !== previousPath) {
+      await projectStore.refreshTree()
+    }
+  } else if (rhythmStore.detailNotice) {
+    toast.error(rhythmStore.detailNotice.message)
+  } else if (!rhythmStore.conflictNotice) {
+    toast.error(rhythmStore.actionError || '保存失败')
+  }
+}
+
 function selectCategory(category: Category) {
   activeCategory.value = category
   // 切换分类时确保面板展开
@@ -1238,6 +1460,9 @@ function handleGoToSettings() {
         :foreshadowing-cards="foreshadowingRecentCards"
         :is-foreshadowing-loading="foreshadowingStore.isLoading"
         :selected-foreshadowing-id="foreshadowingStore.selectedCardId"
+        :rhythm-cards="rhythmRecentCards"
+        :is-rhythm-loading="rhythmStore.isLoading"
+        :selected-rhythm-id="rhythmStore.selectedCardId"
         :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :running-ids="chatStore.runningSessionIds"
         :is-open="isCategoryOpen"
@@ -1259,6 +1484,10 @@ function handleGoToSettings() {
         @refresh-foreshadowing="handleForeshadowingRefresh"
         @open-foreshadowing-create="handleOpenForeshadowingCreate"
         @open-foreshadowing-card="(id) => { selectCategory('foreshadowing'); handleOpenForeshadowingCard(id) }"
+        @open-rhythm-board="selectCategory('rhythm')"
+        @refresh-rhythm="handleRhythmRefresh"
+        @open-rhythm-create="handleOpenRhythmCreate"
+        @open-rhythm-card="(id) => { selectCategory('rhythm'); handleOpenRhythmCard(id) }"
       />
 
       <!-- 中间主内容区：看板分类（计划/伏笔）显示看板（始终保留），其余分类为对话 -->
@@ -1298,6 +1527,24 @@ function handleGoToSettings() {
         @toggle-sidebar="toggleSidebar"
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @toggle-content-panel="handleToggleForeshadowingPanel"
+      />
+      <RhythmBoardPanel
+        v-else-if="activeCategory === 'rhythm'"
+        :board="rhythmStore.board"
+        :is-loading="rhythmStore.isLoading"
+        :error-message="rhythmStore.errorMessage"
+        :selected-card-id="rhythmStore.selectedCardId"
+        :volume-filter="rhythmVolumeFilter"
+        :is-sidebar-open="isCategoryOpen"
+        :is-content-panel-open="workspacePanel.visible"
+        @open-create="handleOpenRhythmCreate"
+        @open-card="handleOpenRhythmCard"
+        @move-card="handleRhythmMove"
+        @retry-load="handleRhythmRefresh"
+        @change-volume-filter="rhythmVolumeFilter = $event"
+        @toggle-sidebar="toggleSidebar"
+        @toggle-mobile-sidebar="toggleMobileSidebar"
+        @toggle-content-panel="handleToggleRhythmPanel"
       />
       <ChatPanel
         v-else
@@ -1433,6 +1680,50 @@ function handleGoToSettings() {
           @update-create-draft="foreshadowingStore.updateCreateDraft"
           @submit-create="handleForeshadowingSubmitCreate"
           @cancel="foreshadowingStore.closeCreate(false)"
+        />
+        <!-- 节奏卡详情 -->
+        <RhythmDetailPanel
+          v-if="workspacePanel.kind === 'rhythm-detail' && rhythmStore.activeCard"
+          :active-card="rhythmStore.activeCard"
+          :draft-name="rhythmStore.draftName"
+          :draft-planned-conflict="rhythmStore.draftPlannedConflict"
+          :draft-planned-mood="rhythmStore.draftPlannedMood"
+          :draft-planned-hook="rhythmStore.draftPlannedHook"
+          :draft-planned-payoff="rhythmStore.draftPlannedPayoff"
+          :draft-planned-characters="rhythmStore.draftPlannedCharacters"
+          :draft-planned-note="rhythmStore.draftPlannedNote"
+          :draft-intent-body="rhythmStore.draftIntentBody"
+          :detail-mode="rhythmStore.detailMode"
+          :is-saving="rhythmStore.isSaving"
+          :conflict-notice="rhythmStore.conflictNotice"
+          :action-error="rhythmStore.actionError"
+          :has-unsaved-changes="rhythmStore.hasUnsavedChanges"
+          @close="handleCloseContentPanel"
+          @update-draft="rhythmStore.updateDraft"
+          @set-detail-mode="rhythmStore.setDetailMode"
+          @save-draft="handleRhythmSaveDraft"
+          @reload-from-conflict="rhythmStore.reloadFromConflict(projectId)"
+          @keep-draft="rhythmStore.keepDraft()"
+          @remove-card="handleRhythmRemove"
+        />
+        <!-- 规划节奏卡 -->
+        <RhythmCreatePanel
+          v-if="workspacePanel.kind === 'rhythm-create'"
+          :new-name="rhythmStore.newCardName"
+          :new-chapter-ref="rhythmStore.newCardChapterRef"
+          :new-planned-conflict="rhythmStore.newCardPlannedConflict"
+          :new-planned-mood="rhythmStore.newCardPlannedMood"
+          :new-planned-hook="rhythmStore.newCardPlannedHook"
+          :new-planned-payoff="rhythmStore.newCardPlannedPayoff"
+          :new-planned-characters="rhythmStore.newCardPlannedCharacters"
+          :new-intent-body="rhythmStore.newCardIntentBody"
+          :can-submit="rhythmStore.hasRequiredCreateInput"
+          :is-creating="rhythmStore.isCreating"
+          :action-error="rhythmStore.actionError"
+          @close="handleCloseContentPanel"
+          @update-create-draft="rhythmStore.updateCreateDraft"
+          @submit-create="handleRhythmSubmitCreate"
+          @cancel="rhythmStore.closeCreate(false)"
         />
       </ContentPanel>
     </div>

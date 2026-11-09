@@ -223,6 +223,7 @@ export const DEFAULT_CONFIG = {
     enableDebugLogging: false,
     activeOutlinePath: null,
     foreshadowingStatusMode: 'default',
+    rhythmDeviationThreshold: 3,
   },
 } as const
 
@@ -243,6 +244,9 @@ export const DEFAULT_FORESHADOWING_STATUS_MODE = DEFAULT_CONFIG.settings.foresha
 export function isForeshadowingStatusMode(value: unknown): value is (typeof FORESHADOWING_STATUS_MODES)[number] {
   return typeof value === 'string' && (FORESHADOWING_STATUS_MODES as readonly string[]).includes(value)
 }
+
+/** 节奏卡偏差阈值默认值（语义见 types/project.ts 的 rhythmDeviationThreshold；合法域由 clamp 保证）。 */
+export const DEFAULT_RHYTHM_DEVIATION_THRESHOLD = DEFAULT_CONFIG.settings.rhythmDeviationThreshold
 
 /** 要素管理员档位合法值表（Phase 2 计划 D3 裁剪三档，语义见 types/project.ts 的 ElementManagerPermissionPreset）。 */
 export const ELEMENT_MANAGER_PERMISSION_PRESETS = ['review', 'material', 'full'] as const

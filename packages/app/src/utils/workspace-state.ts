@@ -27,6 +27,8 @@ export type WorkspaceState = {
   planPanelOpen: boolean
   /** 伏笔面板展开偏好（旧记录缺省 false，与计划面板同构） */
   foreshadowingPanelOpen: boolean
+  /** 节奏面板展开偏好（旧记录缺省 false，与伏笔面板同构） */
+  rhythmPanelOpen: boolean
   /** 内容面板宽度（clamp 后的合法值才写入） */
   contentPanelWidth?: number
 }
@@ -36,7 +38,7 @@ const KEY_PREFIX = 'novai:workspace:'
 /** 迁移来源：面板宽度在此前的全局 key 下，按项目记录缺宽度时回退读它。 */
 export const LEGACY_CONTENT_PANEL_WIDTH_KEY = 'novai:contentPanelWidth'
 
-const VALID_CATEGORIES: readonly Category[] = ['conversation', 'chapter', 'element', 'prompt', 'plan', 'foreshadowing']
+const VALID_CATEGORIES: readonly Category[] = ['conversation', 'chapter', 'element', 'prompt', 'plan', 'foreshadowing', 'rhythm']
 
 function isCategory(value: unknown): value is Category {
   return typeof value === 'string' && (VALID_CATEGORIES as readonly string[]).includes(value)
@@ -79,7 +81,8 @@ export function loadWorkspaceState(projectId: string): WorkspaceState | null {
   if (!isCategory(candidate.category) || !isNullableString(candidate.activeSessionId)
     || !isNullableString(candidate.activeFilePath) || !isOptionalBoolean(candidate.categoryOpen)
     || !isOptionalBoolean(candidate.contentPanelOpen) || !isOptionalBoolean(candidate.planPanelOpen)
-    || !isOptionalBoolean(candidate.foreshadowingPanelOpen)) {
+    || !isOptionalBoolean(candidate.foreshadowingPanelOpen)
+    || !isOptionalBoolean(candidate.rhythmPanelOpen)) {
     return null
   }
 
@@ -92,6 +95,7 @@ export function loadWorkspaceState(projectId: string): WorkspaceState | null {
     contentPanelOpen: candidate.contentPanelOpen ?? false,
     planPanelOpen: candidate.planPanelOpen ?? false,
     foreshadowingPanelOpen: candidate.foreshadowingPanelOpen ?? false,
+    rhythmPanelOpen: candidate.rhythmPanelOpen ?? false,
     ...(typeof width === 'number' && Number.isFinite(width) ? { contentPanelWidth: width } : {}),
   }
 }

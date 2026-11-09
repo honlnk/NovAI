@@ -32,6 +32,7 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
   { key: 'prompt', label: '提示词', icon: 'note' },
   { key: 'plan', label: '计划', icon: 'clipboard' },
   { key: 'foreshadowing', label: '伏笔', icon: 'foreshadowing' },
+  { key: 'rhythm', label: '节奏', icon: 'rhythm' },
 ]
 
 /**
@@ -97,7 +98,9 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           <!-- 计划（剪贴板清单） -->
           <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'clipboard'" />
           <!-- 伏笔（遮眼——隐藏的线索与真相） -->
-          <AppIcon name="eye-off" :size="20" class="h-5 w-5" v-else />
+          <AppIcon name="eye-off" :size="20" class="h-5 w-5" v-else-if="item.icon === 'foreshadowing'" />
+          <!-- 节奏（心律波纹——全本节奏曲线） -->
+          <AppIcon name="activity" :size="20" class="h-5 w-5" v-else />
         </button>
       </Tooltip>
     </div>

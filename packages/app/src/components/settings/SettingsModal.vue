@@ -107,6 +107,7 @@ const projectForm = reactive({
   permissionPreset: 'chapter-material' as 'review' | 'chapter' | 'material' | 'chapter-material' | 'full',
   enableDebugLogging: false,
   foreshadowingStatusMode: 'default' as 'default' | 'full',
+  rhythmDeviationThreshold: 3,
 })
 
 /** 自动保存状态，聚合展示在 footer 左侧。 */
@@ -183,6 +184,7 @@ onMounted(async () => {
         permissionPreset: settings.permissionPreset ?? 'chapter-material',
         enableDebugLogging: settings.enableDebugLogging ?? false,
         foreshadowingStatusMode: settings.foreshadowingStatusMode ?? 'default',
+        rhythmDeviationThreshold: settings.rhythmDeviationThreshold ?? 3,
       })
     }
   }

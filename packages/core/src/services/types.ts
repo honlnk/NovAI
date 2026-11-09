@@ -3,6 +3,13 @@ import type { ReasoningEffort } from '../types/ai'
 import type { AgentRoleId } from '../core/agent/roles'
 import type { PlanScanIssue } from '../types/plans'
 import type { ForeshadowingScanIssue, ForeshadowingStatus } from '../types/foreshadowing'
+import type {
+  RhythmHook,
+  RhythmMood,
+  RhythmPayoff,
+  RhythmScanIssue,
+  RhythmStatus,
+} from '../types/rhythm'
 import type { FileChangeCoords } from '../types/chat'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
@@ -75,6 +82,8 @@ export type ProjectConfigView = {
     activeOutlinePath: string | null
     /** 伏笔看板列模式（default 4 列 / full 6 列；语义见 types/project.ts） */
     foreshadowingStatusMode: ForeshadowingStatusMode
+    /** 节奏卡偏差阈值（1~10，默认 3；语义见 types/project.ts） */
+    rhythmDeviationThreshold: number
   }
 }
 
@@ -331,6 +340,62 @@ export type ForeshadowingBoardView = {
 
 export type ForeshadowingScanIssueView = ForeshadowingScanIssue
 
+/** 节奏卡状态（与核心域 RhythmStatus 同值域：三列看板 规划中/已写/偏差）。 */
+export type RhythmStatusView = RhythmStatus
+
+/**
+ * 节奏卡摘要：看板列与 AI RhythmList 使用，不携带正文。必须含计划值/实际值/
+ * 偏差标记：看板卡片（冲突强度着色、实际值对比、偏差列）与章节侧栏反查依赖它们。
+ */
+export type RhythmCardSummaryView = {
+  id: string
+  name: string
+  status: RhythmStatusView
+  order: number
+  createdAt: string
+  updatedAt: string
+  /** 关联章节（完整「卷/章」引用）。 */
+  chapterRef: string
+  /** 所属卷（chapterRef 首段；无斜杠时空串）。 */
+  volume: string
+  plannedConflict: number
+  plannedMood: RhythmMood
+  plannedHook: RhythmHook
+  plannedPayoff: RhythmPayoff
+  actualConflict: number | null
+  actualMood: RhythmMood | null
+  actualHook: RhythmHook | null
+  actualPayoff: RhythmPayoff | null
+  deviationFlag: boolean
+  /** 摘要（正文「节奏意图」节首个非空行）。 */
+  summary: string
+  sourcePath: string
+}
+
+/** 完整节奏卡（详情编辑使用）：补齐计划角色/备注、实际自评、偏差说明与正文三节。 */
+export type RhythmCardView = RhythmCardSummaryView & {
+  plannedCharacters: string[]
+  plannedNote: string | null
+  actualNote: string | null
+  deviationNote: string | null
+  /** 节奏意图正文。 */
+  intentBody: string
+  /** 上下文衔接正文。 */
+  linkBody: string
+  /** 作者备注正文。 */
+  authorNoteBody: string
+  /** 读取时文件全文 hash：保存时回传做冲突检测（外部修改守卫）。 */
+  contentHash: string
+}
+
+/** 节奏看板视图：列固定为三个状态精确值 + 目录扫描异常报告。 */
+export type RhythmBoardView = {
+  columns: Readonly<Record<RhythmStatusView, readonly RhythmCardSummaryView[]>>
+  issues: readonly RhythmScanIssueView[]
+}
+
+export type RhythmScanIssueView = RhythmScanIssue
+
 export type ProjectIssueView =
   | 'missing-config'
   | 'invalid-config'
@@ -371,6 +436,9 @@ export type ToolNameView =
   | 'RhythmCreate'
   | 'RhythmUpdate'
   | 'RhythmDelete'
+  | 'RhythmCheck'
+  | 'RhythmSync'
+  | 'RhythmCurve'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'

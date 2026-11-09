@@ -16,6 +16,7 @@ defineProps<{
     permissionPreset: 'review' | 'chapter' | 'material' | 'chapter-material' | 'full'
     enableDebugLogging: boolean
     foreshadowingStatusMode: 'default' | 'full'
+    rhythmDeviationThreshold: number
   }
 }>()
 
@@ -132,6 +133,19 @@ defineProps<{
             </select>
             <p class="mt-1.5 text-xs text-gray-500">
               伏笔文件始终按 6 状态存储，这里只切换看板的展示口径；4 列模式下「推进中」合并暗示与发展
+            </p>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-gray-700">节奏偏差阈值（冲突强度）</label>
+            <input
+              v-model.number="form.rhythmDeviationThreshold"
+              type="number"
+              min="1"
+              max="10"
+              class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-500"
+            />
+            <p class="mt-1.5 text-xs text-gray-500">
+              |计划冲突强度 - 实际| ≥ 阈值判偏差（1~10，默认 3）；写后回写实际值时系统自动按此判定并把卡片落「偏差」列
             </p>
           </div>
         </div>

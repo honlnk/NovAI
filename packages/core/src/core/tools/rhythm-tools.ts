@@ -20,18 +20,26 @@ import {
   RHYTHM_PAYOFFS,
 } from '../../types/rhythm'
 import type { RhythmHook, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
+import type { RhythmCardView } from '../../types/rhythm'
 import type {
   RhythmCreateInput,
   RhythmCreateOutput,
   RhythmDeleteInput,
   RhythmDeleteOutput,
+  RhythmCheckInput,
+  RhythmCheckOutput,
+  RhythmCurveInput,
+  RhythmCurveOutput,
   RhythmListInput,
   RhythmListOutput,
   RhythmReadInput,
   RhythmReadOutput,
+  RhythmSyncInput,
+  RhythmSyncOutput,
   RhythmUpdateInput,
   RhythmUpdateOutput,
   ToolDefinition,
+  ToolRuntime,
 } from './types'
 
 /**
@@ -484,7 +492,10 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
     }
   },
   async run(input, runtime) {
-    const card = await updateRhythmCard(runtime.project, input)
+    const card = await updateRhythmCard(runtime.project, {
+      ...input,
+      conflictThreshold: readConflictThreshold(runtime),
+    })
     const content = serializeRhythmCard(card)
 
     return {
@@ -600,5 +611,231 @@ export const rhythmDeleteTool: ToolDefinition<'RhythmDelete', RhythmDeleteInput,
   },
   buildConfirmation(input) {
     return { kind: 'delete', path: `rhythm/（节奏卡 ${input.id}）` }
+  },
+}
+
+// ---------- 高层工具：Check（写前）/ Sync（写后）/ Curve（查询） ----------
+//
+// 与 ForeshadowingCheck/Sync 同一设计口径（创作心智模块计划 §五/§六/§10.6）：
+// - Check（写前）：本章计划节奏 + 前后章节奏。前一章带实际值——衔接主要看上一章
+//   落地的温度，不是计划温度。
+// - Sync（写后）：只读的回写提案上下文组装器（本章卡完整内容 + contentHash +
+//   偏差规则与当前阈值）。提案由模型整理后交作者审阅，落盘走带确认的 RhythmUpdate
+//   ——一条确认链路，不为批量回写另做审批 UI。
+// - Curve（查询）：章节范围内计划/实际对照曲线数据，供「最近节奏怎么样」类总结。
+// 章号匹配统一走「第N章」数值比较（与伏笔 Check/Sync 同一简化口径）。
+
+/** 项目设置里的偏差阈值（normalize 已夹回 1~10；无配置环境回退默认 3）。 */
+function readConflictThreshold(runtime: ToolRuntime): number {
+  return runtime.project.config?.settings?.rhythmDeviationThreshold ?? 3
+}
+
+function deviationRulesText(threshold: number): string {
+  return [
+    `偏差判定规则（当前冲突强度阈值 ${threshold}）：`,
+    `- 冲突强度：|计划 - 实际| ≥ ${threshold} 判偏差；`,
+    '- 情绪基调：与计划不一致即偏差；',
+    '- 章末钩子：只在「有 ↔ 无」翻转时判偏差（同为有但类型不同不算）；',
+    '- 爽点类型：与计划不一致即偏差。',
+    '偏差是中性信号：如实回写，系统自动落「偏差」列并生成说明，不需要粉饰。',
+  ].join('\n')
+}
+
+function toCheckCardBase(card: RhythmCardView) {
+  return {
+    id: card.id,
+    name: card.name,
+    status: card.status,
+    chapterRef: card.chapterRef,
+    volume: card.volume,
+    plannedConflict: card.plannedConflict,
+    plannedMood: card.plannedMood,
+    plannedHook: card.plannedHook,
+    plannedPayoff: card.plannedPayoff,
+    actualConflict: card.actualConflict,
+    actualMood: card.actualMood,
+    actualHook: card.actualHook,
+    actualPayoff: card.actualPayoff,
+    deviationFlag: card.deviationFlag,
+  }
+}
+
+/** 扫描结果里按章号定位本章卡（一章一卡；异常重复时取排序后的第一张）。 */
+function findCardByChapter(cards: readonly RhythmCardView[], chapter: number): RhythmCardView | null {
+  return cards.find((card) => parseChapterNumber(card.chapterRef) === chapter) ?? null
+}
+
+export const rhythmCheckTool: ToolDefinition<'RhythmCheck', RhythmCheckInput, RhythmCheckOutput> = {
+  name: 'RhythmCheck',
+  description: '写前检查（写第 N 章前主动调用）：返回本章的计划节奏（冲突强度/情绪/钩子/爽点 + 节奏意图）与前后章节奏——前一章带已回写的实际值，衔接主要看上一章落地的温度。本章还没有节奏卡时也返回前后章，并提示是否先规划。',
+  validateInput(input) {
+    const value = asRecord(input)
+    const chapter = readChapterRange(value.chapter, 'RhythmCheck.chapter')
+    if (chapter === undefined) {
+      throw new Error('RhythmCheck.chapter 必须是正整数章号（如 12 表示第 12 章）')
+    }
+    return { chapter }
+  },
+  async run(input, runtime) {
+    const scan = await scanRhythmCards(runtime.project)
+    const chapter = input.chapter
+    const planned = findCardByChapter(scan.cards, chapter)
+
+    const numbered = scan.cards
+      .map((card) => ({ card, number: parseChapterNumber(card.chapterRef) }))
+      .filter((entry): entry is { card: RhythmCardView; number: number } => entry.number !== null)
+    const before = numbered.filter((entry) => entry.number < chapter).sort((a, b) => b.number - a.number)
+    const after = numbered.filter((entry) => entry.number > chapter).sort((a, b) => a.number - b.number)
+    const previous = before[0]?.card ?? null
+    const next = after[0]?.card ?? null
+
+    return {
+      chapter,
+      planned: planned
+        ? { ...toCheckCardBase(planned), intentBody: splitRhythmBody(planned.body).intentBody }
+        : null,
+      previous: previous ? toCheckCardBase(previous) : null,
+      next: next ? toCheckCardBase(next) : null,
+      guidance: planned
+        ? [
+          '写作提示：按本章计划值控温（冲突强度/情绪/钩子/爽点），节奏意图说明本章要什么温度；',
+          'previous 已带实际值时以实际温度衔接——上一章实际写出来的温度才是读者此刻的感受基线。',
+        ].join('\n')
+        : '本章还没有节奏卡：先向作者确认是否要为本章规划节奏（RhythmCreate），不主张未经要求自动建卡。',
+    }
+  },
+  summarizeInput(input) {
+    return `写前检查第 ${input.chapter} 章节奏`
+  },
+  summarizeOutput(output) {
+    return output.planned
+      ? `第 ${output.chapter} 章：计划 冲突 ${output.planned.plannedConflict} · ${output.planned.plannedMood}`
+      : `第 ${output.chapter} 章：尚无节奏卡（已带前后章上下文）`
+  },
+}
+
+export const rhythmSyncTool: ToolDefinition<'RhythmSync', RhythmSyncInput, RhythmSyncOutput> = {
+  name: 'RhythmSync',
+  description: '写后同步（写完第 N 章后主动调用）：组装节奏回写提案——本章节奏卡完整内容（含 contentHash）+ 偏差判定规则与当前阈值。本工具只读不落盘：对照本章正文整理 actual_* 回写提案（一组回写，不拆半组），先列给作者审阅，批准后用 RhythmUpdate 落盘（contentHash 直接回传）。',
+  validateInput(input) {
+    const value = asRecord(input)
+    const chapter = readChapterRange(value.chapter, 'RhythmSync.chapter')
+    if (chapter === undefined) {
+      throw new Error('RhythmSync.chapter 必须是正整数章号（如 12 表示第 12 章）')
+    }
+    return { chapter }
+  },
+  async run(input, runtime) {
+    const chapter = input.chapter
+    const scan = await scanRhythmCards(runtime.project)
+    const target = findCardByChapter(scan.cards, chapter)
+
+    if (!target) {
+      return {
+        chapter,
+        notFound: true as const,
+        guidance: '本章没有节奏卡，无需回写。若作者想补登本章节奏，先提案 RhythmCreate（一章一卡）。',
+      }
+    }
+
+    const result = await readRhythmCard(runtime.project, target.id)
+    if (!result) {
+      return {
+        chapter,
+        notFound: true as const,
+        guidance: '本章节奏卡在扫描后已被移除，重新用 RhythmList 确认。',
+      }
+    }
+
+    const { intentBody, linkBody, authorNoteBody } = splitRhythmBody(result.card.body)
+    const threshold = readConflictThreshold(runtime)
+
+    return {
+      chapter,
+      id: result.card.id,
+      name: result.card.name,
+      status: result.card.status,
+      chapterRef: result.card.chapterRef,
+      volume: result.card.volume,
+      plannedConflict: result.card.plannedConflict,
+      plannedMood: result.card.plannedMood,
+      plannedHook: result.card.plannedHook,
+      plannedPayoff: result.card.plannedPayoff,
+      plannedCharacters: [...result.card.plannedCharacters],
+      intentBody,
+      linkBody,
+      authorNoteBody,
+      actualConflict: result.card.actualConflict,
+      actualMood: result.card.actualMood,
+      actualHook: result.card.actualHook,
+      actualPayoff: result.card.actualPayoff,
+      deviationFlag: result.card.deviationFlag,
+      deviationNote: result.card.deviationNote,
+      contentHash: result.contentHash,
+      conflictThreshold: threshold,
+      deviationRules: deviationRulesText(threshold),
+      guidance: [
+        '对照本章正文如实整理 actual_* 一组回写值（冲突强度/情绪/钩子/爽点 + 本章自评 actualNote）；',
+        '系统按偏差规则自动判定状态与偏差说明——status 与偏差标记不手填；',
+        '提案先列给作者审阅（写超了也要如实报，偏差不是错误），批准后用 RhythmUpdate 落盘，contentHash 直接作为 expectedContentHash 回传。',
+      ].join('\n'),
+    }
+  },
+  summarizeInput(input) {
+    return `写后同步第 ${input.chapter} 章节奏`
+  },
+  summarizeOutput(output) {
+    return 'notFound' in output
+      ? `第 ${output.chapter} 章：无节奏卡，无需回写`
+      : `第 ${output.chapter} 章「${output.name || output.id}」：已组装回写提案上下文`
+  },
+}
+
+export const rhythmCurveTool: ToolDefinition<'RhythmCurve', RhythmCurveInput, RhythmCurveOutput> = {
+  name: 'RhythmCurve',
+  description: '节奏曲线查询（作者问「最近节奏怎么样」时调用）：返回章节范围内每章的计划/实际对照（按章号升序）。范围用章号数值给定（如最近 20 章 = chapterFrom: 最新章号-19, chapterTo: 最新章号）；不传范围返回全部。拿到曲线后用自然语言总结趋势与建议（连续高强度提示安排呼吸口、连续低强度提示蓄力）。',
+  validateInput(input) {
+    const value = asRecord(input)
+    const chapterFrom = readChapterRange(value.chapterFrom, 'RhythmCurve.chapterFrom')
+    const chapterTo = readChapterRange(value.chapterTo, 'RhythmCurve.chapterTo')
+    if (chapterFrom !== undefined && chapterTo !== undefined && chapterFrom > chapterTo) {
+      throw new Error('RhythmCurve.chapterFrom 不能大于 chapterTo')
+    }
+    return {
+      ...(chapterFrom !== undefined ? { chapterFrom } : {}),
+      ...(chapterTo !== undefined ? { chapterTo } : {}),
+    }
+  },
+  async run(input, runtime) {
+    const scan = await scanRhythmCards(runtime.project)
+    const inRange = scan.cards
+      .filter((card) => chapterRefInRange(card.chapterRef, input.chapterFrom, input.chapterTo))
+      .sort((a, b) => {
+        const left = parseChapterNumber(a.chapterRef)
+        const right = parseChapterNumber(b.chapterRef)
+        if (left !== null && right !== null) {
+          return left - right
+        }
+        if (left !== null) {
+          return -1
+        }
+        return right !== null ? 1 : 0
+      })
+
+    return {
+      curve: inRange.map((card) => ({ ...toCheckCardBase(card), updatedAt: card.updatedAt, summary: card.summary })),
+      totalCount: inRange.length,
+      chapterFrom: input.chapterFrom ?? null,
+      chapterTo: input.chapterTo ?? null,
+      guidance: '以实际值（actual_*）为主线总结趋势：与计划的偏离方向、连续区间（连续高强度/低强度/同类钩子）；给作者的建议要具体到章，不要泛泛而谈。',
+    }
+  },
+  summarizeInput(input) {
+    const from = input.chapterFrom ?? '…'
+    const to = input.chapterTo ?? '…'
+    return `查询节奏曲线（章号 ${from}~${to}）`
+  },
+  summarizeOutput(output) {
+    return `节奏曲线：${output.totalCount} 章对照数据`
   },
 }

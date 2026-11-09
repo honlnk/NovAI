@@ -75,6 +75,7 @@ describe('主角色声明与重构前装配等价', () => {
       'CreateForeshadowing', 'UpdateForeshadowing', 'DeleteForeshadowing',
       'ForeshadowingCheck', 'ForeshadowingSync',
       'RhythmList', 'RhythmRead', 'RhythmCreate', 'RhythmUpdate', 'RhythmDelete',
+      'RhythmCheck', 'RhythmSync', 'RhythmCurve',
       'GetFileChangeHistory',
       'WebSearch', 'WebFetch', 'KnowledgeLookup',
     ]

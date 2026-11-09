@@ -71,6 +71,7 @@ function createProjectView(files: ProjectView['files']): ProjectView {
         enableDebugLogging: false,
         activeOutlinePath: null,
         foreshadowingStatusMode: 'default',
+        rhythmDeviationThreshold: 3,
       },
     },
   }

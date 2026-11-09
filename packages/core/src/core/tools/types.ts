@@ -40,6 +40,9 @@ export type CoreToolName =
   | 'RhythmCreate'
   | 'RhythmUpdate'
   | 'RhythmDelete'
+  | 'RhythmCheck'
+  | 'RhythmSync'
+  | 'RhythmCurve'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -814,6 +817,100 @@ export type RhythmDeleteOutput = {
   trashPath: string
   contentLength: number
   linesRemoved: number
+}
+
+/** Check/Sync 共用的节奏摘要（计划值 + 已回写的实际值）。 */
+type RhythmCheckCardBase = {
+  id: string
+  name: string
+  status: RhythmStatus
+  chapterRef: string
+  volume: string
+  plannedConflict: number
+  plannedMood: RhythmMood
+  plannedHook: RhythmHook
+  plannedPayoff: RhythmPayoff
+  actualConflict: number | null
+  actualMood: RhythmMood | null
+  actualHook: RhythmHook | null
+  actualPayoff: RhythmPayoff | null
+  deviationFlag: boolean
+}
+
+export type RhythmCheckInput = {
+  chapter: number
+}
+
+/** 写前检查：本章计划节奏 + 前后章节奏（前一章带实际值——衔接主要看上一章落地的温度）。 */
+export type RhythmCheckOutput = {
+  chapter: number
+  /** 本章节奏卡（一章一卡；无卡为 null，guidance 会提示）。 */
+  planned: (RhythmCheckCardBase & { intentBody: string }) | null
+  /** 章号小于本章的最近一张卡（跨卷取章号最近者）。 */
+  previous: RhythmCheckCardBase | null
+  /** 章号大于本章的最近一张卡。 */
+  next: RhythmCheckCardBase | null
+  guidance: string
+}
+
+export type RhythmSyncInput = {
+  chapter: number
+}
+
+/**
+ * 写后同步：组装回写提案上下文——本章节奏卡完整内容（含 contentHash，批准后
+ * RhythmUpdate 直接回传）+ 当前偏差阈值与判定规则。只读不落盘，与
+ * ForeshadowingSync 同一口径（提案给作者审阅，批准后走带确认的 RhythmUpdate）。
+ */
+export type RhythmSyncOutput =
+  | { chapter: number; notFound: true; guidance: string }
+  | {
+      chapter: number
+      id: string
+      name: string
+      status: RhythmStatus
+      chapterRef: string
+      volume: string
+      plannedConflict: number
+      plannedMood: RhythmMood
+      plannedHook: RhythmHook
+      plannedPayoff: RhythmPayoff
+      plannedCharacters: string[]
+      intentBody: string
+      linkBody: string
+      authorNoteBody: string
+      actualConflict: number | null
+      actualMood: RhythmMood | null
+      actualHook: RhythmHook | null
+      actualPayoff: RhythmPayoff | null
+      deviationFlag: boolean
+      deviationNote: string | null
+      contentHash: string
+      /** 当前生效的冲突强度偏差阈值（来自项目设置，默认 3）。 */
+      conflictThreshold: number
+      deviationRules: string
+      guidance: string
+    }
+
+export type RhythmCurveInput = {
+  chapterFrom?: number
+  chapterTo?: number
+}
+
+/** 节奏曲线：范围内每章的计划/实际对照（按章号升序），供「最近节奏怎么样」类总结。 */
+export type RhythmCurveOutput = {
+  curve: Array<
+    RhythmCheckCardBase & {
+      updatedAt: string
+      /** 节奏意图首个非空行摘要。 */
+      summary: string
+    }
+  >
+  totalCount: number
+  /** 实际范围（缺省侧开放时显示用）。 */
+  chapterFrom: number | null
+  chapterTo: number | null
+  guidance: string
 }
 
 export type GetFileChangeHistoryInput = {

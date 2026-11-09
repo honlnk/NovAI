@@ -6,10 +6,10 @@
  * 仅在此保留以统一 Activity Bar 的图标语义。
  * `plan`（创作计划板）的 CategoryPanel 分支显示入口摘要、刷新与最近计划，
  * 完整看板在主内容区（替换对话面板），见 PlanBoardPanel；计划详情与新建
- * 在右侧内容面板（布局统一计划）。`foreshadowing`（伏笔账本）与计划同构，
- * 是创作心智模块（伏笔追踪 + 全本节奏卡）的第一个看板分类。
+ * 在右侧内容面板（布局统一计划）。`foreshadowing`（伏笔账本）与 `rhythm`（节奏卡账本）与计划同构，
+ * 是创作心智模块（伏笔追踪 + 全本节奏卡）的看板分类。
  */
-export type Category = 'conversation' | 'chapter' | 'element' | 'prompt' | 'plan' | 'foreshadowing'
+export type Category = 'conversation' | 'chapter' | 'element' | 'prompt' | 'plan' | 'foreshadowing' | 'rhythm'
 
 /**
  * 设置是动作型入口，不切换 CategoryPanel，单独标识以便 ActivityBar 区分行为。

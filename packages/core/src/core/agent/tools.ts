@@ -27,10 +27,13 @@ import {
   updateForeshadowingTool,
 } from '../tools/foreshadowing-tools'
 import {
+  rhythmCheckTool,
   rhythmCreateTool,
+  rhythmCurveTool,
   rhythmDeleteTool,
   rhythmListTool,
   rhythmReadTool,
+  rhythmSyncTool,
   rhythmUpdateTool,
 } from '../tools/rhythm-tools'
 import { FORESHADOWING_STATUS_LABELS } from '../../types/foreshadowing'
@@ -75,6 +78,9 @@ import type {
   RhythmCreateOutput,
   RhythmUpdateOutput,
   RhythmDeleteOutput,
+  RhythmCheckOutput,
+  RhythmSyncOutput,
+  RhythmCurveOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -1465,6 +1471,137 @@ export function createAgentTools(): AgentRunnableToolMap {
         return `已将节奏卡 ${output.sourcePath} 移入回收站 ${output.trashPath}`
       },
     },
+    RhythmCheck: {
+      name: 'RhythmCheck',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmCheck',
+          description: '写前检查（接到「写第 N 章」指令后、动笔前主动调用）：返回本章的计划节奏（冲突强度/情绪/钩子/爽点 + 节奏意图）与前后章节奏，前一章带已回写的实际值——衔接看上一章落地的温度。',
+          parameters: {
+            type: 'object',
+            properties: {
+              chapter: {
+                type: 'integer',
+                minimum: 1,
+                description: '章节编号（正整数），如 12 表示第 12 章。',
+              },
+            },
+            required: ['chapter'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmCheckTool,
+      formatResult(output: RhythmCheckOutput) {
+        const sections: string[] = [`第 ${output.chapter} 章节奏写前检查：`]
+        if (output.planned) {
+          const planned = output.planned
+          sections.push(`本章计划：冲突 ${planned.plannedConflict} · ${planned.plannedMood} · 钩子 ${planned.plannedHook} · 爽点 ${planned.plannedPayoff}`)
+          if (planned.intentBody.trim()) {
+            sections.push(`节奏意图：${planned.intentBody.trim()}`)
+          }
+        } else {
+          sections.push('本章尚无节奏卡（是否规划先问作者，不自动建卡）。')
+        }
+        if (output.previous) {
+          const prev = output.previous
+          const actual = prev.actualConflict !== null
+            ? `实际 冲突 ${prev.actualConflict} · ${prev.actualMood ?? '—'} · 钩子 ${prev.actualHook ?? '—'}`
+            : '尚未回写实际值（按计划值衔接）'
+          sections.push(`上一章 ${prev.chapterRef}：计划 冲突 ${prev.plannedConflict} · ${prev.plannedMood}；${actual}`)
+        }
+        if (output.next) {
+          sections.push(`下一章 ${output.next.chapterRef}：计划 冲突 ${output.next.plannedConflict} · ${output.next.plannedMood} · 钩子 ${output.next.plannedHook}`)
+        }
+        sections.push('', output.guidance)
+        return sections.join('\n')
+      },
+    },
+    RhythmSync: {
+      name: 'RhythmSync',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmSync',
+          description: '写后同步（写完第 N 章后主动调用）：组装节奏回写提案上下文——本章节奏卡完整内容（含 contentHash）+ 偏差判定规则与当前阈值。只读不落盘：对照本章正文整理 actual_* 提案，先列给作者审阅，批准后用 RhythmUpdate 落盘。',
+          parameters: {
+            type: 'object',
+            properties: {
+              chapter: {
+                type: 'integer',
+                minimum: 1,
+                description: '章节编号（正整数），如 12 表示第 12 章。',
+              },
+            },
+            required: ['chapter'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmSyncTool,
+      formatResult(output: RhythmSyncOutput) {
+        if ('notFound' in output) {
+          return `第 ${output.chapter} 章无节奏卡，无需回写。${output.guidance}`
+        }
+        const sections: string[] = [`第 ${output.chapter} 章节奏写后同步（「${output.name || output.id}」，当前状态 ${RHYTHM_COLUMN_LABELS[output.status]}）：`]
+        sections.push(`计划：冲突 ${output.plannedConflict} · ${output.plannedMood} · 钩子 ${output.plannedHook} · 爽点 ${output.plannedPayoff}`)
+        if (output.actualConflict !== null) {
+          sections.push(`已回写实际：冲突 ${output.actualConflict} · ${output.actualMood ?? '—'} · 钩子 ${output.actualHook ?? '—'} · 爽点 ${output.actualPayoff ?? '—'}（重复同步时先向作者确认是否覆盖）`)
+        }
+        sections.push(`contentHash: ${output.contentHash}`)
+        sections.push('', output.deviationRules, '', output.guidance)
+        return sections.join('\n')
+      },
+    },
+    RhythmCurve: {
+      name: 'RhythmCurve',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RhythmCurve',
+          description: '节奏曲线查询（作者问「最近节奏怎么样」时调用）：返回章节范围内每章的计划/实际对照（章号升序）。范围用章号数值给定（最近 20 章 = chapterFrom: 最新章号-19, chapterTo: 最新章号）；不传返回全部。',
+          parameters: {
+            type: 'object',
+            properties: {
+              chapterFrom: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，起始章号（含）。',
+              },
+              chapterTo: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，结束章号（含）。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: rhythmCurveTool,
+      formatResult(output: RhythmCurveOutput) {
+        const sections: string[] = [`节奏曲线（${output.totalCount} 章${output.chapterFrom !== null || output.chapterTo !== null ? `，范围 ${output.chapterFrom ?? '…'}~${output.chapterTo ?? '…'}` : '，全部'}）：`]
+        if (output.curve.length === 0) {
+          sections.push('（范围内没有节奏卡）')
+        } else {
+          sections.push(output.curve.map((card) => {
+            const actual = card.actualConflict !== null
+              ? `实际 ${card.actualConflict}/${card.actualMood ?? '—'}/${card.actualHook ?? '—'}/${card.actualPayoff ?? '—'}${card.deviationFlag ? ' ⚠偏差' : ''}`
+              : '未回写'
+            return `- ${card.chapterRef} ${card.name || card.id}：计划 ${card.plannedConflict}/${card.plannedMood}/${card.plannedHook}/${card.plannedPayoff}；${actual}`
+          }).join('\n'))
+        }
+        sections.push('', output.guidance)
+        return sections.join('\n')
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -1666,6 +1803,9 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'RhythmCreate'
     || value === 'RhythmUpdate'
     || value === 'RhythmDelete'
+    || value === 'RhythmCheck'
+    || value === 'RhythmSync'
+    || value === 'RhythmCurve'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ForeshadowingCardSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
+import type { ForeshadowingCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView } from '@novai/core/services/types'
 import { chapterRelatedForeshadowing, FORESHADOWING_STATUS_SHORT_LABELS } from '../../constants/foreshadowing'
+import { chapterRhythmCard } from '../../constants/rhythm'
 import { pickDirectoryChildren } from '../../utils/file-tree'
 import AppIcon from '../ui/AppIcon.vue'
 
@@ -10,11 +11,14 @@ const props = defineProps<{
   activeFilePath?: string
   /** 全量伏笔摘要（实时反查「本章相关伏笔」用；不传则不显示该区块） */
   foreshadowingCards?: ForeshadowingCardSummaryView[]
+  /** 全量节奏卡摘要（实时反查「本章节奏卡」用；不传则不显示该区块） */
+  rhythmCards?: RhythmCardSummaryView[]
 }>()
 
 const emit = defineEmits<{
   selectFile: [path: string]
   openForeshadowing: [id: string]
+  openRhythm: [id: string]
 }>()
 
 /**
@@ -32,6 +36,11 @@ const hasChapters = computed(() => chapterNodes.value.length > 0)
 const relatedForeshadowing = computed(() =>
   chapterRelatedForeshadowing(props.foreshadowingCards ?? [], props.activeFilePath),
 )
+
+/**
+ * 本章节奏卡（施工计划 §七）：一章一卡，按章号实时反查。不写入章节文件。
+ */
+const rhythmCard = computed(() => chapterRhythmCard(props.rhythmCards ?? [], props.activeFilePath))
 
 /** 每个目录节点的展开状态，key = 目录 path */
 const expandedDirs = ref<Set<string>>(new Set())
@@ -71,6 +80,24 @@ function isDirExpanded(path: string) {
             </button>
           </li>
         </ul>
+      </div>
+
+      <!-- 本章节奏卡：选中章节后按章号实时反查（一章一卡），不写入章节文件 -->
+      <div v-if="rhythmCard" class="mb-2 rounded-md bg-white/5 px-2 py-2" data-testid="chapter-rhythm-card">
+        <p class="px-1 pb-1 text-xs font-medium text-gray-500">本章节奏卡</p>
+        <button
+          class="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+          @click="emit('openRhythm', rhythmCard.id)"
+        >
+          <AppIcon name="activity" :size="12" class="h-3 w-3 shrink-0 text-gray-600" />
+          <span class="flex-1 truncate">{{ rhythmCard.name }}</span>
+          <span
+            :class="['shrink-0', rhythmCard.status === 'deviated' ? 'text-red-400' : 'text-gray-600']"
+          >{{ rhythmCard.status === 'planned' ? '规划' : rhythmCard.status === 'written' ? '已写' : '偏差' }}</span>
+        </button>
+        <p class="px-1 pt-0.5 text-[10px] text-gray-600">
+          计划 冲突 {{ rhythmCard.plannedConflict }} · {{ rhythmCard.plannedMood }} · 钩子 {{ rhythmCard.plannedHook }} · {{ rhythmCard.plannedPayoff }}
+        </p>
       </div>
 
       <!-- 空状态：chapters/ 目录为空或不存在 -->

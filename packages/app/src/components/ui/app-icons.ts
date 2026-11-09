@@ -1,5 +1,6 @@
 import type { Component } from 'vue'
 import {
+  Activity,
   Archive,
   ArrowDown,
   ArrowRight,
@@ -114,6 +115,8 @@ export const APP_ICONS = {
   list: List,
   settings: Settings,
   home: House,
+  // 节奏卡（心律波纹——全本节奏曲线）
+  activity: Activity,
 } as const satisfies Record<string, Component>
 
 export type AppIconName = keyof typeof APP_ICONS

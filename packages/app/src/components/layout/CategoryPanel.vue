@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ChatSessionSummaryView, ForeshadowingCardSummaryView, PlanCardSummaryView, ProjectFileNodeView } from '@novai/core/services/types'
+import type { ChatSessionSummaryView, ForeshadowingCardSummaryView, PlanCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView } from '@novai/core/services/types'
 import type { Category } from '../../constants/category'
 import ChapterList from '../category/ChapterList.vue'
 import ElementList from '../category/ElementList.vue'
@@ -7,6 +7,7 @@ import PromptList from '../category/PromptList.vue'
 import ConversationList from '../category/ConversationList.vue'
 import PlanList from '../category/PlanList.vue'
 import ForeshadowingList from '../category/ForeshadowingList.vue'
+import RhythmList from '../category/RhythmList.vue'
 import AppIcon from '../ui/AppIcon.vue'
 
 defineProps<{
@@ -32,6 +33,12 @@ defineProps<{
   isForeshadowingLoading: boolean
   /** 当前打开详情的伏笔 id（侧栏最近列表选中态与详情一致） */
   selectedForeshadowingId?: string | null
+  /** 节奏卡摘要（节奏分类面板计数与最近列表用） */
+  rhythmCards: RhythmCardSummaryView[]
+  /** 节奏板读取中 */
+  isRhythmLoading: boolean
+  /** 当前打开详情的节奏卡 id（侧栏最近列表选中态与详情一致） */
+  selectedRhythmId?: string | null
   /** 有待回答提问卡的会话 id 集（会话列表「待回答」徽标；提问按会话路由） */
   pendingQuestionIds?: Set<string>
   /** 实时运行中的会话 id 集（会话列表「进行中」筛选与徽标） */
@@ -68,6 +75,14 @@ const emit = defineEmits<{
   openForeshadowingCard: [id: string]
   /** 登记伏笔（侧栏摘要卡下方入口） */
   openForeshadowingCreate: []
+  /** 打开主内容区节奏看板 */
+  openRhythmBoard: []
+  /** 刷新节奏卡（左侧标题行入口） */
+  refreshRhythm: []
+  /** 打开某张节奏卡详情 */
+  openRhythmCard: [id: string]
+  /** 规划节奏卡（侧栏摘要卡下方入口） */
+  openRhythmCreate: []
 }>()
 </script>
 
@@ -109,8 +124,10 @@ const emit = defineEmits<{
       :files="files"
       :active-file-path="activeFilePath"
       :foreshadowing-cards="foreshadowingCards"
+      :rhythm-cards="rhythmCards"
       @select-file="emit('selectFile', $event)"
       @open-foreshadowing="emit('openForeshadowingCard', $event)"
+      @open-rhythm="emit('openRhythmCard', $event)"
     />
     <ElementList
       v-else-if="activeCategory === 'element'"
@@ -145,6 +162,16 @@ const emit = defineEmits<{
       @refresh="emit('refreshForeshadowing')"
       @open-create="emit('openForeshadowingCreate')"
       @open-card="emit('openForeshadowingCard', $event)"
+    />
+    <RhythmList
+      v-else-if="activeCategory === 'rhythm'"
+      :cards="rhythmCards"
+      :is-loading="isRhythmLoading"
+      :selected-card-id="selectedRhythmId"
+      @open-board="emit('openRhythmBoard')"
+      @refresh="emit('refreshRhythm')"
+      @open-create="emit('openRhythmCreate')"
+      @open-card="emit('openRhythmCard', $event)"
     />
   </aside>
 </template>

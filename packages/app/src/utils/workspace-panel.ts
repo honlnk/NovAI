@@ -6,7 +6,7 @@ import type { Category } from '../constants/category'
  *
  * 统一规则：左侧导航与选择，中间当前分类的主任务，右侧查看/编辑当前选中内容。
  * 右侧面板按分类与当前任务展示：普通文件 / 看板卡片详情（计划、伏笔）/ 新建。
- * 展开偏好按「文件」「计划」「伏笔」三路各自保留：切换分类只影响可见性，不清
+ * 展开偏好按「文件」「计划」「伏笔」「节奏」四路各自保留：切换分类只影响可见性，不清
  * 内容——返回原分类时恢复离开前的展开状态（§2.5），未选中内容时不得凭空显示
  * 空面板。
  */
@@ -17,6 +17,8 @@ export type WorkspacePanelKind =
   | 'plan-create'
   | 'foreshadowing-detail'
   | 'foreshadowing-create'
+  | 'rhythm-detail'
+  | 'rhythm-create'
   | 'write-confirm'
 
 export type WorkspacePanelInput = {
@@ -37,6 +39,12 @@ export type WorkspacePanelInput = {
   isForeshadowingCreateOpen?: boolean
   /** 有选中的伏笔详情 */
   hasActiveForeshadowing?: boolean
+  /** 节奏面板的展开偏好（跨分类保留；缺省 false 兼容旧调用方） */
+  isRhythmPanelOpen?: boolean
+  /** 节奏新建面板开启（与详情互斥展示，优先级高于详情） */
+  isRhythmCreateOpen?: boolean
+  /** 有选中的节奏卡详情 */
+  hasActiveRhythm?: boolean
 }
 
 export type WorkspacePanelState = {
@@ -77,6 +85,19 @@ export function resolveWorkspacePanel(input: WorkspacePanelInput): WorkspacePane
     return { visible: false, kind: null }
   }
 
+  if (input.category === 'rhythm') {
+    if (!input.isRhythmPanelOpen) {
+      return { visible: false, kind: null }
+    }
+    if (input.isRhythmCreateOpen) {
+      return { visible: true, kind: 'rhythm-create' }
+    }
+    if (input.hasActiveRhythm) {
+      return { visible: true, kind: 'rhythm-detail' }
+    }
+    return { visible: false, kind: null }
+  }
+
   if (!input.isFilePanelOpen || !input.hasFileContent) {
     return { visible: false, kind: null }
   }
@@ -89,7 +110,7 @@ export function resolveWorkspacePanel(input: WorkspacePanelInput): WorkspacePane
  */
 export function panelCloseTarget(
   kind: WorkspacePanelKind | null,
-): 'file' | 'plan' | 'foreshadowing' | 'write-confirm' | null {
+): 'file' | 'plan' | 'foreshadowing' | 'rhythm' | 'write-confirm' | null {
   if (kind === 'file') {
     return 'file'
   }
@@ -98,6 +119,9 @@ export function panelCloseTarget(
   }
   if (kind === 'foreshadowing-detail' || kind === 'foreshadowing-create') {
     return 'foreshadowing'
+  }
+  if (kind === 'rhythm-detail' || kind === 'rhythm-create') {
+    return 'rhythm'
   }
   if (kind === 'write-confirm') {
     return 'write-confirm'

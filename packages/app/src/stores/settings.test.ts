@@ -44,6 +44,7 @@ function createConfigView(overrides: Partial<ProjectConfigView> = {}): ProjectCo
       enableDebugLogging: false,
       activeOutlinePath: null,
       foreshadowingStatusMode: 'default',
+      rhythmDeviationThreshold: 3,
     },
     ...overrides,
   }

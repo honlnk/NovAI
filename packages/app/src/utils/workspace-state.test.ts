@@ -35,6 +35,7 @@ describe('workspace-state', () => {
       contentPanelOpen: true,
       planPanelOpen: true,
       foreshadowingPanelOpen: false,
+      rhythmPanelOpen: false,
       contentPanelWidth: 480,
     })
 
@@ -46,6 +47,7 @@ describe('workspace-state', () => {
       contentPanelOpen: true,
       planPanelOpen: true,
       foreshadowingPanelOpen: false,
+      rhythmPanelOpen: false,
       contentPanelWidth: 480,
     })
     // 按项目隔离：另一个项目读不到
@@ -61,6 +63,7 @@ describe('workspace-state', () => {
       contentPanelOpen: false,
       planPanelOpen: false,
       foreshadowingPanelOpen: false,
+      rhythmPanelOpen: false,
     })
 
     const state = loadWorkspaceState('p1')
@@ -101,6 +104,7 @@ describe('workspace-state', () => {
       contentPanelOpen: false,
       planPanelOpen: false,
       foreshadowingPanelOpen: false,
+      rhythmPanelOpen: false,
     })
     expect(state!.contentPanelWidth).toBeUndefined()
   })
@@ -124,6 +128,7 @@ describe('workspace-state', () => {
         contentPanelOpen: false,
         planPanelOpen: false,
         foreshadowingPanelOpen: false,
+      rhythmPanelOpen: false,
       }),
     ).not.toThrow()
   })

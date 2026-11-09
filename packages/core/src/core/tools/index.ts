@@ -27,10 +27,13 @@ import {
   updateForeshadowingTool,
 } from './foreshadowing-tools'
 import {
+  rhythmCheckTool,
   rhythmCreateTool,
+  rhythmCurveTool,
   rhythmDeleteTool,
   rhythmListTool,
   rhythmReadTool,
+  rhythmSyncTool,
   rhythmUpdateTool,
 } from './rhythm-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
@@ -93,6 +96,12 @@ import type {
   RhythmUpdateOutput,
   RhythmDeleteInput,
   RhythmDeleteOutput,
+  RhythmCheckInput,
+  RhythmCheckOutput,
+  RhythmSyncInput,
+  RhythmSyncOutput,
+  RhythmCurveInput,
+  RhythmCurveOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -167,6 +176,12 @@ export type {
   RhythmUpdateOutput,
   RhythmDeleteInput,
   RhythmDeleteOutput,
+  RhythmCheckInput,
+  RhythmCheckOutput,
+  RhythmSyncInput,
+  RhythmSyncOutput,
+  RhythmCurveInput,
+  RhythmCurveOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -213,6 +228,9 @@ type ToolOutputMap = {
   RhythmCreate: RhythmCreateOutput
   RhythmUpdate: RhythmUpdateOutput
   RhythmDelete: RhythmDeleteOutput
+  RhythmCheck: RhythmCheckOutput
+  RhythmSync: RhythmSyncOutput
+  RhythmCurve: RhythmCurveOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -248,6 +266,9 @@ const tools = {
   RhythmCreate: rhythmCreateTool,
   RhythmUpdate: rhythmUpdateTool,
   RhythmDelete: rhythmDeleteTool,
+  RhythmCheck: rhythmCheckTool,
+  RhythmSync: rhythmSyncTool,
+  RhythmCurve: rhythmCurveTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,
