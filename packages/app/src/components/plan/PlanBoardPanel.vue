@@ -28,7 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   openCreate: []
   openCard: [id: string]
-  moveCard: [id: string, status: PlanStatusView, afterId: string | null]
+  moveCard: [id: string, status: PlanStatusView, afterId: string | null, beforeId?: string | null]
   retryLoad: []
   toggleOnHold: []
   toggleSidebar: []
@@ -60,8 +60,8 @@ const totalCards = computed(() => {
 /** 骨架屏列数：与默认四常驻列一致（首载时还没有可跟随的筛选状态数据） */
 const SKELETON_COLUMN_COUNT = 4
 
-function onBoardMoveCard(id: string, columnKey: string, afterId: string | null) {
-  emit('moveCard', id, columnKey as PlanStatusView, afterId)
+function onBoardMoveCard(id: string, columnKey: string, afterId: string | null, beforeId?: string | null) {
+  emit('moveCard', id, columnKey as PlanStatusView, afterId, beforeId)
 }
 
 function formatTime(iso: string): string {
@@ -93,7 +93,7 @@ function formatTime(iso: string): string {
     testid-prefix="plan"
     @open-create="emit('openCreate')"
     @open-card="emit('openCard', $event)"
-    @move-card="(id, columnKey, afterId) => onBoardMoveCard(id, columnKey, afterId)"
+    @move-card="(id, columnKey, afterId, beforeId) => onBoardMoveCard(id, columnKey, afterId, beforeId)"
     @retry-load="emit('retryLoad')"
     @toggle-sidebar="emit('toggleSidebar')"
     @toggle-mobile-sidebar="emit('toggleMobileSidebar')"

@@ -297,6 +297,18 @@ describe('updateRhythmCard：计划值与元数据', () => {
     expect(scan.cards.map((card) => card.name)).toEqual(['B', 'A', 'C'])
     expect(scan.cards[2]!.id).toBe(c.id)
   })
+
+  it('beforeId 在列内插到目标卡片之前（列首 - 步长）', async () => {
+    const a = await createRhythmCard(project(), seedOptions({ name: 'A', chapterRef: '第二卷/第081章' }))
+    await createRhythmCard(project(), seedOptions({ name: 'B', chapterRef: '第二卷/第082章' }))
+    const c = await createRhythmCard(project(), seedOptions({ name: 'C', chapterRef: '第二卷/第083章' }))
+
+    const moved = await updateRhythmCard(project(), { id: c.id, beforeId: a.id })
+    expect(moved.order).toBe(-100)
+
+    const scan = await scanRhythmCards(project())
+    expect(scan.cards.map((card) => card.name)).toEqual(['C', 'A', 'B'])
+  })
 })
 
 describe('updateRhythmCard：实际值回写与偏差判定', () => {

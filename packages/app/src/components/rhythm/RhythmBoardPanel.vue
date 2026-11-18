@@ -32,7 +32,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   openCreate: []
   openCard: [id: string]
-  moveCard: [id: string, status: RhythmStatusView, afterId: string | null]
+  moveCard: [id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null]
   retryLoad: []
   toggleSidebar: []
   toggleMobileSidebar: []
@@ -51,10 +51,14 @@ const totalCards = computed(() => allCards.value.length)
 
 const columns = computed(() => rhythmDisplayColumns(props.board))
 
-/** 落点放行：同列重排才上抛（跨列拖拽静默忽略——状态只由回写驱动） */
-function onBoardMoveCard(id: string, columnKey: string, afterId: string | null) {
+/** 落点放行：同列重排才显示占位并上抛（跨列拖拽静默忽略——状态只由回写驱动） */
+function isRhythmDropAllowed(id: string, columnKey: string) {
+  return isRhythmReorderOnly(props.board, id, columnKey)
+}
+
+function onBoardMoveCard(id: string, columnKey: string, afterId: string | null, beforeId?: string | null) {
   if (isRhythmReorderOnly(props.board, id, columnKey)) {
-    emit('moveCard', id, columnKey as RhythmStatusView, afterId)
+    emit('moveCard', id, columnKey as RhythmStatusView, afterId, beforeId)
   }
 }
 
@@ -84,6 +88,8 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
     empty-text="还没有节奏卡。规划下一章要什么温度——冲突强度、情绪基调、章末钩子、爽点类型。"
     empty-create-label="规划一张节奏卡"
     testid-prefix="rhythm"
+    empty-column-text="暂无节奏卡"
+    :can-drop-card="isRhythmDropAllowed"
     @open-create="emit('openCreate')"
     @open-card="emit('openCard', $event)"
     @move-card="onBoardMoveCard"

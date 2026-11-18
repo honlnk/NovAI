@@ -11,6 +11,7 @@ import {
   extractPlanSlug,
   nextOrderInColumn,
   orderAfter,
+  orderBefore,
   sortPlanCards,
 } from './identity'
 import { scanPlanCards, type ProjectSnapshotLike } from './catalog'
@@ -51,6 +52,8 @@ export type UpdatePlanOptions = {
   status?: PlanStatus
   /** 移动到目标列某个卡片之后；null = 列末尾。仅与 status 同传时有意义。 */
   afterId?: string | null
+  /** 移动到目标列某个卡片之前（看板列首落点）；null = 列首。与 afterId 二选一。 */
+  beforeId?: string | null
   now?: Date
   /** 上次读取的文件全文 hash；提供时做冲突检测。 */
   expectedContentHash?: string
@@ -145,14 +148,20 @@ export async function updatePlanCard(project: ProjectSnapshotLike, options: Upda
   }
 
   const statusChanged = options.status !== undefined && options.status !== current.card.status
-  const positionChanged = statusChanged || options.afterId !== undefined
-  // 不传 afterId 的新状态按列末尾处理；状态未变且未指定位置时不重算 order。
+  const positionChanged = statusChanged || options.afterId !== undefined || options.beforeId !== undefined
+  // 不传位置的新状态按列末尾处理；状态未变且未指定位置时不重算 order。
   const nextOrder = positionChanged
-    ? orderAfter(
-        allCards.filter((card) => card.id !== options.id),
-        options.status ?? current.card.status,
-        options.afterId ?? null,
-      )
+    ? (options.beforeId !== undefined
+        ? orderBefore(
+          allCards.filter((card) => card.id !== options.id),
+          options.status ?? current.card.status,
+          options.beforeId ?? null,
+        )
+        : orderAfter(
+          allCards.filter((card) => card.id !== options.id),
+          options.status ?? current.card.status,
+          options.afterId ?? null,
+        ))
     : current.card.order
   const resolvedOrder = nextOrder ?? current.card.order
 

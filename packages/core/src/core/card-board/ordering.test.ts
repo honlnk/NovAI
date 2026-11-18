@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { nextOrderInColumn, orderAfter, sortBoardCards } from './ordering'
+import { nextOrderInColumn, orderAfter, orderBefore, sortBoardCards } from './ordering'
 
 type Card = { id: string; status: string; order: number; createdAt: string }
 
@@ -61,5 +61,28 @@ describe('orderAfter', () => {
 
   it('afterId 不在目标列按列末尾处理', () => {
     expect(orderAfter(column, 'todo', 'missing')).toBe(400)
+  })
+})
+
+describe('orderBefore', () => {
+  const column = [
+    card('a', 'todo', 100),
+    card('b', 'todo', 200),
+    card('c', 'todo', 300),
+  ]
+
+  it('beforeId=null 或首卡之前取列首 - 步长（order 允许为负）', () => {
+    expect(orderBefore(column, 'todo', null)).toBe(0)
+    expect(orderBefore(column, 'todo', 'a')).toBe(0)
+    expect(orderBefore([], 'todo', null)).toBe(0)
+  })
+
+  it('插到两卡之间取中点', () => {
+    expect(orderBefore(column, 'todo', 'b')).toBe(150)
+    expect(orderBefore(column, 'todo', 'c')).toBe(250)
+  })
+
+  it('beforeId 不在目标列按列末尾处理（与 orderAfter 同口径）', () => {
+    expect(orderBefore(column, 'todo', 'missing')).toBe(400)
   })
 })

@@ -1,6 +1,11 @@
 import { hashContent } from '../util/hash'
 import { sanitizeFileNameFragment } from '../card-board/parser'
-import { nextOrderInColumn as genericNextOrderInColumn, orderAfter as genericOrderAfter, sortBoardCards } from '../card-board/ordering'
+import {
+  nextOrderInColumn as genericNextOrderInColumn,
+  orderAfter as genericOrderAfter,
+  orderBefore as genericOrderBefore,
+  sortBoardCards,
+} from '../card-board/ordering'
 import { PLANS_DIRECTORY } from '../../types/plans'
 import type { PlanCard, PlanCardView } from '../../types/plans'
 
@@ -116,6 +121,16 @@ export function orderAfter(
   step = 100,
 ): number {
   return genericOrderAfter(cards, status, afterId, step)
+}
+
+/** 拖到同列某卡片之前应取的 order 值：中点；列首 - 步长（order 允许为负）。 */
+export function orderBefore(
+  cards: readonly Pick<PlanCard, 'status' | 'order' | 'createdAt' | 'id'>[],
+  status: PlanCard['status'],
+  beforeId: string | null,
+  step = 100,
+): number {
+  return genericOrderBefore(cards, status, beforeId, step)
 }
 
 export type PlanCardWithView = PlanCardView

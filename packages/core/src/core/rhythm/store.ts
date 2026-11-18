@@ -1,5 +1,5 @@
 import { locateCardContent, nextCardSequence, trashCardFile, writeCardFile } from '../card-board/store'
-import { nextOrderInColumn, orderAfter } from '../card-board/ordering'
+import { nextOrderInColumn, orderAfter, orderBefore } from '../card-board/ordering'
 import { buildRhythmBody, normalizeConflictIntensity, parseRhythmFile, replaceRhythmBodySections, serializeRhythmCard } from './parser'
 import {
   createRhythmId,
@@ -88,6 +88,8 @@ export type UpdateRhythmOptions = {
   actualNote?: string | null
   /** 移动到目标列某个卡片之后；null = 列末尾。 */
   afterId?: string | null
+  /** 移动到目标列某个卡片之前（看板列首落点）；null = 列首。与 afterId 二选一。 */
+  beforeId?: string | null
   /** 冲突强度偏差阈值（|计划-实际| ≥ 阈值判偏差）；缺省 3。 */
   conflictThreshold?: number
   now?: Date
@@ -216,6 +218,7 @@ export async function updateRhythmCard(
     || options.actualPayoff !== undefined
     || options.actualNote !== undefined
     || options.afterId !== undefined
+    || options.beforeId !== undefined
 
   if (!hasFieldUpdate) {
     throw new RhythmError('至少提供 name、计划值、正文各节、actual_* 等要更新的字段之一')
@@ -316,13 +319,19 @@ export async function updateRhythmCard(
 
   // 列内位置
   const statusChanged = status !== current.card.status
-  const positionChanged = statusChanged || options.afterId !== undefined
+  const positionChanged = statusChanged || options.afterId !== undefined || options.beforeId !== undefined
   const nextOrder = positionChanged
-    ? orderAfter(
-        allCards.filter((card) => card.id !== options.id),
-        status,
-        options.afterId ?? null,
-      )
+    ? (options.beforeId !== undefined
+        ? orderBefore(
+          allCards.filter((card) => card.id !== options.id),
+          status,
+          options.beforeId ?? null,
+        )
+        : orderAfter(
+          allCards.filter((card) => card.id !== options.id),
+          status,
+          options.afterId ?? null,
+        ))
     : current.card.order
 
   const card: Omit<RhythmCard, 'sourcePath'> = {

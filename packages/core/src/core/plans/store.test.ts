@@ -390,6 +390,19 @@ describe('updatePlanCard', () => {
     expect(updated.updatedAt >= c.updatedAt).toBe(true)
   })
 
+  it('带 beforeId 移动：插到目标卡片之前（列首 - 步长）', async () => {
+    const a = await createPlanCard(project(), { body: 'A', status: 'planned' })
+    await createPlanCard(project(), { body: 'B', status: 'planned' })
+    const c = await createPlanCard(project(), { body: 'C', status: 'inbox' })
+
+    const updated = await updatePlanCard(project(), { id: c.id, status: 'planned', beforeId: a.id })
+
+    expect(updated.status).toBe('planned')
+    expect(updated.order).toBe(-100)
+    const scan = await scanPlanCards(project())
+    expect(scan.cards.map((card) => card.body)).toEqual(['C', 'A', 'B'])
+  })
+
   it('更新不存在的计划：报错', async () => {
     await expect(updatePlanCard(project(), { id: 'plan-none', body: 'x' })).rejects.toThrow('计划不存在')
   })

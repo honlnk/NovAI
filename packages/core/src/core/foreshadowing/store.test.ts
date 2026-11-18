@@ -220,6 +220,18 @@ describe('updateForeshadowingCard', () => {
     expect(abandoned.abandonedReason).toBe('剧情改版，照片线索并入其他伏笔')
   })
 
+  it('beforeId 在列内插到目标卡片之前（列首 - 步长）', async () => {
+    const a = await createForeshadowingCard(project(), { name: 'A', readerView: 'r', plantedAt: '第一卷/第001章' })
+    await createForeshadowingCard(project(), { name: 'B', readerView: 'r', plantedAt: '第一卷/第002章' })
+    const c = await createForeshadowingCard(project(), { name: 'C', readerView: 'r', plantedAt: '第一卷/第003章' })
+
+    const moved = await updateForeshadowingCard(project(), { id: c.id, beforeId: a.id })
+
+    expect(moved.order).toBe(-100)
+    const scan = await scanForeshadowingCards(project())
+    expect(scan.cards.map((item) => item.name)).toEqual(['C', 'A', 'B'])
+  })
+
   it('外部修改后带旧 hash 保存抛冲突', async () => {
     const card = await seed()
     const read = await readForeshadowingCard(project(), card.id)

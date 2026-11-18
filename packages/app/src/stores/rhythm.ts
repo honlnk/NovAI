@@ -123,7 +123,7 @@ export const useRhythmStore = defineStore('rhythm', () => {
     },
     // 列内重排 only：跨列流转由 actual_* 回写驱动，status 形参只是工厂签名对齐
     // （调用方只会在同列重排时触达这里，见 constants/rhythm.ts 的落点放行）
-    moveCard: (projectId, id, _status, afterId) => updateRhythm(projectId, { id, afterId }),
+    moveCard: (projectId, id, _status, afterId, beforeId) => updateRhythm(projectId, { id, afterId, beforeId }),
     deleteCard: (projectId, id) => deleteRhythm(projectId, id),
     submitCreate: (projectId, draft) => createRhythm(projectId, {
       chapterRef: draft.chapterRef.trim(),

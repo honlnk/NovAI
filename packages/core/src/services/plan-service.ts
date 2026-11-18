@@ -113,6 +113,8 @@ export async function updatePlan(
     title?: string
     status?: PlanStatusView
     afterId?: string | null
+    /** 插到目标列某卡片之前（看板列首落点）；null = 列首。与 afterId 二选一。 */
+    beforeId?: string | null
     expectedContentHash?: string
   },
 ): Promise<PlanCardView> {

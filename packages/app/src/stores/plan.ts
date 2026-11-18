@@ -78,7 +78,7 @@ export const usePlanStore = defineStore('plan', () => {
         expectedContentHash: card.contentHash,
       })
     },
-    moveCard: (projectId, id, status, afterId) => updatePlan(projectId, { id, status, afterId }),
+    moveCard: (projectId, id, status, afterId, beforeId) => updatePlan(projectId, { id, status, afterId, beforeId }),
     deleteCard: (projectId, id) => deletePlan(projectId, id),
     // 新建提交：计划名作为正文首个非空行，与正文合成完整内容
     submitCreate: (projectId, draft) => {

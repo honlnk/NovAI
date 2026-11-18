@@ -945,12 +945,12 @@ async function handlePlanSubmitCreate() {
   }
 }
 
-async function handlePlanMove(id: string, status: PlanStatusView, afterId: string | null) {
+async function handlePlanMove(id: string, status: PlanStatusView, afterId: string | null, beforeId?: string | null) {
   if (!projectStore.currentProject) {
     return
   }
   const movingProjectId = projectId.value
-  const ok = await planStore.moveCard(movingProjectId, id, status, afterId)
+  const ok = await planStore.moveCard(movingProjectId, id, status, afterId, beforeId)
   if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
   if (!ok) {
     toast.error(planStore.actionError || '移动计划失败')
@@ -1136,12 +1136,12 @@ async function handleForeshadowingSubmitCreate() {
   }
 }
 
-async function handleForeshadowingMove(id: string, status: ForeshadowingStatusView, afterId: string | null) {
+async function handleForeshadowingMove(id: string, status: ForeshadowingStatusView, afterId: string | null, beforeId?: string | null) {
   if (!projectStore.currentProject) {
     return
   }
   const movingProjectId = projectId.value
-  const ok = await foreshadowingStore.moveCard(movingProjectId, id, status, afterId)
+  const ok = await foreshadowingStore.moveCard(movingProjectId, id, status, afterId, beforeId)
   if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
   if (!ok) {
     toast.error(foreshadowingStore.actionError || '移动伏笔失败')
@@ -1310,12 +1310,12 @@ async function handleRhythmSubmitCreate() {
 }
 
 /** 看板列内重排（跨列拖拽在 constants/rhythm.ts 落点放行处已被忽略） */
-async function handleRhythmMove(id: string, status: RhythmStatusView, afterId: string | null) {
+async function handleRhythmMove(id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null) {
   if (!projectStore.currentProject) {
     return
   }
   const movingProjectId = projectId.value
-  const ok = await rhythmStore.moveCard(movingProjectId, id, status, afterId)
+  const ok = await rhythmStore.moveCard(movingProjectId, id, status, afterId, beforeId)
   if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
   if (!ok) {
     toast.error(rhythmStore.actionError || '移动节奏卡失败')

@@ -80,7 +80,7 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
         expectedContentHash: card.contentHash,
       })
     },
-    moveCard: (projectId, id, status, afterId) => updateForeshadowing(projectId, { id, status, afterId }),
+    moveCard: (projectId, id, status, afterId, beforeId) => updateForeshadowing(projectId, { id, status, afterId, beforeId }),
     deleteCard: (projectId, id) => deleteForeshadowing(projectId, id),
     // 新建提交：可选字段只在有值时提交（回收窗口要求起止俱全才构成区间）
     submitCreate: (projectId, draft) => {

@@ -1,5 +1,5 @@
 import { locateCardContent, nextCardSequence, trashCardFile, writeCardFile } from '../card-board/store'
-import { nextOrderInColumn, orderAfter } from '../card-board/ordering'
+import { nextOrderInColumn, orderAfter, orderBefore } from '../card-board/ordering'
 import { buildForeshadowingBody, parseForeshadowingFile, replaceForeshadowingBodySections, serializeForeshadowingCard } from './parser'
 import {
   createForeshadowingId,
@@ -65,6 +65,8 @@ export type UpdateForeshadowingOptions = {
   abandonedReason?: string | null
   /** 移动到目标列某个卡片之后；null = 列末尾。 */
   afterId?: string | null
+  /** 移动到目标列某个卡片之前（看板列首落点）；null = 列首。与 afterId 二选一。 */
+  beforeId?: string | null
   now?: Date
   /** 上次读取的文件全文 hash；提供时做冲突检测。 */
   expectedContentHash?: string
@@ -182,6 +184,7 @@ export async function updateForeshadowingCard(
     || options.resolvedAt !== undefined
     || options.abandonedReason !== undefined
     || options.afterId !== undefined
+    || options.beforeId !== undefined
 
   if (!hasFieldUpdate) {
     throw new ForeshadowingError('至少提供 name、readerView、authorTruth、status、addRelatedChapters 等要更新的字段之一')
@@ -251,13 +254,19 @@ export async function updateForeshadowingCard(
 
   // 列内位置
   const statusChanged = status !== current.card.status
-  const positionChanged = statusChanged || options.afterId !== undefined
+  const positionChanged = statusChanged || options.afterId !== undefined || options.beforeId !== undefined
   const nextOrder = positionChanged
-    ? orderAfter(
-        allCards.filter((card) => card.id !== options.id),
-        status,
-        options.afterId ?? null,
-      )
+    ? (options.beforeId !== undefined
+        ? orderBefore(
+          allCards.filter((card) => card.id !== options.id),
+          status,
+          options.beforeId ?? null,
+        )
+        : orderAfter(
+          allCards.filter((card) => card.id !== options.id),
+          status,
+          options.afterId ?? null,
+        ))
     : current.card.order
 
   const card: Omit<ForeshadowingCard, 'sourcePath'> = {

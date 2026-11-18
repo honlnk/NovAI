@@ -51,7 +51,7 @@ export interface CardBoardConfig<
   readCard(projectId: string, id: string): Promise<TCard | null>
   /** 保存草稿；需要携带 card.contentHash 做外部修改校验的组合在这里完成 */
   saveCard(projectId: string, card: TCard, draft: TDraft): Promise<TCard>
-  moveCard(projectId: string, id: string, status: TStatus, afterId: string | null): Promise<TCard>
+  moveCard(projectId: string, id: string, status: TStatus, afterId: string | null, beforeId?: string | null): Promise<TCard>
   deleteCard(projectId: string, id: string): Promise<unknown>
   /** 新建面板提交：草稿到创建入参的组合在这里完成 */
   submitCreate(projectId: string, draft: TCreateDraft): Promise<TCard>
@@ -623,18 +623,24 @@ export function createCardBoardCore<
   }
 
   /**
-   * 状态切换 / 拖拽排序的统一入口（立即保存）。afterId 为目标位置前一卡片。
-   * 松手后先把卡片本地移到目标位置（不等写盘与目录重扫），成功后刷新看板以
-   * 文件系统为准；失败保留错误提示并刷新回真实状态。按 ID 同步当前详情
-   * （状态高亮 + 最新 contentHash），不动草稿；异步期间用户已切到其他
-   * 卡片时不回写旧详情。
+   * 状态切换 / 拖拽排序的统一入口（立即保存）。afterId 为目标位置前一卡片；
+   * 列首落点改传 beforeId（目标列首卡，null = 空列/列首）。松手后先把卡片
+   * 本地移到目标位置（不等写盘与目录重扫），成功后刷新看板以文件系统为准；
+   * 失败保留错误提示并刷新回真实状态。按 ID 同步当前详情（状态高亮 + 最新
+   * contentHash），不动草稿；异步期间用户已切到其他卡片时不回写旧详情。
    */
-  async function moveCard(projectId: string, id: string, status: TStatus, afterId: string | null) {
+  async function moveCard(
+    projectId: string,
+    id: string,
+    status: TStatus,
+    afterId: string | null,
+    beforeId?: string | null,
+  ) {
     const generation = beginProject(projectId)
     actionError.value = ''
     const previousBoard = board.value
     const nextBoard = previousBoard
-      ? moveCardInBoard(previousBoard, id, status, afterId)
+      ? moveCardInBoard(previousBoard, id, status, beforeId !== undefined ? null : afterId, beforeId)
       : null
     if (nextBoard) {
       board.value = nextBoard
@@ -653,7 +659,7 @@ export function createCardBoardCore<
     }
 
     try {
-      const updated = await config.moveCard(projectId, id, status, afterId)
+      const updated = await config.moveCard(projectId, id, status, afterId, beforeId)
       if (!isCurrentProject(projectId, generation)) return true
       if (activeCard.value?.id === id) {
         activeCard.value = updated

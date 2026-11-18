@@ -20,8 +20,10 @@ export function moveCardInBoard<
   /** 目标列；NoInfer 让 TStatus 只从看板类型推断，字面量状态不收窄列集合 */
   status: NoInfer<TStatus>,
   afterId: string | null,
+  /** 插到某卡片之前；提供时优先于 afterId（null = 列首）。看板拖拽的列首落点用 */
+  beforeId?: string | null,
 ): TBoard {
-  if (id === afterId) {
+  if (id === afterId || id === beforeId) {
     return board
   }
 
@@ -43,7 +45,18 @@ export function moveCardInBoard<
   columns[sourceStatus] = sourceCards.filter((item) => item.id !== id)
 
   const targetCards = [...columns[status]]
-  if (afterId === null) {
+  if (beforeId !== undefined) {
+    if (beforeId === null) {
+      targetCards.unshift({ ...card, status })
+    } else {
+      const anchorIndex = targetCards.findIndex((item) => item.id === beforeId)
+      if (anchorIndex === -1) {
+        // 锚点不在目标列（看板与请求瞬间不一致）：不动本地视图，等服务端结果
+        return board
+      }
+      targetCards.splice(anchorIndex, 0, { ...card, status })
+    }
+  } else if (afterId === null) {
     targetCards.push({ ...card, status })
   } else {
     const anchorIndex = targetCards.findIndex((item) => item.id === afterId)
@@ -56,6 +69,44 @@ export function moveCardInBoard<
   columns[status] = targetCards
 
   return { ...board, columns }
+}
+
+/* ---------- 拖拽落点（纯函数：中心线判定与插入位置 → 移动参数） ---------- */
+
+/**
+ * 以卡片垂直中心线为界算插入序号：指针在某卡中心上方 → 插它之前；中心及下方
+ * → 越过它。rects 为目标列中排除被拖卡片后的真实卡片几何（自上而下）。
+ */
+export function boardDropInsertionIndex(
+  rects: readonly { top: number; height: number }[],
+  pointerY: number,
+): number {
+  let index = 0
+  for (const rect of rects) {
+    if (pointerY < rect.top + rect.height / 2) {
+      break
+    }
+    index += 1
+  }
+  return index
+}
+
+/** 插入序号 → 移动参数：列首用 beforeId（空列/列尾用 afterId=null）。 */
+export function boardMovePositionForInsertion<TCard extends { id: string }>(
+  cards: readonly TCard[],
+  dragId: string,
+  insertionIndex: number,
+): { afterId?: string | null; beforeId?: string | null } {
+  const rest = cards.filter((card) => card.id !== dragId)
+  const index = Math.max(0, Math.min(insertionIndex, rest.length))
+
+  if (index >= rest.length) {
+    return { afterId: rest.length > 0 ? rest[rest.length - 1]?.id ?? null : null }
+  }
+  if (index === 0) {
+    return rest.length > 0 ? { beforeId: rest[0]?.id ?? null } : { afterId: null }
+  }
+  return { afterId: rest[index - 1]?.id ?? null }
 }
 
 /**

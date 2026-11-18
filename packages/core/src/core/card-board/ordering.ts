@@ -60,3 +60,32 @@ export function orderAfter<T extends { id: string; status: string; order: number
 
   return (target.order + next.order) / 2
 }
+
+/**
+ * 拖到同列某卡片之前应取的 order 值：取相邻两卡 order 的中点；无左侧邻居时
+ * - 步长（order 允许为负，排序仍稳定）。beforeId=null 表示插到列首（空列取 0）。
+ */
+export function orderBefore<T extends { id: string; status: string; order: number; createdAt: string }>(
+  cards: readonly T[],
+  status: T['status'],
+  beforeId: string | null,
+  step = 100,
+): number {
+  const column = sortBoardCards(cards.filter((card) => card.status === status))
+
+  const index = beforeId === null ? 0 : column.findIndex((card) => card.id === beforeId)
+  const target = column[index]
+
+  if (!target) {
+    // 空列取 0；锚点不在目标列按列末尾处理（与 orderAfter 同口径）
+    return nextOrderInColumn(column, status, step)
+  }
+
+  const previous = column[index - 1]
+
+  if (!previous) {
+    return target.order - step
+  }
+
+  return (previous.order + target.order) / 2
+}

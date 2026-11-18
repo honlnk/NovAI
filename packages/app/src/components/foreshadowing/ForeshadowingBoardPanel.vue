@@ -37,7 +37,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   openCreate: []
   openCard: [id: string]
-  moveCard: [id: string, status: ForeshadowingStatusView, afterId: string | null]
+  moveCard: [id: string, status: ForeshadowingStatusView, afterId: string | null, beforeId?: string | null]
   retryLoad: []
   toggleColumnMode: []
   toggleSidebar: []
@@ -63,10 +63,10 @@ function isDue(card: ForeshadowingCardSummaryView): boolean {
 }
 
 /** 看板落点 → 目标状态：默认模式同列重排保持原状态（hinted/developed 不互改） */
-function onBoardMoveCard(id: string, columnKey: string, afterId: string | null) {
+function onBoardMoveCard(id: string, columnKey: string, afterId: string | null, beforeId?: string | null) {
   const status = resolveForeshadowingMoveStatus(props.board, id, columnKey, props.columnMode)
   if (status) {
-    emit('moveCard', id, status, afterId)
+    emit('moveCard', id, status, afterId, beforeId)
   }
 }
 
