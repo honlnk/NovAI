@@ -20,7 +20,6 @@ function baseCard(overrides: Partial<Omit<RhythmCard, 'sourcePath'>> = {}): Omit
     createdAt: '2026-11-01T00:00:00.000Z',
     updatedAt: '2026-11-02T00:00:00.000Z',
     chapterRef: '第二卷/第083章',
-    volume: '第二卷',
     plannedConflict: 3,
     plannedMood: '温馨',
     plannedHook: '无',
@@ -55,7 +54,7 @@ describe('parseRhythmFile', () => {
     expect(parsed.authorNoteBody).toBe('自由文本备注')
   })
 
-  it('解析计划文档同款 frontmatter（含 # 分组注释行）', () => {
+  it('解析计划文档同款 frontmatter（含 # 分组注释行；旧文件的 volume 键被忽略）', () => {
     const content = [
       '---',
       'id: R-083',
@@ -94,6 +93,9 @@ describe('parseRhythmFile', () => {
     expect(parsed.card.actualConflict).toBeNull()
     expect(parsed.card.deviationFlag).toBe(false)
     expect(parsed.intentBody).toBe('喘口气。')
+    // 卷机制已移除：旧文件里的 volume 键按未知键忽略，重序列化时自然丢弃
+    expect('volume' in parsed.card).toBe(false)
+    expect(serializeRhythmCard(parsed.card)).not.toContain('volume:')
   })
 
   it('actual_* 缺省 null、deviation_flag 缺省 false、planned_characters 缺省空数组', () => {
@@ -116,7 +118,6 @@ describe('parseRhythmFile', () => {
 
     expect(parsed.card.status).toBe('planned')
     expect(parsed.card.chapterRef).toBe('')
-    expect(parsed.card.volume).toBe('')
     expect(parsed.card.plannedCharacters).toEqual([])
     expect(parsed.card.plannedNote).toBe('')
     expect(parsed.card.actualConflict).toBeNull()
@@ -129,10 +130,9 @@ describe('parseRhythmFile', () => {
     expect(parsed.card.order).toBe(0)
   })
 
-  it('volume 缺失时从 chapter_ref 首个 / 前段推导', () => {
-    const card = baseCard({ volume: '' })
-    const parsed = parseRhythmFile('rhythm/x.md', serializeRhythmCard(card))
-    expect(parsed.card.volume).toBe('第二卷')
+  it('chapter_ref 支持作者自由标注的「卷/章」写法（不做卷级机制，仅作字符串保留）', () => {
+    const parsed = parseRhythmFile('rhythm/x.md', serializeRhythmCard(baseCard({ chapterRef: '第一卷/第001章' })))
+    expect(parsed.card.chapterRef).toBe('第一卷/第001章')
   })
 
   it('非法情绪基调抛错并指明字段（扫描层收进 issue）', () => {

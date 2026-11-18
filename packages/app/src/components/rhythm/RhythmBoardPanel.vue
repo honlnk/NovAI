@@ -6,7 +6,6 @@ import BoardPanel from '../card-board/BoardPanel.vue'
 import {
   conflictIntensityClass,
   isRhythmReorderOnly,
-  rhythmChapterNumber,
   rhythmDisplayColumns,
 } from '../../constants/rhythm'
 
@@ -15,7 +14,6 @@ import {
  * 偏差）；状态不由 UI 手改——拖拽只放行同列重排（偏差列不可拖出，规划中/已写
  * 之间也不可互拖），跨列流转全由 actual_* 回写的偏差判定驱动。
  *
- * 卷级筛选：顶栏下拉，默认最新卷（有卷可筛时）；「全部卷」显示所有卡。
  * 卡片展示：章节名 + 计划冲突强度（1~3 绿/4~6 黄/7~10 红）+ 情绪/钩子标签；
  * 已回写时给计划↔实际对比（一致绿勾、偏差红警）。
  */
@@ -27,8 +25,6 @@ const props = defineProps<{
   isLoading: boolean
   errorMessage: string
   selectedCardId: string | null
-  /** 卷筛选当前值（空串 = 全部卷） */
-  volumeFilter: string
   isSidebarOpen: boolean
   isContentPanelOpen: boolean
 }>()
@@ -38,13 +34,12 @@ const emit = defineEmits<{
   openCard: [id: string]
   moveCard: [id: string, status: RhythmStatusView, afterId: string | null]
   retryLoad: []
-  changeVolumeFilter: [volume: string]
   toggleSidebar: []
   toggleMobileSidebar: []
   toggleContentPanel: []
 }>()
 
-/** 全部卡（卷选项与计数的输入） */
+/** 全部卡（计数的输入） */
 const allCards = computed(() => {
   if (!props.board) {
     return []
@@ -52,29 +47,9 @@ const allCards = computed(() => {
   return (Object.values(props.board.columns) as RhythmCardSummaryView[][]).flat()
 })
 
-/** 可筛卷清单：按各卷最大章号降序（最新卷在前；无卷的卡归「未分卷」置底） */
-const volumeOptions = computed(() => {
-  const volumes = new Map<string, number>()
-  for (const card of allCards.value) {
-    const volume = card.volume || '（未分卷）'
-    const chapter = rhythmChapterNumber(card.chapterRef) ?? 0
-    volumes.set(volume, Math.max(volumes.get(volume) ?? 0, chapter))
-  }
-  return [...volumes.entries()].sort((a, b) => b[1] - a[1]).map(([volume]) => volume)
-})
-
 const totalCards = computed(() => allCards.value.length)
 
-const columns = computed(() => {
-  const display = rhythmDisplayColumns(props.board)
-  if (!props.volumeFilter) {
-    return display
-  }
-  return display.map((column) => ({
-    ...column,
-    cards: column.cards.filter((card) => (card.volume || '（未分卷）') === props.volumeFilter),
-  }))
-})
+const columns = computed(() => rhythmDisplayColumns(props.board))
 
 /** 落点放行：同列重排才上抛（跨列拖拽静默忽略——状态只由回写驱动） */
 function onBoardMoveCard(id: string, columnKey: string, afterId: string | null) {
@@ -117,18 +92,13 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
     @toggle-mobile-sidebar="emit('toggleMobileSidebar')"
     @toggle-content-panel="emit('toggleContentPanel')"
   >
-    <template #header-extra>
-      <select
-        v-if="volumeOptions.length > 1"
-        class="ml-1 shrink-0 rounded-md border border-gray-200 bg-white px-1.5 py-1 text-xs text-gray-600"
-        aria-label="按卷筛选"
-        data-testid="rhythm-volume-filter"
-        :value="volumeFilter"
-        @change="emit('changeVolumeFilter', ($event.target as HTMLSelectElement).value)"
+    <template #board-hint>
+      <div
+        class="flex shrink-0 items-center gap-1.5 border-b border-gray-100 bg-gray-50/60 px-4 py-1.5 text-[11px] leading-relaxed text-gray-500"
+        data-testid="rhythm-board-hint"
       >
-        <option value="">全部卷</option>
-        <option v-for="volume in volumeOptions" :key="volume" :value="volume">{{ volume }}</option>
-      </select>
+        三列状态不是手动归档：写完章节后回写实际值，系统自动判定（与计划一致 → 已写，走样 → 偏差）。跨列拖拽不可用，拖动仅调整列内顺序。
+      </div>
     </template>
 
     <template #card-content="{ card }">

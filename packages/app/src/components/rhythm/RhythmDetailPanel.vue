@@ -125,7 +125,7 @@ function onCharactersInput(event: Event) {
         >
           {{ RHYTHM_COLUMN_LABELS[activeCard.status] }}
         </span>
-        <span class="text-[11px] text-gray-400">{{ activeCard.chapterRef }}{{ activeCard.volume ? ` · ${activeCard.volume}` : '' }}</span>
+        <span class="text-[11px] text-gray-400">{{ activeCard.chapterRef }}</span>
       </div>
 
       <!-- 计划值编辑区（§七：滑块 + 下拉 + 角色输入） -->

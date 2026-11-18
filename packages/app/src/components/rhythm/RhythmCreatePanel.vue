@@ -55,7 +55,7 @@ function onTextField(field: 'name' | 'chapterRef' | 'plannedCharacters' | 'inten
         <input
           type="text"
           class="col-span-2 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          placeholder="关联章节（必填，如：第二卷/第083章）"
+          placeholder="关联章节（必填，如：第083章）"
           data-testid="rhythm-new-chapter-ref"
           :value="newChapterRef"
           @input="onTextField('chapterRef', $event)"

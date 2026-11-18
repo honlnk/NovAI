@@ -196,11 +196,10 @@ function chapterRefInRange(chapterRef: string, from: number | undefined, to: num
 
 export const rhythmListTool: ToolDefinition<'RhythmList', RhythmListInput, RhythmListOutput> = {
   name: 'RhythmList',
-  description: '查询节奏卡摘要（卡名、状态、关联章节、计划冲突强度/情绪/钩子/爽点、偏差标记、节奏意图首行摘要），可按状态、卷、章号范围筛选。',
+  description: '查询节奏卡摘要（卡名、状态、关联章节、计划冲突强度/情绪/钩子/爽点、偏差标记、节奏意图首行摘要），可按状态、章号范围筛选。',
   validateInput(input) {
     const value = asRecord(input)
     const status = readRhythmStatus(value.status, 'RhythmList.status')
-    const volume = value.volume === undefined ? undefined : readString(value.volume, 'RhythmList.volume').trim()
     const chapterFrom = readChapterRange(value.chapterFrom, 'RhythmList.chapterFrom')
     const chapterTo = readChapterRange(value.chapterTo, 'RhythmList.chapterTo')
     if (chapterFrom !== undefined && chapterTo !== undefined && chapterFrom > chapterTo) {
@@ -208,7 +207,6 @@ export const rhythmListTool: ToolDefinition<'RhythmList', RhythmListInput, Rhyth
     }
     return {
       ...(status !== undefined ? { status } : {}),
-      ...(volume ? { volume } : {}),
       ...(chapterFrom !== undefined ? { chapterFrom } : {}),
       ...(chapterTo !== undefined ? { chapterTo } : {}),
     }
@@ -219,9 +217,6 @@ export const rhythmListTool: ToolDefinition<'RhythmList', RhythmListInput, Rhyth
     if (input.status) {
       cards = cards.filter((card) => card.status === input.status)
     }
-    if (input.volume) {
-      cards = cards.filter((card) => card.volume === input.volume)
-    }
     cards = cards.filter((card) => chapterRefInRange(card.chapterRef, input.chapterFrom, input.chapterTo))
 
     return {
@@ -230,7 +225,6 @@ export const rhythmListTool: ToolDefinition<'RhythmList', RhythmListInput, Rhyth
         name: card.name,
         status: card.status,
         chapterRef: card.chapterRef,
-        volume: card.volume,
         plannedConflict: card.plannedConflict,
         plannedMood: card.plannedMood,
         plannedHook: card.plannedHook,
@@ -245,7 +239,6 @@ export const rhythmListTool: ToolDefinition<'RhythmList', RhythmListInput, Rhyth
   summarizeInput(input) {
     const parts: string[] = []
     if (input.status) parts.push(`状态 ${input.status}`)
-    if (input.volume) parts.push(`卷 ${input.volume}`)
     if (input.chapterFrom !== undefined || input.chapterTo !== undefined) {
       parts.push(`章号 ${input.chapterFrom ?? '…'}~${input.chapterTo ?? '…'}`)
     }
@@ -278,7 +271,6 @@ export const rhythmReadTool: ToolDefinition<'RhythmRead', RhythmReadInput, Rhyth
       name: result.card.name,
       status: result.card.status,
       chapterRef: result.card.chapterRef,
-      volume: result.card.volume,
       plannedConflict: result.card.plannedConflict,
       plannedMood: result.card.plannedMood,
       plannedHook: result.card.plannedHook,
@@ -313,13 +305,13 @@ export const rhythmReadTool: ToolDefinition<'RhythmRead', RhythmReadInput, Rhyth
 
 export const rhythmCreateTool: ToolDefinition<'RhythmCreate', RhythmCreateInput, RhythmCreateOutput> = {
   name: 'RhythmCreate',
-  description: '规划一张节奏卡（一章一卡）。必须提供：关联章节（卷/章）、计划冲突强度（1~10）、计划情绪基调、计划章末钩子、计划爽点类型；节奏意图正文建议同写（本章要什么温度、不要什么）。文件名由应用生成。',
+  description: '规划一张节奏卡（一章一卡）。必须提供：关联章节、计划冲突强度（1~10）、计划情绪基调、计划章末钩子、计划爽点类型；节奏意图正文建议同写（本章要什么温度、不要什么）。文件名由应用生成。',
   validateInput(input) {
     const value = asRecord(input)
 
     const chapterRef = readString(value.chapterRef, 'RhythmCreate.chapterRef').trim()
     if (!chapterRef) {
-      throw new Error('关联章节不能为空：写明这张卡对应哪一章（如 第二卷/第083章）')
+      throw new Error('关联章节不能为空：写明这张卡对应哪一章（如 第083章）')
     }
 
     const plannedConflict = readConflictIntensity(value.plannedConflict, 'RhythmCreate.plannedConflict')
@@ -331,7 +323,6 @@ export const rhythmCreateTool: ToolDefinition<'RhythmCreate', RhythmCreateInput,
     if (name !== undefined && !name) {
       throw new Error('节奏卡名不能为空（不传则按章节名自动生成）')
     }
-    const volume = value.volume === undefined ? undefined : readString(value.volume, 'RhythmCreate.volume').trim()
     const plannedCharacters = readStringArray(value.plannedCharacters, 'RhythmCreate.plannedCharacters')
     const plannedNote = value.plannedNote === undefined ? undefined : readString(value.plannedNote, 'RhythmCreate.plannedNote')
     const intentBody = value.intentBody === undefined ? undefined : readString(value.intentBody, 'RhythmCreate.intentBody')
@@ -345,7 +336,6 @@ export const rhythmCreateTool: ToolDefinition<'RhythmCreate', RhythmCreateInput,
       plannedMood,
       plannedHook,
       plannedPayoff,
-      ...(volume ? { volume } : {}),
       ...(plannedCharacters !== undefined ? { plannedCharacters } : {}),
       ...(plannedNote !== undefined ? { plannedNote } : {}),
       ...(intentBody !== undefined ? { intentBody } : {}),
@@ -354,7 +344,7 @@ export const rhythmCreateTool: ToolDefinition<'RhythmCreate', RhythmCreateInput,
     }
   },
   async run(input, runtime) {
-    // 卡名缺省按章节名生成（如 第二卷/第083章 → 第083章节奏）
+    // 卡名缺省按章节名生成（chapterRef 取「/」末段——兼容作者自由标注的「卷/章」写法，不做卷级机制）
     const chapterName = input.chapterRef.split('/').pop() ?? input.chapterRef
     const card = await createRhythmCard(runtime.project, {
       ...input,
@@ -426,8 +416,6 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
     if (chapterRef !== undefined && !chapterRef) {
       throw new Error('关联章节不能为空')
     }
-    const volume = value.volume === undefined ? undefined : readString(value.volume, 'RhythmUpdate.volume').trim()
-
     const plannedConflict = value.plannedConflict === undefined
       ? undefined
       : readConflictIntensity(value.plannedConflict, 'RhythmUpdate.plannedConflict')
@@ -460,7 +448,7 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
     }
 
     const hasUpdate = [
-      name, chapterRef, volume, plannedConflict, plannedMood, plannedHook, plannedPayoff,
+      name, chapterRef, plannedConflict, plannedMood, plannedHook, plannedPayoff,
       plannedCharacters, plannedNote, intentBody, linkBody, authorNoteBody,
       actualConflict, actualMood, actualHook, actualPayoff, actualNote,
     ].some((field) => field !== undefined) || afterId !== null
@@ -472,7 +460,6 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
       id,
       ...(name !== undefined ? { name } : {}),
       ...(chapterRef !== undefined ? { chapterRef } : {}),
-      ...(volume !== undefined ? { volume } : {}),
       ...(plannedConflict !== undefined ? { plannedConflict } : {}),
       ...(plannedMood !== undefined ? { plannedMood } : {}),
       ...(plannedHook !== undefined ? { plannedHook } : {}),
@@ -565,7 +552,7 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
     if (input.actualPayoff !== undefined) actualParts.push(`爽点 ${input.actualPayoff ?? '清除'}`)
     if (input.actualNote !== undefined) actualParts.push(`自评 ${input.actualNote ? '（已填）' : '清除'}`)
     if (actualParts.length) metaParts.push(`回写实际值：${actualParts.join(' · ')}（偏差与状态由系统自动判定）`)
-    const extra = [input.volume, input.plannedCharacters, input.plannedNote].some((field) => field !== undefined)
+    const extra = [input.plannedCharacters, input.plannedNote].some((field) => field !== undefined)
     if (extra) metaParts.push('（其余元数据字段）')
 
     return {
@@ -647,7 +634,6 @@ function toCheckCardBase(card: RhythmCardView) {
     name: card.name,
     status: card.status,
     chapterRef: card.chapterRef,
-    volume: card.volume,
     plannedConflict: card.plannedConflict,
     plannedMood: card.plannedMood,
     plannedHook: card.plannedHook,
@@ -756,7 +742,6 @@ export const rhythmSyncTool: ToolDefinition<'RhythmSync', RhythmSyncInput, Rhyth
       name: result.card.name,
       status: result.card.status,
       chapterRef: result.card.chapterRef,
-      volume: result.card.volume,
       plannedConflict: result.card.plannedConflict,
       plannedMood: result.card.plannedMood,
       plannedHook: result.card.plannedHook,

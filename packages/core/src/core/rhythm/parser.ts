@@ -77,7 +77,6 @@ export function parseRhythmFile(sourcePath: string, content: string): ParsedRhyt
   const rawStatus = (record.status ?? '').trim()
   const status = isRhythmStatus(rawStatus) ? rawStatus : 'planned'
   const chapterRef = (record.chapter_ref ?? '').trim()
-  const volume = (record.volume ?? '').trim() || chapterRef.split('/')[0]! || ''
   const plannedConflict = parseRequiredConflictIntensity(record.planned_conflict, 'planned_conflict')
   const plannedMood = parseRequiredEnum(record.planned_mood, RHYTHM_MOODS, 'planned_mood')
   const plannedHook = parseRequiredEnum(record.planned_hook, RHYTHM_HOOKS, 'planned_hook')
@@ -93,7 +92,6 @@ export function parseRhythmFile(sourcePath: string, content: string): ParsedRhyt
       createdAt: normalizeTime(record.created_at),
       updatedAt: normalizeTime(record.updated_at),
       chapterRef,
-      volume,
       plannedConflict,
       plannedMood,
       plannedHook,
@@ -128,7 +126,6 @@ export function serializeRhythmCard(card: Omit<RhythmCard, 'sourcePath'>): strin
     ['name', card.name],
     ['status', card.status],
     ['chapter_ref', card.chapterRef],
-    ['volume', card.volume],
     ['planned_conflict', String(card.plannedConflict)],
     ['planned_mood', card.plannedMood],
     ['planned_hook', card.plannedHook],

@@ -18,7 +18,6 @@ function summary(partial: Partial<RhythmCardSummaryView>): RhythmCardSummaryView
     createdAt: '',
     updatedAt: '',
     chapterRef: '第二卷/第083章',
-    volume: '第二卷',
     plannedConflict: 3,
     plannedMood: '温馨',
     plannedHook: '无',

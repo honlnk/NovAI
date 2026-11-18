@@ -157,7 +157,6 @@ describe('RhythmRead / RhythmList', () => {
 
     expect('notFound' in output && output.notFound).toBeFalsy()
     if (!('notFound' in output)) {
-      expect(output.volume).toBe('第二卷')
       expect(output.plannedConflict).toBe(3)
       expect(output.intentBody).toContain('喘息章')
       expect(output.contentHash).toBeTruthy()
@@ -168,7 +167,7 @@ describe('RhythmRead / RhythmList', () => {
     expect('notFound' in missing && missing.notFound).toBe(true)
   })
 
-  it('List 支持状态、卷与章号范围筛选', async () => {
+  it('List 支持状态与章号范围筛选', async () => {
     await createSample() // R-001 第二卷/第083章 planned
     await rhythmCreateTool.run(rhythmCreateTool.validateInput({
       chapterRef: '第二卷/第090章',
@@ -182,9 +181,6 @@ describe('RhythmRead / RhythmList', () => {
 
     const written = await rhythmListTool.run(rhythmListTool.validateInput({ status: 'written' }), runtime())
     expect(written.rhythm.map((card) => card.id)).toEqual(['R-001'])
-
-    const volume = await rhythmListTool.run(rhythmListTool.validateInput({ volume: '第二卷' }), runtime())
-    expect(volume.totalCount).toBe(2)
 
     const range = await rhythmListTool.run(rhythmListTool.validateInput({ chapterFrom: 85, chapterTo: 95 }), runtime())
     expect(range.rhythm.map((card) => card.id)).toEqual(['R-002'])

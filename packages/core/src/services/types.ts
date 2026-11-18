@@ -354,10 +354,8 @@ export type RhythmCardSummaryView = {
   order: number
   createdAt: string
   updatedAt: string
-  /** 关联章节（完整「卷/章」引用）。 */
+  /** 关联章节（如 第083章）。 */
   chapterRef: string
-  /** 所属卷（chapterRef 首段；无斜杠时空串）。 */
-  volume: string
   plannedConflict: number
   plannedMood: RhythmMood
   plannedHook: RhythmHook

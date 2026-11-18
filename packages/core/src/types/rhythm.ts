@@ -119,10 +119,8 @@ export const RHYTHM_COLUMN_LABELS: Record<RhythmColumn, string> = {
 export type RhythmCard = CardBoardCard<RhythmStatus> & {
   /** 节奏卡名（作者可改；名称变化时文件名同步）。 */
   name: string
-  /** 关联章节（完整路径「卷/章」，如 第二卷/第083章）。 */
+  /** 关联章节（如 第083章；作者可用「卷/章」写法自由标注，不做卷级机制）。 */
   chapterRef: string
-  /** 所属卷（「卷/章」的卷段）。 */
-  volume: string
   /** 计划冲突强度（1~10 整数）。 */
   plannedConflict: number
   /** 计划情绪基调。 */

@@ -46,8 +46,6 @@ export type CreateRhythmOptions = {
   plannedHook: RhythmHook
   /** 计划爽点类型。 */
   plannedPayoff: RhythmPayoff
-  /** 所属卷；缺省从 chapterRef 取首个 '/' 前段。 */
-  volume?: string
   /** 计划出场主要角色；缺省空数组。 */
   plannedCharacters?: readonly string[]
   /** 自然语言补充（如「大高潮后的喘息章」）；缺省空串。 */
@@ -65,7 +63,6 @@ export type UpdateRhythmOptions = {
   id: string
   name?: string
   chapterRef?: string
-  volume?: string
   /** 计划冲突强度（1~10 整数）。 */
   plannedConflict?: number
   plannedMood?: RhythmMood
@@ -129,7 +126,6 @@ export async function createRhythmCard(
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     chapterRef,
-    volume: options.volume?.trim() || chapterRef.split('/')[0]!,
     plannedConflict,
     plannedMood: options.plannedMood,
     plannedHook: options.plannedHook,
@@ -208,7 +204,6 @@ export async function updateRhythmCard(
   const hasFieldUpdate = hasBodyUpdate
     || options.name !== undefined
     || options.chapterRef !== undefined
-    || options.volume !== undefined
     || options.plannedConflict !== undefined
     || options.plannedMood !== undefined
     || options.plannedHook !== undefined
@@ -246,11 +241,6 @@ export async function updateRhythmCard(
       throw new RhythmError('关联章节不能为空')
     }
   }
-
-  // 所属卷：显式传入优先（留空回退按新章节推导）
-  const volume = options.volume !== undefined
-    ? (options.volume.trim() || chapterRef.split('/')[0]!)
-    : current.card.volume
 
   // 计划值
   const plannedConflict = options.plannedConflict !== undefined
@@ -343,7 +333,6 @@ export async function updateRhythmCard(
     createdAt: current.card.createdAt,
     updatedAt: now,
     chapterRef,
-    volume,
     plannedConflict,
     plannedMood,
     plannedHook,

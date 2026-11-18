@@ -681,7 +681,6 @@ export type ForeshadowingSyncOutput = {
 
 export type RhythmListInput = {
   status?: RhythmStatus
-  volume?: string
   /** 章号范围筛选（含端点）：按 chapter_ref 里的「第N章」数值比较。 */
   chapterFrom?: number
   chapterTo?: number
@@ -693,7 +692,6 @@ export type RhythmListOutput = {
     name: string
     status: RhythmStatus
     chapterRef: string
-    volume: string
     plannedConflict: number
     plannedMood: RhythmMood
     plannedHook: RhythmHook
@@ -717,7 +715,6 @@ export type RhythmReadOutput =
       name: string
       status: RhythmStatus
       chapterRef: string
-      volume: string
       plannedConflict: number
       plannedMood: RhythmMood
       plannedHook: RhythmHook
@@ -749,7 +746,6 @@ export type RhythmCreateInput = {
   plannedMood: RhythmMood
   plannedHook: RhythmHook
   plannedPayoff: RhythmPayoff
-  volume?: string
   plannedCharacters?: string[]
   plannedNote?: string
   intentBody?: string
@@ -772,7 +768,6 @@ export type RhythmUpdateInput = {
   id: string
   name?: string
   chapterRef?: string
-  volume?: string
   plannedConflict?: number
   plannedMood?: RhythmMood
   plannedHook?: RhythmHook
@@ -825,7 +820,6 @@ type RhythmCheckCardBase = {
   name: string
   status: RhythmStatus
   chapterRef: string
-  volume: string
   plannedConflict: number
   plannedMood: RhythmMood
   plannedHook: RhythmHook
@@ -846,7 +840,7 @@ export type RhythmCheckOutput = {
   chapter: number
   /** 本章节奏卡（一章一卡；无卡为 null，guidance 会提示）。 */
   planned: (RhythmCheckCardBase & { intentBody: string }) | null
-  /** 章号小于本章的最近一张卡（跨卷取章号最近者）。 */
+  /** 章号小于本章的最近一张卡。 */
   previous: RhythmCheckCardBase | null
   /** 章号大于本章的最近一张卡。 */
   next: RhythmCheckCardBase | null
@@ -870,7 +864,6 @@ export type RhythmSyncOutput =
       name: string
       status: RhythmStatus
       chapterRef: string
-      volume: string
       plannedConflict: number
       plannedMood: RhythmMood
       plannedHook: RhythmHook

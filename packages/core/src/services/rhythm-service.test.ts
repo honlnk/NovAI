@@ -221,7 +221,6 @@ describe('getRhythmBoard', () => {
     expect(board.columns.deviated).toHaveLength(1)
     const summary = board.columns.deviated[0]!
     expect(summary.id).toBe(card.id)
-    expect(summary.volume).toBe('第二卷')
     expect(summary.plannedConflict).toBe(3)
     expect(summary.actualConflict).toBe(7)
     expect(summary.deviationFlag).toBe(true)
@@ -230,12 +229,11 @@ describe('getRhythmBoard', () => {
 })
 
 describe('createRhythm / readRhythm / listRhythmCards', () => {
-  it('R-001 起步、文件落在 rhythm/、view 带正文三节与 contentHash；卷从 chapterRef 推导', async () => {
+  it('R-001 起步、文件落在 rhythm/、view 带正文三节与 contentHash', async () => {
     const card = await createRhythm(PROJECT_A, sampleCreateInput())
 
     expect(card.id).toBe('R-001')
     expect(card.sourcePath.startsWith('rhythm/R-001-')).toBe(true)
-    expect(card.volume).toBe('第二卷')
     expect(card.intentBody).toContain('喘息章')
     expect(card.contentHash).toBeTruthy()
 

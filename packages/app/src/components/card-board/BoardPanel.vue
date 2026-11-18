@@ -182,6 +182,10 @@ function onCardDrop(column: { key: string; cards: readonly TCard[] }, afterCard:
       </button>
     </div>
 
+    <!-- 领域提示条（可选插槽，领域看板提供时才渲染；计划/伏笔不传则几何不变）：
+         如节奏看板用它说明状态机与拖拽规则，避免「不能跨列拖拽」被误认为 bug -->
+    <slot v-if="$slots['board-hint']" name="board-hint" />
+
     <!-- 首载骨架屏：默认列占位，读完后一次性换成真实看板 -->
     <div
       v-if="isInitialLoading()"

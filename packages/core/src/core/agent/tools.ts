@@ -1153,7 +1153,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'RhythmList',
-          description: '查询节奏卡摘要（关联章节、计划冲突强度/情绪基调/章末钩子/爽点类型、偏差标记、节奏意图首行），可按状态（planned=规划中/written=已写/deviated=偏差）、卷、章号范围筛选。了解全本节奏规划先查这里。',
+          description: '查询节奏卡摘要（关联章节、计划冲突强度/情绪基调/章末钩子/爽点类型、偏差标记、节奏意图首行），可按状态（planned=规划中/written=已写/deviated=偏差）与章号范围筛选。了解全本节奏规划先查这里。',
           parameters: {
             type: 'object',
             properties: {
@@ -1161,10 +1161,6 @@ export function createAgentTools(): AgentRunnableToolMap {
                 type: 'string',
                 enum: ['planned', 'written', 'deviated'],
                 description: '可选，按状态筛选：planned=规划中、written=已写、deviated=偏差。',
-              },
-              volume: {
-                type: 'string',
-                description: '可选，按卷筛选（如 第一卷）。',
               },
               chapterFrom: {
                 type: 'integer',
@@ -1188,7 +1184,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         }
         const lines = output.rhythm.map((item, index) => [
           `#${index + 1} ${item.name || '（未命名）'}（${item.id}）`,
-          `章节: ${item.chapterRef || '未知'}（${item.volume}）`,
+          `章节: ${item.chapterRef || '未知'}`,
           `计划: 冲突 ${item.plannedConflict} · ${item.plannedMood} · 钩子 ${item.plannedHook} · 爽点 ${item.plannedPayoff}`,
           `status: ${item.status}${item.deviationFlag ? '（有偏差）' : ''}`,
           `summary: ${item.summary || '无'}`,
@@ -1234,7 +1230,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         return [
           `「${output.name || '（未命名）'}」（${RHYTHM_COLUMN_LABELS[output.status]}${output.deviationFlag ? '·有偏差' : ''}）`,
           `id: ${output.id}`,
-          `章节: ${output.chapterRef || '未知'}（${output.volume}）`,
+          `章节: ${output.chapterRef || '未知'}`,
           `计划: 冲突 ${output.plannedConflict} · ${output.plannedMood} · 钩子 ${output.plannedHook} · 爽点 ${output.plannedPayoff}`,
           `出场: ${output.plannedCharacters.join('、') || '未登记'}${output.plannedNote ? `；备注：${output.plannedNote}` : ''}`,
           `实际: ${actual}`,
@@ -1260,7 +1256,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'RhythmCreate',
-          description: '规划一张节奏卡（一章一卡）。必须提供关联章节（卷/章）与计划值：冲突强度 1~10、情绪基调、章末钩子、爽点类型；节奏意图正文建议同写（本章要什么温度、不要什么）。作者排布后续章节节奏或写作前规划时使用。',
+          description: '规划一张节奏卡（一章一卡）。必须提供关联章节与计划值：冲突强度 1~10、情绪基调、章末钩子、爽点类型；节奏意图正文建议同写（本章要什么温度、不要什么）。作者排布后续章节节奏或写作前规划时使用。',
           parameters: {
             type: 'object',
             properties: {
@@ -1270,7 +1266,7 @@ export function createAgentTools(): AgentRunnableToolMap {
               },
               chapterRef: {
                 type: 'string',
-                description: '关联章节，完整路径（卷/章），如 第二卷/第083章。',
+                description: '关联章节（如 第083章；也可用「卷/章」写法自由标注，不做卷级机制）。',
               },
               plannedConflict: {
                 type: 'integer',
@@ -1292,10 +1288,6 @@ export function createAgentTools(): AgentRunnableToolMap {
                 type: 'string',
                 enum: [...RHYTHM_PAYOFFS],
                 description: '计划爽点类型；「无」表示本章无明确爽点。',
-              },
-              volume: {
-                type: 'string',
-                description: '可选，所属卷；不传按 chapterRef 卷段推导。',
               },
               plannedCharacters: {
                 type: 'array',
@@ -1352,10 +1344,6 @@ export function createAgentTools(): AgentRunnableToolMap {
               chapterRef: {
                 type: 'string',
                 description: '可选，修正关联章节。',
-              },
-              volume: {
-                type: 'string',
-                description: '可选，修正所属卷；空串按新 chapterRef 推导。',
               },
               plannedConflict: {
                 type: 'integer',

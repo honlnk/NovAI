@@ -82,8 +82,6 @@ const isPlanPanelOpen = ref(false)
 const isForeshadowingPanelOpen = ref(false)
 /** 节奏面板（详情/新建）展开偏好（跨分类保留；与伏笔面板同构） */
 const isRhythmPanelOpen = ref(false)
-/** 节奏看板卷筛选（'' = 全部卷；默认最新卷在数据到达后回填） */
-const rhythmVolumeFilter = ref('')
 /** 写入确认面板开关（§8）：仅在安全时机自动打开，用户可随时离开（关闭面板不取消请求） */
 const isConfirmPanelOpen = ref(false)
 const showGuide = ref(false)
@@ -282,7 +280,6 @@ onMounted(async () => {
     && (activeCategory.value === 'rhythm' || activeCategory.value === 'chapter')
   ) {
     await rhythmStore.loadBoard(projectId.value)
-    ensureRhythmVolumeDefault()
   }
 
   // 刷新后恢复持久化草稿（数据安全计划 §3-2）：IndexedDB 备份回填内存表，绝不写
@@ -765,7 +762,6 @@ watch(() => projectStore.currentProject?.id, () => {
   isForeshadowingPanelOpen.value = false
   rhythmStore.reset()
   isRhythmPanelOpen.value = false
-  rhythmVolumeFilter.value = ''
 })
 
 /** 右侧面板当前应展示的内容与可见性（文件 / 计划详情 / 新建互斥，规则见 workspace-panel） */
@@ -1200,7 +1196,7 @@ async function handleToggleForeshadowingColumnMode() {
   }
 }
 
-// ===== 节奏卡看板（创作心智模块阶段四：三列状态机 + 卷筛选 + 列内重排） =====
+// ===== 节奏卡看板（创作心智模块阶段四：三列状态机 + 列内重排） =====
 
 /** 节奏侧栏摘要（按更新时间倒序取最近） */
 const rhythmRecentCards = computed(() => {
@@ -1211,33 +1207,6 @@ const rhythmRecentCards = computed(() => {
     .flat()]
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
 })
-
-/** 卷筛选默认最新卷：数据到达且未选择过时回填（各卷最大章号最大者；无卷不筛） */
-function ensureRhythmVolumeDefault() {
-  if (rhythmVolumeFilter.value !== '' || !rhythmStore.board) {
-    return
-  }
-  const cards = rhythmRecentCards.value
-  if (cards.length === 0) {
-    return
-  }
-  const bestChapterByVolume = new Map<string, number>()
-  for (const card of cards) {
-    const volume = card.volume || ''
-    if (!volume) {
-      continue
-    }
-    const chapter = Number(/第(\d+)章/.exec(card.chapterRef)?.[1] ?? 0)
-    bestChapterByVolume.set(volume, Math.max(bestChapterByVolume.get(volume) ?? 0, chapter))
-  }
-  if (bestChapterByVolume.size > 0) {
-    const latest = [...bestChapterByVolume.entries()].sort((a, b) => b[1] - a[1])[0]![0]
-    rhythmVolumeFilter.value = latest
-  }
-}
-
-/** 看板数据到达后回填默认卷（首载与刷新都走这里） */
-watch(() => rhythmStore.board, ensureRhythmVolumeDefault)
 
 /** 打开节奏卡详情（看板卡片 / 侧栏最近列表 / 章节侧栏「本章节奏卡」共用同一入口） */
 async function handleOpenRhythmCard(id: string) {
@@ -1534,14 +1503,12 @@ function handleGoToSettings() {
         :is-loading="rhythmStore.isLoading"
         :error-message="rhythmStore.errorMessage"
         :selected-card-id="rhythmStore.selectedCardId"
-        :volume-filter="rhythmVolumeFilter"
         :is-sidebar-open="isCategoryOpen"
         :is-content-panel-open="workspacePanel.visible"
         @open-create="handleOpenRhythmCreate"
         @open-card="handleOpenRhythmCard"
         @move-card="handleRhythmMove"
         @retry-load="handleRhythmRefresh"
-        @change-volume-filter="rhythmVolumeFilter = $event"
         @toggle-sidebar="toggleSidebar"
         @toggle-mobile-sidebar="toggleMobileSidebar"
         @toggle-content-panel="handleToggleRhythmPanel"

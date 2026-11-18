@@ -136,13 +136,12 @@ function seedOptions(overrides: Partial<SeedOptions> = {}): SeedOptions {
 }
 
 describe('createRhythmCard', () => {
-  it('创建节奏卡：ID 按序号生成、volume 从章节推导、初始 planned、往返无损', async () => {
+  it('创建节奏卡：ID 按序号生成、初始 planned、往返无损', async () => {
     const card = await createRhythmCard(project(), seedOptions())
 
     expect(card.id).toBe('R-001')
     expect(card.sourcePath).toBe('rhythm/R-001-第083章节奏.md')
     expect(card.status).toBe('planned')
-    expect(card.volume).toBe('第二卷')
     expect(card.actualConflict).toBeNull()
     expect(card.actualMood).toBeNull()
     expect(card.actualHook).toBeNull()
@@ -156,17 +155,14 @@ describe('createRhythmCard', () => {
     expect(roundTrip.intentBody).toBe('让读者喘口气。')
   })
 
-  it('第二条序号顺延；显式 volume 覆盖推导；无 / 章节时卷取整段', async () => {
+  it('第二条序号顺延；chapterRef 原样保留（含作者自由标注的「卷/章」写法）', async () => {
     await createRhythmCard(project(), seedOptions())
     const second = await createRhythmCard(project(), seedOptions({ name: 'B', chapterRef: '第三卷/第001章' }))
     expect(second.id).toBe('R-002')
-    expect(second.volume).toBe('第三卷')
-
-    const explicit = await createRhythmCard(project(), seedOptions({ name: 'C', chapterRef: '第二卷/第084章', volume: '番外卷' }))
-    expect(explicit.volume).toBe('番外卷')
+    expect(second.chapterRef).toBe('第三卷/第001章')
 
     const noSlash = await createRhythmCard(project(), seedOptions({ name: 'D', chapterRef: '第099章' }))
-    expect(noSlash.volume).toBe('第099章')
+    expect(noSlash.chapterRef).toBe('第099章')
   })
 
   it('必填缺失或冲突强度非法时拒绝创建', async () => {
