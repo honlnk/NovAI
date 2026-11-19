@@ -18,6 +18,7 @@ import {
 import {
   flushAllEditorSessions,
   flushEditorSessions,
+  freezeEditorSessionForExternal,
   getEditorProbeHandler,
   getEditorSaveHandler,
   getGuardedEditorSession,
@@ -475,7 +476,7 @@ async function processChangeRecord(entry: RecentFileChange) {
         ...(deleted.trashPath !== undefined ? { trashPath: deleted.trashPath } : {}),
       })
       isContentPanelOpen.value = true
-      toast.info(`「${projectStore.activeFile?.name ?? '当前文件'}」已被删除，你的未保存草稿已保留`)
+      toast.info(`「${projectStore.activeFile?.name ?? '当前文件'}」已被删除，你尚未写入正文的内容已保留`)
       return
     }
     panelNotice.value = {
@@ -497,15 +498,17 @@ async function processChangeRecord(entry: RecentFileChange) {
           toPath: change.toPath,
         })
         isContentPanelOpen.value = true
-        toast.info(`「${change.fromPath.split('/').pop() ?? change.fromPath}」已被重命名，你的未保存草稿已保留`)
+        toast.info(`「${change.fromPath.split('/').pop() ?? change.fromPath}」已被重命名，你尚未写入正文的内容已保留`)
         return
       }
       await projectStore.openFile(change.toPath)
       return
     }
-    // 未保存内容保护（§6）：有草稿不静默覆盖，保留草稿并提醒；通知给出查看入口
+    // AI 先落盘且人工有未落盘内容（§五.2 非阻塞冲突）：不清输入、不切预览，
+    // 冻结该会话自动保存并读取外部版本建立冲突，状态条提示用户主动比较
     if (panel?.dirty) {
-      toast.info(`「${projectStore.activeFile?.name ?? effect.path}」已被 AI 更新，你的未保存草稿已保留`)
+      await freezeEditorSessionForExternal(projectId.value, effect.path)
+      toast.info(`「${projectStore.activeFile?.name ?? effect.path}」已被 AI 修改，已保留你尚未写入正文的内容并暂停自动保存`)
       if (isContentChange) {
         pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
       }
@@ -543,8 +546,13 @@ async function processChangeRecord(entry: RecentFileChange) {
     return
   }
 
-  // 未命中当前文件：只入通知队列，不跳转不抢占（§7.4）
+  // 未命中当前文件：只入通知队列，不跳转不抢占（§7.4）。
+  // 用户编辑过又切走的文件被 AI 写盘时同样冻结（§五.2）：回访该文件即见状态条再入口
   if (isContentChange) {
+    if (isFileDraftDirty(projectId.value, targetPath)) {
+      await freezeEditorSessionForExternal(projectId.value, targetPath)
+      toast.info(`「${targetPath.split('/').pop() ?? targetPath}」已被 AI 修改，已保留你尚未写入正文的内容并暂停自动保存`)
+    }
     pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
   }
 }

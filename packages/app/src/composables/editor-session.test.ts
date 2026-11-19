@@ -21,6 +21,7 @@ import {
   _resetEditorSessionsForTest,
   clearEditorSession,
   editorSessionPhase,
+  freezeEditorSessionForExternal,
   getEditorSession,
   openEditorSession,
   requestEditorSave,
@@ -350,6 +351,55 @@ describe('editor-session 保存编排事件序', () => {
     } finally {
       setAutosaveInputEnabled(false)
     }
+  })
+
+  it('AI 先落盘冻结（§五.2）：dirty 会话置冲突、读盘、取消自动保存、紧凑不展开', async () => {
+    const { handler } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    setEditorProbeHandler(async () => ({ kind: 'ok', file: fileView('AI 先落盘的版本', 't9') }))
+    const session = openEditorSession('p1', A_PATH, 'v0', 't0')
+    setEditorInput('p1', A_PATH, '人工未落盘内容')
+
+    const result = await freezeEditorSessionForExternal('p1', A_PATH)
+    expect(result).toBe('conflict')
+    expect(session.conflict?.disk?.content).toBe('AI 先落盘的版本')
+    expect(session.conflict?.expanded).toBe(false)
+    expect(session.content).toBe('人工未落盘内容')
+    expect(editorSessionPhase(session)).toBe('conflict')
+
+    // 冻结期间去抖窗口到期也不写（自动保存冻结直到用户在比较中明确选择）
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('AI 写盘冻结的边界：clean 会话跳过（rebase 跟随）、无会话与守护不动、已有冲突重读磁盘', async () => {
+    const { handler } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    setEditorProbeHandler(async () => ({ kind: 'ok', file: fileView('AI 第二次写盘', 't9') }))
+
+    // clean 会话：不建冲突（磁盘更新由 rebase 通道跟随）
+    const clean = openEditorSession('p1', 'chapters/clean.txt', 'c0', 't0')
+    expect(await freezeEditorSessionForExternal('p1', 'chapters/clean.txt')).toBe('clean')
+    expect(clean.conflict).toBeUndefined()
+
+    // 无会话
+    expect(await freezeEditorSessionForExternal('p1', 'chapters/none.txt')).toBe('none')
+
+    // 守护未决：守护优先，不建冲突
+    const guarded = openEditorSession('p1', 'chapters/g.txt', 'g0', 't0')
+    setEditorInput('p1', 'chapters/g.txt', 'g1')
+    guarded.guard = { kind: 'deleted', trashPath: '.novel/trash/g.txt' }
+    expect(await freezeEditorSessionForExternal('p1', 'chapters/g.txt')).toBe('none')
+    expect(guarded.conflict).toBeUndefined()
+
+    // 已有冲突（用户已展开）：AI 再写盘 → 新代次重读磁盘快照、展开状态保持
+    const conflicted = openEditorSession('p1', A_PATH, 'v0', 't0')
+    setEditorInput('p1', A_PATH, 'v1')
+    conflicted.conflict = { generation: 3, probing: false, missing: false, expanded: true, disk: { content: '旧 AI 版本' } }
+    expect(await freezeEditorSessionForExternal('p1', A_PATH)).toBe('conflict')
+    expect(conflicted.conflict.generation).toBe(4)
+    expect(conflicted.conflict.disk?.content).toBe('AI 第二次写盘')
+    expect(conflicted.conflict.expanded).toBe(true)
   })
 
   it('页面隐藏生命周期：visibilitychange 立即收口全部待写会话（含去抖未到窗的）', async () => {

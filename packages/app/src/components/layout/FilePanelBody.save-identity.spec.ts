@@ -87,7 +87,7 @@ describe('FilePanelBody 保存身份（同路径回写 ≠ 切换文件）', () 
     })
     await enterConflictAndReturn(wrapper, saveFile, '我的草稿')
     // 冲突再入口存在（编辑态）
-    expect(wrapper.text()).toContain('查看两个版本')
+    expect(wrapper.text()).toContain('比较两个版本')
 
     // store 在保存成功后用「同路径、新对象、新版本」替换 activeFile（真实回写形态）
     await wrapper.setProps({ file: fileView(A_PATH, '我的草稿', 'v2') })
@@ -96,7 +96,7 @@ describe('FilePanelBody 保存身份（同路径回写 ≠ 切换文件）', () 
     // 不退预览：编辑现场保留
     expect(wrapper.find('textarea').exists()).toBe(true)
     // 冲突再入口未被清
-    expect(wrapper.text()).toContain('查看两个版本')
+    expect(wrapper.text()).toContain('比较两个版本')
     // 草稿仍在
     expect(getFileDraft('p1', A_PATH)).toBe('我的草稿')
   })
@@ -122,7 +122,7 @@ describe('FilePanelBody 保存身份（同路径回写 ≠ 切换文件）', () 
 
     expect(getFileDraft('p1', A_PATH)).toBe('在途期间的新输入')
     // 冲突不因旧写晚到成功而解除（再入口仍在）
-    expect(wrapper.text()).toContain('查看两个版本')
+    expect(wrapper.text()).toContain('比较两个版本')
   })
 
   it('真实切换到另一个文件：视图重置回预览、草稿按路径隔离保留', async () => {
@@ -140,7 +140,7 @@ describe('FilePanelBody 保存身份（同路径回写 ≠ 切换文件）', () 
     // 切文件重置编辑态
     expect(wrapper.find('textarea').exists()).toBe(false)
     // 甲的冲突再入口不在乙文件现场（按路径隔离），甲草稿保留
-    expect(wrapper.text()).not.toContain('查看两个版本')
+    expect(wrapper.text()).not.toContain('比较两个版本')
     expect(getFileDraft('p1', A_PATH)).toBe('甲草稿')
   })
 
@@ -157,7 +157,7 @@ describe('FilePanelBody 保存身份（同路径回写 ≠ 切换文件）', () 
     await flushPromises()
 
     // 乙项目现场没有甲项目的冲突再入口
-    expect(wrapper.text()).not.toContain('查看两个版本')
+    expect(wrapper.text()).not.toContain('比较两个版本')
     expect(getFileDraft('p1', A_PATH)).toBe('甲草稿')
     // 乙项目路径上没有草稿
     expect(getFileDraft('p2', A_PATH)).toBeUndefined()

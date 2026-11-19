@@ -544,6 +544,42 @@ async function probeExternalVersion(
   delete conflict.disk
 }
 
+/**
+ * AI 写盘到达时冻结有未落盘内容的会话（§五.2 非阻塞冲突）：
+ * 有待写内容的会话置冲突并读取外部版本（不展开比较、不清输入、不切预览——
+ * 紧凑状态条通知用户主动处理）；自动保存随之冻结（conflict 态禁止自动写入）。
+ * 无会话或无待写内容返回 'none'/'clean'（clean 会话由 rebase 跟随磁盘）；
+ * 守护未决时不动（守护优先于冲突）；已有冲突时按新代次重读磁盘快照。
+ */
+export async function freezeEditorSessionForExternal(
+  projectId: string,
+  path: string,
+): Promise<'conflict' | 'clean' | 'none'> {
+  const session = getSession(projectId, path)
+  if (!session) {
+    return 'none'
+  }
+  if (session.guard) {
+    return 'none'
+  }
+  if (!isEditorSessionDirty(session) && !session.conflict) {
+    return 'clean'
+  }
+  cancelAutosaveTimer(editorSessionKey(projectId, path))
+  cancelAutoRetryTimer(editorSessionKey(projectId, path))
+  const generation = (session.conflict?.generation ?? 0) + 1
+  session.conflict = {
+    generation,
+    probing: true,
+    missing: false,
+    // 后台到达非阻塞：保持当前展开状态（紧凑状态条提示，用户主动展开比较）
+    expanded: session.conflict?.expanded ?? false,
+  }
+  session.updatedAt = touchTime()
+  await probeExternalVersion(projectId, path, session, generation)
+  return 'conflict'
+}
+
 /** 用户主动展开比较（再入口）：重新读取磁盘最新 + 最新人工输入并列（阶段 3 接 UI） */
 export async function expandEditorConflict(projectId: string, path: string): Promise<void> {
   const session = getSession(projectId, path)

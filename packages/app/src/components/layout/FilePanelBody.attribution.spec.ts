@@ -77,7 +77,7 @@ async function openConflict(
   saveFile.mockResolvedValueOnce({ ok: false, conflict: true, message: '磁盘已被外部修改' })
   await editDraft(wrapper, draft)
   await pressSaveShortcut(wrapper)
-  await vi.waitFor(() => expect(wrapper.text()).toContain('保存冲突：磁盘上的正文已被 AI 修改'))
+  await vi.waitFor(() => expect(wrapper.text()).toContain('此文件有两个版本'))
 }
 
 describe('FilePanelBody 保存冲突归属返修', () => {
@@ -113,7 +113,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
     releaseProbe({ kind: 'ok', file: fileView(A_PATH, 'AI 磁盘内容') })
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('保存冲突：磁盘上的正文已被 AI 修改')
+    expect(wrapper.text()).not.toContain('此文件有两个版本')
     // 甲的草稿仍在草稿表，未被切走丢失
     expect(getFileDraft('p1', A_PATH)).toBe('我的草稿')
   })
@@ -135,7 +135,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
     await flushPromises()
 
     expect(saveFile).toHaveBeenLastCalledWith(A_PATH, '我的草稿', { force: true, projectId: 'p1' })
-    expect(wrapper.text()).not.toContain('保存冲突：磁盘上的正文已被 AI 修改')
+    expect(wrapper.text()).not.toContain('此文件有两个版本')
   })
 
   it('「采用 AI 版本」复检读取失败：不删草稿，回到冲突界面呈现读取失败', async () => {
@@ -221,7 +221,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
     await flushPromises()
 
     expect(getFileDraft('p1', A_PATH)).toBe('后来继续输入的新草稿')
-    expect(wrapper.text()).toContain('查看两个版本')
+    expect(wrapper.text()).toContain('比较两个版本')
   })
 
   it('磁盘读取失败的冲突不提供任何有损采用，草稿保留', async () => {

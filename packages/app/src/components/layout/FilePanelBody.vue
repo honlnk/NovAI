@@ -684,14 +684,14 @@ function handleContentMouseup() {
           <div class="min-w-0 flex-1 text-xs leading-5 text-amber-800">
             <template v-if="guardState.kind === 'deleted'">
               <p class="font-medium">「{{ guardState.name }}」已被 AI 删除并移入回收站</p>
-              <p class="text-amber-700">你的未保存草稿已保留，不会被自动丢弃；可恢复为一份新文件，或放弃草稿。</p>
+              <p class="text-amber-700">你尚未写入正文的内容已保留，不会被自动丢弃；可恢复为一份新文件，或放弃。</p>
               <p v-if="guardState.trashPath" class="truncate text-[11px] text-amber-600" :title="guardState.trashPath">
                 原文在回收站：{{ guardState.trashPath }}
               </p>
             </template>
             <template v-else>
               <p class="font-medium">「{{ guardState.name }}」已被 AI 重命名为 {{ guardState.toPath }}</p>
-              <p class="text-amber-700">你的未保存草稿仍指向旧路径；迁移后以「未保存」标记出现在新文件上。</p>
+              <p class="text-amber-700">你尚未写入正文的内容仍指向旧路径；迁移后以「等待保存」标记出现在新文件上。</p>
             </template>
           </div>
         </div>
@@ -768,7 +768,7 @@ function handleContentMouseup() {
       >
         <AppIcon name="info" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
         <p class="min-w-0 flex-1 text-blue-800">
-          已恢复未保存草稿（刷新前的编辑内容）。
+          已恢复上次未写完的内容（刷新前的编辑内容）。
           <template v-if="restoredNotice.diskChanged">
             磁盘正文在你编辑之后已有变化，草稿基于较早的磁盘版本——保存时会出现两个版本的对比。
           </template>
@@ -815,14 +815,14 @@ function handleContentMouseup() {
         </div>
       </div>
 
-      <!-- 保存冲突界面（§3-6 版本比较与选择）：并列查看人工输入与 AI 修改后的磁盘正文 -->
+      <!-- 保存冲突界面（§五.2 非阻塞冲突）：展开时整页版本比较与四出口 -->
       <div
         v-if="conflictView"
         class="flex min-h-0 flex-1 flex-col gap-3 rounded-lg border border-red-200 bg-white p-3"
         role="alert"
       >
         <div class="shrink-0">
-          <p class="text-sm font-semibold text-gray-800">保存冲突：磁盘上的正文已被 AI 修改</p>
+          <p class="text-sm font-semibold text-gray-800">此文件有两个版本：磁盘正文已被 AI 修改</p>
           <p class="mt-1 font-mono text-[11px] text-gray-500">{{ conflictView.path }}</p>
           <p class="mt-1.5 text-xs leading-5 text-gray-600">
             浏览器中的草稿与磁盘上的 AI 修改都完整保留，查看期间互不覆盖。下面并列对比两个版本：
@@ -956,8 +956,29 @@ function handleContentMouseup() {
         </p>
       </div>
 
-      <!-- 空状态 -->
-      <div v-else-if="!file" class="flex flex-1 flex-col items-center justify-center">
+      <!-- 冲突未展开：紧凑状态条（§五.2 非阻塞——AI 先落盘冻结/用户收起比较后的再入口）。
+           与内容区并列：冲突期间继续输入保留（自动写入冻结，直到用户在比较中明确选择） -->
+      <template v-else>
+        <div
+          v-if="conflictActive"
+          class="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2"
+          role="alert"
+        >
+          <AppIcon name="triangle-alert" :size="14" class="h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <p class="min-w-0 flex-1 text-xs leading-5 text-amber-800">
+            此文件有两个版本：磁盘正文已被 AI 修改，你尚未写入正文的内容已保留并暂停自动保存。
+          </p>
+          <button
+            type="button"
+            class="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
+            @click="reopenSaveConflict"
+          >
+            比较两个版本
+          </button>
+        </div>
+
+        <!-- 空状态 -->
+        <div v-if="!file" class="flex flex-1 flex-col items-center justify-center">
         <AppIcon name="file-text" :size="48" class="mb-4 h-12 w-12 text-gray-300" />
         <template v-if="notice">
           <p class="mb-1 text-sm font-medium text-gray-500">「{{ notice.name }}」已被删除</p>
@@ -971,8 +992,8 @@ function handleContentMouseup() {
         </template>
       </div>
 
-      <!-- 文件内容 -->
-      <div v-else-if="file" class="flex min-h-0 flex-1 flex-col space-y-3">
+        <!-- 文件内容 -->
+        <div v-else class="flex min-h-0 flex-1 flex-col space-y-3">
         <!-- 预览模式 -->
         <div
           v-if="viewMode === 'preview'"
@@ -1068,26 +1089,9 @@ function handleContentMouseup() {
             placeholder="该文件类型不支持编辑"
             @keydown="handleKeydown"
           />
-          <!-- 冲突再入口（§3-6 返回编辑后冲突状态保留）：重开两个版本的对比 -->
-          <div
-            v-if="conflictActive && !conflictView"
-            class="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
-            role="alert"
-          >
-            <p class="min-w-0 flex-1 text-xs text-amber-800">
-              上次保存与磁盘修改冲突：草稿已保留，两个版本等待你选择。
-            </p>
-            <button
-              type="button"
-              class="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
-              @click="reopenSaveConflict"
-            >
-              查看两个版本
-            </button>
-          </div>
           <!-- 保存失败条：非冲突失败保留草稿与编辑位置，给出重试/放弃出口（§6） -->
           <div
-            v-else-if="conflictFailure && session?.failure"
+            v-if="conflictFailure && session?.failure"
             class="mt-2 flex shrink-0 flex-col gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-2"
             role="alert"
           >
@@ -1116,7 +1120,8 @@ function handleContentMouseup() {
           <span>{{ file.path }}</span>
           <span v-if="file.updatedAt">{{ new Date(file.updatedAt).toLocaleString('zh-CN') }}</span>
         </div>
-      </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
