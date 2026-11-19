@@ -67,6 +67,20 @@ function fileView(path: string, content: string, updatedAt = 'v1'): FileContentV
 
 const A_PATH = 'chapters/a.txt'
 
+/** 章节形态测试文本：一段一行、段间空行，中段段落内少量润色 */
+const CHAPTER_LINES = [
+  '第一段：夜色渐深，城门外的官道上已经没有行人。',
+  '',
+  '第二段：夜色像一张巨大的幕布缓缓压下来，远处的山脊只剩下一道模糊的剪影。',
+  '',
+  '第三段：他收剑入鞘，转身走进了那条无人的长街。',
+]
+const AI_POLISHED_LINES = CHAPTER_LINES.map((line) =>
+  line === CHAPTER_LINES[2]
+    ? '第二段：夜色像一张沉重的幕布缓缓压下来，远处的山脊只剩下一道朦胧的剪影。'
+    : line,
+)
+
 /** 进入编辑模式并输入草稿 */
 async function editDraft(wrapper: VueWrapper, draft: string) {
   await wrapper.find('button[aria-label="编辑"]').trigger('click')
@@ -156,5 +170,71 @@ describe('FilePanelBody 非阻塞冲突与再入口（阶段 3）', () => {
     // 冲突未处理：自动保存仍冻结
     await vi.advanceTimersByTimeAsync(10_000)
     expect(saveFile).not.toHaveBeenCalled()
+  })
+
+  it('比较视图为单栏差异块：中文润色只突出变化的字、未改动区折叠可展开', async () => {
+    probeFile.mockResolvedValue({
+      kind: 'ok',
+      file: fileView(A_PATH, AI_POLISHED_LINES.join('\n'), 'v9'),
+    })
+    const wrapper = mountPanel(fileView(A_PATH, CHAPTER_LINES.join('\n'), 'v1'))
+    await editDraft(wrapper, CHAPTER_LINES.map((l, i) => (i === 2 ? `${l}（人工续写）` : l)).join('\n'))
+
+    await freezeEditorSessionForExternal('p1', A_PATH)
+    await vi.advanceTimersByTimeAsync(0)
+    await wrapper.findAll('button').find((item) => item.text() === '比较两个版本')!.trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 概览按段计数：只有 1 段修改（人工续写落在同一段 → 与 AI 润色同段对改）
+    expect(wrapper.text()).toContain('修改 1 段')
+
+    // 字级高亮：原段落加深被替换的字（红系），新段落加深 AI 的字（绿系）
+    const delStrong = wrapper.findAll('.conflict-inline-del')
+    const addStrong = wrapper.findAll('.conflict-inline-add')
+    expect(delStrong.length).toBeGreaterThan(0)
+    expect(addStrong.length).toBeGreaterThan(0)
+    expect(delStrong.map((s) => s.text()).join('')).toContain('巨大')
+    expect(addStrong.map((s) => s.text()).join('')).toContain('沉重')
+    // 未变化的字留在普通段（same 段不以 strong 类呈现）
+    expect(wrapper.find('.conflict-para-del').text()).toContain('幕布缓缓压下来')
+
+    // 未改动段保留上下文（首尾段落灰显可见），不出现旧双栏空白占位口径
+    expect(wrapper.text()).toContain('第一段：夜色渐深')
+    expect(wrapper.text()).not.toContain('草稿独有')
+
+    // 折叠区：章节中间的空行等未改动区不构成折叠（行数低于阈值），此用例文本较短
+    // 应无折叠按钮；长文折叠由 conflict-diff 单测覆盖结构、此处只验证不误伤短文
+    const foldButtons = wrapper.findAll('button').filter((b) => b.text().includes('未改动内容'))
+    expect(foldButtons).toHaveLength(0)
+  })
+
+  it('长章节比较视图：未改动区折叠，点击展开后可再收起', async () => {
+    const longLines = Array.from({ length: 20 }, (_, i) => `第${i + 1}段：保持原样。`)
+    probeFile.mockResolvedValue({
+      kind: 'ok',
+      file: fileView(A_PATH, longLines.map((l, i) => (i === 9 ? '第十段：AI 润色。' : l)).join('\n'), 'v9'),
+    })
+    const wrapper = mountPanel(fileView(A_PATH, longLines.join('\n'), 'v1'))
+    await editDraft(wrapper, longLines.map((l, i) => (i === 9 ? `${l}（人工改）` : l)).join('\n'))
+
+    await freezeEditorSessionForExternal('p1', A_PATH)
+    await vi.advanceTimersByTimeAsync(0)
+    await wrapper.findAll('button').find((item) => item.text() === '比较两个版本')!.trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 文首 6 段折叠；展开前不可见第1段，展开后可见并可再收起
+    const foldButton = wrapper.findAll('button').find((b) => b.text().includes('展开 6 段未改动内容'))
+    expect(foldButton).toBeDefined()
+    expect(wrapper.text()).not.toContain('第1段：保持原样。')
+
+    await foldButton!.trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.text()).toContain('第1段：保持原样。')
+    const collapseButton = wrapper.findAll('button').find((b) => b.text().includes('收起 6 段未改动内容'))
+    expect(collapseButton).toBeDefined()
+
+    await collapseButton!.trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.text()).not.toContain('第1段：保持原样。')
   })
 })

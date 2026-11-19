@@ -195,6 +195,20 @@ export function dismissChangeNotice(projectId: string, recordId: string): void {
   }
 }
 
+/**
+ * 收起某路径的全部通知（修复批 2026-11-20）：该文件进入正文版本冲突后，
+ * 黄色冲突条成为这一冲突的唯一反馈，既有同类蓝色通知不再叠加显示。
+ * 只清 UI 通知队列，不动 chatStore 的变更账本（recentFileChanges）。
+ */
+export function dismissChangeNoticesForPath(projectId: string, path: string): void {
+  const state = getState(projectId)
+  for (let i = state.notices.length - 1; i >= 0; i -= 1) {
+    if (state.notices[i]!.path === path) {
+      state.notices.splice(i, 1)
+    }
+  }
+}
+
 /** 清空某项目的全部高亮状态（切项目时调用，跨项目不串扰） */
 export function clearChangeHighlights(projectId: string): void {
   clearTimers(projectId)
@@ -214,6 +228,7 @@ export function useChangeHighlights(projectId: string) {
     replayJob: () => replayHighlightJob(projectId),
     dismissJob: () => dismissHighlightJob(projectId),
     dismissNotice: (recordId: string) => dismissChangeNotice(projectId, recordId),
+    dismissNoticesForPath: (path: string) => dismissChangeNoticesForPath(projectId, path),
   }
 }
 

@@ -563,11 +563,15 @@ async function probeExternalVersion(
  * 紧凑状态条通知用户主动处理）；自动保存随之冻结（conflict 态禁止自动写入）。
  * 无会话或无待写内容返回 'none'/'clean'（clean 会话由 rebase 跟随磁盘）；
  * 守护未决时不动（守护优先于冲突）；已有冲突时按新代次重读磁盘快照。
+ *
+ * 返回值区分两种冲突结果（修复批 2026-11-20）：'conflict' = 本次首次建立冲突
+ * （调用方可给一次反馈）；'conflict-refresh' = 该会话此前已在冲突中、本次只是
+ * 刷新磁盘快照（同一冲突的后续 AI 修改，调用方应抑制重复 toast/通知）。
  */
 export async function freezeEditorSessionForExternal(
   projectId: string,
   path: string,
-): Promise<'conflict' | 'clean' | 'none'> {
+): Promise<'conflict' | 'conflict-refresh' | 'clean' | 'none'> {
   const session = getSession(projectId, path)
   if (!session) {
     return 'none'
@@ -580,6 +584,7 @@ export async function freezeEditorSessionForExternal(
   }
   cancelAutosaveTimer(editorSessionKey(projectId, path))
   cancelAutoRetryTimer(editorSessionKey(projectId, path))
+  const hadConflict = session.conflict !== undefined
   const generation = (session.conflict?.generation ?? 0) + 1
   session.conflict = {
     generation,
@@ -590,7 +595,7 @@ export async function freezeEditorSessionForExternal(
   }
   session.updatedAt = touchTime()
   await probeExternalVersion(projectId, path, session, generation)
-  return 'conflict'
+  return hadConflict ? 'conflict-refresh' : 'conflict'
 }
 
 /** 用户主动展开比较（再入口）：重新读取磁盘最新 + 最新人工输入并列（阶段 3 接 UI） */

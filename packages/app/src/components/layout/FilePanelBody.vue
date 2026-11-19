@@ -34,7 +34,7 @@ import {
   useChangeHighlights,
   type ChangeNotice,
 } from '../../composables/useChangeHighlights'
-import { buildLineDiffRows, countLineDiff } from '../../utils/text-diff'
+import { buildConflictDiff } from '../../utils/conflict-diff'
 import { suggestCopyPath } from '../../utils/file-tree'
 import { parseMarkdownBlocks } from '../../utils/markdown-blocks'
 import AppIcon from '../ui/AppIcon.vue'
@@ -182,22 +182,34 @@ const conflictView = computed(() => {
   }
 })
 
-/** 冲突界面的行级差异（§3-6 并列查看；磁盘可读时） */
-const conflictRows = computed(() => {
-  const disk = session.value?.conflict?.disk
-  if (!conflictView.value || !disk || conflictView.value.probing) {
-    return []
-  }
-  return buildLineDiffRows(conflictView.value.draft, disk.content)
-})
-
-const conflictStats = computed(() => {
+/** 冲突界面的差异块（§3-6 版本比较；修复批 2026-11-20 改单栏差异块：段内字级
+ *  高亮 + 未改动折叠 + 超限降级，替代旧整行 LCS 双栏空白占位；磁盘可读时） */
+const conflictDiff = computed(() => {
   const disk = session.value?.conflict?.disk
   if (!conflictView.value || !disk || conflictView.value.probing) {
     return null
   }
-  return countLineDiff(conflictView.value.draft, disk.content)
+  return buildConflictDiff(conflictView.value.draft, disk.content)
 })
+
+/** 差异折叠区展开状态（fold id 集；冲突代次/路径变化即差异重组，折叠态复位） */
+const expandedFolds = ref(new Set<number>())
+watch(
+  () => [pathKey.value, session.value?.conflict?.generation] as const,
+  () => {
+    expandedFolds.value = new Set()
+  },
+)
+
+function toggleFold(id: number) {
+  const next = new Set(expandedFolds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  expandedFolds.value = next
+}
 
 // ===== 定位高亮（§7）：反馈条、绿红切分与 Markdown 块映射 =====
 
@@ -825,9 +837,10 @@ function handleContentMouseup() {
           <p class="text-sm font-semibold text-gray-800">此文件有两个版本：磁盘正文已被 AI 修改</p>
           <p class="mt-1 font-mono text-[11px] text-gray-500">{{ conflictView.path }}</p>
           <p class="mt-1.5 text-xs leading-5 text-gray-600">
-            浏览器中的草稿与磁盘上的 AI 修改都完整保留，查看期间互不覆盖。下面并列对比两个版本：
-            <span class="text-red-600">红色 = 仅你的草稿有</span>（采纳 AI 版本会丢失），
-            <span class="text-green-700">绿色 = 仅磁盘有</span>（AI 的修改，采纳草稿会替换）。
+            浏览器中的草稿与磁盘上的 AI 修改都完整保留，查看期间互不覆盖。下面按段落对比两个版本：
+            <span class="text-red-600">红色段落 = 仅你的草稿有</span>（采纳 AI 版本会丢失），
+            <span class="text-green-700">绿色段落 = 仅磁盘有</span>（AI 的修改，采纳草稿会替换）；
+            段落内加深的字 = 实际变化的部分，未改动段落默认折叠。
           </p>
         </div>
 
@@ -845,34 +858,77 @@ function handleContentMouseup() {
           磁盘读取失败：{{ conflictView.unreadable }}。草稿仍完整保留，可返回编辑或另存副本；读取成功前不能采用磁盘版本。
         </div>
 
-        <template v-else>
-          <p v-if="conflictStats" class="shrink-0 text-xs text-gray-500">
-            差异概览：草稿独有 {{ conflictStats.onlyLeft }} 行，磁盘新增 {{ conflictStats.onlyRight }} 行。
+        <template v-else-if="conflictDiff">
+          <!-- 差异概览：正常按段计数；降级明示「不做逐段对齐」，不伪装精确 diff -->
+          <p v-if="conflictDiff.degraded" class="shrink-0 text-xs text-amber-700">
+            两个版本差异过大，无法逐段对齐；以下整块对比（红 = 仅你的草稿，绿 = 仅磁盘）。
+            <template v-if="conflictDiff.truncated.left > 0">草稿其余 {{ conflictDiff.truncated.left }} 行未显示。</template>
+            <template v-if="conflictDiff.truncated.right > 0">磁盘其余 {{ conflictDiff.truncated.right }} 行未显示。</template>
           </p>
-          <!-- 两栏并列：左 = 我的草稿，右 = 磁盘（AI 修改后） -->
-          <div class="grid min-h-0 flex-1 shrink grid-cols-2 gap-2 overflow-hidden">
-            <div class="flex min-h-0 flex-col rounded-md border border-gray-200">
-              <p class="shrink-0 border-b border-gray-100 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-600">我的草稿（未写盘）</p>
-              <div class="min-h-0 flex-1 overflow-y-auto p-2">
+          <p v-else-if="conflictDiff.stats.changed + conflictDiff.stats.added + conflictDiff.stats.removed === 0" class="shrink-0 text-xs text-gray-500">
+            两个版本的文字内容一致（可能只有结尾换行等格式差异）。
+          </p>
+          <p v-else class="shrink-0 text-xs text-gray-500">
+            差异概览：修改 {{ conflictDiff.stats.changed }} 段、新增 {{ conflictDiff.stats.added }} 段、删除 {{ conflictDiff.stats.removed }} 段。
+          </p>
+
+          <!-- 单栏差异块：上下文（灰）/ 折叠区（可展开）/ 修改（红原段落上、绿新段落下） -->
+          <div class="min-h-0 flex-1 overflow-y-auto rounded-md border border-gray-200 bg-white p-2">
+            <template v-for="(block, index) in conflictDiff.blocks" :key="index">
+              <template v-if="block.kind === 'context'">
                 <div
-                  v-for="(row, index) in conflictRows"
-                  :key="`l${index}`"
-                  class="whitespace-pre-wrap text-xs leading-5"
-                  :class="row.kind === 'left' ? 'conflict-hl-red' : 'text-gray-400'"
-                >{{ row.kind === 'right' ? '' : row.text }}&nbsp;</div>
+                  v-for="(line, lineIndex) in block.lines"
+                  :key="lineIndex"
+                  class="whitespace-pre-wrap px-2 text-xs leading-5 text-gray-400"
+                >{{ line }}&nbsp;</div>
+              </template>
+              <template v-else-if="block.kind === 'fold'">
+                <div v-if="expandedFolds.has(block.id)">
+                  <div
+                    v-for="(line, lineIndex) in block.lines"
+                    :key="lineIndex"
+                    class="whitespace-pre-wrap px-2 text-xs leading-5 text-gray-400"
+                  >{{ line }}&nbsp;</div>
+                  <button
+                    type="button"
+                    class="my-1 w-full rounded border border-gray-100 bg-gray-50 px-2 py-1 text-[11px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                    @click="toggleFold(block.id)"
+                  >
+                    收起 {{ block.count }} 段未改动内容
+                  </button>
+                </div>
+                <button
+                  v-else
+                  type="button"
+                  class="my-1 w-full rounded border border-gray-100 bg-gray-50 px-2 py-1 text-[11px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                  @click="toggleFold(block.id)"
+                >
+                  ⋯ 展开 {{ block.count }} 段未改动内容
+                </button>
+              </template>
+              <div v-else class="my-1 flex flex-col gap-0.5">
+                <div v-for="(pair, pairIndex) in block.pairs" :key="pairIndex" class="flex flex-col gap-0.5">
+                  <!-- 原段落（仅草稿）：红底；有字级变换时只加深实际被替换的字 -->
+                  <div v-if="pair.old !== undefined" class="whitespace-pre-wrap rounded-sm px-2 text-xs leading-5 conflict-para-del">
+                    <template v-if="pair.inline">
+                      <template v-for="(seg, segIndex) in pair.inline" :key="segIndex">
+                        <span v-if="seg.kind !== 'add'" :class="seg.kind === 'del' ? 'conflict-inline-del' : ''">{{ seg.text }}</span>
+                      </template>
+                    </template>
+                    <template v-else>{{ pair.old }}</template>
+                  </div>
+                  <!-- 新段落（仅磁盘）：绿底；有字级变换时只加深实际新增的字 -->
+                  <div v-if="pair.new !== undefined" class="whitespace-pre-wrap rounded-sm px-2 text-xs leading-5 conflict-para-add">
+                    <template v-if="pair.inline">
+                      <template v-for="(seg, segIndex) in pair.inline" :key="segIndex">
+                        <span v-if="seg.kind !== 'del'" :class="seg.kind === 'add' ? 'conflict-inline-add' : ''">{{ seg.text }}</span>
+                      </template>
+                    </template>
+                    <template v-else>{{ pair.new }}</template>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="flex min-h-0 flex-col rounded-md border border-gray-200">
-              <p class="shrink-0 border-b border-gray-100 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-600">磁盘正文（AI 修改后）</p>
-              <div class="min-h-0 flex-1 overflow-y-auto p-2">
-                <div
-                  v-for="(row, index) in conflictRows"
-                  :key="`r${index}`"
-                  class="whitespace-pre-wrap text-xs leading-5"
-                  :class="row.kind === 'right' ? 'conflict-hl-green' : 'text-gray-400'"
-                >{{ row.kind === 'left' ? '' : row.text }}&nbsp;</div>
-              </div>
-            </div>
+            </template>
           </div>
         </template>
 
@@ -1157,17 +1213,30 @@ export default { name: 'FilePanelBody' }
   border: 1px solid rgb(252 165 165 / 0.8);
 }
 
-/* 冲突界面（§3-6）：与确认面板同语系，但语义独立（两侧版本对比） */
-.conflict-hl-red {
-  background-color: rgb(254 202 202 / 0.7);
-  border-radius: 2px;
-  color: rgb(153 27 27);
+/* 冲突比较（§3-6 + 修复批 2026-11-20 单栏差异块）：段落级底色 + 字级加深。
+   红系 = 仅草稿（原段落），绿系 = 仅磁盘（新段落）；未改动上下文灰显。 */
+.conflict-para-del {
+  background-color: rgb(254 226 226 / 0.55);
+  border-left: 2px solid rgb(248 113 113);
+  color: rgb(127 29 29);
 }
 
-.conflict-hl-green {
-  background-color: rgb(187 247 208 / 0.7);
+.conflict-para-add {
+  background-color: rgb(220 252 231 / 0.6);
+  border-left: 2px solid rgb(74 222 128);
+  color: rgb(20 83 45);
+}
+
+.conflict-inline-del {
+  background-color: rgb(254 178 178 / 0.85);
   border-radius: 2px;
-  color: rgb(21 128 61);
+  font-weight: 500;
+}
+
+.conflict-inline-add {
+  background-color: rgb(134 239 172 / 0.85);
+  border-radius: 2px;
+  font-weight: 500;
 }
 
 .hl-fading .change-hl-green,

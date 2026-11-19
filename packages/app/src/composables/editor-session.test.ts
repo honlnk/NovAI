@@ -394,14 +394,20 @@ describe('editor-session 保存编排事件序', () => {
     expect(await freezeEditorSessionForExternal('p1', 'chapters/g.txt')).toBe('none')
     expect(guarded.conflict).toBeUndefined()
 
-    // 已有冲突（用户已展开）：AI 再写盘 → 新代次重读磁盘快照、展开状态保持
+    // 已有冲突（用户已展开）：AI 再写盘 → 新代次重读磁盘快照、展开状态保持；
+    // 返回 'conflict-refresh'（同一冲突的后续修改，调用方据此抑制重复反馈）
     const conflicted = openEditorSession('p1', A_PATH, 'v0', 't0')
     setEditorInput('p1', A_PATH, 'v1')
     conflicted.conflict = { generation: 3, probing: false, missing: false, expanded: true, disk: { content: '旧 AI 版本' } }
-    expect(await freezeEditorSessionForExternal('p1', A_PATH)).toBe('conflict')
+    expect(await freezeEditorSessionForExternal('p1', A_PATH)).toBe('conflict-refresh')
     expect(conflicted.conflict.generation).toBe(4)
     expect(conflicted.conflict.disk?.content).toBe('AI 第二次写盘')
     expect(conflicted.conflict.expanded).toBe(true)
+    // 同一冲突内 AI 第三次写盘：仍是 'conflict-refresh'，磁盘快照继续跟随最新
+    setEditorProbeHandler(async () => ({ kind: 'ok', file: fileView('AI 第三次写盘', 't10') }))
+    expect(await freezeEditorSessionForExternal('p1', A_PATH)).toBe('conflict-refresh')
+    expect(conflicted.conflict.generation).toBe(5)
+    expect(conflicted.conflict.disk?.content).toBe('AI 第三次写盘')
   })
 
   it('settleEditorSave 等待在途写盘完成且不发起保存（§五.4 复检用）', async () => {

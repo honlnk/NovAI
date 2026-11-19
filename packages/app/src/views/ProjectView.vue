@@ -8,35 +8,26 @@ import { usePlanStore } from '../stores/plan'
 import { useToast } from '../composables/useToast'
 import { useConversationFilter } from '../composables/useConversationFilter'
 import {
-  clearFileDraft,
-  flushDraftBackupsNow,
-  hasDirtyDrafts,
-  isFileDraftDirty,
-  moveFileDraft,
-  restorePersistedDrafts,
-} from '../composables/useFileDrafts'
-import {
   flushAllEditorSessions,
   flushEditorSessions,
-  freezeEditorSessionForExternal,
   getEditorProbeHandler,
   getEditorSaveHandler,
   getGuardedEditorSession,
   setAutosaveInputEnabled,
-  setEditorGuard,
   setEditorProbeHandler,
   setEditorSaveHandler,
   setupEditorAutosaveLifecycle,
 } from '../composables/editor-session'
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
+import { clearChangeHighlights } from '../composables/useChangeHighlights'
+import { useFileChangeFeedback } from '../composables/useFileChangeFeedback'
 import {
-  clearChangeHighlights,
-  pushChangeNotice,
-  startHighlightJob,
-  useChangeHighlights,
-  type ChangeNotice,
-} from '../composables/useChangeHighlights'
-import { hashContent } from '@novai/core'
+  clearFileDraft,
+  flushDraftBackupsNow,
+  hasDirtyDrafts,
+  moveFileDraft,
+  restorePersistedDrafts,
+} from '../composables/useFileDrafts'
 import ActivityBar from '../components/layout/ActivityBar.vue'
 import CategoryPanel from '../components/layout/CategoryPanel.vue'
 import ChatPanel from '../components/layout/ChatPanel.vue'
@@ -63,9 +54,8 @@ import {
   loadWorkspaceState,
   saveWorkspaceState,
 } from '../utils/workspace-state'
-import type { ChangedFileView, FileChangeRecordView, ForeshadowingStatusView, PlanStatusView, RhythmStatusView } from '@novai/core/services/types'
-import type { RecentFileChange } from '../stores/chat'
-import { pickDirectoryChildren, resolveActiveFileEffect } from '../utils/file-tree'
+import type { ChangedFileView, ForeshadowingStatusView, PlanStatusView, RhythmStatusView } from '@novai/core/services/types'
+import { pickDirectoryChildren } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
 import { useForeshadowingStore } from '../stores/foreshadowing'
 import { useRhythmStore } from '../stores/rhythm'
@@ -416,204 +406,33 @@ watch(
   },
 )
 
-// ===== 定位高亮反馈队列（交互优化计划 §7）=====
+// ===== 文件变更反馈链（交互优化计划 §7 + 正文自动保存计划 §五.2）=====
 // file-changed 逐条到达（recentFileChanges 不吞并发改动）：命中当前打开文件且现场
-// 无干扰（预览模式、无草稿、改动来自当前会话）时，重读到最新内容并校验版本后自动
-// 播放差异；用户在编辑/有草稿/看别的文件/后台会话改动 → 只入通知队列（可点击查看，
-// 不抢现场）。计划文件只刷新计划工作流，不套用章节高亮。
-const highlights = useChangeHighlights(projectId.value)
-/** 已消费的实时改动 id（防最近队列重复处理） */
-const processedChangeIds = new Set<string>()
-
-/** 账本记录 → 反馈通知（携带重播所需的定位载荷与后台会话归属） */
-function buildChangeNotice(record: FileChangeRecordView, entry: RecentFileChange): ChangeNotice {
-  const change = record.change
-  const path = change.type === 'renamed' ? change.toPath : change.path
-  const canLocate = Boolean(record.coords && record.coords.ranges.length > 0)
-  // 来源归属（F10）：后台会话的改动标注会话标题；当前会话的改动上下文自明不标
-  const fromBackground = entry.sessionId !== chatStore.activeSessionId
-  const sessionTitle = fromBackground
-    ? chatStore.sessions.find((s) => s.sessionId === entry.sessionId)?.title
-    : undefined
-  return {
-    recordId: record.id,
-    path,
-    fileName: path.split('/').pop() ?? path,
-    status: change.type === 'created' ? 'created' : 'updated',
-    count: record.coords?.ranges.length ?? 1,
-    canLocate,
-    ...(canLocate
-      ? {
-          locate: {
-            ranges: record.coords!.ranges,
-            oldText: record.diff?.oldText ?? '',
-            afterHash: record.coords!.afterVersion?.contentHash,
-          },
-        }
-      : {}),
-    ...(fromBackground && sessionTitle !== undefined
-      ? { sessionId: entry.sessionId, sessionTitle }
-      : {}),
-  }
-}
-
-async function processChangeRecord(entry: RecentFileChange) {
-  const record = entry.record
-  const change = record.change
-  const isContentChange = change.type === 'created' || change.type === 'updated'
-  const targetPath = change.type === 'renamed' ? change.toPath : change.path
-
-  // 计划文件只刷新现有计划工作流（计划看板 watch 自行处理），不套用章节高亮（§7）
-  if (targetPath.startsWith('plans/')) {
-    return
-  }
-
-  const panel = filePanelRef.value?.getAutoPlayState?.() ?? null
-  const effect = resolveActiveFileEffect(panel?.path ?? projectStore.activeFile?.path ?? null, change)
-  const isActiveSession = entry.sessionId === chatStore.activeSessionId
-
-  // 删除命中当前打开文件：有未保存草稿时置入草稿守护（数据安全计划 §3-3）——
-  // 不清空编辑现场、草稿原样保留，由 FilePanelBody 横幅给出「恢复为草稿副本/
-  // 放弃草稿并关闭」的去向选择；无草稿才清空面板——快照再留着就是幽灵文件
-  // （编辑保存还会复活它），清空后由空态提示回收站去向
-  if (effect?.action === 'clear') {
-    const deleted = change.type === 'deleted' ? change : null
-    const deletedPath = projectStore.activeFile?.path
-    if (deleted && deletedPath && isFileDraftDirty(projectId.value, deletedPath)) {
-      // 草稿守护（§3-3）：不清空编辑现场、草稿原样保留，由 FilePanelBody 横幅
-      // 给出「恢复为草稿副本/放弃草稿并关闭」的去向选择（守护状态在编辑会话上）
-      setEditorGuard(projectId.value, deletedPath, {
-        kind: 'deleted',
-        ...(deleted.trashPath !== undefined ? { trashPath: deleted.trashPath } : {}),
-      })
-      isContentPanelOpen.value = true
-      toast.info(`「${projectStore.activeFile?.name ?? '当前文件'}」已被删除，你尚未写入正文的内容已保留`)
-      return
-    }
-    panelNotice.value = {
-      name: projectStore.activeFile?.name ?? '当前文件',
-      trashPath: deleted?.trashPath,
-    }
-    projectStore.clearActiveFile()
-    return
-  }
-
-  // 命中当前打开的文件：重读 + 尝试自动播放
-  if (effect?.action === 'reload') {
-    // 重命名命中且有未保存草稿：暂停自动接管（§3-3）——静默重读会让草稿挂在已不
-    // 存在的旧路径上；置入守护，由用户选「迁移草稿/放弃并打开新文件」
-    if (change.type === 'renamed') {
-      if (isFileDraftDirty(projectId.value, change.fromPath)) {
-        setEditorGuard(projectId.value, change.fromPath, {
-          kind: 'renamed',
-          toPath: change.toPath,
-        })
-        isContentPanelOpen.value = true
-        toast.info(`「${change.fromPath.split('/').pop() ?? change.fromPath}」已被重命名，你尚未写入正文的内容已保留`)
-        return
-      }
-      await projectStore.openFile(change.toPath)
-      return
-    }
-    // AI 先落盘且人工有未落盘内容（§五.2 非阻塞冲突）：不清输入、不切预览，
-    // 冻结该会话自动保存并读取外部版本建立冲突，状态条提示用户主动比较
-    if (panel?.dirty) {
-      await freezeEditorSessionForExternal(projectId.value, effect.path)
-      toast.info(`「${projectStore.activeFile?.name ?? effect.path}」已被 AI 修改，已保留你尚未写入正文的内容并暂停自动保存`)
-      if (isContentChange) {
-        pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
-      }
-      return
-    }
-    // 编辑模式不打断输入：入通知队列（重命名已在上面分支处理完毕）
-    if (panel?.viewMode === 'edit' && isContentChange) {
-      pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
-      return
-    }
-    await projectStore.openFile(effect.path)
-    // 版本相符才自动播放（§7：失配降级为通知，绝不覆盖较新内容）
-    const file = projectStore.activeFile
-    if (
-      isActiveSession
-      && record.coords
-      && record.coords.ranges.length > 0
-      && record.coords.afterVersion
-      && file
-      && file.format !== 'json'
-      && hashContent(file.content) === record.coords.afterVersion.contentHash
-    ) {
-      highlights.startJob({
-        recordId: record.id,
-        path: effect.path,
-        ranges: record.coords.ranges,
-        oldText: record.diff?.oldText ?? '',
-        mode: 'timed',
-      })
-      return
-    }
-    if (isContentChange) {
-      pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
-    }
-    return
-  }
-
-  // 未命中当前文件：只入通知队列，不跳转不抢占（§7.4）。
-  // 用户编辑过又切走的文件被 AI 写盘时同样冻结（§五.2）：回访该文件即见状态条再入口
-  if (isContentChange) {
-    if (isFileDraftDirty(projectId.value, targetPath)) {
-      await freezeEditorSessionForExternal(projectId.value, targetPath)
-      toast.info(`「${targetPath.split('/').pop() ?? targetPath}」已被 AI 修改，已保留你尚未写入正文的内容并暂停自动保存`)
-    }
-    pushChangeNotice(projectId.value, buildChangeNotice(record, entry))
-  }
-}
-
-watch(
-  () => chatStore.recentFileChanges.length,
-  () => {
-    for (const entry of chatStore.recentFileChanges) {
-      if (processedChangeIds.has(entry.record.id)) continue
-      processedChangeIds.add(entry.record.id)
-      void processChangeRecord(entry)
-    }
+// 无干扰时重读并自动播放差异；编辑/有草稿/看别的文件/后台会话改动 → 只入通知队列。
+// AI 先落盘且人工有未落盘内容 → 冻结会话建立冲突；冲突反馈分层（同一冲突只留一个
+// 黄色冲突条，不逐次 toast / 蓝色通知）见 useFileChangeFeedback（修复批 2026-11-20
+// 从本视图抽出，调用链不变，便于真实事件链测试）。
+const { locateToken, handleLocateChange } = useFileChangeFeedback({
+  projectId: () => projectId.value,
+  getPanelState: () => filePanelRef.value?.getAutoPlayState?.() ?? null,
+  openContentPanel: () => {
+    isContentPanelOpen.value = true
   },
-)
+  setPanelNotice: (notice) => {
+    panelNotice.value = notice
+  },
+})
 
-/** 变更通知「查看差异」点击令牌：递增驱动 FilePanelBody 在路径未变（正编辑同文件）时也切回预览 */
-const locateToken = ref(0)
-
-/** 变更通知点击：打开对应文件；可定位且版本相符则重播稳定差异，失配降级为提示 */
-async function handleLocateChange(notice: ChangeNotice) {
-  locateToken.value += 1
-  await projectStore.openFile(notice.path)
-  // 面板被收起时等同「在文件树点文件」：先展开，否则高亮在隐藏面板里无从看见
-  isContentPanelOpen.value = true
-  if (!notice.locate) {
-    return
-  }
-  const file = projectStore.activeFile
-  if (!notice.locate.afterHash || (file && hashContent(file.content) === notice.locate.afterHash)) {
-    highlights.startJob({
-      recordId: notice.recordId,
-      path: notice.path,
-      ranges: notice.locate.ranges,
-      oldText: notice.locate.oldText,
-      mode: 'stable',
-    })
-    return
-  }
-  toast.info(`「${notice.fileName}」内容已再次变化，无法定位该处修改`)
-}
 
 // 切项目：清空上一项目的反馈队列与高亮状态（跨项目不串扰；草稿守护随编辑会话
-// 按项目隔离，无需清理）；切走前把待写草稿备份立即落盘（§3-2 立即落盘时机）
+// 按项目隔离，无需清理；消费游标由 useFileChangeFeedback 自清）；切走前把待写
+// 草稿备份立即落盘（§3-2 立即落盘时机）
 watch(
   projectId,
   (next, previous) => {
     if (previous !== undefined) {
       void flushDraftBackupsNow()
     }
-    processedChangeIds.clear()
     chatStore.clearRecentFileChanges()
     clearChangeHighlights(projectId.value)
   },
