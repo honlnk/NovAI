@@ -1,33 +1,38 @@
 /**
- * 文件编辑草稿表（交互优化计划 §6「未保存内容保护」+ 数据安全计划 §3-2/§3-3）：
- * 编辑会话按「项目:路径」保留草稿，切换文件/分类/收起面板不静默丢失；回到该文件
- * 时草稿原样恢复。
+ * 文件编辑草稿表 —— 编辑器会话状态机的兼容访问层（正文自动保存与并发冲突
+ * 交互重设计计划 §四.1/§六.1）：
  *
- * 模块级单例（useConversationFilter 同款）：FilePanelBody 常驻挂载（v-show），
- * 草稿表比组件生命周期长，项目切换靠复合键隔离。
+ * 内存「草稿表」不再是被单独维护的概念，而是编辑器会话（editor-session）的
+ * 未落盘编辑数据视图：条目 = 会话的 content / baseContent / originPath，
+ * 脏判定 = 最新输入与编辑基线不一致。IndexedDB 备份（draft-backup）是会话的
+ * **未落盘恢复镜像**——权威正文仍是项目磁盘，内存会话保存运行期最新输入。
  *
- * 数据安全计划后的增强：
- * - 草稿以「项目、文件身份、内容版本」共同识别：条目记录草稿正文、所依据的磁盘
- *   基线内容、起源路径（重命名迁移前）与最后编辑时间；
- * - 内存表是运行期索引与权威状态，同时镜像到浏览器 IndexedDB（draft-backup，
- *   去抖写入 + 关键时机立即落盘）：刷新/异常退出后重新进入项目可恢复草稿——
- *   恢复只回填内存，绝不自动保存改正文；
- * - 删除/重命名当前文件的草稿去向（§3-3）由 ProjectView 的草稿守护承接，
- *   本模块提供 moveFileDraft（迁移到新路径，保留旧路径关联）；
- * - 正文不自动保存；beforeunload 守卫（真实离开时浏览器确认）继续兜底。
+ * 保存编排（快照、串行、冲突、守护）在 editor-session 中统一处理；本模块
+ * 只保留原草稿表 API 形态供 ProjectView / WriteConfirmPanel / save-outcome
+ * 等既有调用方使用（阶段 4 确认链改接统一保存会话后进一步收敛）。
  */
 
 import {
-  flushDraftBackup,
   loadProjectDraftBackups,
-  removeDraftBackup,
-  scheduleDraftBackup,
+  flushDraftBackup,
 } from './draft-backup'
+import {
+  acknowledgeRestoredEditor,
+  clearEditorSession,
+  editorSessionNeedsLeaveGuard,
+  getEditorSession,
+  isEditorSessionDirty,
+  listEditorSessions,
+  migrateEditorSession,
+  restoreEditorSessions,
+  upsertEditorSessionData,
+  _resetEditorSessionsForTest,
+} from './editor-session'
 
 export type DraftEntry = {
   /** 用户当前草稿 */
   content: string
-  /** 草稿所依据的磁盘内容快照（脏判定基线；恢复后据此提示磁盘是否已变化） */
+  /** 草稿所依据的磁盘内容快照（脏判定基线；恢复后据此提示磁盘是否变化） */
   baseContent: string
   /** 草稿起源路径（重命名迁移前的旧路径；未迁移时缺省） */
   originPath?: string
@@ -35,44 +40,44 @@ export type DraftEntry = {
   updatedAt?: string
 }
 
-const draftsByProject = new Map<string, Map<string, DraftEntry>>()
-
-/** 已恢复（刷新后从 IndexedDB 回填）且尚未被用户知悉的草稿路径 */
-const restoredDraftPathsByProject = new Map<string, Set<string>>()
-
-function projectBucket(projectId: string): Map<string, DraftEntry> {
-  let bucket = draftsByProject.get(projectId)
-  if (!bucket) {
-    bucket = new Map()
-    draftsByProject.set(projectId, bucket)
+function toEntry(
+  projectId: string,
+  path: string,
+): DraftEntry | undefined {
+  const session = getEditorSession(projectId, path)
+  if (!session || !isEditorSessionDirty(session)) {
+    return undefined
   }
-  return bucket
+  return {
+    content: session.content,
+    baseContent: session.baseContent,
+    ...(session.originPath !== undefined ? { originPath: session.originPath } : {}),
+    updatedAt: session.updatedAt,
+  }
 }
 
-/** 取某文件的编辑草稿正文；无编辑会话返回 undefined */
+/** 取某文件的编辑草稿正文；无编辑会话（或与基线一致）返回 undefined */
 export function getFileDraft(projectId: string, path: string): string | undefined {
-  return draftsByProject.get(projectId)?.get(path)?.content
+  return toEntry(projectId, path)?.content
 }
 
 /** 取某文件的草稿条目（含磁盘基线与起源路径）；无编辑会话返回 undefined */
 export function getFileDraftEntry(projectId: string, path: string): DraftEntry | undefined {
-  return draftsByProject.get(projectId)?.get(path)
+  return toEntry(projectId, path)
 }
 
-/** 记录某文件的编辑草稿（每次编辑实时调用）；草稿与磁盘一致时清除条目 */
+/**
+ * 记录/重定某文件的草稿数据（rebase、恢复、迁移后的兼容路径）：
+ * 不触发保存编排（面板输入走 editor-session 的 setEditorInput）。
+ * 草稿与基线一致时清除条目（与原草稿表语义一致：不残留假脏条目）。
+ */
 export function setFileDraft(projectId: string, path: string, content: string, baseContent: string): void {
   if (content === baseContent) {
     clearFileDraft(projectId, path)
     return
   }
-  const previous = getFileDraftEntry(projectId, path)
-  projectBucket(projectId).set(path, {
-    content,
-    baseContent,
-    ...(previous?.originPath !== undefined ? { originPath: previous.originPath } : {}),
-    updatedAt: new Date().toISOString(),
-  })
-  scheduleDraftBackup(projectId, path, {
+  const previous = getEditorSession(projectId, path)
+  upsertEditorSessionData(projectId, path, {
     content,
     baseContent,
     ...(previous?.originPath !== undefined ? { originPath: previous.originPath } : {}),
@@ -80,13 +85,10 @@ export function setFileDraft(projectId: string, path: string, content: string, b
 }
 
 /**
- * 清除草稿（保存成功清除本次保存绑定的草稿、放弃更改、读取最新后调用）；
- * 同步删除持久化备份记录。
+ * 清除草稿（放弃更改、采用磁盘版本后调用）；同步删除持久化备份记录。
  */
 export function clearFileDraft(projectId: string, path: string): void {
-  draftsByProject.get(projectId)?.delete(path)
-  restoredDraftPathsByProject.get(projectId)?.delete(path)
-  removeDraftBackup(projectId, path)
+  clearEditorSession(projectId, path)
 }
 
 /**
@@ -94,50 +96,40 @@ export function clearFileDraft(projectId: string, path: string): void {
  * 保留原路径关联（originPath）与磁盘基线，旧路径条目与备份随之清除。
  */
 export function moveFileDraft(projectId: string, fromPath: string, toPath: string): void {
-  const bucket = draftsByProject.get(projectId)
-  const entry = bucket?.get(fromPath)
-  if (!entry) {
-    return
-  }
-  bucket!.delete(fromPath)
-  bucket!.set(toPath, {
-    ...entry,
-    originPath: entry.originPath ?? fromPath,
-    updatedAt: new Date().toISOString(),
-  })
-  restoredDraftPathsByProject.get(projectId)?.delete(fromPath)
-  removeDraftBackup(projectId, fromPath)
-  scheduleDraftBackup(projectId, toPath, {
-    content: entry.content,
-    baseContent: entry.baseContent,
-    originPath: entry.originPath ?? fromPath,
-  })
+  migrateEditorSession(projectId, fromPath, toPath)
 }
 
 /** 某文件当前是否有未保存草稿 */
 export function isFileDraftDirty(projectId: string, path: string): boolean {
-  return draftsByProject.get(projectId)?.has(path) ?? false
+  const session = getEditorSession(projectId, path)
+  return session !== undefined && isEditorSessionDirty(session)
 }
 
-/** 项目内是否存在任何未保存草稿（beforeunload 守卫用） */
+/**
+ * 项目内是否存在需要离开提醒的内容（§六.3）：有待写、在途、失败、冲突、
+ * 恢复未校验或守护未处理内容时提醒继续存在；正常保存完成后不因短暂编辑历史提醒。
+ */
 export function hasDirtyDrafts(projectId: string): boolean {
-  const bucket = draftsByProject.get(projectId)
-  return bucket !== undefined && bucket.size > 0
+  return listDirtyDraftPaths(projectId).length > 0
 }
 
 /** 项目内全部未保存草稿路径（草稿守护/恢复提示用） */
 export function listDirtyDraftPaths(projectId: string): string[] {
-  return [...(draftsByProject.get(projectId)?.keys() ?? [])]
+  // 有待写内容，或在途/失败/冲突/恢复未校验/守护未处理的会话都保留提醒与再入口
+  return listEditorSessions(projectId)
+    .filter((session) => isEditorSessionDirty(session) || editorSessionNeedsLeaveGuard(session))
+    .map((session) => session.path)
 }
 
-/** 某文件的草稿是否为「刷新后恢复」且尚未被知悉（面板展示「已恢复未保存草稿」） */
+/** 某文件的草稿是否为「刷新后恢复」且尚未被知悉（面板展示「已恢复上次未写完的内容」） */
 export function isDraftRestoredFromBackup(projectId: string, path: string): boolean {
-  return restoredDraftPathsByProject.get(projectId)?.has(path) ?? false
+  const session = getEditorSession(projectId, path)
+  return session !== undefined && session.restoredPending && !session.restoredAcked
 }
 
 /** 用户已知悉恢复提示（打开文件/关闭提示后调用），标记出队 */
 export function acknowledgeRestoredDraft(projectId: string, path: string): void {
-  restoredDraftPathsByProject.get(projectId)?.delete(path)
+  acknowledgeRestoredEditor(projectId, path)
 }
 
 export type RestoredDraftReport = {
@@ -147,39 +139,23 @@ export type RestoredDraftReport = {
 }
 
 /**
- * 重新进入项目时恢复持久化草稿（数据安全计划 §3-2）：
- * 只回填内存表中尚无草稿的路径（同页会话内存比备份新，不回退）；恢复绝不
- * 触发正文写盘。读取失败抛错，由调用方明确提示并保留当前页面内容。
+ * 重新进入项目时恢复持久化草稿（§六.2）：
+ * 只回填内存中尚无有效会话的路径（同页会话内存比备份新，不回退）；恢复绝不
+ * 触发正文写盘。旧记录缺少会话/冲突字段时按「有人工内容、待校验」处理，
+ * 不能因字段缺失丢弃。读取失败抛错，由调用方明确提示并保留当前页面内容。
  */
 export async function restorePersistedDrafts(projectId: string): Promise<RestoredDraftReport> {
   const records = await loadProjectDraftBackups(projectId)
-  const bucket = projectBucket(projectId)
-  const restored: RestoredDraftReport['restored'] = []
-  for (const record of records) {
-    if (bucket.has(record.path)) {
-      continue
-    }
-    bucket.set(record.path, {
+  return restoreEditorSessions(
+    projectId,
+    records.map((record) => ({
+      path: record.path,
       content: record.content,
       baseContent: record.baseContent,
       ...(record.originPath !== undefined ? { originPath: record.originPath } : {}),
       updatedAt: record.updatedAt,
-    })
-    restored.push({
-      path: record.path,
-      ...(record.originPath !== undefined ? { originPath: record.originPath } : {}),
-      updatedAt: record.updatedAt,
-    })
-  }
-  restored.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  if (restored.length > 0) {
-    const marks = restoredDraftPathsByProject.get(projectId) ?? new Set<string>()
-    for (const item of restored) {
-      marks.add(item.path)
-    }
-    restoredDraftPathsByProject.set(projectId, marks)
-  }
-  return { projectId, restored }
+    })),
+  )
 }
 
 /** 立即把待写草稿备份落盘（切换项目/关闭面板等关键时机；ProjectView 调用） */
@@ -187,8 +163,7 @@ export function flushDraftBackupsNow(): Promise<void> {
   return flushDraftBackup()
 }
 
-/** 测试专用：清空整张草稿表（含恢复标记） */
+/** 测试专用：清空整张草稿表（含恢复标记与底层会话） */
 export function _clearFileDraftsForTest(): void {
-  draftsByProject.clear()
-  restoredDraftPathsByProject.clear()
+  _resetEditorSessionsForTest()
 }

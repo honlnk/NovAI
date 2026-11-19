@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
-import type { FileContentView, ProjectFileNodeView } from '@novai/core/services/types'
+import { computed, nextTick, ref, watch } from 'vue'
+import type { FileContentView } from '@novai/core/services/types'
 import { countContentChars } from '@novai/core'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import Tooltip from '../ui/Tooltip.vue'
 import PanelHeader from './PanelHeader.vue'
-import type { SaveFileOutcome } from '../../stores/project'
 import { useProjectStore } from '../../stores/project'
 import {
   acknowledgeRestoredDraft,
@@ -14,8 +13,19 @@ import {
   getFileDraft,
   getFileDraftEntry,
   isDraftRestoredFromBackup,
-  setFileDraft,
 } from '../../composables/useFileDrafts'
+import {
+  adoptDiskInEditor,
+  collapseEditorConflict,
+  editorSessionPhase,
+  expandEditorConflict,
+  getEditorSession,
+  openEditorSession,
+  overwriteEditorContent,
+  requestEditorSave,
+  setEditorInput,
+  rebaseCleanSessionBaseline,
+} from '../../composables/editor-session'
 import {
   buildTextHighlightSegments,
   markdownBlockIndicesInRange,
@@ -24,26 +34,23 @@ import {
 } from '../../composables/useChangeHighlights'
 import { buildLineDiffRows, countLineDiff } from '../../utils/text-diff'
 import { suggestCopyPath } from '../../utils/file-tree'
-import { applyDraftAfterSave, resolveDraftAfterSave } from '../../utils/save-outcome'
 import { parseMarkdownBlocks } from '../../utils/markdown-blocks'
 import AppIcon from '../ui/AppIcon.vue'
 
 /**
- * 普通文件内容（右侧面板的文件内容类型）：预览/编辑两态、引用选中与草稿行为。
+ * 普通文件内容（右侧面板的文件内容类型）：预览/编辑两态、引用选中与保存编排。
  * 内容卡片撑满面板剩余高度，滚动发生在卡片内部。
  *
- * 保存状态机（交互优化计划 §6 + 数据安全计划 §3-1/§3-3/§3-6）：
- * - 保存绑定完整请求上下文（项目、路径、内容快照、磁盘版本）：等待写盘期间
- *   切换文件/项目，结果只作用于本次保存的目标；保存期间继续输入的内容保留为
- *   未保存（成功后基线换到刚落盘的内容），不会被成功回调清除；
- * - 保存状态按路径隔离（saving/失败/冲突），不污染当前显示的其他文件；
- * - 版本冲突（AI 已写盘）一次点击即进入冲突界面：并列查看人工草稿与磁盘
- *   修改（红=仅草稿有、绿=仅磁盘有），提供返回编辑/另存副本/两种需二次确认
- *   的有损采用；查看与另存副本均保留原草稿与冲突状态。
- * - 草稿守护（数据安全计划 §3-3）：AI 删除/重命名有人工草稿的文件时，
- *   ProjectView 置入 draftGuard——删除给「恢复为草稿副本/放弃草稿并关闭」，
- *   重命名给「迁移草稿/放弃草稿并打开新文件」，不自动清空编辑现场。
- * - 刷新后恢复的草稿（IndexedDB 备份回填）以横幅提示，含磁盘基线是否变化。
+ * 保存状态机（正文自动保存与并发冲突交互重设计计划 §四）：
+ * 编辑会话按「项目 + 路径」收敛在 editor-session 模块（待写/在途/成功/失败/冲突/
+ * 守护统一状态），本组件只负责展示与发送用户操作；保存编排绑定固定归属，
+ * 「同路径磁盘版本更新（保存回写）」「切换到另一个文件」「同路径切换到另一个项目」
+ * 是三个不同事件——同路径回写不重置编辑态、不清冲突再入口与失败态。
+ * 版本冲突一次点击即进入冲突比较：并列查看人工输入与磁盘修改（红=仅草稿有、
+ * 绿=仅磁盘有），差异用最新输入与最新磁盘；四个出口中两种采用需二次确认。
+ * 草稿守护（§3-3）：AI 删除/重命名有未落盘内容的文件时置入守护会话——
+ * 删除给「恢复为草稿副本/放弃草稿并关闭」，重命名给「迁移草稿/放弃草稿并打开新文件」。
+ * 刷新后恢复的内容（IndexedDB 恢复镜像回填）以横幅提示，含磁盘基线是否变化。
  *
  * 定位高亮（交互优化计划 §7）：AI 写盘后按账本坐标在预览中定位——新内容绿显、
  * 被替换原文以相邻红段呈现（比较用，不写盘）；多处修改逐处切换，淡出后保留
@@ -55,20 +62,14 @@ const props = defineProps<{
   projectId: string
   /** 空态提示（AI 删除了正打开的文件时由 ProjectView 置入，指向回收站去向） */
   notice?: { name: string; trashPath?: string } | null
-  /** 保存处理器（ProjectView 注入 projectStore.saveFile）；面板据此驱动保存状态 */
-  saveFile: (path: string, content: string, options?: { expectedUpdatedAt?: string; force?: boolean; projectId?: string }) => Promise<SaveFileOutcome>
   /** 变更通知「查看差异」请求令牌：ProjectView 每次处理通知点击时递增（路径未变时也要切回预览） */
   locateToken?: number
-  /** 草稿守护（数据安全计划 §3-3）：AI 删除/重命名有人工草稿的当前文件时置入 */
-  draftGuard?: DraftGuardState | null
   /** 草稿恢复令牌：ProjectView 从 IndexedDB 恢复草稿后递增（面板重读当前路径草稿） */
   draftRestoreToken?: number
 }>()
 
 const emit = defineEmits<{
   close: []
-  /** 冲突时「读取最新（放弃草稿）」：ProjectView 重读磁盘内容 */
-  reload: [path: string]
   selectQuote: [payload: { path: string; name: string; text: string }]
   /** 点击变更通知：ProjectView 打开对应文件并（可定位时）重播稳定差异 */
   locateChange: [notice: ChangeNotice]
@@ -86,36 +87,19 @@ const hl = useChangeHighlights(props.projectId)
 const viewMode = ref<'preview' | 'edit'>('preview')
 const editDraft = ref('')
 
-/** 按路径隔离的保存过程态与失败态（数据安全计划 §3-1：不污染其他文件） */
-const savingPaths = reactive(new Set<string>())
-/** 保存状态不能只按路径隔离：不同项目可以有完全相同的章节路径。 */
-function saveStateKey(projectId: string, path: string): string {
-  return JSON.stringify([projectId, path])
-}
-type SaveErrorInfo = { message: string; conflict: boolean; diskUpdatedAt?: string }
-const saveErrors = reactive(new Map<string, SaveErrorInfo>())
-
-/** 冲突界面状态（§3-6 版本比较与选择）；null = 不在冲突视图 */
-type SaveConflictState = {
-  projectId: string
-  path: string
-  /** 人工草稿全文（进入冲突时的快照） */
-  draft: string
-  /** 草稿所依据的磁盘基线（说明用） */
-  draftBase: string
-  /** 磁盘当前全文（AI 修改后）；missing 时无意义 */
-  disk: string
-  diskUpdatedAt?: string
-  /** 文件确实不存在；读取失败另行保留原因，不伪装成已删除 */
-  missing: boolean
-  unreadable?: string
-}
-const conflictView = ref<SaveConflictState | null>(null)
-let conflictGeneration = 0
+/** 当前路径的编辑会话（状态机数据源；无会话 = 无编辑活动） */
+const pathKey = computed(() => props.file?.path ?? '')
+const session = computed(() =>
+  pathKey.value ? getEditorSession(props.projectId, pathKey.value) ?? null : null,
+)
+const phase = computed(() => (session.value ? editorSessionPhase(session.value) : 'clean'))
+const isSavingThisFile = computed(() => phase.value === 'saving')
+const conflictActive = computed(() => session.value?.conflict !== undefined)
+const conflictFailure = computed(() =>
+  session.value?.failure !== undefined && !conflictActive.value,
+)
 /** 有损采用的二次确认步（null=未开始；第二次点击才执行） */
 const confirmAdopt = ref<'disk' | 'draft' | null>(null)
-/** 有损采用单独编号：退出冲突/切换文件后，在途结果不得再修改新现场。 */
-let adoptGeneration = 0
 /** 另存副本表单（冲突界面与删除守护共用） */
 const copyFormOpen = ref(false)
 const copyTarget = ref('')
@@ -129,13 +113,9 @@ const canEdit = computed(() => {
 })
 
 /** 草稿与磁盘内容不一致时为脏，用于显示「未保存」标记 */
-const isDirty = computed(() => editDraft.value !== (props.file?.content ?? ''))
-
-/** 当前路径的保存状态（§3-1 按项目 + 路径隔离） */
-const pathKey = computed(() => props.file?.path ?? '')
-const currentSaveStateKey = computed(() => saveStateKey(props.projectId, pathKey.value))
-const isSavingThisFile = computed(() => pathKey.value !== '' && savingPaths.has(currentSaveStateKey.value))
-const thisFileError = computed(() => (pathKey.value !== '' ? saveErrors.get(currentSaveStateKey.value) : undefined))
+const isDirty = computed(() =>
+  session.value !== null && session.value.content !== session.value.baseContent,
+)
 
 /** 稿件字数（§6）：统计当前阅读版本，编辑模式含未保存草稿；JSON 非稿件不统计 */
 const wordCount = computed(() => {
@@ -149,7 +129,8 @@ const wordCount = computed(() => {
 /** 头部保存状态文案（已保存/未保存/正在保存/保存失败/保存冲突） */
 const saveStatusLabel = computed(() => {
   if (isSavingThisFile.value) return '正在保存'
-  if (thisFileError.value) return thisFileError.value.conflict ? '保存冲突' : '保存失败'
+  if (conflictActive.value) return '保存冲突'
+  if (conflictFailure.value) return '保存失败'
   return isDirty.value ? '未保存' : '已保存'
 })
 
@@ -165,21 +146,55 @@ const restoredNotice = computed(() => {
   }
 })
 
-/** 冲突界面的行级差异（§3-6 并列查看） */
+/** 删除/重命名守护横幅数据（会话守护状态 + 展示名） */
+const guardState = computed(() => {
+  const guard = session.value?.guard
+  if (!guard) {
+    return null
+  }
+  const path = session.value!.path
+  return {
+    kind: guard.kind,
+    path,
+    name: path.split('/').pop() ?? path,
+    ...(guard.toPath !== undefined ? { toPath: guard.toPath } : {}),
+    ...(guard.trashPath !== undefined ? { trashPath: guard.trashPath } : {}),
+  }
+})
+
+/** 冲突界面数据（会话冲突展开时的展示形态；差异用最新输入与最新磁盘） */
+const conflictView = computed(() => {
+  const active = session.value
+  const conflict = active?.conflict
+  if (!active || !conflict || !conflict.expanded) {
+    return null
+  }
+  return {
+    path: active.path,
+    /** 人工输入全文（实时最新，不冻结在第一次冲突） */
+    draft: active.content,
+    draftBase: active.baseContent,
+    missing: conflict.missing,
+    ...(conflict.unreadable !== undefined ? { unreadable: conflict.unreadable } : {}),
+    probing: conflict.probing,
+  }
+})
+
+/** 冲突界面的行级差异（§3-6 并列查看；磁盘可读时） */
 const conflictRows = computed(() => {
-  const state = conflictView.value
-  if (!state || state.missing) {
+  const disk = session.value?.conflict?.disk
+  if (!conflictView.value || !disk || conflictView.value.probing) {
     return []
   }
-  return buildLineDiffRows(state.draft, state.disk)
+  return buildLineDiffRows(conflictView.value.draft, disk.content)
 })
 
 const conflictStats = computed(() => {
-  const state = conflictView.value
-  if (!state || state.missing) {
+  const disk = session.value?.conflict?.disk
+  if (!conflictView.value || !disk || conflictView.value.probing) {
     return null
   }
-  return countLineDiff(state.draft, state.disk)
+  return countLineDiff(conflictView.value.draft, disk.content)
 })
 
 // ===== 定位高亮（§7）：反馈条、绿红切分与 Markdown 块映射 =====
@@ -267,21 +282,22 @@ watch(
   },
 )
 
+// 「切换文件 / 切换项目」与「同路径磁盘版本更新」是不同事件（§四.4 保存身份）：
+// 监听源必须是标量值比较——保存成功会用新文件对象回写同路径，getter 返回新数组的
+// 引用比较会把它误判为切换，清掉编辑态、冲突入口与保存错误（2026-11-08 真机缺陷）。
 watch(
-  () => [props.file?.path, props.projectId] as const,
+  [() => props.file?.path, () => props.projectId],
   () => {
-    // 切换文件或项目（同路径跨项目也要换草稿桶）：旧文件草稿已随每次编辑实时入表
-    //（见 editDraft watch），此处恢复新文件的草稿；无草稿以磁盘内容初始化——
-    // 否则 preview 下 isDirty 误报「未保存」。回预览模式，草稿若存在以「未保存」标记呈现。
+    // 真实切换文件或项目（同路径跨项目也要换会话桶）：恢复新路径的会话草稿；
+    // 无草稿以磁盘内容初始化——否则 preview 下 isDirty 误报「未保存」。
+    // 回预览模式；冲突/失败态在各自会话里按路径隔离保留，不随切换丢失。
     viewMode.value = 'preview'
-    editDraft.value = props.file ? (getFileDraft(props.projectId, props.file.path) ?? props.file.content) : ''
-    conflictView.value = null
-    conflictGeneration += 1
-    adoptGeneration += 1
+    editDraft.value = props.file
+      ? (getFileDraft(props.projectId, props.file.path) ?? props.file.content)
+      : ''
     confirmAdopt.value = null
     copyFormOpen.value = false
     copyError.value = ''
-    saveErrors.delete(currentSaveStateKey.value)
     copySavedPath.value = ''
     // 切换文件时立即落盘草稿备份（数据安全计划 §3-2 的立即落盘时机）
     void flushDraftBackupsNow()
@@ -289,17 +305,36 @@ watch(
   { immediate: true },
 )
 
-// 进入编辑模式时：优先恢复该文件的保留草稿，无草稿才以磁盘当前内容初始化
+// 同路径磁盘版本更新（保存回写 / 外部修改重读）：clean 会话跟随最新磁盘版本
+// （最新磁盘版本仍要正确进入保存会话）；有待写内容的会话不动基线——保存时由
+// 版本 + 内容哈希校验判定，冲突在阶段 3 冻结。
+watch(
+  () => [props.file?.path, props.file?.updatedAt, props.projectId] as const,
+  ([path]) => {
+    if (!props.file || !path || path !== props.file.path) {
+      return
+    }
+    rebaseCleanSessionBaseline(props.projectId, path, props.file.content, props.file.updatedAt)
+    if (viewMode.value === 'edit') {
+      return
+    }
+    if (!getFileDraft(props.projectId, path)) {
+      editDraft.value = props.file.content
+    }
+  },
+)
+
+// 进入编辑模式时：建立（或恢复）该文件的编辑会话，草稿原样回填
 watch(viewMode, (mode) => {
-  if (mode === 'edit') {
-    editDraft.value = (props.file ? getFileDraft(props.projectId, props.file.path) : undefined)
-      ?? props.file?.content
-      ?? ''
+  const file = props.file
+  if (mode === 'edit' && file && isEditablePath(file.path)) {
+    const active = openEditorSession(props.projectId, file.path, file.content, file.updatedAt)
+    editDraft.value = active.content
   }
 })
 
 // 「查看差异」通知点击（§7）：当前文件正在编辑时路径不变，file.path watch 不触发，
-// 由令牌 watch 强制切回预览呈现重播差异（草稿保留在草稿表，以「未保存」标记呈现）
+// 由令牌 watch 强制切回预览呈现重播差异（草稿保留在会话，以「未保存」标记呈现）
 watch(
   () => props.locateToken,
   () => {
@@ -323,26 +358,13 @@ watch(
   },
 )
 
-// 同文件被外部更新（AI 改动后 ProjectView 重读）：预览模式且无保留草稿时跟随磁盘内容，
-// 否则「未保存」标记会对着旧副本误报；编辑模式不动本地草稿副本（§6 草稿保护）
-watch(
-  () => props.file?.updatedAt,
-  () => {
-    if (!props.file || viewMode.value === 'edit') {
-      return
-    }
-    if (!getFileDraft(props.projectId, props.file.path)) {
-      editDraft.value = props.file.content
-    }
-  },
-)
-
-// 编辑会话中每次改动实时入草稿表（切换文件不静默丢失的关键）；与磁盘一致即清除
+// 编辑会话中每次改动实时入会话与恢复镜像（切换文件不静默丢失的关键）；
+// 去抖自动保存（阶段 2）由会话模块按 2000ms 窗口自行调度
 watch([editDraft, () => props.file?.path, () => props.projectId], ([draft, path, projectId]) => {
   if (!path || viewMode.value !== 'edit' || !props.file) {
     return
   }
-  setFileDraft(projectId, path, draft, props.file.content)
+  setEditorInput(projectId, path, draft)
 })
 
 /**
@@ -368,7 +390,7 @@ function shouldRenderMarkdown(format: string) {
 }
 
 /**
- * 编辑模式键盘处理：Ctrl/Cmd+S 手动保存（失焦不自动保存）。
+ * 编辑模式键盘处理：Ctrl/Cmd+S 立即收口（可选快捷方式，不显示「必须保存」提示）。
  */
 function handleKeydown(event: KeyboardEvent) {
   const isSaveShortcut = (event.ctrlKey || event.metaKey) && event.key === 's'
@@ -379,143 +401,64 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 /**
- * 保存（数据安全计划 §3-1/§3-6）：开始时固定项目、路径、内容快照与磁盘版本；
- * 写盘自带版本校验（expectedUpdatedAt = 草稿所依据的磁盘版本），磁盘已被 AI
- * 修改时本次写入取消、一次点击即进入冲突界面。
- * 成功回调只处理本次保存绑定的草稿：保存期间继续输入的内容保留为未保存
- *（基线换到刚落盘的内容），与磁盘一致的部分清除。
+ * 手动保存（§四 统一编排）：会话模块串行调度——快照（内容 + 基线版本 + 基线内容
+ * 哈希）在开始时固定，写盘自带版本校验；守护/冲突未解决时内部拒绝写入。
+ * 结果只作用于该会话：成功只承认本次快照（在途新输入保留），冲突读取外部版本
+ * 并登记（一次点击即进入比较界面）。
  */
-async function handleSave(force = false) {
-  const file = props.file
-  if (!file || !canEdit.value || !isDirty.value) {
+async function handleSave() {
+  const path = pathKey.value
+  if (!path || !canEdit.value) {
     return
   }
-  const projectId = props.projectId
-  const path = file.path
-  const stateKey = saveStateKey(projectId, path)
-  if (savingPaths.has(stateKey)) {
-    return
-  }
-
-  const savedDraft = editDraft.value
-  const baseUpdatedAt = file.updatedAt
-
-  savingPaths.add(stateKey)
-  saveErrors.delete(stateKey)
-  copySavedPath.value = ''
-  const outcome = await props.saveFile(path, savedDraft, {
-    projectId,
-    ...(force ? {} : { expectedUpdatedAt: baseUpdatedAt }),
-  })
-  savingPaths.delete(stateKey)
-
-  // 保存完成后的处理全部使用开始时固定的归属（projectId + path），
-  // 与当前面板显示哪个文件无关（§3-1：乙的内容、草稿与状态不被甲的保存修改）
-  if (outcome.ok) {
-    applyDraftAfterSave(
-      projectId,
-      path,
-      resolveDraftAfterSave(getFileDraft(projectId, path), outcome.file.content),
-    )
-    return
-  }
-
-  saveErrors.set(stateKey, {
-    message: outcome.message,
-    conflict: outcome.conflict,
-    ...(outcome.diskUpdatedAt !== undefined ? { diskUpdatedAt: outcome.diskUpdatedAt } : {}),
-  })
-  if (outcome.conflict) {
-    // 版本冲突（AI 已写盘/文件已不存在）：一次点击即进入冲突界面（§3-6）
-    await openSaveConflict(path, savedDraft)
-  }
+  await requestEditorSave(props.projectId, path, { trigger: 'manual' })
 }
 
-/** 进入冲突界面：读取磁盘当前内容（AI 修改后），与草稿快照并列呈现 */
-async function openSaveConflict(path: string, draft: string) {
-  const generation = ++conflictGeneration
-  const projectId = props.projectId
-  const entry = getFileDraftEntry(projectId, path)
-  const probe = await projectStore.probeFile(path, projectId)
-  if (generation !== conflictGeneration || props.projectId !== projectId || props.file?.path !== path) {
-    return
-  }
-  const disk = probe.kind === 'ok' ? probe.file : null
-  conflictView.value = {
-    projectId,
-    path,
-    draft,
-    draftBase: entry?.baseContent ?? '',
-    disk: disk?.content ?? '',
-    ...(disk?.updatedAt !== undefined ? { diskUpdatedAt: disk.updatedAt } : {}),
-    missing: probe.kind === 'missing',
-    ...(probe.kind === 'unreadable' ? { unreadable: probe.message } : {}),
-  }
-  confirmAdopt.value = null
-  copyFormOpen.value = false
-  copyError.value = ''
-}
-
-/** 冲突界面「返回继续编辑」（§3-6）：只离开冲突处理，草稿与冲突状态保留 */
+/** 冲突界面「返回继续编辑」（§3-6）：只离开冲突处理，输入与冲突状态保留（再入口保留） */
 function backToEditFromConflict() {
-  conflictView.value = null
-  adoptGeneration += 1
+  if (pathKey.value) {
+    collapseEditorConflict(props.projectId, pathKey.value)
+  }
   confirmAdopt.value = null
   copyFormOpen.value = false
   copyError.value = ''
   viewMode.value = 'edit'
 }
 
-/** 冲突未处理时的再入口（返回编辑后）：重读磁盘最新，重新打开冲突界面 */
+/** 冲突未处理时的再入口（返回编辑后）：重读磁盘最新，重新展开比较 */
 async function reopenSaveConflict() {
-  const error = thisFileError.value
   const path = pathKey.value
-  if (!error?.conflict || !path) {
+  if (!path || !conflictActive.value) {
     return
   }
-  const draft = getFileDraft(props.projectId, path)
-  if (draft === undefined) {
-    return
-  }
-  await openSaveConflict(path, draft)
+  await expandEditorConflict(props.projectId, path)
 }
 
 /**
- * 采纳磁盘版本（§3-6 有损操作，需二次确认）：先重新读取磁盘，读取成功才放弃草稿
- * 并删除恢复记录；读取失败或文件又消失时草稿必须完整保留，回到冲突界面呈现
- * 最新探测结果（「采用 AI 版本」绝不先删稿后读盘）。
+ * 采纳磁盘版本（§3-6 有损操作，需二次确认）：会话层先重新读取磁盘，读取成功才
+ * 放弃人工内容并删除恢复记录；读取失败或文件又消失时草稿必须完整保留，
+ * 冲突界面呈现最新探测结果（「采用 AI 版本」绝不先删稿后读盘）。
  */
 async function adoptDiskVersion() {
-  const state = conflictView.value
-  if (!state) {
+  const path = pathKey.value
+  if (!path || !conflictView.value) {
     return
   }
   if (confirmAdopt.value !== 'disk') {
     confirmAdopt.value = 'disk'
     return
   }
-  const generation = ++adoptGeneration
-  const probe = await projectStore.probeFile(state.path, state.projectId)
-  if (generation !== adoptGeneration) return
-  if (probe.kind !== 'ok') {
-    // 读取失败/文件已不存在：不丢草稿。仍在原冲突现场时刷新冲突界面（其内部
-    // 自带代次与归属核对，已切走则静默丢弃，草稿仍在草稿表）。
-    await openSaveConflict(state.path, state.draft)
-    return
-  }
-  clearFileDraft(state.projectId, state.path)
-  saveErrors.delete(saveStateKey(state.projectId, state.path))
-  conflictView.value = null
+  const result = await adoptDiskInEditor(props.projectId, path)
   confirmAdopt.value = null
-  if (props.projectId === state.projectId && props.file?.path === state.path) {
-    await projectStore.openFile(state.path)
+  if (result === 'resolved' && props.file?.path === path) {
+    await projectStore.openFile(path)
   }
 }
 
-/** 采纳我的草稿（§3-6 有损操作，需二次确认）：草稿整份覆盖磁盘，AI 修改被替换 */
+/** 采纳我的草稿（§3-6 有损操作，需二次确认）：整份覆盖磁盘；等待期间新输入按新基线保留 */
 async function adoptDraftVersion() {
-  const state = conflictView.value
-  if (!state || copyBusy.value) {
+  const path = pathKey.value
+  if (!path || !conflictView.value || copyBusy.value) {
     return
   }
   if (confirmAdopt.value !== 'draft') {
@@ -523,26 +466,13 @@ async function adoptDraftVersion() {
     return
   }
   copyBusy.value = true
-  const generation = ++adoptGeneration
-  const outcome = await props.saveFile(state.path, state.draft, { force: true, projectId: state.projectId })
+  const result = await overwriteEditorContent(props.projectId, path)
   copyBusy.value = false
-  if (outcome.ok) {
-    // 与正常保存一致：只清理本次覆盖的快照；等待期间继续输入的新稿要 rebase 保留。
-    applyDraftAfterSave(
-      state.projectId,
-      state.path,
-      resolveDraftAfterSave(getFileDraft(state.projectId, state.path), outcome.file.content),
-    )
-    if (generation === adoptGeneration) {
-      saveErrors.delete(saveStateKey(state.projectId, state.path))
-      conflictView.value = null
-      confirmAdopt.value = null
-    }
+  if (result.ok) {
+    confirmAdopt.value = null
     return
   }
-  if (generation === adoptGeneration) {
-    copyError.value = outcome.message
-  }
+  copyError.value = result.message ?? '保存失败'
 }
 
 /** 打开另存副本表单（冲突界面 / 删除守护共用）；目标名预填不冲突的建议名 */
@@ -559,10 +489,10 @@ function openCopyForm(sourcePath: string) {
  * 冲突界面的副本保留原草稿与冲突状态；删除守护的副本即草稿去向（清原草稿）。
  */
 async function submitCopy(sourcePath: string, options: { resolveSource: boolean }) {
-  const projectId = conflictView.value?.projectId ?? props.projectId
+  const projectId = props.projectId
   const target = copyTarget.value.trim()
   const source = options.resolveSource
-    ? (getFileDraft(projectId, sourcePath) ?? conflictView.value?.draft)
+    ? (getFileDraft(projectId, sourcePath) ?? session.value?.content ?? conflictView.value?.draft)
     : (conflictView.value?.draft ?? getFileDraft(projectId, sourcePath))
   if (!target || copyBusy.value || source === undefined) {
     return
@@ -581,8 +511,7 @@ async function submitCopy(sourcePath: string, options: { resolveSource: boolean 
   if (options.resolveSource) {
     // 删除守护的「恢复为草稿副本」：草稿内容已成新文件，清原路径草稿并打开副本
     clearFileDraft(projectId, sourcePath)
-    conflictView.value = null
-    saveErrors.delete(saveStateKey(projectId, sourcePath))
+    confirmAdopt.value = null
     emit('guard-resolved')
     if (props.projectId === projectId) {
       await projectStore.refreshTree()
@@ -599,7 +528,7 @@ function discardGuardDraft() {
   emit('guard-discard')
 }
 
-/** 保存失败条「放弃更改」（§6）：丢掉草稿回到磁盘当前内容，清该路径失败态 */
+/** 保存失败条「放弃更改」（§6）：丢掉草稿回到磁盘当前内容，清该会话失败态 */
 function discardDraft() {
   const file = props.file
   if (!file) {
@@ -607,7 +536,6 @@ function discardDraft() {
   }
   clearFileDraft(props.projectId, file.path)
   editDraft.value = file.content
-  saveErrors.delete(saveStateKey(props.projectId, file.path))
 }
 
 /** 重命名守护「把草稿迁移到新文件」（§3-3）：ProjectView 迁移草稿并打开新路径 */
@@ -660,19 +588,19 @@ function handleContentMouseup() {
         <h2 class="truncate text-sm font-semibold text-gray-800">
           {{ file ? file.name : '内容预览' }}
         </h2>
-        <!-- 保存状态（§6 + §3-1 按路径隔离）：已保存 / 未保存 / 正在保存 / 保存失败 / 保存冲突 -->
+        <!-- 保存状态（§四 按项目 + 路径隔离）：已保存 / 未保存 / 正在保存 / 保存失败 / 保存冲突 -->
         <span
           v-if="file"
           class="flex shrink-0 items-center gap-1 text-xs"
           :class="{
-            'text-gray-400': !isSavingThisFile && !thisFileError && !isDirty,
-            'text-amber-600': !isSavingThisFile && !thisFileError && isDirty,
+            'text-gray-400': !isSavingThisFile && !conflictActive && !conflictFailure && !isDirty,
+            'text-amber-600': !isSavingThisFile && !conflictActive && !conflictFailure && isDirty,
             'text-blue-600': isSavingThisFile,
-            'text-red-600': Boolean(thisFileError),
+            'text-red-600': conflictActive || conflictFailure,
           }"
         >
           <span
-            v-if="!isSavingThisFile && !thisFileError && isDirty"
+            v-if="!isSavingThisFile && !conflictActive && !conflictFailure && isDirty"
             class="h-1.5 w-1.5 rounded-full bg-amber-500"
           />
           {{ saveStatusLabel }}
@@ -726,35 +654,35 @@ function handleContentMouseup() {
 
     <!-- 内容区域：卡片撑满剩余高度，滚动发生在卡片内部（与计划详情一致） -->
     <div class="flex min-h-0 flex-1 flex-col p-4">
-      <!-- 草稿守护横幅（§3-3）：AI 删除/重命名有人工草稿的文件时置入，不自动清空编辑现场 -->
+      <!-- 草稿守护横幅（§3-3）：AI 删除/重命名有人工内容的文件时置入，不自动清空编辑现场 -->
       <div
-        v-if="draftGuard"
+        v-if="guardState"
         class="mb-3 flex shrink-0 flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2.5"
         role="alert"
       >
         <div class="flex items-start gap-2">
           <AppIcon name="triangle-alert" :size="15" class="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <div class="min-w-0 flex-1 text-xs leading-5 text-amber-800">
-            <template v-if="draftGuard.kind === 'deleted'">
-              <p class="font-medium">「{{ draftGuard.name }}」已被 AI 删除并移入回收站</p>
+            <template v-if="guardState.kind === 'deleted'">
+              <p class="font-medium">「{{ guardState.name }}」已被 AI 删除并移入回收站</p>
               <p class="text-amber-700">你的未保存草稿已保留，不会被自动丢弃；可恢复为一份新文件，或放弃草稿。</p>
-              <p v-if="draftGuard.trashPath" class="truncate text-[11px] text-amber-600" :title="draftGuard.trashPath">
-                原文在回收站：{{ draftGuard.trashPath }}
+              <p v-if="guardState.trashPath" class="truncate text-[11px] text-amber-600" :title="guardState.trashPath">
+                原文在回收站：{{ guardState.trashPath }}
               </p>
             </template>
             <template v-else>
-              <p class="font-medium">「{{ draftGuard.name }}」已被 AI 重命名为 {{ draftGuard.toPath }}</p>
+              <p class="font-medium">「{{ guardState.name }}」已被 AI 重命名为 {{ guardState.toPath }}</p>
               <p class="text-amber-700">你的未保存草稿仍指向旧路径；迁移后以「未保存」标记出现在新文件上。</p>
             </template>
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <template v-if="draftGuard.kind === 'deleted'">
+          <template v-if="guardState.kind === 'deleted'">
             <button
               v-if="!copyFormOpen"
               type="button"
               class="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500"
-              @click="openCopyForm(draftGuard.path)"
+              @click="openCopyForm(guardState.path)"
             >
               恢复为草稿副本
             </button>
@@ -784,7 +712,7 @@ function handleContentMouseup() {
           </template>
         </div>
         <!-- 删除守护的副本命名表单：新建文件语义，目标存在则要求另选名称 -->
-        <div v-if="copyFormOpen && draftGuard.kind === 'deleted'" class="flex flex-col gap-1.5">
+        <div v-if="copyFormOpen && guardState.kind === 'deleted'" class="flex flex-col gap-1.5">
           <div class="flex items-center gap-2">
             <input
               v-model="copyTarget"
@@ -796,7 +724,7 @@ function handleContentMouseup() {
               type="button"
               class="shrink-0 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
               :disabled="copyBusy || !copyTarget.trim()"
-              @click="submitCopy(draftGuard.path, { resolveSource: true })"
+              @click="submitCopy(guardState.path, { resolveSource: true })"
             >
               {{ copyBusy ? '保存中…' : '保存副本' }}
             </button>
@@ -868,7 +796,7 @@ function handleContentMouseup() {
         </div>
       </div>
 
-      <!-- 保存冲突界面（§3-6 版本比较与选择）：并列查看人工草稿与 AI 修改后的磁盘正文 -->
+      <!-- 保存冲突界面（§3-6 版本比较与选择）：并列查看人工输入与 AI 修改后的磁盘正文 -->
       <div
         v-if="conflictView"
         class="flex min-h-0 flex-1 flex-col gap-3 rounded-lg border border-red-200 bg-white p-3"
@@ -884,8 +812,13 @@ function handleContentMouseup() {
           </p>
         </div>
 
+        <!-- 正在检查另一版本（读取在途，不能暂时退回「已保存」） -->
+        <div v-if="conflictView.probing" class="shrink-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-500">
+          正在检查另一版本…
+        </div>
+
         <!-- 磁盘读取失败与版本变化分开提示（§3-6） -->
-        <div v-if="conflictView.missing" class="shrink-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <div v-else-if="conflictView.missing" class="shrink-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           目标文件在磁盘上已不存在（可能已被删除）。你的草稿仍完整保留，可另存为副本后放弃本文件。
         </div>
 
@@ -974,7 +907,7 @@ function handleContentMouseup() {
           >
             将草稿另存为副本
           </button>
-          <template v-if="!conflictView.missing && !conflictView.unreadable">
+          <template v-if="!conflictView.missing && !conflictView.unreadable && !conflictView.probing">
             <span class="min-w-0 flex-1" />
             <button
               type="button"
@@ -1118,7 +1051,7 @@ function handleContentMouseup() {
           />
           <!-- 冲突再入口（§3-6 返回编辑后冲突状态保留）：重开两个版本的对比 -->
           <div
-            v-if="thisFileError?.conflict"
+            v-if="conflictActive && !conflictView"
             class="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
             role="alert"
           >
@@ -1135,11 +1068,11 @@ function handleContentMouseup() {
           </div>
           <!-- 保存失败条：非冲突失败保留草稿与编辑位置，给出重试/放弃出口（§6） -->
           <div
-            v-else-if="thisFileError && !thisFileError.conflict"
+            v-else-if="conflictFailure && session?.failure"
             class="mt-2 flex shrink-0 flex-col gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-2"
             role="alert"
           >
-            <p class="text-xs text-red-700">{{ thisFileError.message }}</p>
+            <p class="text-xs text-red-700">{{ session.failure.message }}</p>
             <div class="flex items-center gap-2">
               <button
                 type="button"
@@ -1182,18 +1115,6 @@ function handleContentMouseup() {
 
 <script lang="ts">
 export default { name: 'FilePanelBody' }
-
-/** AI 删除/重命名有人工草稿的文件时的守护状态（数据安全计划 §3-3） */
-export type DraftGuardState = {
-  kind: 'deleted' | 'renamed'
-  /** 草稿所在路径（旧路径） */
-  path: string
-  name: string
-  /** renamed：新路径 */
-  toPath?: string
-  /** deleted：回收站去向 */
-  trashPath?: string
-}
 </script>
 
 <style>

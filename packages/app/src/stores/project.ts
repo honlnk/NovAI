@@ -370,7 +370,13 @@ export const useProjectStore = defineStore('project', () => {
   async function saveFile(
     path: string,
     content: string,
-    options?: { expectedUpdatedAt?: string; force?: boolean; projectId?: string },
+    options?: {
+      expectedUpdatedAt?: string
+      /** 编辑基线正文的内容哈希（正文自动保存计划 §四.3：时间戳识别不出变化时兜底判冲突） */
+      expectedBaseHash?: string
+      force?: boolean
+      projectId?: string
+    },
   ): Promise<SaveFileOutcome> {
     const projectId = options?.projectId ?? currentProject.value?.id
     if (!projectId) {
@@ -381,7 +387,12 @@ export const useProjectStore = defineStore('project', () => {
 
     try {
       const saved = await writeFile(projectId, path, content, {
-        ...(options?.force ? {} : { expectedUpdatedAt: options?.expectedUpdatedAt }),
+        ...(options?.force
+          ? {}
+          : {
+              ...(options?.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: options.expectedUpdatedAt } : {}),
+              ...(options?.expectedBaseHash !== undefined ? { expectedBaseHash: options.expectedBaseHash } : {}),
+            }),
       })
       if (currentProject.value?.id === projectId && activeFile.value?.path === path) {
         activeFile.value = saved

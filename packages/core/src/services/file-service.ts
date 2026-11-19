@@ -3,6 +3,7 @@ import {
   rescanProject,
   writeProjectTextFile,
 } from '../core/fs/project-fs'
+import { hashContent } from '../core/util/hash'
 
 import {
   requireRuntimeProject,
@@ -69,28 +70,39 @@ export class FileSaveConflictError extends Error {
  * 写盘后回读一次，返回含最新 updatedAt 的 FileContentView。
  * 供内容面板编辑模式保存章节 / 提示词 / 要素三类文件使用。
  *
- * 版本校验（§6「缺少可靠保护时先补版本校验」）：传入 expectedUpdatedAt（草稿所依据
- * 的磁盘版本）时，磁盘内容已变或文件已失则抛 FileSaveConflictError，不覆盖外部修改；
- * 缺省不做校验（写确认链等调用方有自己的读取状态防线）。内容与磁盘一致时幂等返回，
+ * 版本校验（§6 + 正文自动保存计划 §四.3 第 9 条）：传入 expectedUpdatedAt（草稿所依据
+ * 的磁盘版本）或 expectedBaseHash（编辑基线正文的内容哈希）时，磁盘内容已变或文件
+ * 已失则抛 FileSaveConflictError，不覆盖外部修改——磁盘更新时间未能识别变化时由
+ * 内容哈希兜底判定（基线正文与磁盘不一致且非幂等写入即冲突）。缺省不做校验
+ * （写确认链等调用方有自己的读取状态防线）。内容与磁盘一致时幂等返回，
  * 不重写盘（mtime 不动，避免无意义的新版本）。
  */
 export async function writeFile(
   projectId: string,
   path: string,
   content: string,
-  options?: { expectedUpdatedAt?: string },
+  options?: { expectedUpdatedAt?: string; expectedBaseHash?: string },
 ): Promise<FileContentView> {
   const project = requireRuntimeProject(projectId)
-  if (options?.expectedUpdatedAt !== undefined) {
+  if (options?.expectedUpdatedAt !== undefined || options?.expectedBaseHash !== undefined) {
     const current = await readProjectFile(project, path).catch(() => null)
     if (!current) {
       throw new FileSaveConflictError(path, 'missing')
     }
-    if (current.content !== content && current.updatedAt !== options.expectedUpdatedAt) {
-      throw new FileSaveConflictError(path, 'modified', current.updatedAt)
-    }
     if (current.content === content) {
       return toFileContentView(current)
+    }
+    if (
+      options.expectedUpdatedAt !== undefined
+      && current.updatedAt !== options.expectedUpdatedAt
+    ) {
+      throw new FileSaveConflictError(path, 'modified', current.updatedAt)
+    }
+    if (
+      options.expectedBaseHash !== undefined
+      && hashContent(current.content) !== options.expectedBaseHash
+    ) {
+      throw new FileSaveConflictError(path, 'modified', current.updatedAt)
     }
   }
   await writeProjectTextFile(project.handle, path, content)

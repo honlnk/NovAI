@@ -15,6 +15,12 @@ import type { FileContentView } from '@novai/core/services/types'
 
 import FilePanelBody from './FilePanelBody.vue'
 import { getFileDraft, getFileDraftEntry, _clearFileDraftsForTest } from '../../composables/useFileDrafts'
+import {
+  setEditorProbeHandler,
+  setEditorSaveHandler,
+  type EditorSaveHandler,
+  _resetEditorSessionsForTest,
+} from '../../composables/editor-session'
 
 const probeFile = vi.hoisted(() => vi.fn())
 const createFileCopy = vi.hoisted(() => vi.fn())
@@ -72,15 +78,23 @@ async function openConflict(
 describe('FilePanelBody 保存冲突归属返修', () => {
   beforeEach(() => {
     _clearFileDraftsForTest()
+    _resetEditorSessionsForTest()
+    setEditorSaveHandler(null)
+    setEditorProbeHandler(null)
     probeFile.mockReset().mockResolvedValue({ kind: 'ok', file: fileView(A_PATH, 'AI 磁盘内容') })
     createFileCopy.mockReset().mockResolvedValue({ ok: true, file: fileView('chapters/copy.txt', '') })
   })
 
+  /** 挂载面板并注册保存/探测服务（会话编排经注入服务调用，不再走 props） */
+  function mountPanel(props: { file: FileContentView; projectId: string }, saveFile: ReturnType<typeof vi.fn>) {
+    setEditorSaveHandler(saveFile as unknown as EditorSaveHandler)
+    setEditorProbeHandler(probeFile)
+    return mount(FilePanelBody, { props })
+  }
+
   it('冲突探测未完成时切到乙文件：晚到结果不弹冲突界面，甲草稿保留', async () => {
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     saveFile.mockResolvedValueOnce({ ok: false, conflict: true, message: '磁盘已被外部修改' })
     await editDraft(wrapper, '我的草稿')
 
@@ -101,14 +115,13 @@ describe('FilePanelBody 保存冲突归属返修', () => {
 
   it('「采用我的草稿」仍写入冲突启动时固定的项目', async () => {
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     await openConflict(wrapper, saveFile, '我的草稿')
     // 主保存带版本校验与项目；强制采用整份覆盖
     expect(saveFile).toHaveBeenNthCalledWith(1, A_PATH, '我的草稿', {
       projectId: 'p1',
       expectedUpdatedAt: 'v1',
+      expectedBaseHash: expect.any(String),
     })
 
     saveFile.mockResolvedValueOnce({ ok: true, file: fileView(A_PATH, '我的草稿') })
@@ -126,9 +139,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
       .mockResolvedValueOnce({ kind: 'unreadable', message: '权限失效' })
       .mockResolvedValueOnce({ kind: 'unreadable', message: '权限失效' })
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     await openConflict(wrapper, saveFile, '必须保留的草稿')
 
     await button(wrapper, '采用 AI 版本').trigger('click')
@@ -143,9 +154,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
 
   it('同路径跨项目后立即输入：草稿写入新项目，不回写旧项目或使用旧基线', async () => {
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '甲原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '甲原文'), projectId: 'p1' }, saveFile)
     await editDraft(wrapper, '甲草稿')
     await wrapper.setProps({ file: fileView(A_PATH, '乙原文'), projectId: 'p2' })
     await wrapper.find('button[aria-label="编辑"]').trigger('click')
@@ -161,9 +170,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
     const saveFile = vi.fn().mockImplementationOnce(
       () => new Promise((resolve) => { releaseSave = resolve }),
     )
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '甲原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '甲原文'), projectId: 'p1' }, saveFile)
     await editDraft(wrapper, '甲草稿')
     await button(wrapper, '保存').trigger('click')
     expect(wrapper.text()).toContain('正在保存')
@@ -182,9 +189,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
       .mockResolvedValueOnce({ kind: 'ok', file: fileView(A_PATH, 'AI 磁盘内容') })
       .mockImplementationOnce(() => new Promise((resolve) => { releaseProbe = resolve }))
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     await openConflict(wrapper, saveFile, '原草稿')
 
     await button(wrapper, '采用 AI 版本').trigger('click')
@@ -199,9 +204,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
 
   it('「采用我的草稿」写盘在途时继续输入：旧成功结果保留新稿与冲突再入口', async () => {
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     await openConflict(wrapper, saveFile, '原草稿')
     let releaseSave!: (value: { ok: true; file: FileContentView }) => void
     saveFile.mockImplementationOnce(() => new Promise((resolve) => { releaseSave = resolve }))
@@ -219,9 +222,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
   it('磁盘读取失败的冲突不提供任何有损采用，草稿保留', async () => {
     probeFile.mockResolvedValue({ kind: 'unreadable', message: '权限失效' })
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     await openConflict(wrapper, saveFile, '必须保留的草稿')
 
     expect(wrapper.text()).toContain('磁盘读取失败：权限失效')
@@ -235,9 +236,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
 
   it('删除全部正文的空草稿也可另存为副本（写入固定项目）', async () => {
     const saveFile = vi.fn()
-    const wrapper = mount(FilePanelBody, {
-      props: { file: fileView(A_PATH, '原文'), projectId: 'p1', saveFile },
-    })
+    const wrapper = mountPanel({ file: fileView(A_PATH, '原文'), projectId: 'p1' }, saveFile)
     await openConflict(wrapper, saveFile, '')
 
     await button(wrapper, '将草稿另存为副本').trigger('click')
