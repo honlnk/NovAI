@@ -493,24 +493,33 @@ describe('editor-session 保存编排事件序', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('恢复续存后自动保存落盘：恢复标记清除（横幅「续存成功可消失」）', async () => {
+  it('恢复续存回填即启动自动保存去抖；落盘成功后恢复标记清除（横幅「续存成功可消失」）', async () => {
+    const { setAutosaveInputEnabled } = await import('./editor-session')
     const { handler, release } = createDeferredSaveHandler()
     setEditorSaveHandler(handler)
     setEditorProbeHandler(async () => ({ kind: 'ok', file: fileView('原基线', 't0') }))
-    const [report] = [await restoreEditorSessions('p1', [
-      { path: A_PATH, content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T01:00:00Z' },
-    ])]
-    expect(report.restored).toHaveLength(1)
-    const session = getEditorSession('p1', A_PATH)!
-    expect(session.restoredPending).toBe(true)
+    setAutosaveInputEnabled(true)
+    try {
+      const report = await restoreEditorSessions('p1', [
+        { path: A_PATH, content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T01:00:00Z' },
+      ])
+      expect(report.restored).toHaveLength(1)
+      const session = getEditorSession('p1', A_PATH)!
+      expect(session.restoredPending).toBe(true)
 
-    // 自动保存落盘成功：基线上移、恢复标记清除
-    const saving = requestEditorSave('p1', A_PATH, { trigger: 'debounce' })
-    await vi.advanceTimersByTimeAsync(0)
-    release(1, { ok: true, file: fileView('未写完内容', 't1') })
-    await saving
-    expect(session.restoredPending).toBe(false)
-    expect(editorSessionPhase(session)).toBe('clean')
+      // 回填即启动去抖（§六.1 续存内容由自动保存随后落盘）：到窗自动写盘
+      await vi.advanceTimersByTimeAsync(EDITOR_AUTOSAVE_DEBOUNCE_MS - 1)
+      expect(handler).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(handler).toHaveBeenCalledTimes(1)
+      release(1, { ok: true, file: fileView('未写完内容', 't1') })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(session.restoredPending).toBe(false)
+      expect(editorSessionPhase(session)).toBe('clean')
+    } finally {
+      setAutosaveInputEnabled(false)
+    }
   })
 
   it('页面隐藏生命周期：visibilitychange 立即收口全部待写会话（含去抖未到窗的）', async () => {

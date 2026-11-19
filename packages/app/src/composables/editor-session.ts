@@ -903,6 +903,10 @@ export async function restoreEditorSessions(
     // 基线一致（自动续存）/ 无法核对（unreadable、服务未注册、读取异常）：待校验回填
     session.restoredPending = true
     session.restoredAcked = false
+    if (probe?.kind === 'ok' && record.baseContent === probe.file.content) {
+      // 基线一致已核对：自动续存——启动自动保存去抖，未写完内容由自动保存随后落盘（§六.1）
+      scheduleAutosave(projectId, record.path)
+    }
     restored.push({
       path: record.path,
       ...(record.originPath !== undefined ? { originPath: record.originPath } : {}),
