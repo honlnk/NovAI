@@ -1,5 +1,5 @@
 <script setup lang="ts" generic="TCard extends { id: string }">
-import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 
 import { REPO_URL } from '../../constants/repo'
 import AppIcon from '../ui/AppIcon.vue'
@@ -7,6 +7,11 @@ import {
   boardDropInsertionIndex,
   boardMovePositionForInsertion,
 } from './board-reorder'
+import {
+  animateDragSlot,
+  type DragAnimationClock,
+  type DragSlotFrame,
+} from './drag-slot-animation'
 
 /**
  * 看板主面板骨架（创作心智模块施工计划 §10.5，自计划模块上提泛化）：始终占据
@@ -45,6 +50,8 @@ const props = defineProps<{
   emptyColumnText?: string
   /** 落点放行（默认全部允许）：如节奏看板只放行同列重排，跨列不显示占位也不可放 */
   canDropCard?: (id: string, columnKey: string) => boolean
+  /** 测试用同一虚拟时钟驱动定时器与动画进度；生产环境不传 */
+  animationClock?: DragAnimationClock
 }>()
 
 const emit = defineEmits<{
@@ -71,53 +78,61 @@ const CARD_SLOT_GAP_PX = 8
 const PLACEHOLDER_COLLAPSE_MS = 180
 
 type DropSlot = { columnKey: string; insertionIndex: number }
+type DropPlaceholder = DropSlot & { key: number; frame: DragSlotFrame }
 type BoardRenderItem =
   | { kind: 'card'; card: TCard; isDragSource: boolean }
-  | { kind: 'placeholder' }
+  | { kind: 'placeholder'; placeholder: DropPlaceholder }
 
 const boardRoot = ref<HTMLElement | null>(null)
 const dragCardId = ref<string | null>(null)
 /** 被拖卡片视觉高度（px）：原位塌陷与占位卡展开共用，保证占位与真实卡等高 */
 const dragCardHeight = ref(0)
-const isDragSourceCollapsed = ref(false)
+const dragSourceFrame = ref<DragSlotFrame>({ height: 0, paddingBottom: CARD_SLOT_GAP_PX, opacity: 1 })
 const dropSlot = ref<DropSlot | null>(null)
-const isDropPlaceholderVisible = ref(false)
-const isDropPlaceholderExpanded = ref(false)
+/** 活跃落点与正在退场的旧落点分开保留：移动时旧卡收缩、新卡从 0 展开 */
+const dropPlaceholders = ref<DropPlaceholder[]>([])
+const activeDropPlaceholderKey = ref<number | null>(null)
+let nextDropPlaceholderKey = 0
 
 const animationTimers = new Set<number>()
-let animationScheduleGeneration = 0
-let placeholderRemoveTimer: number | null = null
+let cancelSourceAnimation: (() => void) | null = null
+const cancelPlaceholderAnimations = new Map<number, () => void>()
+const cancelPlaceholderFades = new Map<number, () => void>()
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
 
-/**
- * 等初始样式进 DOM 并强制一次样式计算后再切换目标态：CSS 高度过渡需要可计算的
- * 起点。用 nextTick + reflow + setTimeout（不用 rAF）——原生拖拽进行中浏览器可能
- * 暂停 rAF，占位卡会因此停在 0 高。
- */
-function queueTransition(callback: () => void) {
-  const generation = animationScheduleGeneration
-  void nextTick().then(() => {
-    if (generation !== animationScheduleGeneration) {
-      return
-    }
-    // 强制样式计算，把「固定测得高度 / 0 高」的起点落实后再切换目标态
-    document.body.getBoundingClientRect()
-    const id = window.setTimeout(() => {
-      animationTimers.delete(id)
-      callback()
-    }, 0)
-    animationTimers.add(id)
-  })
+const zeroFrame = (): DragSlotFrame => ({ height: 0, paddingBottom: 0, opacity: 0 })
+const fullFrame = (): DragSlotFrame => ({
+  height: dragCardHeight.value,
+  paddingBottom: CARD_SLOT_GAP_PX,
+  opacity: 1,
+})
+
+function clearSourceAnimation() {
+  cancelSourceAnimation?.()
+  cancelSourceAnimation = null
 }
 
-function clearPlaceholderRemoveTimer() {
-  if (placeholderRemoveTimer !== null) {
-    window.clearTimeout(placeholderRemoveTimer)
-    placeholderRemoveTimer = null
+function clearPlaceholderAnimation(key: number) {
+  cancelPlaceholderAnimations.get(key)?.()
+  cancelPlaceholderAnimations.delete(key)
+  cancelPlaceholderFades.get(key)?.()
+  cancelPlaceholderFades.delete(key)
+}
+
+function writePlaceholderFrame(key: number, frame: DragSlotFrame) {
+  // 数组 push 后模板读取的是响应式代理；必须写回同一个代理，不能只改原始对象
+  const current = dropPlaceholders.value.find((item) => item.key === key)
+  if (current) {
+    current.frame = frame
   }
 }
 
+function removeDropPlaceholder(key: number) {
+  clearPlaceholderAnimation(key)
+  dropPlaceholders.value = dropPlaceholders.value.filter((placeholder) => placeholder.key !== key)
+}
+
 function cancelAnimationTimers() {
-  animationScheduleGeneration += 1
   for (const id of animationTimers) {
     window.clearTimeout(id)
   }
@@ -126,33 +141,91 @@ function cancelAnimationTimers() {
 
 function cancelDragAnimations() {
   cancelAnimationTimers()
-  clearPlaceholderRemoveTimer()
+  clearSourceAnimation()
+  for (const key of cancelPlaceholderAnimations.keys()) {
+    clearPlaceholderAnimation(key)
+  }
 }
 
 onBeforeUnmount(cancelDragAnimations)
 
+/** 显式锁定拖影：后续源卡透明/塌陷不得影响浏览器已经抓取的卡片快照 */
+function setCardDragImage(card: HTMLElement, dataTransfer: DataTransfer, pointer: { x: number; y: number }) {
+  if (typeof dataTransfer.setDragImage !== 'function') {
+    return
+  }
+  const rect = card.getBoundingClientRect()
+  // 克隆一份未带 opacity-0 的卡片放在视口外，固定快照尺寸，避免受源卡布局变化影响
+  const image = card.cloneNode(true) as HTMLElement
+  image.classList.remove('opacity-0')
+  image.style.position = 'fixed'
+  image.style.left = '-10000px'
+  image.style.top = '0px'
+  image.style.width = `${rect.width}px`
+  image.style.height = `${rect.height}px`
+  image.style.margin = '0'
+  image.style.opacity = '1'
+  image.style.pointerEvents = 'none'
+  image.setAttribute('aria-hidden', 'true')
+  document.body.append(image)
+  try {
+    dataTransfer.setDragImage(image, pointer.x - rect.left, pointer.y - rect.top)
+    // 不在 dragstart 同步移除：浏览器可能在事件返回后才抓取快照
+    const id = window.setTimeout(() => {
+      animationTimers.delete(id)
+      image.remove()
+    }, 0)
+    animationTimers.add(id)
+  } catch {
+    image.remove()
+  }
+}
+
 function onCardDragStart(card: TCard, event: DragEvent) {
+  const element = event.currentTarget as HTMLElement
   dragCardId.value = card.id
   // offsetHeight 含边框不含外间距；测量失败（测试环境）时保留 0，仅退化掉动画
-  dragCardHeight.value = Math.max(0, Math.round((event.currentTarget as HTMLElement).offsetHeight))
-  isDragSourceCollapsed.value = false
+  dragCardHeight.value = Math.max(0, Math.round(element.offsetHeight))
+  dragSourceFrame.value = { height: dragCardHeight.value + CARD_SLOT_GAP_PX, paddingBottom: CARD_SLOT_GAP_PX, opacity: 1 }
   event.dataTransfer?.setData('text/plain', card.id)
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'move'
+    setCardDragImage(element, event.dataTransfer, { x: event.clientX, y: event.clientY })
   }
-  // 先按测得高度固定槽位（无视觉变化），样式落实后再收缩，CSS 过渡才有起点
-  queueTransition(() => {
-    isDragSourceCollapsed.value = true
-  })
+  // 拖影已在上方同步锁定，再启动源卡槽位塌陷
+  clearSourceAnimation()
+  cancelSourceAnimation = animateDragSlot(
+    dragSourceFrame.value,
+    { height: 0, paddingBottom: 0, opacity: 0 },
+    160,
+    (frame) => {
+      dragSourceFrame.value = frame
+    },
+    () => {},
+    { reducedMotion: reducedMotion.matches, ...(props.animationClock ?? {}) },
+  )
 }
 
 /** 取消 / 无效松手：占位卡收缩移除，原卡片恢复占位（真实数组从未动过） */
 function onCardDragEnd() {
   hideDropPlaceholder()
-  dragCardId.value = null
-  dragCardHeight.value = 0
-  isDragSourceCollapsed.value = false
-  // 占位卡的收缩计时器保留（hideDropPlaceholder 已排），只取消未生效的展开任务
+  clearSourceAnimation()
+  // 从当前高度恢复，避免取消发生在塌陷中途时卡片跳变
+  const frame = dragSourceFrame.value
+  cancelSourceAnimation = animateDragSlot(
+    frame,
+    { height: dragCardHeight.value + CARD_SLOT_GAP_PX, paddingBottom: CARD_SLOT_GAP_PX, opacity: 1 },
+    160,
+    (nextFrame) => {
+      dragSourceFrame.value = nextFrame
+    },
+    () => {
+      dragCardId.value = null
+      dragCardHeight.value = 0
+      cancelSourceAnimation = null
+    },
+    { reducedMotion: reducedMotion.matches, ...(props.animationClock ?? {}) },
+  )
   cancelAnimationTimers()
 }
 
@@ -163,41 +236,73 @@ function isDropAllowed(columnKey: string): boolean {
   return props.canDropCard?.(dragCardId.value, columnKey) ?? true
 }
 
-/** 更新落点：占位卡是同一个 DOM 节点（稳定 key），换位置不重播展开动画 */
+/** 更新落点：同一位置只更新指针；换位置则旧卡退场、新卡独立从 0 展开 */
 function showDropPlaceholder(slot: DropSlot) {
-  dropSlot.value = slot
-  clearPlaceholderRemoveTimer()
-  if (!isDropPlaceholderVisible.value) {
-    isDropPlaceholderVisible.value = true
-    isDropPlaceholderExpanded.value = false
-    queueTransition(() => {
-      isDropPlaceholderExpanded.value = true
-    })
-  } else if (!isDropPlaceholderExpanded.value) {
-    // 移出后快速移回：撤销收尾中的收缩，从当前高度继续展开
-    queueTransition(() => {
-      isDropPlaceholderExpanded.value = true
-    })
+  const current = dropSlot.value
+  if (current?.columnKey === slot.columnKey && current.insertionIndex === slot.insertionIndex) {
+    return
   }
+  hideDropPlaceholder()
+  dropSlot.value = slot
+  const key = ++nextDropPlaceholderKey
+  const placeholder: DropPlaceholder = { ...slot, key, frame: zeroFrame() }
+  activeDropPlaceholderKey.value = key
+  dropPlaceholders.value.push(placeholder)
+  clearPlaceholderAnimation(key)
+  const cancel = animateDragSlot(
+    zeroFrame(),
+    { ...fullFrame(), opacity: 0 },
+    PLACEHOLDER_COLLAPSE_MS,
+    (frame) => {
+      writePlaceholderFrame(key, frame)
+    },
+    () => {
+      clearPlaceholderAnimation(key)
+      const current = dropPlaceholders.value.find((item) => item.key === key)
+      if (!current) {
+        return
+      }
+      // 用户要求先长高再淡入：高度动画完成后才启动独立的透明度时间轴
+      cancelPlaceholderFades.set(key, animateDragSlot(
+        current.frame,
+        { ...current.frame, opacity: 1 },
+        120,
+        (frame) => writePlaceholderFrame(key, frame),
+        () => cancelPlaceholderFades.delete(key),
+        { reducedMotion: reducedMotion.matches, ...(props.animationClock ?? {}) },
+      ))
+    },
+    { reducedMotion: reducedMotion.matches, ...(props.animationClock ?? {}) },
+  )
+  cancelPlaceholderAnimations.set(key, cancel)
 }
 
 /** 移出可放区域：占位卡从当前高度收缩，过渡结束后再卸载节点 */
 function hideDropPlaceholder() {
-  if (!dropSlot.value && !isDropPlaceholderVisible.value) {
-    return
-  }
   dropSlot.value = null
-  clearPlaceholderRemoveTimer()
-  if (!isDropPlaceholderVisible.value) {
+  const activeKey = activeDropPlaceholderKey.value
+  activeDropPlaceholderKey.value = null
+  if (activeKey === null) {
     return
   }
-  isDropPlaceholderExpanded.value = false
-  placeholderRemoveTimer = window.setTimeout(() => {
-    placeholderRemoveTimer = null
-    if (!isDropPlaceholderExpanded.value) {
-      isDropPlaceholderVisible.value = false
-    }
-  }, PLACEHOLDER_COLLAPSE_MS)
+  const active = dropPlaceholders.value.find((item) => item.key === activeKey)
+  if (!active) {
+    return
+  }
+  clearPlaceholderAnimation(activeKey)
+  const cancel = animateDragSlot(
+    active.frame,
+    zeroFrame(),
+    PLACEHOLDER_COLLAPSE_MS,
+    (frame) => {
+      active.frame = frame
+    },
+    () => {
+      removeDropPlaceholder(activeKey)
+    },
+    { reducedMotion: reducedMotion.matches, ...(props.animationClock ?? {}) },
+  )
+  cancelPlaceholderAnimations.set(activeKey, cancel)
 }
 
 /** 列级 dragover：不依赖子卡片事件，空白区/空列与卡片一样有明确落点 */
@@ -240,10 +345,10 @@ function onColumnDrop(column: { key: string; cards: readonly TCard[] }, event: D
   // 先清拖拽态再上抛：调用方乐观重排与占位卸载同帧渲染，真实卡片直接接管位置
   dragCardId.value = null
   dragCardHeight.value = 0
-  isDragSourceCollapsed.value = false
   dropSlot.value = null
-  isDropPlaceholderVisible.value = false
-  isDropPlaceholderExpanded.value = false
+  dropPlaceholders.value = []
+  activeDropPlaceholderKey.value = null
+  dragSourceFrame.value = { height: 0, paddingBottom: CARD_SLOT_GAP_PX, opacity: 1 }
   cancelDragAnimations()
 
   if (!id || !slot || slot.columnKey !== column.key || !dropAllowed) {
@@ -258,11 +363,12 @@ function onColumnDrop(column: { key: string; cards: readonly TCard[] }, event: D
   }
 }
 
-/** 一列的渲染项：真实卡片全保留（被拖卡片塌陷为 0 高，DOM 不卸载），按落点插入占位 */
+/** 一列的渲染项：真实卡片全保留；每个落点占位独立，允许旧位置收缩、新位置展开 */
 function columnItems(column: { key: string; cards: readonly TCard[] }): BoardRenderItem[] {
   const items: BoardRenderItem[] = []
-  const slot = dropSlot.value
-  const showPlaceholder = slot !== null && slot.columnKey === column.key && isDropPlaceholderVisible.value
+  const placeholders = dropPlaceholders.value
+    .filter((placeholder) => placeholder.columnKey === column.key)
+    .sort((a, b) => a.insertionIndex - b.insertionIndex)
   let insertionIndex = 0
 
   for (const card of column.cards) {
@@ -270,34 +376,34 @@ function columnItems(column: { key: string; cards: readonly TCard[] }): BoardRen
       items.push({ kind: 'card', card, isDragSource: true })
       continue
     }
-    if (showPlaceholder && slot.insertionIndex === insertionIndex) {
-      items.push({ kind: 'placeholder' })
+    for (const placeholder of placeholders.filter((item) => item.insertionIndex === insertionIndex)) {
+      items.push({ kind: 'placeholder', placeholder })
     }
     items.push({ kind: 'card', card, isDragSource: false })
     insertionIndex += 1
   }
-  if (showPlaceholder && slot.insertionIndex === insertionIndex) {
-    items.push({ kind: 'placeholder' })
+  for (const placeholder of placeholders.filter((item) => item.insertionIndex === insertionIndex)) {
+    items.push({ kind: 'placeholder', placeholder })
   }
   return items
 }
 
-/** 被拖卡片的槽位样式：先固定测得高度，随后塌陷到 0（含间距） */
+/** 被拖卡片的槽位样式：高度、间距和透明度由同一时间轴驱动 */
 function dragSourceSlotStyle(): Record<string, string> | undefined {
   if (!dragCardId.value) {
     return undefined
   }
   return {
-    height: isDragSourceCollapsed.value ? '0px' : `${dragCardHeight.value + CARD_SLOT_GAP_PX}px`,
-    paddingBottom: isDragSourceCollapsed.value ? '0px' : `${CARD_SLOT_GAP_PX}px`,
+    height: `${Math.max(0, dragSourceFrame.value.height)}px`,
+    paddingBottom: `${Math.max(0, dragSourceFrame.value.paddingBottom)}px`,
   }
 }
 
-/** 占位卡槽位样式：与被拖卡片等高（含间距），从 0 线性展开 */
-function dropPlaceholderSlotStyle(): Record<string, string> {
+/** 占位卡槽位样式：每个落点持有独立帧，展开/收回均可看到中间高度 */
+function dropPlaceholderSlotStyle(placeholder: DropPlaceholder): Record<string, string> {
   return {
-    height: isDropPlaceholderExpanded.value ? `${dragCardHeight.value + CARD_SLOT_GAP_PX}px` : '0px',
-    paddingBottom: isDropPlaceholderExpanded.value ? `${CARD_SLOT_GAP_PX}px` : '0px',
+    height: `${placeholder.frame.height}px`,
+    paddingBottom: `${placeholder.frame.paddingBottom}px`,
   }
 }
 </script>
@@ -452,17 +558,18 @@ function dropPlaceholderSlotStyle(): Record<string, string> {
             {{ emptyColumnText ?? '拖卡片到这里' }}
           </p>
 
-          <template v-for="item in columnItems(column)" :key="item.kind === 'placeholder' ? 'board-drop-placeholder' : item.card.id">
-            <!-- 落点占位：与被拖卡片等高的浅色轮廓，展开后淡入；不参与命中 -->
+          <template v-for="item in columnItems(column)" :key="item.kind === 'placeholder' ? `board-drop-placeholder-${item.placeholder.key}` : item.card.id">
+            <!-- 落点占位：每个落点独立，旧位置收缩、新位置从 0 展开；不参与命中 -->
             <div
               v-if="item.kind === 'placeholder'"
-              :class="['board-card-slot board-card-slot--drop', isDropPlaceholderExpanded ? 'is-expanded' : '']"
-              :style="dropPlaceholderSlotStyle()"
+              :class="['board-card-slot board-card-slot--drop', item.placeholder.frame.height > 0 ? 'is-expanded' : '']"
+              :style="dropPlaceholderSlotStyle(item.placeholder)"
+              :data-drop-placeholder-key="item.placeholder.key"
               aria-hidden="true"
             >
               <div
                 class="rounded-md border-2 border-dashed border-gray-300 bg-gray-50"
-                :style="{ height: `${Math.max(dragCardHeight, 0)}px` }"
+                :style="{ height: `${Math.max(dragCardHeight, 0)}px`, opacity: item.placeholder.frame.opacity }"
                 :data-testid="`${testidPrefix}-drop-placeholder`"
               />
             </div>
@@ -500,39 +607,13 @@ function dropPlaceholderSlotStyle(): Record<string, string> {
 </template>
 
 <style scoped>
-/* 卡片槽 owns 卡片高度与下方间距：原位塌陷 / 占位展开时两者一起过渡 */
+/* 卡片槽 owns 卡片高度与下方间距；逐帧值由 drag-slot-animation 提供，不走 CSS 时钟 */
 .board-card-slot {
   padding-bottom: 0.5rem;
   overflow: hidden;
-  transition:
-    height 160ms linear,
-    padding-bottom 160ms linear;
-}
-
-.board-card-slot--dragged {
-  transition-duration: 160ms;
 }
 
 .board-card-slot--drop {
-  transition:
-    height 180ms linear,
-    padding-bottom 180ms linear;
-}
-
-.board-card-slot--drop > div {
-  opacity: 0;
-  transition: opacity 120ms ease-out 50ms;
-}
-
-.board-card-slot--drop.is-expanded > div {
-  opacity: 1;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .board-card-slot,
-  .board-card-slot--drop,
-  .board-card-slot--drop > div {
-    transition: none;
-  }
+  pointer-events: none;
 }
 </style>
