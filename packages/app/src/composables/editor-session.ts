@@ -186,6 +186,7 @@ export function clearEditorSession(projectId: string, path: string): void {
   const session = sessions.get(key)
   sessions.delete(key)
   cancelAutosaveTimer(key)
+  clearAutoRetryCycle(key)
   if (session) {
     removeDraftBackup(projectId, path)
   }
@@ -203,6 +204,8 @@ export function setEditorInput(projectId: string, path: string, content: string)
   }
   session.content = content
   session.updatedAt = touchTime()
+  // 新输入开启新的保存周期：失败补试次数随之重置（内容变了是新一次尝试）
+  clearAutoRetryCycle(editorSessionKey(projectId, path))
   if (session.guard || session.conflict) {
     // 守护/冲突期间继续输入只更新内容与镜像，不安排自动写入（禁止自动写入）
     scheduleSessionMirror(session)
@@ -323,6 +326,7 @@ export function setEditorGuard(
   if (guard) {
     session.guard = guard
     cancelAutosaveTimer(editorSessionKey(projectId, path))
+    cancelAutoRetryTimer(editorSessionKey(projectId, path))
   } else {
     delete session.guard
   }
@@ -342,6 +346,15 @@ export function setEditorSaveHandler(handler: EditorSaveHandler | null): void {
 
 export function setEditorProbeHandler(handler: EditorProbeHandler | null): void {
   probeHandler = handler
+}
+
+/** 当前注册的保存/探测服务（ProjectView 卸载时比对「还是不是自己注册的」再注销，防快速往返竞态） */
+export function getEditorSaveHandler(): EditorSaveHandler | null {
+  return saveHandler
+}
+
+export function getEditorProbeHandler(): EditorProbeHandler | null {
+  return probeHandler
 }
 
 /** 同一会话的写盘请求串行：后到请求等前一个完成后按最新状态执行 */
@@ -423,6 +436,7 @@ async function performSave(
     // 保存服务异常按普通失败处理（内容与位置保留，原因持续可见）
     session.inFlight = null
     session.failure = { message: error instanceof Error ? error.message : String(error) }
+    scheduleAutoRetry(projectId, path)
     return
   }
 
@@ -430,9 +444,17 @@ async function performSave(
   if (session.inFlight?.content === snapshot.content) {
     session.inFlight = null
   }
+  if (!outcome || typeof outcome !== 'object') {
+    // 保存服务返回非法结果（类型契约之外，如测试弱 mock / 服务实现缺陷）：
+    // 按普通失败处理，不悬挂在途态、不静默当成功
+    session.failure = { message: '保存服务返回无效结果' }
+    scheduleAutoRetry(projectId, path)
+    return
+  }
 
   if (outcome.ok) {
     applySaveSuccess(session, outcome.file)
+    clearAutoRetryCycle(editorSessionKey(projectId, path))
     return
   }
 
@@ -442,6 +464,8 @@ async function performSave(
   }
 
   session.failure = { message: outcome.message }
+  // 普通失败自动补试一次（§阶段 2）：持久错误必须可见，补试失败后不再自动打扰
+  scheduleAutoRetry(projectId, path)
 }
 
 /**
@@ -651,6 +675,49 @@ function cancelAutosaveTimer(key: string): void {
   }
 }
 
+// ---------- 普通失败自动补试（阶段 2） ----------
+
+/** 失败后自动补试延迟 */
+export const EDITOR_SAVE_RETRY_DELAY_MS = 1000
+
+const autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** 本失败周期已自动补试过的会话键（新输入/保存成功重置周期） */
+const autoRetriedKeys = new Set<string>()
+
+/**
+ * 普通写入失败后自动补试一次（§阶段 2：普通失败仅自动补试一次）：
+ * 补试按系统自动触发走（冲突/守护下不写）；补试也失败则保持失败态等用户处理，
+ * 持久错误持续可见——「已保存」只对应真实磁盘内容。
+ */
+function scheduleAutoRetry(projectId: string, path: string): void {
+  const key = editorSessionKey(projectId, path)
+  if (autoRetriedKeys.has(key)) {
+    return
+  }
+  cancelAutoRetryTimer(key)
+  autoRetryTimers.set(
+    key,
+    setTimeout(() => {
+      autoRetryTimers.delete(key)
+      autoRetriedKeys.add(key)
+      void requestEditorSave(projectId, path, { trigger: 'debounce' })
+    }, EDITOR_SAVE_RETRY_DELAY_MS),
+  )
+}
+
+function cancelAutoRetryTimer(key: string): void {
+  const timer = autoRetryTimers.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    autoRetryTimers.delete(key)
+  }
+}
+
+function clearAutoRetryCycle(key: string): void {
+  cancelAutoRetryTimer(key)
+  autoRetriedKeys.delete(key)
+}
+
 /** 立即收口某会话（切文件/分类/项目、关面板、切预览等关键时机） */
 export function flushEditorSession(projectId: string, path: string): Promise<void> {
   cancelAutosaveTimer(editorSessionKey(projectId, path))
@@ -663,6 +730,39 @@ export async function flushEditorSessions(projectId: string): Promise<void> {
     (session) => session.projectId === projectId && isEditorSessionDirty(session),
   )
   await Promise.all(targets.map((session) => flushEditorSession(projectId, session.path)))
+}
+
+/**
+ * 全部项目的待写会话立即收口（页面隐藏/关闭、离开项目视图）：
+ * 写盘来不及完成时恢复镜像仍在（draft-backup 独立落盘），离开提醒不谎报。
+ */
+export async function flushAllEditorSessions(): Promise<void> {
+  const targets = [...sessions.values()].filter((session) => isEditorSessionDirty(session))
+  await Promise.all(
+    targets.map((session) => flushEditorSession(session.projectId, session.path)),
+  )
+}
+
+/**
+ * 生命周期挂接（阶段 2）：页面隐藏/关闭前立即尝试收口全部待写会话。
+ * 与 draft-backup 的镜像落盘各自独立——正文写盘失败不拖累镜像，镜像也不替代写盘。
+ * 返回退订函数。
+ */
+export function setupEditorAutosaveLifecycle(): () => void {
+  if (typeof document === 'undefined') {
+    return () => {}
+  }
+  const flush = () => {
+    void flushAllEditorSessions()
+  }
+  document.addEventListener('visibilitychange', flush)
+  window.addEventListener('pagehide', flush)
+  window.addEventListener('beforeunload', flush)
+  return () => {
+    document.removeEventListener('visibilitychange', flush)
+    window.removeEventListener('pagehide', flush)
+    window.removeEventListener('beforeunload', flush)
+  }
 }
 
 // ---------- 恢复镜像回填 ----------
@@ -724,6 +824,10 @@ export function _resetEditorSessionsForTest(): void {
   for (const key of autosaveTimers.keys()) {
     cancelAutosaveTimer(key)
   }
+  for (const key of autoRetryTimers.keys()) {
+    cancelAutoRetryTimer(key)
+  }
+  autoRetriedKeys.clear()
   autosaveInputEnabled = false
 }
 

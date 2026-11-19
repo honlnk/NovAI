@@ -63,6 +63,11 @@ async function editDraft(wrapper: VueWrapper, draft: string) {
   await wrapper.find('textarea').setValue(draft)
 }
 
+/** Ctrl/⌘+S 立即收口（保存按钮已随无保存心智退役，快捷键是唯一手动触发） */
+async function pressSaveShortcut(wrapper: VueWrapper) {
+  await wrapper.find('textarea').trigger('keydown', { ctrlKey: true, key: 's' })
+}
+
 /** 触发一次冲突保存并等冲突界面出现 */
 async function openConflict(
   wrapper: VueWrapper,
@@ -71,7 +76,7 @@ async function openConflict(
 ) {
   saveFile.mockResolvedValueOnce({ ok: false, conflict: true, message: '磁盘已被外部修改' })
   await editDraft(wrapper, draft)
-  await button(wrapper, '保存').trigger('click')
+  await pressSaveShortcut(wrapper)
   await vi.waitFor(() => expect(wrapper.text()).toContain('保存冲突：磁盘上的正文已被 AI 修改'))
 }
 
@@ -102,7 +107,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
     probeFile.mockImplementationOnce(
       () => new Promise((resolve) => { releaseProbe = resolve }),
     )
-    await button(wrapper, '保存').trigger('click')
+    await pressSaveShortcut(wrapper)
     // 保存冲突已判定、磁盘探测在途时切到乙文件（代次递增）
     await wrapper.setProps({ file: fileView('chapters/b.txt', '乙原文') })
     releaseProbe({ kind: 'ok', file: fileView(A_PATH, 'AI 磁盘内容') })
@@ -172,7 +177,7 @@ describe('FilePanelBody 保存冲突归属返修', () => {
     )
     const wrapper = mountPanel({ file: fileView(A_PATH, '甲原文'), projectId: 'p1' }, saveFile)
     await editDraft(wrapper, '甲草稿')
-    await button(wrapper, '保存').trigger('click')
+    await pressSaveShortcut(wrapper)
     expect(wrapper.text()).toContain('正在保存')
 
     await wrapper.setProps({ file: fileView(A_PATH, '乙原文'), projectId: 'p2' })

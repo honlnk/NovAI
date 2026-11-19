@@ -19,6 +19,8 @@ import {
   collapseEditorConflict,
   editorSessionPhase,
   expandEditorConflict,
+  flushEditorSession,
+  flushEditorSessions,
   getEditorSession,
   openEditorSession,
   overwriteEditorContent,
@@ -112,7 +114,7 @@ const canEdit = computed(() => {
   return Boolean(props.file && isEditablePath(props.file.path))
 })
 
-/** 草稿与磁盘内容不一致时为脏，用于显示「未保存」标记 */
+/** 草稿与磁盘内容不一致时为脏，用于显示「等待保存」标记 */
 const isDirty = computed(() =>
   session.value !== null && session.value.content !== session.value.baseContent,
 )
@@ -126,12 +128,12 @@ const wordCount = computed(() => {
   return countContentChars(text, props.file.format, { isChapter: props.file.path.startsWith('chapters/') })
 })
 
-/** 头部保存状态文案（已保存/未保存/正在保存/保存失败/保存冲突） */
+/** 头部保存状态文案（§六.1 无保存心智：等待保存 / 正在保存 / 已保存；异常单独解释） */
 const saveStatusLabel = computed(() => {
   if (isSavingThisFile.value) return '正在保存'
   if (conflictActive.value) return '保存冲突'
   if (conflictFailure.value) return '保存失败'
-  return isDirty.value ? '未保存' : '已保存'
+  return isDirty.value ? '等待保存' : '已保存'
 })
 
 /** 刷新后恢复提示：当前文件有「恢复且未知悉」的草稿（数据安全计划 §3-2） */
@@ -287,7 +289,18 @@ watch(
 // 引用比较会把它误判为切换，清掉编辑态、冲突入口与保存错误（2026-11-08 真机缺陷）。
 watch(
   [() => props.file?.path, () => props.projectId],
-  () => {
+  ([newPath, newProjectId], oldValues) => {
+    // 真实切换（旧值存在且不同）：旧现场待写内容立即收口（§阶段 2 离开收口），
+    // 收口失败时旧会话保留失败态与镜像，不因切换静默丢失。
+    // 切项目收口整个旧项目；切文件收口单个旧路径。
+    if (oldValues) {
+      const [oldPath, oldProjectId] = oldValues
+      if (oldProjectId && oldProjectId !== newProjectId) {
+        void flushEditorSessions(oldProjectId)
+      } else if (oldPath && oldPath !== newPath) {
+        void flushEditorSession(oldProjectId, oldPath)
+      }
+    }
     // 真实切换文件或项目（同路径跨项目也要换会话桶）：恢复新路径的会话草稿；
     // 无草稿以磁盘内容初始化——否则 preview 下 isDirty 误报「未保存」。
     // 回预览模式；冲突/失败态在各自会话里按路径隔离保留，不随切换丢失。
@@ -324,12 +337,18 @@ watch(
   },
 )
 
-// 进入编辑模式时：建立（或恢复）该文件的编辑会话，草稿原样回填
-watch(viewMode, (mode) => {
+// 进入编辑模式时：建立（或恢复）该文件的编辑会话，草稿原样回填；
+// 退回预览 = 本文件编辑告一段落：待写内容立即收口（§阶段 2 离开收口），
+// 冲突/守护会话不强行写（收口在会话内被拒绝，现场原样保留）
+watch(viewMode, (mode, previous) => {
   const file = props.file
   if (mode === 'edit' && file && isEditablePath(file.path)) {
     const active = openEditorSession(props.projectId, file.path, file.content, file.updatedAt)
     editDraft.value = active.content
+    return
+  }
+  if (mode === 'preview' && previous === 'edit' && file) {
+    void flushEditorSession(props.projectId, file.path)
   }
 })
 
@@ -1089,17 +1108,6 @@ function handleContentMouseup() {
                 放弃更改
               </button>
             </div>
-          </div>
-          <div class="mt-2 flex shrink-0 items-center justify-between px-1">
-            <span class="text-xs text-gray-400">Ctrl/⌘ + S 保存</span>
-            <button
-              type="button"
-              class="rounded-lg bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-40"
-              :disabled="!canEdit || !isDirty || isSavingThisFile"
-              @click="handleSave()"
-            >
-              {{ isSavingThisFile ? '保存中...' : '保存' }}
-            </button>
           </div>
         </div>
 

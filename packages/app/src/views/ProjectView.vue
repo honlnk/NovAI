@@ -16,10 +16,16 @@ import {
   restorePersistedDrafts,
 } from '../composables/useFileDrafts'
 import {
+  flushAllEditorSessions,
+  flushEditorSessions,
+  getEditorProbeHandler,
+  getEditorSaveHandler,
   getGuardedEditorSession,
+  setAutosaveInputEnabled,
   setEditorGuard,
   setEditorProbeHandler,
   setEditorSaveHandler,
+  setupEditorAutosaveLifecycle,
 } from '../composables/editor-session'
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
 import {
@@ -101,9 +107,17 @@ const panelNotice = ref<{ name: string; trashPath?: string } | null>(null)
 const draftRestoreToken = ref(0)
 
 // 编辑会话的保存/外部版本读取服务（§四 统一保存编排）：会话模块通过注入的服务
-// 调用 projectStore，保持与 UI 组件解耦；离开项目视图时注销
-setEditorSaveHandler((path, content, options) => projectStore.saveFile(path, content, options))
-setEditorProbeHandler((path, targetProjectId) => projectStore.probeFile(path, targetProjectId))
+// 调用 projectStore，保持与 UI 组件解耦；离开项目视图时（收口结束后）注销
+const editorSaveService = (path: string, content: string, options?: Parameters<typeof projectStore.saveFile>[2]) =>
+  projectStore.saveFile(path, content, options)
+const editorProbeService = (path: string, targetProjectId?: string) =>
+  projectStore.probeFile(path, targetProjectId)
+setEditorSaveHandler(editorSaveService)
+setEditorProbeHandler(editorProbeService)
+
+// 输入自动保存（§阶段 2）：进入项目视图即打开 2000ms 去抖收口；应用级开关，
+// 视图卸载后写盘服务随之注销（自动触发无服务时自然不写），不再关闭
+setAutosaveInputEnabled(true)
 
 /**
  * 内容面板宽度（R7）：从 localStorage 读取，clamp 到 240~720，无记录时默认 320。
@@ -317,15 +331,30 @@ onUnmounted(() => {
   workspaceGeneration += 1
   indexStore.dispose()
   teardownDraftBackup?.()
-  setEditorSaveHandler(null)
-  setEditorProbeHandler(null)
+  teardownEditorAutosave?.()
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  // 离开项目视图（§阶段 2 离开收口）：尽力收口全部待写会话；写盘服务等收口
+  // 结束再注销（发起即返回，来不及落盘的内容由恢复镜像兜底）。注销前比对
+  // 「还是不是本实例注册的服务」，防快速往返时把新实例的服务一并注销。
+  void flushAllEditorSessions()
+    .catch(() => {})
+    .finally(() => {
+      if (getEditorSaveHandler() === editorSaveService) {
+        setEditorSaveHandler(null)
+      }
+      if (getEditorProbeHandler() === editorProbeService) {
+        setEditorProbeHandler(null)
+      }
+    })
 })
 
 // 草稿备份生命周期（数据安全计划 §3-2）：页面隐藏/关闭前立即落盘待写备份
+// 正文自动保存收口（§阶段 2）在同一时机独立挂接——写盘与镜像互不拖累
 let teardownDraftBackup: (() => void) | null = null
+let teardownEditorAutosave: (() => void) | null = null
 onMounted(() => {
   teardownDraftBackup = setupDraftBackupLifecycle()
+  teardownEditorAutosave = setupEditorAutosaveLifecycle()
 })
 
 // 后台会话保存失败到达（§3-4 保存失败可见 / F11 错误持续）：错误 toast 默认持续显示
@@ -345,11 +374,12 @@ watch(
   },
 )
 
-// 未保存内容保护的刷新风险口（§6）：项目内有任何未保存编辑草稿时，刷新/关闭
-// 标签页给出浏览器原生确认（正文不自动保存，离开即丢——必须让用户明确选择）
+// 未保存内容保护的刷新风险口（§6 + §阶段 2）：有待写/在途/失败/冲突/守护内容时，
+// 刷新/关闭标签页给出浏览器原生确认，并立即尝试收口（来不及落盘由恢复镜像兜底）
 function handleBeforeUnload(event: BeforeUnloadEvent) {
   const projectId = projectStore.currentProject?.id
   if (projectId && hasDirtyDrafts(projectId)) {
+    void flushAllEditorSessions()
     event.preventDefault()
     event.returnValue = ''
   }
@@ -733,7 +763,12 @@ const planRecentCards = computed(() => {
 })
 
 /** 进入计划分类时加载看板；切回其他分类恢复原对话与文件面板状态（面板偏好都在本组件 ref，天然保留） */
-watch(activeCategory, async (category) => {
+watch(activeCategory, async (category, previous) => {
+  // 切换分类 = 离开当前编辑现场（§阶段 2 离开收口）：项目内待写内容立即收口；
+  // 冲突/守护会话在收口内部被拒绝，现场按会话保留
+  if (previous && projectStore.currentProject) {
+    void flushEditorSessions(projectId.value)
+  }
   if (category === 'plan' && projectStore.currentProject) {
     await planStore.loadBoard(projectId.value)
   } else if ((category === 'foreshadowing' || category === 'chapter') && projectStore.currentProject) {
@@ -747,7 +782,12 @@ watch(activeCategory, async (category) => {
 })
 
 /** 切换/关闭项目时清理上一个项目的计划板状态（含编辑会话）与面板展开偏好 */
-watch(() => projectStore.currentProject?.id, () => {
+watch(() => projectStore.currentProject?.id, (_newId, previousId) => {
+  // 旧项目的待写内容尽力收口（§阶段 2）：运行时项目已切换，写盘失败时旧会话
+  // 保留失败态与恢复镜像，回到该项目时可见可重试，不静默丢失
+  if (previousId) {
+    void flushEditorSessions(previousId)
+  }
   planStore.reset()
   isPlanPanelOpen.value = false
   foreshadowingStore.reset()
@@ -795,7 +835,9 @@ function handleCloseContentPanel() {
   const target = panelCloseTarget(workspacePanel.value.kind)
   if (target === 'file') {
     isContentPanelOpen.value = false
-    // 关闭文件面板：当前文件的草稿仍留在草稿表（重开即恢复），备份立即落盘（§3-2）
+    // 关闭文件面板（§阶段 2 离开收口）：项目内待写内容立即收口（会话保留，重开即恢复
+    // 现场）；备份镜像独立立即落盘（§3-2）
+    void flushEditorSessions(projectId.value)
     void flushDraftBackupsNow()
   } else if (target === 'plan') {
     isPlanPanelOpen.value = false

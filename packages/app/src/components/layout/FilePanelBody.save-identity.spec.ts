@@ -55,11 +55,16 @@ async function editDraft(wrapper: VueWrapper, draft: string) {
   await wrapper.find('textarea').setValue(draft)
 }
 
+/** Ctrl/⌘+S 立即收口（保存按钮已随无保存心智退役，快捷键是唯一手动触发） */
+async function pressSaveShortcut(wrapper: VueWrapper) {
+  await wrapper.find('textarea').trigger('keydown', { ctrlKey: true, key: 's' })
+}
+
 /** 制造一次保存冲突并回到编辑态（冲突再入口出现） */
 async function enterConflictAndReturn(wrapper: VueWrapper, saveFile: ReturnType<typeof vi.fn>, draft: string) {
   saveFile.mockResolvedValueOnce({ ok: false, conflict: true, message: '磁盘已被外部修改' })
   await editDraft(wrapper, draft)
-  await button(wrapper, '保存').trigger('click')
+  await pressSaveShortcut(wrapper)
   await vi.waitFor(() => expect(wrapper.text()).toContain('保存冲突'))
   await button(wrapper, '返回继续编辑').trigger('click')
 }
@@ -109,7 +114,7 @@ describe('FilePanelBody 保存身份（同路径回写 ≠ 切换文件）', () 
     saveFile.mockImplementationOnce(
       () => new Promise((resolve) => { releaseSave = resolve }),
     )
-    await button(wrapper, '保存').trigger('click')
+    await pressSaveShortcut(wrapper)
     // 写盘在途时继续输入（不被清除、不误判已保存）
     await wrapper.find('textarea').setValue('在途期间的新输入')
     releaseSave({ ok: true, file: fileView(A_PATH, '原草稿', 'v2') })

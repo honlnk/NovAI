@@ -1,3 +1,11 @@
+// @vitest-environment happy-dom
+/**
+ * 编辑会话状态机事件序（正文自动保存与并发冲突交互重设计计划 阶段 1/2 验收）：
+ * 受控 Promise + 可控时钟覆盖旧写晚到、等待期间新输入、同路径跨项目、保存回写
+ * 对象与失败恢复；每次写盘断言磁盘调用与恢复镜像（IndexedDB 备份）两侧。
+ * 阶段 2 追加：2000ms 输入去抖自动落盘、普通失败自动补试一次、页面隐藏收口。
+ * 环境 happy-dom：setupEditorAutosaveLifecycle 需要 document/window。
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { hashContent } from '@novai/core'
@@ -9,6 +17,7 @@ import {
 } from './draft-backup'
 import {
   EDITOR_AUTOSAVE_DEBOUNCE_MS,
+  EDITOR_SAVE_RETRY_DELAY_MS,
   _resetEditorSessionsForTest,
   clearEditorSession,
   editorSessionPhase,
@@ -18,15 +27,10 @@ import {
   setEditorInput,
   setEditorProbeHandler,
   setEditorSaveHandler,
+  setupEditorAutosaveLifecycle,
   type EditorSaveHandler,
 } from './editor-session'
 import { _clearFileDraftsForTest, getFileDraft } from './useFileDrafts'
-
-/**
- * 编辑会话状态机事件序（正文自动保存与并发冲突交互重设计计划 阶段 1 验收）：
- * 受控 Promise + 可控时钟覆盖旧写晚到、等待期间新输入、同路径跨项目、保存回写
- * 对象与失败恢复；每次写盘断言磁盘调用与恢复镜像（IndexedDB 备份）两侧。
- */
 
 function createMemoryStore(): DraftBackupStore & { records: Map<string, PersistedDraftRecord> } {
   const records = new Map<string, PersistedDraftRecord>()
@@ -207,7 +211,7 @@ describe('editor-session 保存编排事件序', () => {
     expect(store.records.has(buildDraftKey('p1', A_PATH))).toBe(false)
   })
 
-  it('普通写入失败：内容与位置保留、失败态持续；手动重试成功后清失败', async () => {
+  it('普通写入失败：自动补试一次；补试仍失败则错误持续可见，手动重试成功后清失败', async () => {
     const { handler, release } = createDeferredSaveHandler()
     setEditorSaveHandler(handler)
     const session = openEditorSession('p1', A_PATH, 'v0', 't0')
@@ -220,9 +224,19 @@ describe('editor-session 保存编排事件序', () => {
     expect(session.content).toBe('v1')
     expect(session.failure?.message).toBe('写入失败：权限不足')
     expect(editorSessionPhase(session)).toBe('failed')
-    // 失败不自动重试（阶段 1 手动模式；阶段 2 起补一次自动重试）
-    await vi.advanceTimersByTimeAsync(5000)
+
+    // 自动补试恰好一次（§阶段 2：普通失败仅自动补试一次）：补窗口内不打扰
+    await vi.advanceTimersByTimeAsync(EDITOR_SAVE_RETRY_DELAY_MS - 1)
     expect(handler).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(handler).toHaveBeenCalledTimes(2)
+    release(2, { ok: false, conflict: false, message: '写入失败：权限不足' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 补试也失败：不再自动重试，持久错误持续可见（「已保存」只对应真实磁盘内容）
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(handler).toHaveBeenCalledTimes(2)
+    expect(session.failure?.message).toBe('写入失败：权限不足')
     // 镜像保留未落盘内容
     await vi.advanceTimersByTimeAsync(800)
     expect(store.records.get(buildDraftKey('p1', A_PATH))?.content).toBe('v1')
@@ -230,10 +244,36 @@ describe('editor-session 保存编排事件序', () => {
     // 手动重试成功：失败清除、基线上移
     const retry = requestEditorSave('p1', A_PATH, { trigger: 'manual' })
     await vi.advanceTimersByTimeAsync(0)
-    release(2, { ok: true, file: fileView('v1', 't2') })
+    release(3, { ok: true, file: fileView('v1', 't2') })
     await retry
     expect(session.failure).toBeUndefined()
     expect(editorSessionPhase(session)).toBe('clean')
+  })
+
+  it('补试失败后新输入开启新失败周期：内容变了可再自动补试一次', async () => {
+    const { handler, release } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    openEditorSession('p1', A_PATH, 'v0', 't0')
+    setEditorInput('p1', A_PATH, 'v1')
+    const first = requestEditorSave('p1', A_PATH, { trigger: 'manual' })
+    await vi.advanceTimersByTimeAsync(0)
+    release(1, { ok: false, conflict: false, message: '失败一' })
+    await first
+    await vi.advanceTimersByTimeAsync(EDITOR_SAVE_RETRY_DELAY_MS)
+    release(2, { ok: false, conflict: false, message: '失败二' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(handler).toHaveBeenCalledTimes(2)
+
+    // 新输入（内容变化）开启新周期：失败后又能自动补试一次
+    setEditorInput('p1', A_PATH, 'v2')
+    const second = requestEditorSave('p1', A_PATH, { trigger: 'manual' })
+    await vi.advanceTimersByTimeAsync(0)
+    release(3, { ok: false, conflict: false, message: '失败三' })
+    await second
+    await vi.advanceTimersByTimeAsync(EDITOR_SAVE_RETRY_DELAY_MS)
+    expect(handler).toHaveBeenCalledTimes(4)
+    release(4, { ok: true, file: fileView('v2', 't3') })
+    await vi.advanceTimersByTimeAsync(0)
   })
 
   it('保存冲突：读取外部版本登记冲突；冲突期间自动触发不写、手动触发仍可尝试', async () => {
@@ -267,6 +307,10 @@ describe('editor-session 保存编排事件序', () => {
     release(2, { ok: false, conflict: true, message: '已被外部修改' })
     await retry
     expect(calls[1]?.options).toMatchObject({ projectId: 'p1' })
+
+    // 冲突不是普通失败：不自动补试（等待用户在两个版本间明确选择）
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(handler).toHaveBeenCalledTimes(2)
   })
 
   it('守护未决时禁止一切写入（含手动）；输入与守护状态保留', async () => {
@@ -305,6 +349,33 @@ describe('editor-session 保存编排事件序', () => {
       expect(editorSessionPhase(session)).toBe('clean')
     } finally {
       setAutosaveInputEnabled(false)
+    }
+  })
+
+  it('页面隐藏生命周期：visibilitychange 立即收口全部待写会话（含去抖未到窗的）', async () => {
+    const { handler, release } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    const teardown = setupEditorAutosaveLifecycle()
+    try {
+      const sessionA = openEditorSession('p1', 'chapters/a.txt', 'v0', 't0')
+      const sessionB = openEditorSession('p2', 'chapters/b.txt', 'w0', 's0')
+      setEditorInput('p1', 'chapters/a.txt', '甲待写')
+      setEditorInput('p2', 'chapters/b.txt', '乙待写')
+      // 去抖窗口远未到（刚输入）：页面隐藏也要立即收口
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(handler).toHaveBeenCalledTimes(2)
+      const calls = vi.mocked(handler).mock.calls
+      const paths = [calls[0]?.[0], calls[1]?.[0]]
+      expect(paths).toContain('chapters/a.txt')
+      expect(paths).toContain('chapters/b.txt')
+      release(1, { ok: true, file: { path: 'chapters/a.txt', name: 'a.txt', format: 'text', content: '甲待写', updatedAt: 't1' } })
+      release(2, { ok: true, file: { path: 'chapters/b.txt', name: 'b.txt', format: 'text', content: '乙待写', updatedAt: 's1' } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(editorSessionPhase(sessionA)).toBe('clean')
+      expect(editorSessionPhase(sessionB)).toBe('clean')
+    } finally {
+      teardown()
     }
   })
 })
