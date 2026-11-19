@@ -2,35 +2,73 @@ import { computed, ref, shallowRef, watch } from 'vue'
 
 import { isSameBoardOrder, moveCardInBoard, type BoardColumns } from '../components/card-board/board-reorder'
 import { shouldReturnToPreviewAfterSave, type DetailMode } from '../components/plan/detail-mode'
+import {
+  createSaveSessionRealm,
+  type SaveSessionBase,
+  type SaveSessionRestoreReport,
+  type SaveSessionSettledResult,
+} from '../composables/save-session'
+import {
+  loadProjectCardBackups,
+  removeCardBackup,
+  scheduleCardBackup,
+  type PersistedCardDraft,
+} from '../composables/card-backup'
 
 /**
  * 看板卡片 store 的通用机件（创作心智模块施工计划 §10.5，自计划模块上提泛化）：
- * 生成代次守卫、串行看板加载队列（批次计数）、乐观移动与原地短路、卡片级编辑
- * 会话（草稿/视图态/冲突随卡片暂存恢复）、按草稿版本的保存合并、新建面板流程。
- * 计划（stores/plan.ts）与伏笔（stores/foreshadowing.ts）各自 defineStore 内调用
+ * 生成代次守卫、串行看板加载队列（批次计数）、乐观移动与原地短路、统一卡片
+ * 保存会话（composables/save-session 引擎实例）、新建面板流程。计划
+ * （stores/plan.ts）与伏笔（stores/foreshadowing.ts）各自 defineStore 内调用
  * 本工厂，再叠加领域 computed 与动作——避免三份平行实现。
  *
  * 领域差异全部经由 config 注入：
  * - 服务适配器（loadBoard/readCard/saveCard/moveCard/deleteCard/submitCreate）：
  *   草稿到服务入参的组合（如计划名改写正文首行）在适配器内完成；
- * - 草稿形状：TDraft 字段可空（null = 该字段未修改），会话把草稿字段平铺在顶层；
+ * - 草稿形状：TDraft 字段可空（null = 该字段未修改）；
  * - 冲突提取：服务层冲突错误 → 带最新内容的卡片（无冲突返回 null）。
  *
  * 状态归属与冲突规则沿用计划板的约定：看板数据以项目文件为事实来源，切项目整体
  * 清理；用户正在编辑时不拿远端内容覆盖草稿，保存携带读取时 contentHash 命中服务
  * 层校验；带草稿的卡片被切走期间文件被外部修改，重开时不覆盖草稿，转冲突流程。
+ *
+ * 编辑会话已迁入统一保存会话引擎（阶段 1）：会话常驻（不再随切卡暂存/恢复），
+ * 字段草稿、编辑模式、在途保存、失败与冲突都挂在会话上；引擎负责同键串行写盘、
+ * 快照固定与只承认本次快照、失败自动补试与恢复镜像核对。草稿「改回与磁盘一致」
+ * 时收敛为全空模板，让 clean 状态可表示（会话隐藏、镜像清除）。
  */
 
 /** 看板读取来源：首载（骨架屏）、操作后/外部变更自动同步、左侧手动刷新 */
 export type BoardLoadSource = 'initial' | 'auto' | 'manual'
 
-/** 卡片级编辑会话：某张卡片被切走时暂存的界面草稿（字段平铺）与视图态 */
+/**
+ * 统一保存会话中的卡片编辑状态：引擎基础字段 + 卡片领域字段。
+ * 草稿与磁盘卡片异构（draft 字段可空、null = 未修改），基线快照固定为全空模板，
+ * 基线版本令牌用 contentHash。
+ */
+export type CardSaveSession<TDraft extends object, TCard> = SaveSessionBase & {
+  cardId: string
+  /** 字段草稿（null 字段 = 未修改；全空 = 无未保存修改） */
+  draft: TDraft
+  /** 草稿基线快照：恒为全空模板（clean 可表示） */
+  baseDraft: TDraft
+  /** 会话依据的磁盘卡片版本令牌（保存校验与外部修改判定） */
+  baseContentHash?: string
+  /** 保存时组合服务入参所依据的磁盘卡片（contentHash 取读取时值） */
+  diskCard?: TCard
+  /** 切走时的视图态（重开恢复编辑模式） */
+  mode: DetailMode
+  /** 离开保存失败的卡片后，错误仍属于这张卡，不串到其他卡片 */
+  actionMessage?: string
+}
+
+/** 卡片级编辑会话的兼容视图（领域字段平铺 + 视图态；由统一会话派生） */
 export type CardBoardEditSession<TDraft extends object, TCard> = TDraft & {
   /** 切走时的视图态（重开恢复编辑模式） */
   mode: DetailMode
   /** 草稿所基于的读取时内容 hash：重开时与最新 hash 对比判断外部修改 */
   baseContentHash: string
-  /** 草稿版本：识别保存期间继续输入的新内容 */
+  /** 兼容保留（旧会话的草稿版本号；统一会话由快照比较承担该职责） */
   revision: number
   /** 离开保存失败的卡片后，错误仍属于这张卡，不串到其他卡片 */
   actionError?: string
@@ -97,8 +135,7 @@ export function createCardBoardCore<
   TCreateDraft extends object,
 >(config: CardBoardConfig<TStatus, TSummary, TBoard, TCard, TDraft, TCreateDraft>) {
   // 泛型容器一律 shallowRef：深层 ref 会把 TCard/TDraft 经 UnwrapRef 污染成
-  // 无法证明相容的类型；这里的全部写入都是整体替换（无字段级突变），浅层即够，
-  // 与原 plan store 对 savingSessions 的处理同理。
+  // 无法证明相容的类型；这里的全部写入都是整体替换（无字段级突变），浅层即够。
   const board = shallowRef<TBoard | null>(null)
   const isLoading = ref(false)
   const errorMessage = ref('')
@@ -109,15 +146,8 @@ export function createCardBoardCore<
 
   /** 当前打开的详情卡片完整内容（含 contentHash） */
   const activeCard = shallowRef<TCard | null>(null)
-  /** 详情编辑草稿（字段可空：null = 该字段未修改）；null 整体 = 无未保存修改 */
-  const draft = shallowRef<TDraft | null>(null)
   /** 详情视图态：默认预览，随卡片切换按编辑会话恢复 */
   const detailMode = ref<DetailMode>('preview')
-  /** 卡片级编辑会话缓存（key = 卡片 id；随项目 reset 清理；仅整体替换触发） */
-  const editSessions = shallowRef(new Map<string, CardBoardEditSession<TDraft, TCard>>())
-  /** 保存中（按当前卡片识别；Promise 不交给 Vue 深层代理） */
-  const savingSessions = shallowRef(new Map<string, Promise<boolean>>())
-  const isSaving = computed(() => activeCard.value !== null && savingSessions.value.has(activeCard.value.id))
   /** 保存成功仍按原卡片返回；视图刷新文件树不依赖保存结束时用户正看哪张卡 */
   const lastSavedCard = shallowRef<TCard | null>(null)
   /** 打开的卡片在编辑外被外部修改（AI/外部编辑器）：提示重新读取或保留草稿 */
@@ -139,8 +169,6 @@ export function createCardBoardCore<
   let currentProjectId: string | null = null
   /** 读取序号：只有当前项目里最后一次选择的卡片可以接管详情 */
   let openSequence = 0
-  /** 每份草稿有独立版本；保存只清理提交时那一版，保留随后继续输入的内容 */
-  const draftVersions = new Map<string, number>()
   /** 新建只允许当前项目的最后一次提交回写新建草稿 */
   let createSequence = 0
   /** 创建是否已交由独立文件操作承接；界面取消不应让它保持提交锁 */
@@ -158,12 +186,6 @@ export function createCardBoardCore<
     return currentProjectId === projectId && projectGeneration === generation
   }
 
-  function nextDraftVersion(cardId: string): number {
-    const version = (draftVersions.get(cardId) ?? 0) + 1
-    draftVersions.set(cardId, version)
-    return version
-  }
-
   /** 新建面板是否有未提交内容（草稿静默保留，供恢复显示用） */
   const hasCreateDraft = computed(() => config.hasCreateInput(createDraft.value))
 
@@ -174,6 +196,229 @@ export function createCardBoardCore<
     return (Object.values(board.value.columns) as TSummary[][])
       .reduce((total, cards) => total + cards.length, 0)
   })
+
+  /* ---------- 统一卡片保存会话（阶段 1） ---------- */
+
+  /** 手动保存的同步去重标记（项目 + 卡片复合键：保存排队到写盘开始的间隙内也不重复提交） */
+  const manualSaveInFlight = new Set<string>()
+
+  function manualSaveKey(projectId: string, cardId: string): string {
+    return JSON.stringify([projectId, cardId])
+  }
+
+  function scheduleSessionMirror(session: CardSaveSession<TDraft, TCard>): void {
+    scheduleCardBackup(session.projectId, session.cardId, {
+      draft: session.draft as unknown as PersistedCardDraft,
+      baseContentHash: session.baseContentHash,
+      mode: session.mode,
+    })
+  }
+
+  const cardRealm = createSaveSessionRealm<CardSaveSession<TDraft, TCard>, TDraft, TCard>({
+    isSameSnapshot: isSameDraft,
+    getSnapshot: (session) => session.draft,
+    setSnapshot: (session, snapshot) => {
+      session.draft = snapshot
+    },
+    getBaseSnapshot: (session) => session.baseDraft,
+    setBaseSnapshot: (session, snapshot) => {
+      session.baseDraft = snapshot
+    },
+    getBaseVersion: (session) => session.baseContentHash,
+    setBaseVersion: (session, version) => {
+      session.baseContentHash = version
+    },
+    captureInFlight: (session) => {
+      // 新保存周期开始：旧失败信息不再属于这张卡的当前详情
+      delete session.actionMessage
+      return true
+    },
+    releaseInFlight: (session) => {
+      session.inFlight = null
+    },
+    createSession: (projectId, cardId, seed) => ({
+      projectId,
+      cardId,
+      draft: seed.snapshot,
+      baseDraft: seed.baseSnapshot,
+      ...(seed.baseVersion !== undefined ? { baseContentHash: seed.baseVersion } : {}),
+      mode: 'preview',
+      inFlight: null,
+      restoredPending: false,
+      restoredAcked: false,
+      updatedAt: seed.updatedAt ?? new Date().toISOString(),
+    }),
+    upsertSession: (session, data) => {
+      session.draft = data.snapshot
+      session.baseDraft = data.baseSnapshot
+    },
+    save: async (_projectId, _cardId, snapshot, ctx) => {
+      const card = ctx.session.diskCard
+      if (!card) {
+        return { ok: false, conflict: false, message: '卡片会话缺少磁盘基线，请重新打开卡片' }
+      }
+      try {
+        const saved = await config.saveCard(ctx.session.projectId, card, snapshot)
+        // 写盘成功即更新会话的磁盘基线（写盘期间继续输入的保存按新基线校验）
+        ctx.session.diskCard = saved
+        return { ok: true, disk: saved }
+      } catch (error) {
+        const currentCard = config.extractConflict(error, card)
+        if (currentCard) {
+          return {
+            ok: false,
+            conflict: true,
+            message: toMessage(error, config.messages.saveCard),
+            disk: currentCard,
+          }
+        }
+        return { ok: false, conflict: false, message: toMessage(error, config.messages.saveCard) }
+      }
+    },
+    probe: async (projectId, cardId) => {
+      const card = await config.readCard(projectId, cardId)
+      return card ? { kind: 'ok', disk: card } : { kind: 'missing' }
+    },
+    versionOf: (card) => card.contentHash,
+    snapshotFromDisk: () => config.emptyDraft(),
+    isBaselineIntact: (record, card) => record.baseVersion === card.contentHash,
+    isSnapshotOnDisk: (record, card) => !config.draftDiffers(card, record.snapshot),
+    scheduleMirror: (session) => {
+      scheduleSessionMirror(session)
+    },
+    removeMirror: (projectId, cardId) => {
+      removeCardBackup(projectId, cardId)
+    },
+    onSettled: (projectId, cardId, result) => handleSaveSettled(projectId, cardId, result),
+  })
+
+  /**
+   * 每次写盘完成的回执：同步看板与详情。文件写入不因用户切卡而取消，但结果
+   * 只更新原卡片的会话，不能覆盖新选择；旧项目的结果不回写新现场。
+   */
+  async function handleSaveSettled(
+    projectId: string,
+    cardId: string,
+    result: SaveSessionSettledResult<TCard>,
+  ): Promise<void> {
+    if (currentProjectId !== projectId) {
+      return
+    }
+    const session = cardRealm.getSession(projectId, cardId)
+    if (result.status === 'saved') {
+      lastSavedCard.value = result.disk
+      if (activeCard.value?.id === cardId) {
+        activeCard.value = result.disk
+        actionError.value = ''
+        if (!session || config.isEmptyDraft(session.draft)) {
+          detailMode.value = 'preview'
+          if (session) session.mode = 'preview'
+        }
+      }
+      await refreshBoard(projectId)
+      return
+    }
+    if (session) {
+      session.actionMessage = result.message
+    }
+    if (activeCard.value?.id === cardId) {
+      if (result.status === 'conflict') {
+        const conflictCard = session?.conflict?.disk as TCard | undefined
+        if (conflictCard) conflictNotice.value = { currentCard: conflictCard }
+      }
+      actionError.value = result.message
+    } else {
+      const card = session?.diskCard
+      detailNotice.value = {
+        cardId,
+        message: `「${card ? config.cardTitle(card) : cardId}」${result.message}`,
+      }
+    }
+  }
+
+  /** 详情编辑草稿（字段可空：null = 该字段未修改）；null 整体 = 无未保存修改 */
+  const draft = computed<TDraft | null>(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return null
+    }
+    const session = cardRealm.getSession(currentProjectId, card.id)
+    if (!session || config.isEmptyDraft(session.draft)) {
+      return null
+    }
+    return session.draft
+  })
+
+  /** 保存中（按当前卡片识别） */
+  const isSaving = computed(() => {
+    const card = activeCard.value
+    return card !== null
+      && currentProjectId !== null
+      && cardRealm.getSession(currentProjectId, card.id)?.inFlight != null
+  })
+
+  /**
+   * 卡片级编辑会话兼容视图（key = 卡片 id）：从统一会话派生，clean 会话隐藏
+   * （保存成功/关闭详情后不再出现在表里）。
+   */
+  const editSessions = computed(() => {
+    const view = new Map<string, CardBoardEditSession<TDraft, TCard>>()
+    if (currentProjectId == null) {
+      return view
+    }
+    for (const session of cardRealm.listSessions(currentProjectId)) {
+      if (
+        config.isEmptyDraft(session.draft)
+        && !session.conflict
+        && !session.failure
+        && !session.guard
+        && !session.restoredPending
+      ) {
+        continue
+      }
+      const conflictCard = session.conflict?.disk as TCard | undefined
+      view.set(session.cardId, {
+        ...session.draft,
+        mode: session.mode,
+        baseContentHash: session.baseContentHash ?? '',
+        revision: 0,
+        ...(session.actionMessage !== undefined ? { actionError: session.actionMessage } : {}),
+        ...(conflictCard !== undefined ? { conflictCard } : {}),
+      })
+    }
+    return view
+  })
+
+  /** 打开（或按需创建）卡片会话，磁盘基线取当前读取的卡片 */
+  function ensureCardSession(projectId: string, card: TCard): CardSaveSession<TDraft, TCard> {
+    const existing = cardRealm.getSession(projectId, card.id)
+    if (existing) {
+      return existing
+    }
+    const session = cardRealm.openSession(projectId, card.id, {
+      snapshot: config.emptyDraft(),
+      baseSnapshot: config.emptyDraft(),
+      baseVersion: card.contentHash,
+    })
+    session.diskCard = card
+    return session
+  }
+
+  /** 编辑模式写入会话；有草稿时同步镜像（重开恢复编辑态） */
+  function syncModeToSession(mode: DetailMode): void {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return
+    }
+    const session = cardRealm.getSession(currentProjectId, card.id)
+    if (!session) {
+      return
+    }
+    session.mode = mode
+    if (!config.isEmptyDraft(session.draft)) {
+      scheduleSessionMirror(session)
+    }
+  }
 
   const hasUnsavedChanges = computed(() =>
     activeCard.value !== null
@@ -186,6 +431,7 @@ export function createCardBoardCore<
   watch([isSaving, hasUnsavedChanges], ([saving, unsaved], [prevSaving]) => {
     if (shouldReturnToPreviewAfterSave(prevSaving, saving, unsaved)) {
       detailMode.value = 'preview'
+      syncModeToSession('preview')
     }
   })
 
@@ -263,54 +509,15 @@ export function createCardBoardCore<
 
   /* ---------- 卡片级编辑会话 ---------- */
 
-  /** 把当前卡片的界面草稿暂存进会话缓存（切卡 / 开新建前调用；无卡片为空操作） */
-  function stashEditSession() {
-    const card = activeCard.value
-    if (!card) {
-      return
-    }
-    editSessions.value.set(card.id, {
-      ...(draft.value ?? config.emptyDraft()),
-      mode: detailMode.value,
-      baseContentHash: card.contentHash,
-      revision: draftVersions.get(card.id) ?? 0,
-      actionError: actionError.value || undefined,
-      conflictCard: conflictNotice.value?.currentCard,
-    })
-  }
-
   /**
-   * 恢复目标卡片的编辑会话。有草稿且文件已被外部修改时不覆盖草稿：
-   * activeCard 保持草稿基线 hash（保存仍命中服务层冲突校验），并置冲突提示。
+   * 打开卡片详情：会话常驻（草稿/模式随卡保留）。有草稿且文件已被外部修改
+   * （或冲突随会话保留）时不覆盖草稿——显示卡保持草稿基线 hash（保存仍命中
+   * 服务层冲突校验），并置冲突提示。
    */
-  function restoreEditSession(card: TCard) {
-    const session = editSessions.value.get(card.id)
-    if (!session) {
-      draft.value = null
-      detailMode.value = 'preview'
-      draftVersions.set(card.id, 0)
-      return
-    }
-    draftVersions.set(card.id, session.revision)
-
-    draft.value = config.isEmptyDraft(session) ? null : session
-    detailMode.value = session.mode
-
-    if (config.draftDiffers(card, session) && (session.baseContentHash !== card.contentHash || session.conflictCard)) {
-      activeCard.value = { ...card, contentHash: session.baseContentHash } as TCard
-      conflictNotice.value = { currentCard: session.conflictCard ?? card }
-    }
-  }
-
-  /** 打开卡片详情：切走当前卡片前暂存草稿，新建面板让位（输入保留） */
   async function openCard(projectId: string, id: string): Promise<void> {
     const generation = beginProject(projectId)
     const sequence = ++openSequence
     const wasCreateOpen = isCreateOpen.value
-    if (activeCard.value?.id !== id || wasCreateOpen || detailMode.value !== 'preview'
-      || draft.value !== null || conflictNotice.value) {
-      stashEditSession()
-    }
     actionError.value = ''
     conflictNotice.value = null
     detailError.value = null
@@ -326,35 +533,52 @@ export function createCardBoardCore<
       if (!isLatest()) return
       if (!card) {
         // 卡片刚被删除（外部或 AI）：清空详情与会话并刷新看板。
-        editSessions.value.delete(id)
-        draftVersions.delete(id)
+        cardRealm.clearSession(projectId, id)
         activeCard.value = null
-        draft.value = null
         detailMode.value = 'preview'
         selectedCardId.value = null
         await refreshBoard(projectId)
         return
       }
 
-      activeCard.value = card
-      restoreEditSession(card)
-      selectedCardId.value = card.id
-      actionError.value = editSessions.value.get(id)?.actionError ?? ''
-      if (!conflictNotice.value) detailNotice.value = null
-      const saving = savingSessions.value.get(id)
-      if (saving) {
-        // 保存已在进行中的同卡重读只更新文件基线，已提交的草稿版本不清空。
-        await saving
-        if (!isLatest() || activeCard.value?.id !== id) return
-        const current = activeCard.value
-        const session = editSessions.value.get(id)
-        if (current && session) {
-          draft.value = config.isEmptyDraft(session) ? null : session
-          detailMode.value = session.mode
-          if (session.baseContentHash !== current.contentHash) {
-            activeCard.value = { ...current, contentHash: session.baseContentHash } as TCard
-          }
+      const session = ensureCardSession(projectId, card)
+      const hasLiveDraft = !config.isEmptyDraft(session.draft)
+      const draftChangedOnDisk = hasLiveDraft && config.draftDiffers(card, session.draft)
+      const baselineChanged = session.baseContentHash !== undefined
+        && session.baseContentHash !== card.contentHash
+
+      if (draftChangedOnDisk && (baselineChanged || session.conflict)) {
+        // 不覆盖草稿：显示卡保持草稿基线 hash，冲突提示携带磁盘最新版本。
+        const baselineCard = { ...card, contentHash: session.baseContentHash ?? card.contentHash } as TCard
+        session.diskCard = baselineCard
+        if (!session.conflict) {
+          session.conflict = { generation: 1, probing: false, missing: false, expanded: false, disk: card }
         }
+        activeCard.value = baselineCard
+        conflictNotice.value = { currentCard: (session.conflict.disk as TCard) ?? card }
+      } else {
+        if (hasLiveDraft && !draftChangedOnDisk) {
+          // 草稿内容已与磁盘一致（外部改成同值）：冗余草稿收敛清空
+          cardRealm.setInput(projectId, id, config.emptyDraft())
+        }
+        session.diskCard = card
+        session.baseContentHash = card.contentHash
+        activeCard.value = card
+      }
+      selectedCardId.value = card.id
+      detailMode.value = session.mode
+      actionError.value = session.actionMessage ?? ''
+      if (!conflictNotice.value) detailNotice.value = null
+
+      if (session.inFlight != null) {
+        // 保存已在进行中的同卡重读只等保存收口，已提交的草稿由保存结果承认。
+        await cardRealm.settleSave(projectId, id)
+        if (!isLatest() || activeCard.value?.id !== id) return
+        const settled = cardRealm.getSession(projectId, id)
+        if (settled?.diskCard) {
+          activeCard.value = settled.diskCard
+        }
+        detailMode.value = settled?.mode ?? 'preview'
       }
     } catch (error) {
       if (isLatest()) {
@@ -367,12 +591,10 @@ export function createCardBoardCore<
   function closeCard() {
     openSequence += 1
     const id = activeCard.value?.id
-    if (id) {
-      editSessions.value.delete(id)
-      draftVersions.delete(id)
+    if (id && currentProjectId != null) {
+      cardRealm.clearSession(currentProjectId, id)
     }
     activeCard.value = null
-    draft.value = null
     detailMode.value = 'preview'
     conflictNotice.value = null
     actionError.value = ''
@@ -383,121 +605,67 @@ export function createCardBoardCore<
 
   /** 草稿字段更新（未动过的字段保持 null；调用方按领域字段拼 partial） */
   function updateDraft(partial: Partial<TDraft>) {
-    if (activeCard.value) nextDraftVersion(activeCard.value.id)
+    const card = activeCard.value
+    if (!card || currentProjectId == null) return
+    const session = ensureCardSession(currentProjectId, card)
     // 首次修改从全 null 模板起步，保证 TDraft 字段齐全（draftDiffers 依赖字段存在）
-    draft.value = { ...config.emptyDraft(), ...(draft.value ?? {}), ...partial }
+    const merged = { ...config.emptyDraft(), ...session.draft, ...partial }
+    // 改回与磁盘一致的值时收敛为全空模板：clean 状态可表示（会话隐藏、镜像清除）
+    const next = config.draftDiffers(card, merged) ? merged : config.emptyDraft()
+    cardRealm.setInput(currentProjectId, card.id, next)
   }
 
   /** 详情视图切换（预览/编辑）；值随卡片进入编辑会话，切卡可恢复 */
   function setDetailMode(mode: DetailMode) {
     detailMode.value = mode
+    syncModeToSession(mode)
   }
 
   /**
    * 保存详情草稿。携带读取时 contentHash：文件被外部改过时服务层抛冲突，
    * 草稿保留并由 conflictNotice 提示（不覆盖别人，也不丢草稿）。
-   * 保存只认发起时的项目、卡片和草稿版本。文件写入不能因用户切卡而取消，
-   * 但结果必须更新原卡片的会话，不能覆盖新选择；保存期间继续输入的新版本
-   * 也不能清掉。返回是否保存成功。
+   * 保存只认发起时的项目和卡片；写盘经统一会话串行编排，保存期间继续输入的
+   * 新版本不能被清掉。返回是否保存成功。
    */
   async function saveDraft(projectId: string): Promise<boolean> {
     const card = activeCard.value
-    if (!card || savingSessions.value.has(card.id)) return false
+    if (!card) return false
+    if (manualSaveInFlight.has(manualSaveKey(projectId, card.id))) return false
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session || session.inFlight != null) return false
+    if (config.isEmptyDraft(session.draft) || !config.draftDiffers(card, session.draft)) return false
 
-    const cardId = card.id
-    if (draft.value === null || !config.draftDiffers(card, draft.value)) return false
-
-    const generation = beginProject(projectId)
-    const revision = draftVersions.get(cardId) ?? 0
-    const submittedDraft: TDraft = { ...(draft.value as TDraft) }
-    const previousMode = detailMode.value
-
+    beginProject(projectId)
+    const generation = projectGeneration
+    manualSaveInFlight.add(manualSaveKey(projectId, card.id))
     actionError.value = ''
     lastSavedCard.value = null
-    const saving = (async (): Promise<boolean> => {
-      try {
-        const saved = await config.saveCard(projectId, card, submittedDraft)
-        if (!isCurrentProject(projectId, generation)) return false
-        lastSavedCard.value = saved
-
-        const savedId = saved.id
-        const stillCurrent = activeCard.value?.id === savedId
-        const currentRevision = draftVersions.get(savedId) ?? 0
-        const session = editSessions.value.get(savedId)
-        const unchanged = currentRevision === revision
-        if (unchanged) {
-          // 未再编辑：该版草稿已经落盘，当前详情和暂存会话都以新文件为准。
-          editSessions.value.delete(savedId)
-          if (stillCurrent) {
-            activeCard.value = saved
-            draft.value = null
-            detailMode.value = shouldReturnToPreviewAfterSave(true, false, false) ? 'preview' : previousMode
-          }
-        } else {
-          // 只刷新文件基线，保留后续输入；无未保存修改的编辑态会话也可直接清理。
-          const nextSession: CardBoardEditSession<TDraft, TCard> = {
-            ...((stillCurrent ? draft.value : session) ?? config.emptyDraft()),
-            mode: stillCurrent ? detailMode.value : (session?.mode ?? previousMode),
-            baseContentHash: saved.contentHash,
-            revision: currentRevision,
-          }
-          if (config.draftDiffers(saved, nextSession)) {
-            editSessions.value.set(savedId, nextSession)
-          } else {
-            editSessions.value.delete(savedId)
-          }
-          if (stillCurrent) activeCard.value = saved
-        }
-        await refreshBoard(projectId)
-        return true
-      } catch (error) {
-        if (!isCurrentProject(projectId, generation)) return false
-
-        const message = toMessage(error, config.messages.saveCard)
-        const currentCard = config.extractConflict(error, card)
-        if (activeCard.value?.id === cardId) {
-          if (currentCard) conflictNotice.value = { currentCard }
-          actionError.value = message
-        } else {
-          const session = editSessions.value.get(cardId)
-          if (session) {
-            editSessions.value.set(cardId, {
-              ...session,
-              actionError: message,
-              conflictCard: currentCard ?? undefined,
-            })
-          }
-          detailNotice.value = { cardId, message: `「${config.cardTitle(card)}」${message}` }
-        }
-        return false
-      }
-    })()
-
-    const sessions = new Map(savingSessions.value)
-    sessions.set(cardId, saving)
-    savingSessions.value = sessions
     try {
-      return await saving
+      // 快照在请求时固定（同 tick）：排队到写盘开始之间继续输入的内容保留为待写
+      const submitted: TDraft = { ...session.draft }
+      const result = await cardRealm.requestSave(projectId, card.id, {
+        trigger: 'manual',
+        snapshot: submitted,
+      })
+      // 返回值只认发起时的项目代次：写盘照常完成（文件写入不因切项目取消），
+      // 但保存期间项目已切换时，结果不应用于当前视图，按失败口径返回。
+      return result.status === 'saved' && isCurrentProject(projectId, generation)
     } finally {
-      // reset 后旧保存的收尾不能删除新项目中同 ID 卡片的新保存。
-      if (savingSessions.value.get(cardId) === saving) {
-        const sessions = new Map(savingSessions.value)
-        sessions.delete(cardId)
-        savingSessions.value = sessions
-      }
+      manualSaveInFlight.delete(manualSaveKey(projectId, card.id))
     }
   }
 
-  /** 冲突处理：丢弃草稿（含会话缓存），重新读取文件当前内容并回到预览 */
+  /** 冲突处理：丢弃草稿（含会话缓存与恢复镜像），重新读取文件当前内容并回到预览 */
   async function reloadFromConflict(projectId: string) {
-    if (!conflictNotice.value || !activeCard.value || savingSessions.value.has(activeCard.value.id)) return
+    const cardId = activeCard.value?.id
+    if (!conflictNotice.value || !cardId) return
+    if (manualSaveInFlight.has(manualSaveKey(projectId, cardId))) return
+    const session = cardRealm.getSession(projectId, cardId)
+    if (session?.inFlight != null) return
     const generation = beginProject(projectId)
-    const cardId = activeCard.value.id
     const sequence = ++openSequence
 
-    editSessions.value.delete(cardId)
-    draftVersions.set(cardId, (draftVersions.get(cardId) ?? 0) + 1)
-    draft.value = null
+    cardRealm.clearSession(projectId, cardId)
     conflictNotice.value = null
     actionError.value = ''
     detailNotice.value = null
@@ -512,7 +680,12 @@ export function createCardBoardCore<
         await refreshBoard(projectId)
         return
       }
-      draftVersions.set(cardId, 0)
+      const fresh = cardRealm.openSession(projectId, cardId, {
+        snapshot: config.emptyDraft(),
+        baseSnapshot: config.emptyDraft(),
+        baseVersion: card.contentHash,
+      })
+      fresh.diskCard = card
       activeCard.value = card
       selectedCardId.value = card.id
     } catch (error) {
@@ -525,6 +698,33 @@ export function createCardBoardCore<
   /** 冲突处理：保留当前草稿继续编辑（下次保存仍会校验 hash） */
   function keepDraft() {
     conflictNotice.value = null
+  }
+
+  /**
+   * 重新进入项目时从浏览器恢复镜像回填卡片会话（不写盘；核对规则见
+   * save-session：内容已一致清冗余；基线一致回填待续存；磁盘已变建立冲突；
+   * 卡片已删进入删除守护）。
+   */
+  async function restoreCardDrafts(projectId: string): Promise<SaveSessionRestoreReport> {
+    const records = await loadProjectCardBackups(projectId)
+    const report = await cardRealm.restoreSessions(
+      projectId,
+      records.map((record) => ({
+        key: record.cardId,
+        snapshot: record.draft as unknown as TDraft,
+        baseSnapshot: config.emptyDraft(),
+        ...(record.baseContentHash !== undefined ? { baseVersion: record.baseContentHash } : {}),
+        updatedAt: record.updatedAt,
+      })),
+    )
+    // 记录里携带的编辑模式回填到会话（重开时恢复视图态）
+    for (const record of records) {
+      const session = cardRealm.getSession(projectId, record.cardId)
+      if (session) {
+        session.mode = record.mode
+      }
+    }
+    return report
   }
 
   /**
@@ -555,7 +755,6 @@ export function createCardBoardCore<
   /** 打开新建面板（看板右上 / 空状态入口共用）：切换展示对象，不清当前卡片草稿 */
   function openCreate() {
     if (isCreateOpen.value) return
-    stashEditSession()
     isCreateOpen.value = true
   }
 
@@ -664,6 +863,13 @@ export function createCardBoardCore<
       if (activeCard.value?.id === id) {
         activeCard.value = updated
       }
+      // 同步会话磁盘基线：移动改写了文件（contentHash 变化），当前卡的后续
+      // 保存按新 hash 校验，未保存草稿保留。
+      const session = cardRealm.getSession(projectId, id)
+      if (session) {
+        session.diskCard = updated
+        session.baseContentHash = updated.contentHash
+      }
       await refreshBoard(projectId)
       return true
     } catch (error) {
@@ -683,9 +889,8 @@ export function createCardBoardCore<
       await config.deleteCard(projectId, id)
       if (!isCurrentProject(projectId, generation)) return true
 
-      // 删除后清除该卡片的编辑会话，删除当前打开的卡片时一并关闭详情
-      editSessions.value.delete(id)
-      draftVersions.delete(id)
+      // 删除后清除该卡片的编辑会话（含恢复镜像），删除当前打开的卡片时一并关闭详情
+      cardRealm.clearSession(projectId, id)
       if (selectedCardId.value === id) {
         closeCard()
       }
@@ -705,17 +910,14 @@ export function createCardBoardCore<
     currentProjectId = null
     openSequence += 1
     createSequence += 1
-    savingSessions.value = new Map()
+    manualSaveInFlight.clear()
     isCreating.value = false
     createDetached = false
     board.value = null
     isLoading.value = false
     boardSyncSource.value = 'auto'
     activeCard.value = null
-    draft.value = null
     detailMode.value = 'preview'
-    editSessions.value = new Map()
-    draftVersions.clear()
     conflictNotice.value = null
     actionError.value = ''
     detailError.value = null
@@ -725,6 +927,11 @@ export function createCardBoardCore<
     selectedCardId.value = null
     isCreateOpen.value = false
     createDraft.value = config.emptyCreateDraft()
+    // 清空全部卡片会话与恢复镜像（切项目丢弃未落盘草稿，与既有语义一致；
+    // 刷新场景的恢复由 IndexedDB 记录在下次进入项目时核对回填）
+    for (const session of cardRealm.listAllSessions()) {
+      cardRealm.clearSession(session.projectId, session.cardId)
+    }
   }
 
   return {
@@ -759,6 +966,7 @@ export function createCardBoardCore<
     saveDraft,
     reloadFromConflict,
     keepDraft,
+    restoreCardDrafts,
     createCardVia,
     openCreate,
     closeCreate,
@@ -768,6 +976,17 @@ export function createCardBoardCore<
     removeCard,
     reset,
   }
+}
+
+/** 两份字段草稿逐字段相等（引擎脏判定；字段值为标量或 null） */
+function isSameDraft<TDraft extends object>(left: TDraft, right: TDraft): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  for (const key of keys) {
+    if (left[key as keyof TDraft] !== right[key as keyof TDraft]) {
+      return false
+    }
+  }
+  return true
 }
 
 function toMessage(error: unknown, fallback: string) {

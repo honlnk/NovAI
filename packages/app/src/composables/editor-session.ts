@@ -3,27 +3,31 @@
  * 按「项目 + 路径」把人工编辑、保存编排与冲突/守护状态收敛到可独立测试的会话模块，
  * 组件只负责展示与发送用户操作——不再在组件监听器、草稿表和保存回调里分别拼状态。
  *
- * 会话记录（§四.1）：最新人工输入、编辑基线（开始编辑时的磁盘正文与版本）、
- * 在途写盘快照、失败原因、已感知的外部版本（冲突代次）、删除/重命名守护、
- * 恢复镜像回填标记。IndexedDB 草稿备份（draft-backup）是会话的**未落盘恢复镜像**，
- * 权威正文仍是项目磁盘；内存会话保存运行期最新输入。
+ * 自「看板卡片详情自动保存与状态操作优化计划」阶段 1 起，事件序机制（同键串行
+ * 写盘、失败补试、冲突代次、恢复核对、生命周期收口）上提到通用引擎
+ * composables/save-session.ts，与看板卡片共用同一套已验证编排；本文件是正文
+ * 领域适配层：快照 = 正文内容字符串，磁盘版本 = {content, updatedAt}，版本令牌
+ * = updatedAt + 基线内容哈希，恢复镜像 = draft-backup（IndexedDB）。
  *
- * 写盘编排（§四.3）：同键串行（写盘期间的新输入不清除、不回滚；旧写盘完成只承认
- * 其快照，再按新基线处理剩余输入）；保存绑定固定项目与路径，结果只作用于该会话；
- * 冲突与守护在写盘前再次检查；core 写入口的磁盘版本 + 基线内容哈希校验是最终防线。
- *
- * 阶段 1 只接入手动触发（保存按钮 / Ctrl+S / 重试）；输入去抖与生命周期收口
- * （阶段 2）通过 enableAutosaveInput 打开。冲突交互的非阻塞化在阶段 3。
+ * 会话记录：最新人工输入、编辑基线（开始编辑时的磁盘正文与版本）、在途写盘
+ * 快照、失败原因、已感知的外部版本（冲突代次）、删除/重命名守护、恢复镜像
+ * 回填标记。权威正文仍是项目磁盘；内存会话保存运行期最新输入。
  */
-import { reactive } from 'vue'
 import { hashContent } from '@novai/core'
 import type { FileContentView } from '@novai/core/services/types'
 import type { SaveFileOutcome } from '../stores/project'
 import { removeDraftBackup, scheduleDraftBackup } from './draft-backup'
+import {
+  SAVE_SESSION_AUTOSAVE_DEBOUNCE_MS,
+  SAVE_SESSION_RETRY_DELAY_MS,
+  SaveServiceUnavailableError,
+  createSaveSessionRealm,
+  type SaveSessionAdapter,
+} from './save-session'
 
 export type EditorSessionPhase =
   | 'clean' // 无待写内容（已保存）
-  | 'pending' // 有待写内容（等待保存；阶段 2 起等待去抖）
+  | 'pending' // 有待写内容（等待保存；去抖窗口内）
   | 'saving' // 写盘在途（正在保存）
   | 'failed' // 普通写入失败（保存失败，可重试）
   | 'conflict' // 检测到外部版本（禁止自动写入，直到用户解决）
@@ -110,230 +114,17 @@ export function editorSessionKey(projectId: string, path: string): string {
   return JSON.stringify([projectId, path])
 }
 
-const sessions = reactive(new Map<string, EditorSession>())
+/** 正文领域的磁盘版本形状（引擎视角不透明） */
+type EditorDisk = { content: string; updatedAt?: string }
+/** 正文领域快照：整份正文内容 */
+type EditorSnapshot = { content: string }
 
-function touchTime(): string {
-  return new Date().toISOString()
-}
-
-function getSession(projectId: string, path: string): EditorSession | undefined {
-  return sessions.get(editorSessionKey(projectId, path))
-}
-
-/** 取某「项目 + 路径」的会话（组件展示与保存编排的入口；无会话返回 undefined） */
-export function getEditorSession(projectId: string, path: string): EditorSession | undefined {
-  return getSession(projectId, path)
-}
-
-/** 项目内全部会话（离开提醒、恢复提示与守护扫描用） */
-export function listEditorSessions(projectId: string): EditorSession[] {
-  return [...sessions.values()].filter((session) => session.projectId === projectId)
-}
-
-/** 会话当前所处阶段（§四.2 固定状态；派生值，不落盘） */
-export function editorSessionPhase(session: EditorSession): EditorSessionPhase {
-  if (session.guard) return 'guard'
-  if (session.conflict) return 'conflict'
-  if (session.inFlight) return 'saving'
-  if (session.failure) return 'failed'
-  if (session.restoredPending) return 'restored'
-  return session.content !== session.baseContent ? 'pending' : 'clean'
-}
-
-/** 某会话是否有未落盘的人工内容（待写/在途输入；不含失败与冲突标记本身） */
-export function isEditorSessionDirty(session: EditorSession): boolean {
-  return session.content !== session.baseContent
-}
-
-/**
- * 是否需要离开提醒（§六.3）：有待写、在途、失败、冲突、恢复未校验或守护
- * 未处理内容时提醒继续存在；正常自动保存完成后不因短暂编辑历史提醒。
- */
-export function editorSessionNeedsLeaveGuard(session: EditorSession): boolean {
-  return editorSessionPhase(session) !== 'clean'
-}
-
-/** 建立会话（进入编辑模式时以磁盘内容为基线）；已存在则保留原会话（草稿不丢） */
-export function openEditorSession(
-  projectId: string,
-  path: string,
-  diskContent: string,
-  diskUpdatedAt?: string,
-): EditorSession {
-  const key = editorSessionKey(projectId, path)
-  const existing = sessions.get(key)
-  if (existing) {
-    return existing
-  }
-  const session: EditorSession = reactive({
-    projectId,
-    path,
-    content: diskContent,
-    baseContent: diskContent,
-    ...(diskUpdatedAt !== undefined ? { baseUpdatedAt: diskUpdatedAt } : {}),
-    inFlight: null,
-    restoredPending: false,
-    restoredAcked: false,
-    updatedAt: touchTime(),
-  })
-  sessions.set(key, session)
-  return session
-}
-
-/** 清除会话（放弃更改、采用磁盘版本后）：同步删除恢复镜像记录 */
-export function clearEditorSession(projectId: string, path: string): void {
-  const key = editorSessionKey(projectId, path)
-  const session = sessions.get(key)
-  sessions.delete(key)
-  cancelAutosaveTimer(key)
-  clearAutoRetryCycle(key)
-  if (session) {
-    removeDraftBackup(projectId, path)
+function toDisk(file: FileContentView): EditorDisk {
+  return {
+    content: file.content,
+    ...(file.updatedAt !== undefined ? { updatedAt: file.updatedAt } : {}),
   }
 }
-
-/**
- * 人工输入（编辑模式每次改动调用）：更新最新输入、重置该文件的自动保存去抖；
- * 输入实时进入恢复镜像（镜像保持自己的去抖策略，不以正文写盘替代）。
- * 输入与基线一致时会话收敛为 clean 并清掉镜像记录（无未落盘内容）。
- */
-export function setEditorInput(projectId: string, path: string, content: string): void {
-  const session = getSession(projectId, path)
-  if (!session) {
-    return
-  }
-  session.content = content
-  session.updatedAt = touchTime()
-  // 新输入开启新的保存周期：失败补试次数随之重置（内容变了是新一次尝试）
-  clearAutoRetryCycle(editorSessionKey(projectId, path))
-  if (session.guard || session.conflict) {
-    // 守护/冲突期间继续输入只更新内容与镜像，不安排自动写入（禁止自动写入）
-    scheduleSessionMirror(session)
-    return
-  }
-  if (content === session.baseContent) {
-    removeDraftBackup(projectId, path)
-    return
-  }
-  scheduleSessionMirror(session)
-  scheduleAutosave(projectId, path)
-}
-
-function scheduleSessionMirror(session: EditorSession): void {
-  scheduleDraftBackup(session.projectId, session.path, {
-    content: session.content,
-    baseContent: session.baseContent,
-    ...(session.originPath !== undefined ? { originPath: session.originPath } : {}),
-  })
-}
-
-/** 外部重定会话数据（迁移/恢复/rebase 兼容路径）：不触发保存编排，但同步恢复镜像 */
-export function upsertEditorSessionData(
-  projectId: string,
-  path: string,
-  data: { content: string; baseContent: string; originPath?: string },
-): void {
-  const key = editorSessionKey(projectId, path)
-  const existing = sessions.get(key)
-  if (existing) {
-    existing.content = data.content
-    existing.baseContent = data.baseContent
-    if (data.originPath !== undefined) {
-      existing.originPath = data.originPath
-    }
-    existing.updatedAt = touchTime()
-    if (data.content !== data.baseContent) {
-      scheduleSessionMirror(existing)
-    }
-    return
-  }
-  const created = reactive({
-    projectId,
-    path,
-    content: data.content,
-    baseContent: data.baseContent,
-    ...(data.originPath !== undefined ? { originPath: data.originPath } : {}),
-    inFlight: null,
-    restoredPending: false,
-    restoredAcked: false,
-    updatedAt: touchTime(),
-  })
-  sessions.set(key, created)
-  if (data.content !== data.baseContent) {
-    scheduleSessionMirror(created)
-  }
-}
-
-/**
- * 同路径磁盘版本更新（保存回写 / 外部修改重读）到达时重定基线：
- * 会话 clean（无待写、不在途、无冲突/守护）时跟随最新磁盘版本；
- * 有待写内容时不覆盖基线——保存时由版本 + 内容哈希校验判定，冲突在阶段 3 冻结。
- */
-export function rebaseCleanSessionBaseline(
-  projectId: string,
-  path: string,
-  diskContent: string,
-  diskUpdatedAt?: string,
-): void {
-  const session = getSession(projectId, path)
-  if (!session || session.inFlight || session.conflict || session.guard) {
-    return
-  }
-  if (session.content !== session.baseContent) {
-    return
-  }
-  session.content = diskContent
-  session.baseContent = diskContent
-  if (diskUpdatedAt !== undefined) {
-    session.baseUpdatedAt = diskUpdatedAt
-  }
-  session.updatedAt = touchTime()
-}
-
-/** 把会话迁移到新路径（重命名守护「迁移草稿」）：保留起源路径与冲突；守护随迁移解除 */
-export function migrateEditorSession(projectId: string, fromPath: string, toPath: string): void {
-  const fromKey = editorSessionKey(projectId, fromPath)
-  const session = sessions.get(fromKey)
-  if (!session) {
-    return
-  }
-  sessions.delete(fromKey)
-  cancelAutosaveTimer(fromKey)
-  session.path = toPath
-  session.originPath = session.originPath ?? fromPath
-  delete session.guard
-  session.updatedAt = touchTime()
-  sessions.set(editorSessionKey(projectId, toPath), session)
-  removeDraftBackup(projectId, fromPath)
-  scheduleSessionMirror(session)
-}
-
-/** 项目内当前处于删除/重命名守护的会话（ProjectView 守护动作入口用） */
-export function getGuardedEditorSession(projectId: string): EditorSession | undefined {
-  return listEditorSessions(projectId).find((session) => session.guard !== undefined)
-}
-
-/** 置入删除/重命名守护（AI 改动有人工内容的文件时由 ProjectView 调用）；无会话则忽略 */
-export function setEditorGuard(
-  projectId: string,
-  path: string,
-  guard: EditorGuardState | null,
-): void {
-  const session = getSession(projectId, path)
-  if (!session) {
-    return
-  }
-  if (guard) {
-    session.guard = guard
-    cancelAutosaveTimer(editorSessionKey(projectId, path))
-    cancelAutoRetryTimer(editorSessionKey(projectId, path))
-  } else {
-    delete session.guard
-  }
-  session.updatedAt = touchTime()
-}
-
-// ---------- 保存编排（同键串行） ----------
 
 /** 保存服务（projectStore.saveFile 的注入形态；ProjectView 注册） */
 let saveHandler: EditorSaveHandler | null = null
@@ -357,20 +148,201 @@ export function getEditorProbeHandler(): EditorProbeHandler | null {
   return probeHandler
 }
 
-/** 同一会话的写盘请求串行：后到请求等前一个完成后按最新状态执行 */
-const saveChains = new Map<string, Promise<void>>()
-
-function enqueueSaveWork(key: string, work: () => Promise<void>): Promise<void> {
-  const previous = saveChains.get(key) ?? Promise.resolve()
-  const run = previous.catch(() => {}).then(work)
-  saveChains.set(key, run)
-  const cleanup = () => {
-    if (saveChains.get(key) === run) {
-      saveChains.delete(key)
+const editorAdapter: SaveSessionAdapter<EditorSession, EditorSnapshot, EditorDisk> = {
+  isSameSnapshot: (a, b) => a.content === b.content,
+  getSnapshot: (session) => ({ content: session.content }),
+  setSnapshot: (session, snapshot) => {
+    session.content = snapshot.content
+  },
+  getBaseSnapshot: (session) => ({ content: session.baseContent }),
+  setBaseSnapshot: (session, snapshot) => {
+    session.baseContent = snapshot.content
+  },
+  getBaseVersion: (session) => session.baseUpdatedAt,
+  setBaseVersion: (session, version) => {
+    session.baseUpdatedAt = version
+  },
+  captureInFlight: (_session, captured) => ({
+    content: captured.snapshot.content,
+    ...(captured.baseVersion !== undefined ? { baseUpdatedAt: captured.baseVersion } : {}),
+    baseHash: hashContent(captured.baseSnapshot.content),
+  }),
+  releaseInFlight: (session, captured) => {
+    if (session.inFlight?.content === captured.snapshot.content) {
+      session.inFlight = null
     }
-  }
-  void run.then(cleanup, cleanup)
-  return run
+  },
+  createSession: (projectId, path, seed) => ({
+    projectId,
+    path,
+    content: seed.snapshot.content,
+    baseContent: seed.baseSnapshot.content,
+    ...(seed.baseVersion !== undefined ? { baseUpdatedAt: seed.baseVersion } : {}),
+    ...(seed.originKey !== undefined ? { originPath: seed.originKey } : {}),
+    inFlight: null,
+    restoredPending: false,
+    restoredAcked: false,
+    updatedAt: seed.updatedAt ?? new Date().toISOString(),
+  }),
+  upsertSession: (session, data) => {
+    session.content = data.snapshot.content
+    session.baseContent = data.baseSnapshot.content
+    if (data.originKey !== undefined) {
+      session.originPath = data.originKey
+    }
+  },
+  onSessionKeyChange: (session, fromKey, toKey) => {
+    session.path = toKey
+    session.originPath = session.originPath ?? fromKey
+    delete session.guard
+  },
+  save: async (projectId, path, snapshot, context) => {
+    if (!saveHandler) {
+      throw new SaveServiceUnavailableError('会话不存在或未注册保存服务')
+    }
+    const outcome = await saveHandler(path, snapshot.content, {
+      projectId,
+      ...(context.force
+        ? { force: true }
+        : {
+            ...(context.baseVersion !== undefined ? { expectedUpdatedAt: context.baseVersion } : {}),
+            expectedBaseHash: hashContent(context.base.content),
+          }),
+    })
+    if (outcome.ok) {
+      return { ok: true, disk: toDisk(outcome.file) }
+    }
+    return { ok: false, conflict: outcome.conflict, message: outcome.message }
+  },
+  probe: async (projectId, path) => {
+    if (!probeHandler) {
+      throw new SaveServiceUnavailableError('未注册外部版本读取服务')
+    }
+    const probe = await probeHandler(path, projectId)
+    if (probe.kind === 'ok') {
+      return { kind: 'ok', disk: toDisk(probe.file) }
+    }
+    return probe
+  },
+  versionOf: (disk) => disk.updatedAt,
+  snapshotFromDisk: (disk) => ({ content: disk.content }),
+  scheduleMirror: (session) => {
+    scheduleDraftBackup(session.projectId, session.path, {
+      content: session.content,
+      baseContent: session.baseContent,
+      ...(session.originPath !== undefined ? { originPath: session.originPath } : {}),
+    })
+  },
+  removeMirror: (projectId, path) => {
+    removeDraftBackup(projectId, path)
+  },
+}
+
+const realm = createSaveSessionRealm<EditorSession, EditorSnapshot, EditorDisk>(editorAdapter)
+
+/** 取某「项目 + 路径」的会话（组件展示与保存编排的入口；无会话返回 undefined） */
+export function getEditorSession(projectId: string, path: string): EditorSession | undefined {
+  return realm.getSession(projectId, path)
+}
+
+/** 项目内全部会话（离开提醒、恢复提示与守护扫描用） */
+export function listEditorSessions(projectId: string): EditorSession[] {
+  return realm.listSessions(projectId)
+}
+
+/** 会话当前所处阶段（固定状态；派生值，不落盘） */
+export function editorSessionPhase(session: EditorSession): EditorSessionPhase {
+  return realm.phaseOf(session)
+}
+
+/** 某会话是否有未落盘的人工内容（待写/在途输入；不含失败与冲突标记本身） */
+export function isEditorSessionDirty(session: EditorSession): boolean {
+  return realm.isDirty(session)
+}
+
+/**
+ * 是否需要离开提醒：有待写、在途、失败、冲突、恢复未校验或守护
+ * 未处理内容时提醒继续存在；正常自动保存完成后不因短暂编辑历史提醒。
+ */
+export function editorSessionNeedsLeaveGuard(session: EditorSession): boolean {
+  return realm.needsLeaveGuard(session)
+}
+
+/** 建立会话（进入编辑模式时以磁盘内容为基线）；已存在则保留原会话（草稿不丢） */
+export function openEditorSession(
+  projectId: string,
+  path: string,
+  diskContent: string,
+  diskUpdatedAt?: string,
+): EditorSession {
+  return realm.openSession(projectId, path, {
+    snapshot: { content: diskContent },
+    baseSnapshot: { content: diskContent },
+    ...(diskUpdatedAt !== undefined ? { baseVersion: diskUpdatedAt } : {}),
+  })
+}
+
+/** 清除会话（放弃更改、采用磁盘版本后）：同步删除恢复镜像记录 */
+export function clearEditorSession(projectId: string, path: string): void {
+  realm.clearSession(projectId, path)
+}
+
+/**
+ * 人工输入（编辑模式每次改动调用）：更新最新输入、重置该文件的自动保存去抖；
+ * 输入实时进入恢复镜像（镜像保持自己的去抖策略，不以正文写盘替代）。
+ * 输入与基线一致时会话收敛为 clean 并清掉镜像记录（无未落盘内容）。
+ */
+export function setEditorInput(projectId: string, path: string, content: string): void {
+  realm.setInput(projectId, path, { content })
+}
+
+/** 外部重定会话数据（迁移/恢复/rebase 兼容路径）：不触发保存编排，但同步恢复镜像 */
+export function upsertEditorSessionData(
+  projectId: string,
+  path: string,
+  data: { content: string; baseContent: string; originPath?: string },
+): void {
+  realm.upsertSessionData(projectId, path, {
+    snapshot: { content: data.content },
+    baseSnapshot: { content: data.baseContent },
+    ...(data.originPath !== undefined ? { originKey: data.originPath } : {}),
+  })
+}
+
+/**
+ * 同路径磁盘版本更新（保存回写 / 外部修改重读）到达时重定基线：
+ * 会话 clean（无待写、不在途、无冲突/守护）时跟随最新磁盘版本；
+ * 有待写内容时不覆盖基线——保存时由版本 + 内容哈希校验判定。
+ */
+export function rebaseCleanSessionBaseline(
+  projectId: string,
+  path: string,
+  diskContent: string,
+  diskUpdatedAt?: string,
+): void {
+  realm.rebaseCleanBaseline(projectId, path, {
+    content: diskContent,
+    ...(diskUpdatedAt !== undefined ? { updatedAt: diskUpdatedAt } : {}),
+  })
+}
+
+/** 把会话迁移到新路径（重命名守护「迁移草稿」）：保留起源路径与冲突；守护随迁移解除 */
+export function migrateEditorSession(projectId: string, fromPath: string, toPath: string): void {
+  realm.migrateSession(projectId, fromPath, toPath)
+}
+
+/** 项目内当前处于删除/重命名守护的会话（ProjectView 守护动作入口用） */
+export function getGuardedEditorSession(projectId: string): EditorSession | undefined {
+  return realm.getGuardedSession(projectId)
+}
+
+/** 置入删除/重命名守护（AI 改动有人工内容的文件时由 ProjectView 调用）；无会话则忽略 */
+export function setEditorGuard(
+  projectId: string,
+  path: string,
+  guard: EditorGuardState | null,
+): void {
+  realm.setGuard(projectId, path, guard)
 }
 
 /**
@@ -380,272 +352,57 @@ function enqueueSaveWork(key: string, work: () => Promise<void>): Promise<void> 
  * - 写盘在途时按同键串行排队，前一个完成后以最新输入再执行；
  * - 快照在开始时固定（内容 + 基线版本 + 基线内容哈希），结果只作用于该会话。
  */
-export function requestEditorSave(
+export async function requestEditorSave(
   projectId: string,
   path: string,
   options?: { trigger?: 'manual' | 'debounce' | 'flush' },
 ): Promise<void> {
-  const trigger = options?.trigger ?? 'manual'
-  const key = editorSessionKey(projectId, path)
-  return enqueueSaveWork(key, () => performSave(projectId, path, { trigger, force: false }))
+  await realm.requestSave(projectId, path, options)
 }
 
 /**
- * 等待该键在途与排队的写盘全部完成（不发起保存；§五.4 确认复检用）：
+ * 等待该键在途与排队的写盘全部完成（不发起保存；确认复检用）：
  * 自动保存可能恰好在确认审阅期间落盘，复检必须等写盘出结果后再给出
  * 候选是否仍可安全同意的结论，不能拿在途瞬间的旧状态判定。
  */
 export function settleEditorSave(projectId: string, path: string): Promise<void> {
-  const key = editorSessionKey(projectId, path)
-  return enqueueSaveWork(key, async () => {})
-}
-
-async function performSave(
-  projectId: string,
-  path: string,
-  options: { trigger: 'manual' | 'debounce' | 'flush'; force: boolean },
-): Promise<void> {
-  const session = getSession(projectId, path)
-  if (!session || !saveHandler) {
-    return
-  }
-  // 冲突与守护在写盘前再次检查（不能只靠提示出现时的状态）：
-  // 守护未选择前去向禁止任何写入；冲突只禁止自动写入（去抖/收口），
-  // 手动触发是用户明确选择（会再次撞版本校验并回到比较界面）。
-  if (session.guard) {
-    return
-  }
-  if (session.conflict && options.trigger !== 'manual') {
-    return
-  }
-  if (!options.force && session.content === session.baseContent) {
-    // 无待写内容；在途失败态不因无内容请求清除（由重试/新输入重新触发）
-    return
-  }
-
-  const snapshot = {
-    content: session.content,
-    baseUpdatedAt: session.baseUpdatedAt,
-    baseHash: hashContent(session.baseContent),
-  }
-  session.inFlight = { ...snapshot }
-  delete session.failure
-
-  let outcome: SaveFileOutcome
-  try {
-    outcome = await saveHandler(path, snapshot.content, {
-      projectId,
-      ...(options.force
-        ? { force: true }
-        : {
-            ...(snapshot.baseUpdatedAt !== undefined ? { expectedUpdatedAt: snapshot.baseUpdatedAt } : {}),
-            expectedBaseHash: snapshot.baseHash,
-          }),
-    })
-  } catch (error) {
-    // 保存服务异常按普通失败处理（内容与位置保留，原因持续可见）
-    session.inFlight = null
-    session.failure = { message: error instanceof Error ? error.message : String(error) }
-    scheduleAutoRetry(projectId, path)
-    return
-  }
-
-  // 结果处理全部作用于固定归属的会话（projectId + path），与当前界面显示哪个文件无关
-  if (session.inFlight?.content === snapshot.content) {
-    session.inFlight = null
-  }
-  if (!outcome || typeof outcome !== 'object') {
-    // 保存服务返回非法结果（类型契约之外，如测试弱 mock / 服务实现缺陷）：
-    // 按普通失败处理，不悬挂在途态、不静默当成功
-    session.failure = { message: '保存服务返回无效结果' }
-    scheduleAutoRetry(projectId, path)
-    return
-  }
-
-  if (outcome.ok) {
-    applySaveSuccess(session, outcome.file)
-    clearAutoRetryCycle(editorSessionKey(projectId, path))
-    return
-  }
-
-  if (outcome.conflict) {
-    await enterConflictFromSave(projectId, path, session)
-    return
-  }
-
-  session.failure = { message: outcome.message }
-  // 普通失败自动补试一次（§阶段 2）：持久错误必须可见，补试失败后不再自动打扰
-  scheduleAutoRetry(projectId, path)
+  return realm.settleSave(projectId, path)
 }
 
 /**
- * 写盘成功（§四.3 / §五.1）：只承认本次快照已落盘——
- * - 会话内容与落盘内容一致：待写清空，基线换到刚落盘的版本，镜像清除；
- * - 写盘期间有新输入：新输入保留为待写，基线 rebase 到刚落盘内容，镜像重定基线；
- * - 冲突不因旧写晚到成功而解除（在途期间到达的外部版本仍待用户处理）。
- */
-function applySaveSuccess(session: EditorSession, saved: FileContentView): void {
-  session.baseContent = saved.content
-  if (saved.updatedAt !== undefined) {
-    session.baseUpdatedAt = saved.updatedAt
-  }
-  if (session.content === saved.content) {
-    removeDraftBackup(session.projectId, session.path)
-    // 恢复内容已真实落盘：续存完成，恢复横幅随之消失（§六.1）
-    session.restoredPending = false
-    session.restoredAcked = true
-  } else {
-    scheduleSessionMirror(session)
-  }
-  session.updatedAt = touchTime()
-}
-
-/** 保存结果判定为冲突：读取外部版本并登记冲突（不自动展开、不清输入） */
-async function enterConflictFromSave(projectId: string, path: string, session: EditorSession): Promise<void> {
-  const generation = (session.conflict?.generation ?? 0) + 1
-  session.conflict = {
-    generation,
-    probing: true,
-    missing: false,
-    expanded: session.conflict?.expanded ?? true,
-  }
-  session.updatedAt = touchTime()
-  await probeExternalVersion(projectId, path, session, generation)
-}
-
-/**
- * 读取磁盘外部版本到冲突状态（比较/采用前的最新读取）：
- * 读取失败只说明无法读取另一版本（unreadable），不伪装成文件已删除。
- */
-async function probeExternalVersion(
-  projectId: string,
-  path: string,
-  session: EditorSession,
-  generation: number,
-): Promise<void> {
-  if (!probeHandler) {
-    if (session.conflict && session.conflict.generation === generation) {
-      session.conflict.probing = false
-      session.conflict.unreadable = '未注册外部版本读取服务'
-    }
-    return
-  }
-  const probe = await probeHandler(path, projectId)
-  const conflict = session.conflict
-  if (!conflict || conflict.generation !== generation) {
-    return
-  }
-  conflict.probing = false
-  if (probe.kind === 'ok') {
-    conflict.disk = {
-      content: probe.file.content,
-      ...(probe.file.updatedAt !== undefined ? { updatedAt: probe.file.updatedAt } : {}),
-    }
-    conflict.missing = false
-    delete conflict.unreadable
-    return
-  }
-  if (probe.kind === 'missing') {
-    conflict.missing = true
-    delete conflict.disk
-    delete conflict.unreadable
-    return
-  }
-  conflict.missing = false
-  conflict.unreadable = probe.message
-  // 读取失败时旧的磁盘快照必须作废：采用磁盘版本绝不能拿着上一轮的旧读取清稿
-  delete conflict.disk
-}
-
-/**
- * AI 写盘到达时冻结有未落盘内容的会话（§五.2 非阻塞冲突）：
+ * AI 写盘到达时冻结有未落盘内容的会话（非阻塞冲突）：
  * 有待写内容的会话置冲突并读取外部版本（不展开比较、不清输入、不切预览——
- * 紧凑状态条通知用户主动处理）；自动保存随之冻结（conflict 态禁止自动写入）。
+ * 紧凑状态条通知用户主动处理）；自动保存随之冻结。
  * 无会话或无待写内容返回 'none'/'clean'（clean 会话由 rebase 跟随磁盘）；
  * 守护未决时不动（守护优先于冲突）；已有冲突时按新代次重读磁盘快照。
  *
- * 返回值区分两种冲突结果（修复批 2026-11-20）：'conflict' = 本次首次建立冲突
- * （调用方可给一次反馈）；'conflict-refresh' = 该会话此前已在冲突中、本次只是
- * 刷新磁盘快照（同一冲突的后续 AI 修改，调用方应抑制重复 toast/通知）。
+ * 返回值区分两种冲突结果：'conflict' = 本次首次建立冲突（调用方可给一次反馈）；
+ * 'conflict-refresh' = 该会话此前已在冲突中、本次只是刷新磁盘快照（同一冲突的
+ * 后续 AI 修改，调用方应抑制重复 toast/通知）。
  */
-export async function freezeEditorSessionForExternal(
+export function freezeEditorSessionForExternal(
   projectId: string,
   path: string,
 ): Promise<'conflict' | 'conflict-refresh' | 'clean' | 'none'> {
-  const session = getSession(projectId, path)
-  if (!session) {
-    return 'none'
-  }
-  if (session.guard) {
-    return 'none'
-  }
-  if (!isEditorSessionDirty(session) && !session.conflict) {
-    return 'clean'
-  }
-  cancelAutosaveTimer(editorSessionKey(projectId, path))
-  cancelAutoRetryTimer(editorSessionKey(projectId, path))
-  const hadConflict = session.conflict !== undefined
-  const generation = (session.conflict?.generation ?? 0) + 1
-  session.conflict = {
-    generation,
-    probing: true,
-    missing: false,
-    // 后台到达非阻塞：保持当前展开状态（紧凑状态条提示，用户主动展开比较）
-    expanded: session.conflict?.expanded ?? false,
-  }
-  session.updatedAt = touchTime()
-  await probeExternalVersion(projectId, path, session, generation)
-  return hadConflict ? 'conflict-refresh' : 'conflict'
+  return realm.freezeForExternal(projectId, path)
 }
 
-/** 用户主动展开比较（再入口）：重新读取磁盘最新 + 最新人工输入并列（阶段 3 接 UI） */
-export async function expandEditorConflict(projectId: string, path: string): Promise<void> {
-  const session = getSession(projectId, path)
-  if (!session?.conflict) {
-    return
-  }
-  const generation = session.conflict.generation + 1
-  session.conflict.generation = generation
-  session.conflict.probing = true
-  session.conflict.expanded = true
-  await probeExternalVersion(projectId, path, session, generation)
+/** 用户主动展开比较（再入口）：重新读取磁盘最新 + 最新人工输入并列 */
+export function expandEditorConflict(projectId: string, path: string): Promise<void> {
+  return realm.expandConflict(projectId, path)
 }
 
 /** 返回继续编辑：收起比较、保留冲突与输入（再入口保留）；在途的「采用 AI 版本」随之中止 */
 export function collapseEditorConflict(projectId: string, path: string): void {
-  const session = getSession(projectId, path)
-  if (session?.conflict) {
-    session.conflict.expanded = false
-    session.conflict.adoptingDisk = false
-  }
+  realm.collapseConflict(projectId, path)
 }
 
 /** 冲突解决出口之一：采用磁盘（AI）版本——重新读取成功后才放弃人工内容（二次确认在 UI 层） */
-export async function adoptDiskInEditor(
+export function adoptDiskInEditor(
   projectId: string,
   path: string,
 ): Promise<'resolved' | 'probe-failed' | 'aborted'> {
-  const session = getSession(projectId, path)
-  if (!session?.conflict || !probeHandler) {
-    return 'probe-failed'
-  }
-  const generation = session.conflict.generation + 1
-  session.conflict.generation = generation
-  session.conflict.adoptingDisk = true
-  await probeExternalVersion(projectId, path, session, generation)
-  const conflict = session.conflict
-  if (!conflict || conflict.generation !== generation || conflict.probing || !conflict.disk) {
-    // 读取失败/文件缺失：绝不先删内容，冲突保留并呈现最新探测结果
-    conflict && (conflict.expanded = true)
-    return 'probe-failed'
-  }
-  if (!conflict.adoptingDisk) {
-    // 复检在途时用户已离开确认（返回编辑/切走）：晚到结果不得清掉继续输入的内容
-    return 'aborted'
-  }
-  delete conflict.adoptingDisk
-  clearEditorSession(projectId, path)
-  return 'resolved'
+  return realm.adoptDisk(projectId, path)
 }
 
 /**
@@ -653,170 +410,51 @@ export async function adoptDiskInEditor(
  * 等待期间的新输入按新基线保留；采用完成后若仍有未落盘输入，冲突保留
  * （不把不同版本混称为「已保存」）；晚到的旧采用结果不得清掉新输入或新冲突。
  */
-export async function overwriteEditorContent(
+export function overwriteEditorContent(
   projectId: string,
   path: string,
 ): Promise<{ ok: boolean; message?: string }> {
-  const session = getSession(projectId, path)
-  if (!session || !saveHandler) {
-    return { ok: false, message: '会话不存在或未注册保存服务' }
-  }
-  const outcome = await saveHandler(path, session.content, { force: true, projectId })
-  const current = getSession(projectId, path)
-  if (!current || current !== session) {
-    // 会话已被清除/迁移：结果不再修改现场（副本归属核对）
-    return { ok: outcome.ok, ...(outcome.ok ? {} : { message: outcome.message }) }
-  }
-  if (outcome.ok) {
-    applySaveSuccess(session, outcome.file)
-    if (session.content === session.baseContent && session.conflict) {
-      // 全部落盘：本次采用解决了冲突
-      delete session.conflict
-    }
-    delete session.failure
-    return { ok: true }
-  }
-  if (outcome.conflict) {
-    await enterConflictFromSave(projectId, path, session)
-    return { ok: false, message: outcome.message }
-  }
-  session.failure = { message: outcome.message }
-  return { ok: false, message: outcome.message }
+  return realm.overwriteContent(projectId, path)
 }
 
-// ---------- 输入去抖与收口（阶段 2 打开） ----------
+// ---------- 输入去抖与收口 ----------
 
-/** 输入后自动保存去抖窗口（§二.2 固定取舍：最后一次输入后 2000ms） */
-export const EDITOR_AUTOSAVE_DEBOUNCE_MS = 2000
-
-let autosaveInputEnabled = false
-
-/** 打开/关闭输入自动保存触发（阶段 1 仅手动；阶段 2 接入后打开） */
-export function setAutosaveInputEnabled(enabled: boolean): void {
-  autosaveInputEnabled = enabled
-  if (!enabled) {
-    for (const key of autosaveTimers.keys()) {
-      cancelAutosaveTimer(key)
-    }
-  }
-}
-
-const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-function scheduleAutosave(projectId: string, path: string): void {
-  if (!autosaveInputEnabled) {
-    return
-  }
-  const key = editorSessionKey(projectId, path)
-  const existing = autosaveTimers.get(key)
-  if (existing) {
-    clearTimeout(existing)
-  }
-  autosaveTimers.set(
-    key,
-    setTimeout(() => {
-      autosaveTimers.delete(key)
-      void requestEditorSave(projectId, path, { trigger: 'debounce' })
-    }, EDITOR_AUTOSAVE_DEBOUNCE_MS),
-  )
-}
-
-function cancelAutosaveTimer(key: string): void {
-  const timer = autosaveTimers.get(key)
-  if (timer) {
-    clearTimeout(timer)
-    autosaveTimers.delete(key)
-  }
-}
-
-// ---------- 普通失败自动补试（阶段 2） ----------
+/** 输入后自动保存去抖窗口（固定取舍：最后一次输入后 2000ms） */
+export const EDITOR_AUTOSAVE_DEBOUNCE_MS = SAVE_SESSION_AUTOSAVE_DEBOUNCE_MS
 
 /** 失败后自动补试延迟 */
-export const EDITOR_SAVE_RETRY_DELAY_MS = 1000
+export const EDITOR_SAVE_RETRY_DELAY_MS = SAVE_SESSION_RETRY_DELAY_MS
 
-const autoRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-/** 本失败周期已自动补试过的会话键（新输入/保存成功重置周期） */
-const autoRetriedKeys = new Set<string>()
-
-/**
- * 普通写入失败后自动补试一次（§阶段 2：普通失败仅自动补试一次）：
- * 补试按系统自动触发走（冲突/守护下不写）；补试也失败则保持失败态等用户处理，
- * 持久错误持续可见——「已保存」只对应真实磁盘内容。
- */
-function scheduleAutoRetry(projectId: string, path: string): void {
-  const key = editorSessionKey(projectId, path)
-  if (autoRetriedKeys.has(key)) {
-    return
-  }
-  cancelAutoRetryTimer(key)
-  autoRetryTimers.set(
-    key,
-    setTimeout(() => {
-      autoRetryTimers.delete(key)
-      autoRetriedKeys.add(key)
-      void requestEditorSave(projectId, path, { trigger: 'debounce' })
-    }, EDITOR_SAVE_RETRY_DELAY_MS),
-  )
-}
-
-function cancelAutoRetryTimer(key: string): void {
-  const timer = autoRetryTimers.get(key)
-  if (timer) {
-    clearTimeout(timer)
-    autoRetryTimers.delete(key)
-  }
-}
-
-function clearAutoRetryCycle(key: string): void {
-  cancelAutoRetryTimer(key)
-  autoRetriedKeys.delete(key)
+/** 打开/关闭输入自动保存触发 */
+export function setAutosaveInputEnabled(enabled: boolean): void {
+  realm.setAutosaveInputEnabled(enabled)
 }
 
 /** 立即收口某会话（切文件/分类/项目、关面板、切预览等关键时机） */
-export function flushEditorSession(projectId: string, path: string): Promise<void> {
-  cancelAutosaveTimer(editorSessionKey(projectId, path))
-  return requestEditorSave(projectId, path, { trigger: 'flush' })
+export async function flushEditorSession(projectId: string, path: string): Promise<void> {
+  await realm.flushSession(projectId, path)
 }
 
 /** 项目内全部有待写内容的会话立即收口（离开项目视图等） */
-export async function flushEditorSessions(projectId: string): Promise<void> {
-  const targets = [...sessions.values()].filter(
-    (session) => session.projectId === projectId && isEditorSessionDirty(session),
-  )
-  await Promise.all(targets.map((session) => flushEditorSession(projectId, session.path)))
+export function flushEditorSessions(projectId: string): Promise<void> {
+  return realm.flushSessions(projectId)
 }
 
 /**
  * 全部项目的待写会话立即收口（页面隐藏/关闭、离开项目视图）：
  * 写盘来不及完成时恢复镜像仍在（draft-backup 独立落盘），离开提醒不谎报。
  */
-export async function flushAllEditorSessions(): Promise<void> {
-  const targets = [...sessions.values()].filter((session) => isEditorSessionDirty(session))
-  await Promise.all(
-    targets.map((session) => flushEditorSession(session.projectId, session.path)),
-  )
+export function flushAllEditorSessions(): Promise<void> {
+  return realm.flushAllSessions()
 }
 
 /**
- * 生命周期挂接（阶段 2）：页面隐藏/关闭前立即尝试收口全部待写会话。
+ * 生命周期挂接：页面隐藏/关闭前立即尝试收口全部待写会话。
  * 与 draft-backup 的镜像落盘各自独立——正文写盘失败不拖累镜像，镜像也不替代写盘。
  * 返回退订函数。
  */
 export function setupEditorAutosaveLifecycle(): () => void {
-  if (typeof document === 'undefined') {
-    return () => {}
-  }
-  const flush = () => {
-    void flushAllEditorSessions()
-  }
-  document.addEventListener('visibilitychange', flush)
-  window.addEventListener('pagehide', flush)
-  window.addEventListener('beforeunload', flush)
-  return () => {
-    document.removeEventListener('visibilitychange', flush)
-    window.removeEventListener('pagehide', flush)
-    window.removeEventListener('beforeunload', flush)
-  }
+  return realm.setupLifecycle()
 }
 
 // ---------- 恢复镜像回填 ----------
@@ -834,7 +472,7 @@ export type RestoredEditorReport = {
 }
 
 /**
- * 重新进入项目时从恢复镜像回填会话（§六.2 存量恢复迁移）：
+ * 重新进入项目时从恢复镜像回填会话（存量恢复迁移）：
  * 只回填尚无有效会话的路径（同页会话比备份新，不回退）；回填不触发正文写盘。
  * 恢复时逐文件读取磁盘核对：内容与磁盘一致清冗余记录；磁盘与基线一致才自动
  * 续存；不一致建立版本冲突；原路径已删除进入删除守护；读取失败（或读取服务
@@ -845,111 +483,42 @@ export async function restoreEditorSessions(
   projectId: string,
   records: Array<{ path: string; content: string; baseContent: string; originPath?: string; updatedAt: string }>,
 ): Promise<RestoredEditorReport> {
-  const restored: RestoredEditorReport['restored'] = []
-  const discarded: RestoredEditorReport['discarded'] = []
-  const conflicted: RestoredEditorReport['conflicted'] = []
-  const guarded: RestoredEditorReport['guarded'] = []
-  for (const record of records) {
-    const existing = getSession(projectId, record.path)
-    if (existing && (isEditorSessionDirty(existing) || existing.conflict || existing.guard)) {
-      continue
-    }
-
-    // 逐文件核对磁盘版本（§六.2：不能只看磁盘更新时间，内容身份直接比较）
-    let probe: EditorProbeResult | null = null
-    if (probeHandler) {
-      try {
-        probe = await probeHandler(record.path, projectId)
-      } catch {
-        probe = null
-      }
-    }
-    if (probe?.kind === 'ok' && record.content === probe.file.content) {
-      // 恢复内容已与磁盘一致：冗余恢复记录清理，不回填
-      removeDraftBackup(projectId, record.path)
-      discarded.push({ path: record.path })
-      continue
-    }
-
-    const session = openEditorSession(projectId, record.path, record.baseContent)
-    session.content = record.content
-    session.baseContent = record.baseContent
-    if (record.originPath !== undefined) {
-      session.originPath = record.originPath
-    }
-    session.updatedAt = record.updatedAt
-
-    if (probe?.kind === 'missing') {
-      // 原路径已不在磁盘：删除守护（不自动复活原文件；重命名记录沿用迁移选择）
-      session.guard = { kind: 'deleted' }
-      session.restoredPending = false
-      session.restoredAcked = true
-      guarded.push({ path: record.path })
-      continue
-    }
-    if (probe?.kind === 'ok' && record.baseContent !== probe.file.content) {
-      // 磁盘已被修改且不等于恢复基线：建立版本冲突（非阻塞紧凑态，用户主动比较）
-      session.restoredPending = true
-      session.restoredAcked = false
-      session.conflict = {
-        generation: 1,
-        probing: false,
-        missing: false,
-        expanded: false,
-        disk: {
-          content: probe.file.content,
-          ...(probe.file.updatedAt !== undefined ? { updatedAt: probe.file.updatedAt } : {}),
-        },
-      }
-      conflicted.push({ path: record.path })
-      continue
-    }
-
-    // 基线一致（自动续存）/ 无法核对（unreadable、服务未注册、读取异常）：待校验回填
-    session.restoredPending = true
-    session.restoredAcked = false
-    if (probe?.kind === 'ok' && record.baseContent === probe.file.content) {
-      // 基线一致已核对：自动续存——启动自动保存去抖，未写完内容由自动保存随后落盘（§六.1）
-      scheduleAutosave(projectId, record.path)
-    }
-    restored.push({
-      path: record.path,
-      ...(record.originPath !== undefined ? { originPath: record.originPath } : {}),
+  const report = await realm.restoreSessions(
+    projectId,
+    records.map((record) => ({
+      key: record.path,
+      snapshot: { content: record.content },
+      baseSnapshot: { content: record.baseContent },
+      ...(record.originPath !== undefined ? { originKey: record.originPath } : {}),
       updatedAt: record.updatedAt,
-    })
+    })),
+  )
+  return {
+    projectId: report.projectId,
+    restored: report.restored.map((item) => ({
+      path: item.key,
+      ...(item.originKey !== undefined ? { originPath: item.originKey } : {}),
+      updatedAt: item.updatedAt,
+    })),
+    discarded: report.discarded.map((item) => ({ path: item.key })),
+    conflicted: report.conflicted.map((item) => ({ path: item.key })),
+    guarded: report.guarded.map((item) => ({ path: item.key })),
   }
-  restored.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  return { projectId, restored, discarded, conflicted, guarded }
 }
 
 /** 恢复提示已被知悉（横幅关闭） */
 export function acknowledgeRestoredEditor(projectId: string, path: string): void {
-  const session = getSession(projectId, path)
-  if (session) {
-    session.restoredAcked = true
-  }
+  realm.acknowledgeRestored(projectId, path)
 }
 
 // ---------- 测试注入口 ----------
 
 /** 测试专用：清空全部会话与编排状态 */
 export function _resetEditorSessionsForTest(): void {
-  sessions.clear()
-  saveChains.clear()
-  for (const key of autosaveTimers.keys()) {
-    cancelAutosaveTimer(key)
-  }
-  for (const key of autoRetryTimers.keys()) {
-    cancelAutoRetryTimer(key)
-  }
-  autoRetriedKeys.clear()
-  autosaveInputEnabled = false
+  realm.resetForTest()
 }
 
 /** 测试专用：等待同键写盘链排空（受控 Promise 事件序断言用） */
-export async function _waitForEditorSaveChain(projectId: string, path: string): Promise<void> {
-  const run = saveChains.get(editorSessionKey(projectId, path))
-  if (run) {
-    await run
-  }
+export function _waitForEditorSaveChain(projectId: string, path: string): Promise<void> {
+  return realm.waitForSaveChain(projectId, path)
 }

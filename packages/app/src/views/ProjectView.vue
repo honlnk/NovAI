@@ -19,6 +19,7 @@ import {
   setupEditorAutosaveLifecycle,
 } from '../composables/editor-session'
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
+import { setupCardBackupLifecycle } from '../composables/card-backup'
 import { clearChangeHighlights } from '../composables/useChangeHighlights'
 import { useFileChangeFeedback } from '../composables/useFileChangeFeedback'
 import {
@@ -317,6 +318,35 @@ onMounted(async () => {
     toast.error(error instanceof Error ? error.message : '读取草稿备份失败')
   }
 
+  // 看板卡片草稿恢复（看板卡片详情自动保存阶段 1）：与正文同一套核对——内容已
+  // 与磁盘一致清冗余记录；基线一致回填待续存（阶段 2 打开自动保存后落盘）；磁盘
+  // 已变建立冲突；卡片已删进入删除守护。回填不打开详情、不写卡片文件。
+  try {
+    const reports = await Promise.all([
+      planStore.restoreCardDrafts(projectId.value),
+      foreshadowingStore.restoreCardDrafts(projectId.value),
+      rhythmStore.restoreCardDrafts(projectId.value),
+    ])
+    const cardTotal = reports.reduce(
+      (total, report) => total + report.restored.length + report.conflicted.length + report.guarded.length,
+      0,
+    )
+    if (cardTotal > 0) {
+      const conflicted = reports.reduce((total, report) => total + report.conflicted.length, 0)
+      const guarded = reports.reduce((total, report) => total + report.guarded.length, 0)
+      const parts = [`已恢复 ${cardTotal} 张卡片的未保存编辑`]
+      if (conflicted > 0) {
+        parts.push(`${conflicted} 张磁盘已被修改（打开详情后比较）`)
+      }
+      if (guarded > 0) {
+        parts.push(`${guarded} 张卡片已删除（待选择去向）`)
+      }
+      toast.info(parts.join('；'), { duration: 5000 })
+    }
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : '读取卡片草稿备份失败')
+  }
+
   // 初始化 RAG 索引状态栏（订阅事件 + 首次读取 meta）
   await indexStore.init(projectId.value)
 
@@ -334,6 +364,7 @@ onUnmounted(() => {
   indexStore.dispose()
   teardownDraftBackup?.()
   teardownEditorAutosave?.()
+  teardownCardBackup?.()
   window.removeEventListener('beforeunload', handleBeforeUnload)
   // 离开项目视图（§阶段 2 离开收口）：尽力收口全部待写会话；写盘服务等收口
   // 结束再注销（发起即返回，来不及落盘的内容由恢复镜像兜底）。注销前比对
@@ -351,12 +382,15 @@ onUnmounted(() => {
 })
 
 // 草稿备份生命周期（数据安全计划 §3-2）：页面隐藏/关闭前立即落盘待写备份
-// 正文自动保存收口（§阶段 2）在同一时机独立挂接——写盘与镜像互不拖累
+// 正文自动保存收口（§阶段 2）在同一时机独立挂接——写盘与镜像互不拖累；
+// 看板卡片草稿镜像（阶段 1）同样挂接
 let teardownDraftBackup: (() => void) | null = null
 let teardownEditorAutosave: (() => void) | null = null
+let teardownCardBackup: (() => void) | null = null
 onMounted(() => {
   teardownDraftBackup = setupDraftBackupLifecycle()
   teardownEditorAutosave = setupEditorAutosaveLifecycle()
+  teardownCardBackup = setupCardBackupLifecycle()
 })
 
 // 后台会话保存失败到达（§3-4 保存失败可见 / F11 错误持续）：错误 toast 默认持续显示
