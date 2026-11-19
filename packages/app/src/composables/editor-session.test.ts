@@ -25,7 +25,9 @@ import {
   getEditorSession,
   openEditorSession,
   requestEditorSave,
+  restoreEditorSessions,
   setEditorInput,
+  settleEditorSave,
   setEditorProbeHandler,
   setEditorSaveHandler,
   setupEditorAutosaveLifecycle,
@@ -400,6 +402,115 @@ describe('editor-session 保存编排事件序', () => {
     expect(conflicted.conflict.generation).toBe(4)
     expect(conflicted.conflict.disk?.content).toBe('AI 第二次写盘')
     expect(conflicted.conflict.expanded).toBe(true)
+  })
+
+  it('settleEditorSave 等待在途写盘完成且不发起保存（§五.4 复检用）', async () => {
+    const { handler, release } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    const session = openEditorSession('p1', A_PATH, 'v0', 't0')
+    setEditorInput('p1', A_PATH, 'v1')
+    const saving = requestEditorSave('p1', A_PATH, { trigger: 'manual' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    // settle 排队在途写盘之后：写盘未出结果前不完成
+    let settled = false
+    const settling = settleEditorSave('p1', A_PATH).then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(false)
+
+    release(1, { ok: true, file: fileView('v1', 't1') })
+    await Promise.all([saving, settling])
+    expect(settled).toBe(true)
+    expect(editorSessionPhase(session)).toBe('clean')
+    // settle 自身不发起保存
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('恢复核对磁盘（§六.2）：一致清冗余、基线一致续存、已变建冲突、已删进守护', async () => {
+    const { handler } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    // probe 按 path 分发磁盘现状
+    const disk = new Map<string, string | null>([
+      ['chapters/same.txt', '已写完内容'], // 与恢复内容一致 → 清冗余
+      ['chapters/base.txt', '原基线'], // 与恢复基线一致 → 自动续存
+      ['chapters/changed.txt', 'AI 已改写'], // 与基线不一致 → 版本冲突
+      ['chapters/gone.txt', null], // 原路径已删 → 删除守护
+    ])
+    setEditorProbeHandler(async (path) => {
+      const content = disk.get(path)
+      if (content === undefined) return { kind: 'unreadable', message: '读取失败' }
+      if (content === null) return { kind: 'missing' }
+      return { kind: 'ok', file: { path, name: path.split('/').pop()!, format: 'text', content, updatedAt: 't9' } }
+    })
+
+    const records = [
+      { path: 'chapters/same.txt', content: '已写完内容', baseContent: '旧基线', updatedAt: '2026-11-19T01:00:00Z' },
+      { path: 'chapters/base.txt', content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T02:00:00Z' },
+      { path: 'chapters/changed.txt', content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T03:00:00Z' },
+      { path: 'chapters/gone.txt', content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T04:00:00Z' },
+      { path: 'chapters/unknown.txt', content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T05:00:00Z' },
+    ]
+    // 预置恢复镜像（清冗余断言用）
+    for (const record of records) {
+      await store.put({
+        key: buildDraftKey('p1', record.path),
+        projectId: 'p1',
+        path: record.path,
+        content: record.content,
+        baseContent: record.baseContent,
+        updatedAt: record.updatedAt,
+      })
+    }
+
+    const report = await restoreEditorSessions('p1', records)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 一致：清冗余记录、不回填会话
+    expect(report.discarded.map((item) => item.path)).toEqual(['chapters/same.txt'])
+    expect(getEditorSession('p1', 'chapters/same.txt')).toBeUndefined()
+    expect(store.records.has(buildDraftKey('p1', 'chapters/same.txt'))).toBe(false)
+
+    // 基线一致：自动续存（待写内容由自动保存落盘；按编辑时间新→旧排序）
+    expect(report.restored.map((item) => item.path)).toEqual(['chapters/unknown.txt', 'chapters/base.txt'])
+    const resumed = getEditorSession('p1', 'chapters/base.txt')!
+    expect(resumed.content).toBe('未写完内容')
+    expect(resumed.restoredPending).toBe(true)
+    expect(resumed.conflict).toBeUndefined()
+
+    // 已变：回填 + 版本冲突（非阻塞紧凑态）
+    expect(report.conflicted.map((item) => item.path)).toEqual(['chapters/changed.txt'])
+    const conflicted = getEditorSession('p1', 'chapters/changed.txt')!
+    expect(conflicted.conflict?.disk?.content).toBe('AI 已改写')
+    expect(conflicted.conflict?.expanded).toBe(false)
+    expect(conflicted.content).toBe('未写完内容')
+
+    // 已删：删除守护（不自动复活原文件）
+    expect(report.guarded.map((item) => item.path)).toEqual(['chapters/gone.txt'])
+    const guarded = getEditorSession('p1', 'chapters/gone.txt')!
+    expect(guarded.guard?.kind).toBe('deleted')
+    expect(guarded.conflict).toBeUndefined()
+    // 回填绝不写正文
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('恢复续存后自动保存落盘：恢复标记清除（横幅「续存成功可消失」）', async () => {
+    const { handler, release } = createDeferredSaveHandler()
+    setEditorSaveHandler(handler)
+    setEditorProbeHandler(async () => ({ kind: 'ok', file: fileView('原基线', 't0') }))
+    const [report] = [await restoreEditorSessions('p1', [
+      { path: A_PATH, content: '未写完内容', baseContent: '原基线', updatedAt: '2026-11-19T01:00:00Z' },
+    ])]
+    expect(report.restored).toHaveLength(1)
+    const session = getEditorSession('p1', A_PATH)!
+    expect(session.restoredPending).toBe(true)
+
+    // 自动保存落盘成功：基线上移、恢复标记清除
+    const saving = requestEditorSave('p1', A_PATH, { trigger: 'debounce' })
+    await vi.advanceTimersByTimeAsync(0)
+    release(1, { ok: true, file: fileView('未写完内容', 't1') })
+    await saving
+    expect(session.restoredPending).toBe(false)
+    expect(editorSessionPhase(session)).toBe('clean')
   })
 
   it('页面隐藏生命周期：visibilitychange 立即收口全部待写会话（含去抖未到窗的）', async () => {

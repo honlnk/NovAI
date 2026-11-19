@@ -53,6 +53,34 @@ describe('file tools', () => {
     }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
   })
 
+  it('人工先落盘、AI 后编辑：拦截不覆盖人工版本，重读后按新内容编辑成功（§三 防线二闭环）', async () => {
+    const runtime = createRuntime({
+      'chapters/第001章-初遇.txt': 'AI 读到的原文',
+    })
+
+    await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+    // 人工在 AI 读取后落盘（自动保存写回磁盘，mtime 与内容都变）
+    await writeProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt', '人工先落盘的新版本')
+
+    // AI 持旧读取状态执行编辑：被读后写校验拦截，人工版本不被覆盖
+    await expect(editFileTool.run({
+      path: 'chapters/第001章-初遇.txt',
+      oldText: 'AI 读到的原文',
+      newText: 'AI 的修改',
+    }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
+    await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('人工先落盘的新版本')
+
+    // 不存在「工具自动重读」：受控 Agent 收到错误后显式重新 ReadFile，再按新内容编辑成功
+    await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+    const editOutput = await editFileTool.run({
+      path: 'chapters/第001章-初遇.txt',
+      oldText: '人工先落盘的新版本',
+      newText: '重读后的修改',
+    }, runtime)
+    expect(editOutput.occurrences).toBe(1)
+    await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('重读后的修改')
+  })
+
   describe('空文件特判（D1：oldText="" 填充空文件）', () => {
     it('文件不存在时报错并引导使用 CreateFile', async () => {
       const runtime = createRuntime({})

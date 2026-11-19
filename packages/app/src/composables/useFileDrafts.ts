@@ -25,6 +25,7 @@ import {
   listEditorSessions,
   migrateEditorSession,
   restoreEditorSessions,
+  type RestoredEditorReport,
   upsertEditorSessionData,
   _resetEditorSessionsForTest,
 } from './editor-session'
@@ -132,17 +133,15 @@ export function acknowledgeRestoredDraft(projectId: string, path: string): void 
   acknowledgeRestoredEditor(projectId, path)
 }
 
-export type RestoredDraftReport = {
-  projectId: string
-  /** 本次从持久化恢复的草稿（路径 + 起源路径 + 最后编辑时间），按编辑时间新→旧 */
-  restored: Array<{ path: string; originPath?: string; updatedAt: string }>
-}
+export type RestoredDraftReport = RestoredEditorReport
 
 /**
- * 重新进入项目时恢复持久化草稿（§六.2）：
- * 只回填内存中尚无有效会话的路径（同页会话内存比备份新，不回退）；恢复绝不
- * 触发正文写盘。旧记录缺少会话/冲突字段时按「有人工内容、待校验」处理，
- * 不能因字段缺失丢弃。读取失败抛错，由调用方明确提示并保留当前页面内容。
+ * 重新进入项目时恢复持久化草稿（§六.2 存量恢复迁移）：
+ * 只回填内存中尚无有效会话的路径（同页会话内存比备份新，不回退）；回填绝不
+ * 触发正文写盘（续存内容由自动保存随后落盘）。恢复时逐文件核对磁盘：内容与
+ * 磁盘一致清冗余记录；基线一致自动续存；磁盘已变建立版本冲突；原路径已删除
+ * 进入删除守护（判定见 editor-session.restoreEditorSessions）。
+ * 读取失败抛错，由调用方明确提示并保留当前页面内容。
  */
 export async function restorePersistedDrafts(projectId: string): Promise<RestoredDraftReport> {
   const records = await loadProjectDraftBackups(projectId)

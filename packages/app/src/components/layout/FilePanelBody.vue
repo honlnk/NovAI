@@ -298,7 +298,7 @@ watch(
       if (oldProjectId && oldProjectId !== newProjectId) {
         void flushEditorSessions(oldProjectId)
       } else if (oldPath && oldPath !== newPath) {
-        void flushEditorSession(oldProjectId, oldPath)
+        void flushEditorSession(oldProjectId ?? newProjectId, oldPath)
       }
     }
     // 真实切换文件或项目（同路径跨项目也要换会话桶）：恢复新路径的会话草稿；

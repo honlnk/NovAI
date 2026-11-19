@@ -74,9 +74,9 @@ export type EditorSession = {
   conflict?: EditorConflictState
   /** 删除/重命名守护（存在即 guard） */
   guard?: EditorGuardState
-  /** 恢复镜像已回填、待版本校验 */
+  /** 恢复镜像已回填、待版本校验（恢复核对磁盘见 restoreEditorSessions） */
   restoredPending: boolean
-  /** 恢复提示已被知悉（横幅消失标记；版本校验在阶段 4 接入） */
+  /** 恢复提示已被知悉（横幅消失标记） */
   restoredAcked: boolean
   /** 会话最后活动时间（ISO） */
   updatedAt: string
@@ -390,6 +390,16 @@ export function requestEditorSave(
   return enqueueSaveWork(key, () => performSave(projectId, path, { trigger, force: false }))
 }
 
+/**
+ * 等待该键在途与排队的写盘全部完成（不发起保存；§五.4 确认复检用）：
+ * 自动保存可能恰好在确认审阅期间落盘，复检必须等写盘出结果后再给出
+ * 候选是否仍可安全同意的结论，不能拿在途瞬间的旧状态判定。
+ */
+export function settleEditorSave(projectId: string, path: string): Promise<void> {
+  const key = editorSessionKey(projectId, path)
+  return enqueueSaveWork(key, async () => {})
+}
+
 async function performSave(
   projectId: string,
   path: string,
@@ -481,6 +491,9 @@ function applySaveSuccess(session: EditorSession, saved: FileContentView): void 
   }
   if (session.content === saved.content) {
     removeDraftBackup(session.projectId, session.path)
+    // 恢复内容已真实落盘：续存完成，恢复横幅随之消失（§六.1）
+    session.restoredPending = false
+    session.restoredAcked = true
   } else {
     scheduleSessionMirror(session)
   }
@@ -805,34 +818,91 @@ export function setupEditorAutosaveLifecycle(): () => void {
 
 export type RestoredEditorReport = {
   projectId: string
+  /** 磁盘与恢复基线一致（或无法核对）：自动续存，待写内容由自动保存落盘 */
   restored: Array<{ path: string; originPath?: string; updatedAt: string }>
+  /** 恢复内容已与磁盘一致：冗余记录已清理，不回填 */
+  discarded: Array<{ path: string }>
+  /** 磁盘已被修改且不等于基线：回填并建立版本冲突（非阻塞紧凑态） */
+  conflicted: Array<{ path: string }>
+  /** 原路径已不在磁盘：回填并进入删除守护（不自动复活原文件） */
+  guarded: Array<{ path: string }>
 }
 
 /**
- * 重新进入项目时从恢复镜像回填会话（§六.2）：
- * 只回填尚无会话的路径（同页会话比备份新，不回退）；回填不触发正文写盘；
- * 旧记录缺少会话/冲突字段时按「有人工内容、待校验」处理（restoredPending），
- * 不能因字段缺失丢弃。读取失败抛错，由调用方提示并保留当前内容。
+ * 重新进入项目时从恢复镜像回填会话（§六.2 存量恢复迁移）：
+ * 只回填尚无有效会话的路径（同页会话比备份新，不回退）；回填不触发正文写盘。
+ * 恢复时逐文件读取磁盘核对：内容与磁盘一致清冗余记录；磁盘与基线一致才自动
+ * 续存；不一致建立版本冲突；原路径已删除进入删除守护；读取失败（或读取服务
+ * 未注册）按「有人工内容、待校验」回填（restoredPending），不能因字段缺失
+ * 或核对失败丢弃，也不以空值覆盖。
  */
 export async function restoreEditorSessions(
   projectId: string,
   records: Array<{ path: string; content: string; baseContent: string; originPath?: string; updatedAt: string }>,
 ): Promise<RestoredEditorReport> {
   const restored: RestoredEditorReport['restored'] = []
+  const discarded: RestoredEditorReport['discarded'] = []
+  const conflicted: RestoredEditorReport['conflicted'] = []
+  const guarded: RestoredEditorReport['guarded'] = []
   for (const record of records) {
     const existing = getSession(projectId, record.path)
     if (existing && (isEditorSessionDirty(existing) || existing.conflict || existing.guard)) {
       continue
     }
+
+    // 逐文件核对磁盘版本（§六.2：不能只看磁盘更新时间，内容身份直接比较）
+    let probe: EditorProbeResult | null = null
+    if (probeHandler) {
+      try {
+        probe = await probeHandler(record.path, projectId)
+      } catch {
+        probe = null
+      }
+    }
+    if (probe?.kind === 'ok' && record.content === probe.file.content) {
+      // 恢复内容已与磁盘一致：冗余恢复记录清理，不回填
+      removeDraftBackup(projectId, record.path)
+      discarded.push({ path: record.path })
+      continue
+    }
+
     const session = openEditorSession(projectId, record.path, record.baseContent)
     session.content = record.content
     session.baseContent = record.baseContent
     if (record.originPath !== undefined) {
       session.originPath = record.originPath
     }
+    session.updatedAt = record.updatedAt
+
+    if (probe?.kind === 'missing') {
+      // 原路径已不在磁盘：删除守护（不自动复活原文件；重命名记录沿用迁移选择）
+      session.guard = { kind: 'deleted' }
+      session.restoredPending = false
+      session.restoredAcked = true
+      guarded.push({ path: record.path })
+      continue
+    }
+    if (probe?.kind === 'ok' && record.baseContent !== probe.file.content) {
+      // 磁盘已被修改且不等于恢复基线：建立版本冲突（非阻塞紧凑态，用户主动比较）
+      session.restoredPending = true
+      session.restoredAcked = false
+      session.conflict = {
+        generation: 1,
+        probing: false,
+        missing: false,
+        expanded: false,
+        disk: {
+          content: probe.file.content,
+          ...(probe.file.updatedAt !== undefined ? { updatedAt: probe.file.updatedAt } : {}),
+        },
+      }
+      conflicted.push({ path: record.path })
+      continue
+    }
+
+    // 基线一致（自动续存）/ 无法核对（unreadable、服务未注册、读取异常）：待校验回填
     session.restoredPending = true
     session.restoredAcked = false
-    session.updatedAt = record.updatedAt
     restored.push({
       path: record.path,
       ...(record.originPath !== undefined ? { originPath: record.originPath } : {}),
@@ -840,10 +910,10 @@ export async function restoreEditorSessions(
     })
   }
   restored.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  return { projectId, restored }
+  return { projectId, restored, discarded, conflicted, guarded }
 }
 
-/** 恢复提示已被知悉（横幅关闭；版本校验语义在阶段 4 接入） */
+/** 恢复提示已被知悉（横幅关闭） */
 export function acknowledgeRestoredEditor(projectId: string, path: string): void {
   const session = getSession(projectId, path)
   if (session) {

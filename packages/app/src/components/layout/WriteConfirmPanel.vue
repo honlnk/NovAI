@@ -11,7 +11,12 @@ import {
   buildPendingReplaceSegments,
   type TextHighlightSegment,
 } from '../../composables/useChangeHighlights'
-import { clearFileDraft, getFileDraftEntry, type DraftEntry } from '../../composables/useFileDrafts'
+import { getFileDraftEntry, type DraftEntry } from '../../composables/useFileDrafts'
+import {
+  getEditorSession,
+  requestEditorSave,
+  settleEditorSave,
+} from '../../composables/editor-session'
 import { buildLineDiffRows, countLineDiff } from '../../utils/text-diff'
 import { applyEditCandidate, resolveConfirmDraftBranch, type ConfirmDraftBranch } from '../../utils/confirm-draft'
 import { suggestCopyPath } from '../../utils/file-tree'
@@ -23,11 +28,13 @@ import { applyDraftAfterSave, resolveDraftAfterSave } from '../../utils/save-out
  * 新内容，红 = 将被替换的原文，均未写盘），底部固定「同意写入 / 拒绝」。聊天区
  * 只留「等待审阅」标记与返回入口；离开（关闭面板）不取消请求。
  *
- * 人工草稿接入（§3-5 五分支）：按「磁盘版本」与「人工草稿」两条信息分别判断——
+ * 人工草稿接入（§3-5 五分支 / §五.4 统一保存会话）：按「磁盘版本」与「人工
+ * 草稿」两条信息分别判断——
  * - 无草稿：保留现有候选差异与版本复检，可直接同意；
  * - 有草稿（磁盘未变/已变）：默认并列展示「人工草稿 × AI 候选写盘结果」，阻止
- *   直接同意——磁盘写入不会自动保存人工草稿；先「保存人工草稿后重审」或
- *   「保留副本后放弃草稿」再重新校验；磁盘已变时额外说明三方关系；
+ *   直接同意——磁盘写入不会自动保存人工草稿；先「保存草稿后重审」（统一保存
+ *   会话立即收口，磁盘已变时进版本比较、不强写）或「另存副本后放弃当前内容」
+ *   （副本只存操作开始时快照、二次确认）再重新校验；磁盘已变时额外说明三方关系；
  * - 磁盘读取失败与文件不存在分开提示；无法确认安全时默认不能同意。
  *
  * 版本复检（§8「确认前重新校验版本」）：面板打开与点击「同意写入」时各读一次磁盘，
@@ -78,6 +85,8 @@ const draftActionError = ref('')
 /** 副本改名输入（目标被占用时展开） */
 const copyTarget = ref('')
 const copyRenameOpen = ref(false)
+/** 副本保存二次确认（§五.4：明确「原文件内容仍未写完」后才执行） */
+const copySaveConfirmed = ref(false)
 const copySavedNotice = ref('')
 
 const canDirectConfirm = computed(() => draftBranch.value === 'none')
@@ -198,6 +207,7 @@ watch(
     draftEntry.value = null
     copySavedNotice.value = ''
     copyRenameOpen.value = false
+    copySaveConfirmed.value = false
     copyTarget.value = ''
     void loadDisk()
   },
@@ -205,9 +215,9 @@ watch(
 )
 
 /**
- * 「保存人工草稿后重审」（§3-5）：把草稿显式落盘（用户主动保存，草稿随之清除），
- * 然后重新校验磁盘与候选——回到无草稿分支再决定同意与否。磁盘已变（AI 已写盘）
- * 时保存会覆盖磁盘修改，按钮文案已警示。
+ * 「保存人工草稿后重审」（§五.4 统一保存会话）：走编辑会话的立即收口（用户
+ * 主动触发），磁盘已变化时撞版本校验进入正文版本比较——绝不绕过校验强写。
+ * 保存成功草稿随之清除、重新校验；进入冲突/守护/失败时提示先在正文面板处理。
  */
 async function handleSaveDraft() {
   const c = candidate.value
@@ -218,24 +228,22 @@ async function handleSaveDraft() {
   draftActionBusy.value = true
   draftActionError.value = ''
   try {
-    const outcome = await projectStore.saveFile(c.path, entry.content, {
-      projectId: targetProjectId,
-      ...(draftBranch.value === 'draft-diverged' ? { force: true } : {}),
-    })
-    // 草稿清除固定属于写入的项目；跨项目返回不得触碰新项目同路径草稿。
-    if (outcome.ok) {
-      // 只清理本次落盘快照；等待期间若草稿已更新，保留更新并按已保存内容重定基线。
-      applyDraftAfterSave(
-        targetProjectId,
-        c.path,
-        resolveDraftAfterSave(getFileDraftEntry(targetProjectId, c.path)?.content, outcome.file.content),
-      )
-    }
+    await requestEditorSave(targetProjectId, c.path, { trigger: 'manual' })
+    // 保存归属固定于发起时的项目与确认；跨项目返回不得触碰新现场
     if (props.confirmation.id !== confirmationId || projectId.value !== targetProjectId) {
       return
     }
-    if (!outcome.ok) {
-      draftActionError.value = outcome.message
+    const session = getEditorSession(targetProjectId, c.path)
+    if (session?.guard) {
+      draftActionError.value = '文件已被删除或重命名：请先在正文面板选择草稿去向，再回来审阅。'
+      return
+    }
+    if (session?.conflict) {
+      draftActionError.value = '磁盘正文已被修改，已进入两个版本比较：请先在正文面板完成版本选择，再回来重新审阅。'
+      return
+    }
+    if (session?.failure) {
+      draftActionError.value = session.failure.message
       return
     }
     copySavedNotice.value = ''
@@ -246,8 +254,10 @@ async function handleSaveDraft() {
 }
 
 /**
- * 「保留副本后放弃草稿」（§3-5）：草稿以新建文件语义另存副本（不覆盖任何已有
- * 文件，占用时要求改名），原草稿清除后重新审阅。副本留在项目里供用户处理。
+ * 「另存副本后放弃当前内容」（§五.4）：草稿以新建文件语义另存副本（不覆盖任何
+ * 已有文件，占用时要求改名），需二次确认（原文件内容仍未写完）。副本只保存
+ * 操作开始时的快照，成功后只清除这份快照——等待期间新增输入保留并进入重审，
+ * 不能被一并删除。
  */
 async function handleKeepCopyDraft() {
   const c = candidate.value
@@ -258,23 +268,34 @@ async function handleKeepCopyDraft() {
     draftActionError.value = '请填写副本文件名'
     return
   }
+  if (!copySaveConfirmed.value) {
+    // 二次确认：明确告知原文件内容仍未写完
+    copySaveConfirmed.value = true
+    return
+  }
   draftActionBusy.value = true
   draftActionError.value = ''
   const confirmationId = props.confirmation.id
+  const snapshot = entry.content
   try {
-    const outcome = await projectStore.createFileCopy(copyTarget.value.trim(), entry.content, { projectId: targetProjectId })
+    const outcome = await projectStore.createFileCopy(copyTarget.value.trim(), snapshot, { projectId: targetProjectId })
     if (props.confirmation.id !== confirmationId || projectId.value !== targetProjectId) {
       // 已切确认：副本按新建语义照常存在，反馈不污染新确认
       return
     }
     if (!outcome.ok) {
+      copySaveConfirmed.value = false
       draftActionError.value = outcome.exists ? `「${copyTarget.value.trim()}」已存在，请换个名字` : outcome.message
       return
     }
-    copySavedNotice.value = `草稿已另存为副本：${copyTarget.value.trim()}`
-    if (projectId.value) {
-      clearFileDraft(targetProjectId, c.path)
-    }
+    copySavedNotice.value = `已另存副本：${copyTarget.value.trim()}（原文件正文仍未写完，可重新审阅）`
+    // 只清本次落盘快照：等待期间若草稿已更新，保留更新并按副本内容重定基线
+    applyDraftAfterSave(
+      targetProjectId,
+      c.path,
+      resolveDraftAfterSave(getFileDraftEntry(targetProjectId, c.path)?.content, snapshot),
+    )
+    copySaveConfirmed.value = false
     copyRenameOpen.value = false
     await loadDisk()
     await projectStore.refreshTree()
@@ -288,6 +309,7 @@ function openCopyRename() {
   if (!c) return
   copyTarget.value = suggestCopyPath(projectStore.currentProject?.files ?? [], c.path)
   copyRenameOpen.value = true
+  copySaveConfirmed.value = false
   draftActionError.value = ''
 }
 
@@ -307,6 +329,27 @@ async function handleConfirm() {
   const path = c.path
   deciding.value = true
   try {
+    // 自动保存可能恰好在审阅期间落盘（§五.4）：先等在途写盘出结果，
+    // 复检结论基于最新磁盘与最新未落盘内容，不拿在途瞬间的旧状态判定。
+    await settleEditorSave(targetProjectId, path)
+    if (
+      props.confirmation.id !== confirmationId
+      || projectId.value !== targetProjectId
+    ) {
+      return
+    }
+    // 正文版本冲突/守护未解决前，AI 候选保持等待（§五.4 不两套面板各自强写）
+    const session = getEditorSession(targetProjectId, path)
+    if (session?.conflict) {
+      draftActionError.value = '此文件有两个版本尚未处理：请先在正文面板完成版本选择，再回来同意。'
+      await loadDisk()
+      return
+    }
+    if (session?.guard) {
+      draftActionError.value = '文件已被删除或重命名：请先在正文面板选择草稿去向，再回来同意。'
+      await loadDisk()
+      return
+    }
     const fresh = await projectStore.probeFile(c.path, targetProjectId)
     // 复检期间切确认/项目/目标路径：旧结果不进入新现场确认或触发同意。
     if (
@@ -429,10 +472,10 @@ const staleExplain = computed(() => {
       <div class="flex items-start gap-1.5 text-xs text-amber-800">
         <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
         <div class="min-w-0 flex-1 leading-5">
-          <p class="font-medium">这个文件有你的未保存草稿</p>
+          <p class="font-medium">这个文件有你尚未写入正文的内容</p>
           <p v-if="draftBranch === 'draft-clean'">
-            同意写入只改磁盘正文，不会自动保存你的草稿；草稿会保留，之后保存时会出现两个版本的对比。
-            需要先处理草稿才能同意。
+            同意写入只改磁盘正文，不会自动保存你的内容；自动保存随后会落盘（或点下方立即收口），
+            落盘后重新校验即可同意。
           </p>
           <p v-else>
             磁盘正文在你编辑之后已被修改（AI 或外部）。三方关系：你的草稿基于较早的磁盘版本
@@ -442,7 +485,7 @@ const staleExplain = computed(() => {
         </div>
       </div>
       <p v-if="draftActionError" class="pl-5 text-xs text-red-600">{{ draftActionError }}</p>
-      <p v-if="copySavedNotice" class="pl-5 text-xs text-green-700">{{ copySavedNotice }}（原草稿已清除，可重新审阅）</p>
+      <p v-if="copySavedNotice" class="pl-5 text-xs text-green-700">{{ copySavedNotice }}</p>
       <div v-if="draftEntry" class="flex flex-wrap items-center gap-2 pl-5">
         <button
           type="button"
@@ -450,7 +493,7 @@ const staleExplain = computed(() => {
           :disabled="draftActionBusy"
           @click="handleSaveDraft"
         >
-          {{ draftActionBusy ? '处理中…' : draftBranch === 'draft-diverged' ? '保存草稿后重审（将覆盖磁盘上的修改）' : '保存草稿后重审' }}
+          {{ draftActionBusy ? '处理中…' : '保存草稿后重审' }}
         </button>
         <button
           v-if="!copyRenameOpen"
@@ -458,7 +501,7 @@ const staleExplain = computed(() => {
           class="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
           @click="openCopyRename"
         >
-          保留副本后放弃草稿
+          另存副本后放弃当前内容
         </button>
         <template v-if="copyRenameOpen">
           <input
@@ -469,11 +512,12 @@ const staleExplain = computed(() => {
           >
           <button
             type="button"
-            class="shrink-0 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
+            class="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-white transition-colors disabled:opacity-40"
+            :class="copySaveConfirmed ? 'bg-red-600 hover:bg-red-500' : 'bg-amber-600 hover:bg-amber-500'"
             :disabled="draftActionBusy || !copyTarget.trim()"
             @click="handleKeepCopyDraft"
           >
-            保存副本
+            {{ copySaveConfirmed ? '确认另存（原文件内容仍未写完）' : '保存副本' }}
           </button>
           <button
             type="button"

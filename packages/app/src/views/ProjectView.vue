@@ -303,14 +303,25 @@ onMounted(async () => {
     await rhythmStore.loadBoard(projectId.value)
   }
 
-  // 刷新后恢复持久化草稿（数据安全计划 §3-2）：IndexedDB 备份回填内存表，绝不写
-  // 正文文件；有恢复项时递增令牌让面板重读当前路径草稿并亮「已恢复」横幅。
-  // 读取失败明确提示（保留当前页面内容，不静默置空）。
+  // 刷新后恢复持久化草稿（§六.2 存量恢复迁移）：逐文件核对磁盘——内容与磁盘
+  // 一致清冗余记录；基线一致自动续存（待写内容由自动保存落盘）；磁盘已变建立
+  // 版本冲突；原路径已删除进入删除守护。回填本身绝不写正文文件；读取失败明确
+  // 提示（保留当前页面内容，不静默置空）。
   try {
     const report = await restorePersistedDrafts(projectId.value)
-    if (report.restored.length > 0) {
+    const total = report.restored.length + report.conflicted.length + report.guarded.length
+    if (total > 0 || report.discarded.length > 0) {
       draftRestoreToken.value += 1
-      toast.info(`已恢复 ${report.restored.length} 份未保存草稿（未写盘）`, { duration: 5000 })
+    }
+    if (total > 0) {
+      const parts = [`已恢复 ${total} 份未写完的内容`]
+      if (report.conflicted.length > 0) {
+        parts.push(`${report.conflicted.length} 份磁盘已被修改（待版本比较）`)
+      }
+      if (report.guarded.length > 0) {
+        parts.push(`${report.guarded.length} 份原文件已删除（待选择去向）`)
+      }
+      toast.info(parts.join('；'), { duration: 5000 })
     }
   } catch (error) {
     toast.error(error instanceof Error ? error.message : '读取草稿备份失败')

@@ -7,14 +7,17 @@
  * 覆盖：有草稿/读取失败阻止直接同意；保存草稿固定项目且跨项目晚到不清
  * 新项目草稿；探测晚到不污染切走后的确认；「文件不存在」的仍要同意必须
  * 复检仍不存在才放行。
+ * 阶段 4 追加：「保存草稿后重审」走统一保存会话（不再强写）、冲突未解决
+ * 不能同意、复检等在途自动保存落盘、副本二次确认只清操作开始时快照。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import type { FileChangeConfirmationView, FileContentView } from '@novai/core/services/types'
 
 import WriteConfirmPanel from './WriteConfirmPanel.vue'
 import { getFileDraft, setFileDraft, _clearFileDraftsForTest } from '../../composables/useFileDrafts'
+import { requestEditorSave, setEditorSaveHandler, type EditorSaveHandler } from '../../composables/editor-session'
 
 const storeState = vi.hoisted(() => ({
   currentProject: null as { id: string; name: string; files: never[] } | null,
@@ -77,12 +80,18 @@ describe('WriteConfirmPanel 确认归属返修', () => {
     saveFile.mockReset()
     createFileCopy.mockReset()
     refreshTree.mockReset()
+    // 阶段 4：保存草稿走统一保存会话（save handler 注入）
+    setEditorSaveHandler(saveFile as unknown as EditorSaveHandler)
+  })
+
+  afterEach(() => {
+    setEditorSaveHandler(null)
   })
 
   it('目标文件有人工草稿：进入草稿分支横幅，直接同意被阻止', async () => {
     setFileDraft('p1', A_PATH, '我的草稿', DISK)
     const wrapper = mountPanel()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你的未保存草稿'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
     expect(button(wrapper, '同意写入').attributes('disabled')).toBeDefined()
   })
 
@@ -99,7 +108,7 @@ describe('WriteConfirmPanel 确认归属返修', () => {
     setFileDraft('p1', A_PATH, '我的草稿', DISK)
     setFileDraft('p2', A_PATH, '乙项目草稿', DISK)
     const wrapper = mountPanel()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你的未保存草稿'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
 
     let releaseSave!: (value: { ok: true; file: FileContentView }) => void
     saveFile.mockImplementationOnce(
@@ -110,8 +119,9 @@ describe('WriteConfirmPanel 确认归属返修', () => {
     storeState.currentProject = { id: 'p2', name: '乙项目', files: [] }
     releaseSave({ ok: true, file: fileView(A_PATH, '我的草稿') })
     await flushPromises()
+    await flushPromises()
 
-    expect(saveFile).toHaveBeenCalledWith(A_PATH, '我的草稿', { projectId: 'p1' })
+    expect(saveFile).toHaveBeenCalledWith(A_PATH, '我的草稿', expect.objectContaining({ projectId: 'p1' }))
     expect(getFileDraft('p1', A_PATH)).toBeUndefined()
     expect(getFileDraft('p2', A_PATH)).toBe('乙项目草稿')
   })
@@ -119,12 +129,13 @@ describe('WriteConfirmPanel 确认归属返修', () => {
   it('保存草稿后重审的在途写盘：完成回调不得清掉后来更新的草稿', async () => {
     setFileDraft('p1', A_PATH, '保存开始时的草稿', DISK)
     const wrapper = mountPanel()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你的未保存草稿'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
     let releaseSave!: (value: { ok: true; file: FileContentView }) => void
     saveFile.mockImplementationOnce(() => new Promise((resolve) => { releaseSave = resolve }))
     await button(wrapper, '保存草稿后重审').trigger('click')
     setFileDraft('p1', A_PATH, '等待期间继续输入的新草稿', DISK)
     releaseSave({ ok: true, file: fileView(A_PATH, '保存开始时的草稿') })
+    await flushPromises()
     await flushPromises()
 
     expect(getFileDraft('p1', A_PATH)).toBe('等待期间继续输入的新草稿')
@@ -174,11 +185,13 @@ describe('WriteConfirmPanel 确认归属返修', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('新段'))
     await button(wrapper, '同意写入').trigger('click')
     setFileDraft('p1', A_PATH, '等待期间的新草稿', DISK)
+    // 复检先等在途保存链 settle，再探测磁盘：等探测真正挂起再放行
+    await vi.waitFor(() => expect(releaseProbe).toBeTypeOf('function'))
     releaseProbe({ kind: 'ok', file: fileView(A_PATH, DISK) })
     await flushPromises()
 
     expect(wrapper.emitted('confirm')).toBeUndefined()
-    expect(wrapper.text()).toContain('这个文件有你的未保存草稿')
+    expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容')
     expect(getFileDraft('p1', A_PATH)).toBe('等待期间的新草稿')
   })
 
@@ -225,5 +238,103 @@ describe('WriteConfirmPanel 确认归属返修', () => {
 
     expect(probeFile).toHaveBeenCalledTimes(2)
     expect(wrapper.emitted('confirm')).toHaveLength(1)
+  })
+})
+
+describe('WriteConfirmPanel 确认链接入统一保存会话（阶段 4）', () => {
+  beforeEach(() => {
+    _clearFileDraftsForTest()
+    storeState.currentProject = { id: 'p1', name: '甲项目', files: [] }
+    probeFile.mockReset().mockResolvedValue({ kind: 'ok', file: fileView(A_PATH, DISK) })
+    saveFile.mockReset()
+    createFileCopy.mockReset().mockResolvedValue({ ok: true, path: 'chapters/副本.txt' })
+    refreshTree.mockReset()
+    setEditorSaveHandler(saveFile as unknown as EditorSaveHandler)
+  })
+
+  afterEach(() => {
+    setEditorSaveHandler(null)
+  })
+
+  it('「保存草稿后重审」磁盘已变：撞版本校验进冲突，不强写、草稿保留', async () => {
+    setFileDraft('p1', A_PATH, '我的草稿', DISK)
+    const wrapper = mountPanel()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
+
+    saveFile.mockResolvedValueOnce({ ok: false, conflict: true, message: '已被外部修改' })
+    await button(wrapper, '保存草稿后重审').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    // 强写已移除：不带 force，撞校验即进冲突（§五.4）
+    expect(saveFile).toHaveBeenCalledWith(A_PATH, '我的草稿', expect.not.objectContaining({ force: true }))
+    expect(wrapper.text()).toContain('已进入两个版本比较')
+    // 草稿保留：等用户在正文面板完成版本选择
+    expect(getFileDraft('p1', A_PATH)).toBe('我的草稿')
+  })
+
+  it('冲突未解决时同意被拦：不两套面板各自强写', async () => {
+    setFileDraft('p1', A_PATH, '我的草稿', DISK)
+    // 直接把会话置为冲突态（AI 先落盘冻结的等价现场：保存再撞也进冲突）
+    saveFile.mockResolvedValue({ ok: false, conflict: true, message: '已被外部修改' })
+    await requestEditorSave('p1', A_PATH, { trigger: 'manual' })
+    await flushPromises()
+
+    const wrapper = mountPanel()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
+    // 「同意写入」被阻止（disabled）；草稿分支内没有绕过出口
+    expect(button(wrapper, '同意写入').attributes('disabled')).toBeDefined()
+
+    // 冲突未解决前「保存草稿后重审」再撞版本校验：同样进冲突、提示先完成版本选择
+    await button(wrapper, '保存草稿后重审').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    expect(saveFile).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('已进入两个版本比较')
+    expect(getFileDraft('p1', A_PATH)).toBe('我的草稿')
+    expect(wrapper.emitted('confirm')).toBeUndefined()
+  })
+
+  it('保存草稿后重审成功：草稿清除回到可直接同意，复检放行', async () => {
+    setFileDraft('p1', A_PATH, '我的草稿', DISK)
+    saveFile.mockResolvedValueOnce({ ok: true, file: fileView(A_PATH, '我的草稿') })
+    const wrapper = mountPanel()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
+
+    await button(wrapper, '保存草稿后重审').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    // 统一保存会话落盘成功：草稿清除、横幅回无草稿分支
+    expect(getFileDraft('p1', A_PATH)).toBeUndefined()
+    await vi.waitFor(() => expect(button(wrapper, '同意写入').attributes('disabled')).toBeUndefined())
+
+    await button(wrapper, '同意写入').trigger('click')
+    await flushPromises()
+    // 初次加载 + 保存后重读 + 同意前复检
+    expect(probeFile).toHaveBeenCalledTimes(3)
+    expect(wrapper.emitted('confirm')).toHaveLength(1)
+  })
+
+  it('另存副本需二次确认；成功只清操作开始时的快照、等待期间新增输入保留', async () => {
+    setFileDraft('p1', A_PATH, '保存副本时的草稿', DISK)
+    const wrapper = mountPanel()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('这个文件有你尚未写入正文的内容'))
+
+    await button(wrapper, '另存副本后放弃当前内容').trigger('click')
+    await wrapper.find('input[placeholder="副本文件路径"]').setValue('chapters/副本.txt')
+    // 第一击只是二次确认（明确「原文件内容仍未写完」），不落盘
+    await button(wrapper, '保存副本').trigger('click')
+    expect(createFileCopy).not.toHaveBeenCalled()
+    expect(button(wrapper, '确认另存（原文件内容仍未写完）')).toBeDefined()
+
+    // 等待期间继续输入（快照固定为点击时刻的草稿）
+    setFileDraft('p1', A_PATH, '等待期间继续输入', DISK)
+    await button(wrapper, '确认另存（原文件内容仍未写完）').trigger('click')
+    await flushPromises()
+
+    expect(createFileCopy).toHaveBeenCalledWith('chapters/副本.txt', '保存副本时的草稿', { projectId: 'p1' })
+    // 只清快照：新增输入保留进入重审（不被一并删除）
+    expect(getFileDraft('p1', A_PATH)).toBe('等待期间继续输入')
+    expect(wrapper.text()).toContain('已另存副本：chapters/副本.txt')
   })
 })
