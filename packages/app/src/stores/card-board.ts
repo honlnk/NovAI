@@ -1,7 +1,7 @@
 import { computed, ref, shallowRef, watch } from 'vue'
 
 import { isSameBoardOrder, moveCardInBoard, type BoardColumns } from '../components/card-board/board-reorder'
-import { shouldReturnToPreviewAfterSave, type DetailMode } from '../components/plan/detail-mode'
+import { type DetailMode } from '../components/plan/detail-mode'
 import {
   createSaveSessionRealm,
   type SaveSessionBase,
@@ -378,10 +378,7 @@ export function createCardBoardCore<
       if (activeCard.value?.id === cardId) {
         activeCard.value = result.disk
         actionError.value = ''
-        if (!session || config.isEmptyDraft(session.draft)) {
-          detailMode.value = 'preview'
-          if (session) session.mode = 'preview'
-        }
+        // 保存成功保持当前编辑态（视图切换由用户手动预览/编辑控制），不自动跳预览
       }
       await refreshBoard(projectId)
       return
@@ -559,18 +556,9 @@ export function createCardBoardCore<
 
   const hasUnsavedChanges = computed(() =>
     activeCard.value !== null
-    && draft.value !== null
-    && config.draftDiffers(activeCard.value, draft.value),
+      && draft.value !== null
+      && config.draftDiffers(activeCard.value, draft.value),
   )
-
-  // 保存成功（保存中结束且未保存修改清零）自动回到预览态；
-  // 冲突 / 失败路径未保存修改仍为 true，不误触发
-  watch([isSaving, hasUnsavedChanges], ([saving, unsaved], [prevSaving]) => {
-    if (shouldReturnToPreviewAfterSave(prevSaving, saving, unsaved)) {
-      detailMode.value = 'preview'
-      syncModeToSession('preview')
-    }
-  })
 
   /* ---------- 看板读取：首载骨架屏 + 后台刷新保留看板 ---------- */
 

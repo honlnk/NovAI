@@ -54,7 +54,6 @@ const emit = defineEmits<{
   saveCopy: [name: string]
   restoreAsCopy: [name: string]
   discardGuard: []
-  removeCard: [id: string]
 }>()
 
 /** 分组列按钮：常驻四列 + 已搁置（与看板展示口径解耦，详情里始终全量可切） */
@@ -86,7 +85,6 @@ function onDraftInput(event: Event) {
     :guard="guard"
     :action-error="actionError"
     :updated-at="activeCard.updatedAt"
-    delete-label="删除（移入回收站）"
     testid-prefix="plan"
     @close="emit('close')"
     @update-title="emit('updateDraftTitle', $event)"
@@ -100,7 +98,6 @@ function onDraftInput(event: Event) {
     @save-copy="emit('saveCopy', $event)"
     @restore-as-copy="emit('restoreAsCopy', $event)"
     @discard-guard="emit('discardGuard')"
-    @remove-card="emit('removeCard', activeCard.id)"
   >
     <template #content="{ detailMode: mode, frozen }">
       <!-- 预览态：渲染 Markdown（显示当前草稿），双击进入编辑 -->

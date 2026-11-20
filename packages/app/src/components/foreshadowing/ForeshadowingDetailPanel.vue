@@ -60,7 +60,6 @@ const emit = defineEmits<{
   saveCopy: [name: string]
   restoreAsCopy: [name: string]
   discardGuard: []
-  removeCard: [id: string]
 }>()
 
 const statusButtons = computed(() =>
@@ -129,7 +128,6 @@ function onAbandonReasonInput(event: Event) {
     :guard="guard"
     :action-error="actionError"
     :updated-at="activeCard.updatedAt"
-    delete-label="删除（移入回收站）"
     testid-prefix="foreshadowing"
     @close="emit('close')"
     @update-title="emit('updateDraftName', $event)"
@@ -143,7 +141,6 @@ function onAbandonReasonInput(event: Event) {
     @save-copy="emit('saveCopy', $event)"
     @restore-as-copy="emit('restoreAsCopy', $event)"
     @discard-guard="emit('discardGuard')"
-    @remove-card="emit('removeCard', activeCard.id)"
   >
     <template #content="{ detailMode: mode, frozen }">
       <!-- 结构字段区（只读；修改走 AI 工具或直接编辑文件） -->

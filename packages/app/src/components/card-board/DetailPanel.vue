@@ -21,8 +21,9 @@ import AppIcon from '../ui/AppIcon.vue'
  * - 分组按钮：选中态读取已生效列 key（保存成功才切换）；待保存状态用中性底
  *   与点状等待标记（不伪装成已生效），点击只登记待保存状态（两秒后随本卡
  *   整体保存），不立即移动卡片。
- * - 底部操作行无保存按钮：保存状态条（已保存/等待保存/正在保存/保存失败+
- *   重试/保存冲突）+ 更新时间 + 删除（两步确认）。
+ * - 底部信息行与正文编辑器同规格（轻量灰字一行）：左保存状态（已保存/
+ *   等待保存/正在保存/保存失败+重试/保存冲突），右更新时间；无删除入口
+ *   （删除功能暂停，恢复时在领域面板重新接线）。
  *
  * 冲突与守护（阶段 3，非阻塞）：
  * - 有冲突时列按钮下方常驻紧凑琥珀条（唯一，连续外部修改不堆叠），「比较并
@@ -57,8 +58,6 @@ const props = defineProps<{
   actionError: string
   /** 底部展示的更新时间（空串隐藏） */
   updatedAt: string
-  /** 删除按钮文案（如「删除（移入回收站）」） */
-  deleteLabel: string
   testidPrefix: string
 }>()
 
@@ -84,11 +83,7 @@ const emit = defineEmits<{
   restoreAsCopy: [name: string]
   /** 守护出口「放弃并关闭」：丢弃保留的未落盘现场并关闭详情 */
   discardGuard: []
-  removeCard: []
 }>()
-
-/** 删除两步确认（随卡片切换清残留；草稿与视图态恢复由 store 负责） */
-const isDeleteConfirmOpen = ref(false)
 
 /** 有损采用的两击确认（disk/mine；收起比较或切卡清残留） */
 const confirmAdopt = ref<'disk' | 'mine' | null>(null)
@@ -107,7 +102,6 @@ const expandedFolds = ref(new Set<string>())
 watch(
   () => props.cardId,
   () => {
-    isDeleteConfirmOpen.value = false
     confirmAdopt.value = null
     copyFormOpen.value = false
     guardCopyOpen.value = false
@@ -600,10 +594,10 @@ function formatTime(iso: string): string {
 
         <p v-if="actionError" class="shrink-0 pt-1 text-xs text-red-600">{{ actionError }}</p>
 
-        <!-- 底部操作行：保存状态条 + 更新时间 + 删除（同一行，宽度不足换行；无保存按钮） -->
-        <div class="flex shrink-0 flex-wrap items-center gap-2 py-3">
+        <!-- 底部信息行（与正文编辑器的文件信息行同规格）：左保存状态，右更新时间 -->
+        <div class="flex shrink-0 items-center justify-between py-3 text-xs text-gray-500">
           <span
-            class="flex shrink-0 items-center gap-1 text-xs"
+            class="flex shrink-0 items-center gap-1"
             :class="{
               'text-gray-400': savePhase === 'clean',
               'text-amber-600': savePhase === 'pending',
@@ -618,32 +612,17 @@ function formatTime(iso: string): string {
               class="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
             />
             {{ saveStatusLabel }}
-          </span>
-          <button
-            v-if="savePhase === 'failed'"
-            class="rounded-md border border-red-200 bg-white px-2 py-0.5 text-xs text-red-600 transition-colors hover:bg-red-50"
-            :data-testid="`${testidPrefix}-detail-retry`"
-            @click="emit('retrySave')"
-          >
-            重试
-          </button>
-          <span v-if="updatedAt" class="text-[10px] text-gray-400">
-            更新于 {{ formatTime(updatedAt) }}
-          </span>
-
-          <span class="ml-auto">
             <button
-              v-if="!isDeleteConfirmOpen"
-              class="rounded-lg border border-gray-200 bg-white px-3 py-1 text-xs text-red-600 transition-colors hover:bg-red-50"
-              @click="isDeleteConfirmOpen = true"
+              v-if="savePhase === 'failed'"
+              class="ml-1 rounded-md border border-red-200 bg-white px-2 py-0.5 text-xs text-red-600 transition-colors hover:bg-red-50"
+              :data-testid="`${testidPrefix}-detail-retry`"
+              @click="emit('retrySave')"
             >
-              {{ deleteLabel }}
+              重试
             </button>
-            <span v-else class="flex items-center gap-1.5 text-xs text-gray-500">
-              <span>移入回收站？</span>
-              <button class="rounded bg-red-600 px-2 py-1 text-white hover:bg-red-500" @click="emit('removeCard')">删除</button>
-              <button class="rounded bg-gray-100 px-2 py-1 text-gray-600 hover:bg-gray-200" @click="isDeleteConfirmOpen = false">取消</button>
-            </span>
+          </span>
+          <span v-if="updatedAt" class="shrink-0">
+            更新于 {{ formatTime(updatedAt) }}
           </span>
         </div>
       </template>

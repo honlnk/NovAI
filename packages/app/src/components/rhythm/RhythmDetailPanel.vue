@@ -56,7 +56,6 @@ const emit = defineEmits<{
   saveCopy: [name: string]
   restoreAsCopy: [name: string]
   discardGuard: []
-  removeCard: [id: string]
 }>()
 
 /* ---------- 展示值：有草稿显示草稿（预览态也跟随未保存修改） ---------- */
@@ -113,7 +112,6 @@ function onCharactersInput(event: Event) {
     :guard="guard"
     :action-error="actionError"
     :updated-at="activeCard.updatedAt"
-    delete-label="删除（移入回收站）"
     testid-prefix="rhythm"
     @close="emit('close')"
     @update-title="(value) => emit('updateDraft', { name: value })"
@@ -126,7 +124,6 @@ function onCharactersInput(event: Event) {
     @save-copy="emit('saveCopy', $event)"
     @restore-as-copy="emit('restoreAsCopy', $event)"
     @discard-guard="emit('discardGuard')"
-    @remove-card="emit('removeCard', activeCard.id)"
   >
     <template #content="{ detailMode: mode, frozen }">
       <!-- 状态徽标（只读：状态由回写偏差判定自动流转，不接受手改） -->

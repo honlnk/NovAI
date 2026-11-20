@@ -955,20 +955,6 @@ async function handlePlanMove(id: string, status: PlanStatusView, afterId: strin
   }
 }
 
-async function handlePlanRemove(id: string) {
-  if (!projectStore.currentProject) {
-    return
-  }
-  const removingProjectId = projectId.value
-  const ok = await planStore.removeCard(removingProjectId, id)
-  if (projectId.value !== removingProjectId || projectStore.currentProject?.id !== removingProjectId) return
-  if (ok) {
-    toast.success('已移入回收站')
-  } else {
-    toast.error(planStore.actionError || '删除计划失败')
-  }
-}
-
 /** 状态条「重试」（阶段 2 无保存心智）：手动重开当前卡片的失败保存，重开自动补试周期 */
 function handlePlanRetrySave() {
   void planStore.retrySave(projectId.value)
@@ -1214,20 +1200,6 @@ async function handleForeshadowingMove(id: string, status: ForeshadowingStatusVi
   }
 }
 
-async function handleForeshadowingRemove(id: string) {
-  if (!projectStore.currentProject) {
-    return
-  }
-  const removingProjectId = projectId.value
-  const ok = await foreshadowingStore.removeCard(removingProjectId, id)
-  if (projectId.value !== removingProjectId || projectStore.currentProject?.id !== removingProjectId) return
-  if (ok) {
-    toast.success('已移入回收站')
-  } else {
-    toast.error(foreshadowingStore.actionError || '删除伏笔失败')
-  }
-}
-
 /** 状态条「重试」（阶段 2 无保存心智）：手动重开当前伏笔的失败保存 */
 function handleForeshadowingRetrySave() {
   void foreshadowingStore.retrySave(projectId.value)
@@ -1400,20 +1372,6 @@ async function handleRhythmMove(id: string, status: RhythmStatusView, afterId: s
   if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
   if (!ok) {
     toast.error(rhythmStore.actionError || '移动节奏卡失败')
-  }
-}
-
-async function handleRhythmRemove(id: string) {
-  if (!projectStore.currentProject) {
-    return
-  }
-  const removingProjectId = projectId.value
-  const ok = await rhythmStore.removeCard(removingProjectId, id)
-  if (projectId.value !== removingProjectId || projectStore.currentProject?.id !== removingProjectId) return
-  if (ok) {
-    toast.success('已移入回收站')
-  } else {
-    toast.error(rhythmStore.actionError || '删除节奏卡失败')
   }
 }
 
@@ -1685,7 +1643,6 @@ function handleGoToSettings() {
           @save-copy="planConflictHandlers.saveCopy"
           @restore-as-copy="planConflictHandlers.restoreAsCopy"
           @discard-guard="planConflictHandlers.discardGuard"
-          @remove-card="handlePlanRemove"
         />
         <!-- 新建计划 -->
         <PlanCreatePanel
@@ -1734,8 +1691,7 @@ function handleGoToSettings() {
           @save-copy="foreshadowingConflictHandlers.saveCopy"
           @restore-as-copy="foreshadowingConflictHandlers.restoreAsCopy"
           @discard-guard="foreshadowingConflictHandlers.discardGuard"
-          @remove-card="handleForeshadowingRemove"
-        />
+          />
         <!-- 登记伏笔 -->
         <ForeshadowingCreatePanel
           v-if="workspacePanel.kind === 'foreshadowing-create'"
@@ -1782,8 +1738,7 @@ function handleGoToSettings() {
           @save-copy="rhythmConflictHandlers.saveCopy"
           @restore-as-copy="rhythmConflictHandlers.restoreAsCopy"
           @discard-guard="rhythmConflictHandlers.discardGuard"
-          @remove-card="handleRhythmRemove"
-        />
+          />
         <!-- 规划节奏卡 -->
         <RhythmCreatePanel
           v-if="workspacePanel.kind === 'rhythm-create'"

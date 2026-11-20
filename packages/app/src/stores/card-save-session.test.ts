@@ -229,8 +229,8 @@ describe('卡片统一保存会话：写盘与恢复镜像', () => {
     await store.openCard(PROJECT, 'a')
     expect(store.draftTitle).toBeNull()
     expect(store.draftBody).toBeNull()
-    // 切卡收口时用户已离开本卡（「保存成功自动回预览」只作用于用户停留的
-    // 卡片），会话保留编辑模式，重开直接恢复编辑现场；基线一致不触发冲突
+    // 切卡收口时用户已离开本卡，会话保留编辑模式，重开直接恢复编辑现场；
+    // 保存成功不自动切预览（2026-11-20 交互修订），基线一致不触发冲突
     expect(store.detailMode).toBe('edit')
     expect(store.conflictNotice).toBeNull()
   })
