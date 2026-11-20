@@ -12,8 +12,9 @@ import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 
 import ForeshadowingDetailPanel from './ForeshadowingDetailPanel.vue'
+import type { ForeshadowingCardView } from '@novai/core/services/types'
 
-function activeCard(overrides: Record<string, unknown> = {}) {
+function activeCard(overrides: Partial<ForeshadowingCardView> = {}): ForeshadowingCardView {
   return {
     id: 'f1',
     name: '阁楼里的钢琴声',

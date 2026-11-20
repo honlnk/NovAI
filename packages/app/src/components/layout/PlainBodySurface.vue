@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 /**
  * 普通正文表面（六个模块右侧详情布局统一计划 阶段 1）：单正文预览／编辑的
@@ -32,10 +32,14 @@ const surfaceClass = computed(() => {
     scroll ? 'overflow-y-auto' : '',
   ]
 })
+
+/** 根元素（滚动容器）：定位高亮滚动等需要直接操作滚动位置的领域使用 */
+const root = ref<HTMLElement | null>(null)
+defineExpose({ root })
 </script>
 
 <template>
-  <div :class="surfaceClass" data-testid="detail-body-surface">
+  <div ref="root" :class="surfaceClass" data-testid="detail-body-surface">
     <slot />
   </div>
 </template>

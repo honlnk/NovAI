@@ -3,8 +3,12 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { FileContentView } from '@novai/core/services/types'
 import { countContentChars } from '@novai/core'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
-import Tooltip from '../ui/Tooltip.vue'
-import PanelHeader from './PanelHeader.vue'
+import DetailLayout from './DetailLayout.vue'
+import PlainBodySurface from './PlainBodySurface.vue'
+import GuardBanner from './GuardBanner.vue'
+import ConflictResolutionLayout from './ConflictResolutionLayout.vue'
+import ConflictDiffBlocks from './ConflictDiffBlocks.vue'
+import type { DetailSavePhase } from './detail-save-phase'
 import { useProjectStore } from '../../stores/project'
 import {
   acknowledgeRestoredDraft,
@@ -41,7 +45,9 @@ import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 普通文件内容（右侧面板的文件内容类型）：预览/编辑两态、引用选中与保存编排。
- * 内容卡片撑满面板剩余高度，滚动发生在卡片内部。
+ * 布局（头部状态灯、模式切换、消息区、正文表面与底部信息行）由统一详情布局
+ * DetailLayout 承载（六个模块布局统一计划 阶段 2），本组件保留正文会话、AI 定位、
+ * 选文引用和文件专属操作。
  *
  * 保存状态机（正文自动保存与并发冲突交互重设计计划 §四）：
  * 编辑会话按「项目 + 路径」收敛在 editor-session 模块（待写/在途/成功/失败/冲突/
@@ -49,7 +55,8 @@ import AppIcon from '../ui/AppIcon.vue'
  * 「同路径磁盘版本更新（保存回写）」「切换到另一个文件」「同路径切换到另一个项目」
  * 是三个不同事件——同路径回写不重置编辑态、不清冲突再入口与失败态。
  * 版本冲突一次点击即进入冲突比较：并列查看人工输入与磁盘修改（红=仅草稿有、
- * 绿=仅磁盘有），差异用最新输入与最新磁盘；四个出口中两种采用需二次确认。
+ * 绿=仅磁盘有），差异用最新输入与最新磁盘；四个出口中两种采用需二次确认
+ * （由 ConflictResolutionLayout 承接两击确认与副本文案）。
  * 草稿守护（§3-3）：AI 删除/重命名有未落盘内容的文件时置入守护会话——
  * 删除给「恢复为草稿副本/放弃草稿并关闭」，重命名给「迁移草稿/放弃草稿并打开新文件」。
  * 刷新后恢复的内容（IndexedDB 恢复镜像回填）以横幅提示，含磁盘基线是否变化。
@@ -100,9 +107,7 @@ const conflictActive = computed(() => session.value?.conflict !== undefined)
 const conflictFailure = computed(() =>
   session.value?.failure !== undefined && !conflictActive.value,
 )
-/** 有损采用的二次确认步（null=未开始；第二次点击才执行） */
-const confirmAdopt = ref<'disk' | 'draft' | null>(null)
-/** 另存副本表单（冲突界面与删除守护共用） */
+/** 另存副本表单（冲突界面与删除守护共用；开合与默认名由本组件持有） */
 const copyFormOpen = ref(false)
 const copyTarget = ref('')
 const copyBusy = ref(false)
@@ -112,6 +117,14 @@ const copySavedPath = ref('')
 
 const canEdit = computed(() => {
   return Boolean(props.file && isEditablePath(props.file.path))
+})
+
+/** 布局层保存阶段（§四.3 优先顺序）：在途 > 冲突 > 失败 > 待保存 > 已保存 */
+const savePhase = computed<DetailSavePhase>(() => {
+  if (isSavingThisFile.value) return 'saving'
+  if (conflictActive.value) return 'conflict'
+  if (conflictFailure.value) return 'failed'
+  return isDirty.value ? 'pending' : 'clean'
 })
 
 /** 草稿与磁盘内容不一致时为脏，用于显示「等待保存」标记 */
@@ -126,14 +139,6 @@ const wordCount = computed(() => {
   }
   const text = viewMode.value === 'edit' ? editDraft.value : props.file.content
   return countContentChars(text, props.file.format, { isChapter: props.file.path.startsWith('chapters/') })
-})
-
-/** 头部保存状态文案（§六.1 无保存心智：等待保存 / 正在保存 / 已保存；异常单独解释） */
-const saveStatusLabel = computed(() => {
-  if (isSavingThisFile.value) return '正在保存'
-  if (conflictActive.value) return '保存冲突'
-  if (conflictFailure.value) return '保存失败'
-  return isDirty.value ? '等待保存' : '已保存'
 })
 
 /** 刷新后恢复提示：当前文件有「恢复且未知悉」的草稿（数据安全计划 §3-2） */
@@ -182,8 +187,7 @@ const conflictView = computed(() => {
   }
 })
 
-/** 冲突界面的差异块（§3-6 版本比较；修复批 2026-11-20 改单栏差异块：段内字级
- *  高亮 + 未改动折叠 + 超限降级，替代旧整行 LCS 双栏空白占位；磁盘可读时） */
+/** 冲突界面的差异块（§3-6 版本比较；磁盘可读时；折叠态作用域 = 路径 + 冲突代次） */
 const conflictDiff = computed(() => {
   const disk = session.value?.conflict?.disk
   if (!conflictView.value || !disk || conflictView.value.probing) {
@@ -192,28 +196,15 @@ const conflictDiff = computed(() => {
   return buildConflictDiff(conflictView.value.draft, disk.content)
 })
 
-/** 差异折叠区展开状态（fold id 集；冲突代次/路径变化即差异重组，折叠态复位） */
-const expandedFolds = ref(new Set<number>())
-watch(
-  () => [pathKey.value, session.value?.conflict?.generation] as const,
-  () => {
-    expandedFolds.value = new Set()
-  },
+/** 冲突界面确认态/折叠态作用域：切换文件或冲突代次推进即复位 */
+const conflictScopeKey = computed(() =>
+  `${pathKey.value}:${session.value?.conflict?.generation ?? 0}`,
 )
-
-function toggleFold(id: number) {
-  const next = new Set(expandedFolds.value)
-  if (next.has(id)) {
-    next.delete(id)
-  } else {
-    next.add(id)
-  }
-  expandedFolds.value = next
-}
 
 // ===== 定位高亮（§7）：反馈条、绿红切分与 Markdown 块映射 =====
 
-const previewRef = ref<HTMLElement | null>(null)
+/** 预览表面（滚动容器；定位高亮手动计算滚动量） */
+const previewSurface = ref<InstanceType<typeof PlainBodySurface> | null>(null)
 
 /** 面板当前文件的高亮任务（任意阶段，settled 也保留反馈条）；别的文件的任务不管 */
 const panelJob = computed(() => {
@@ -272,7 +263,7 @@ watch(
   async (key) => {
     if (!key) return
     await nextTick()
-    const container = previewRef.value
+    const container = previewSurface.value?.root ?? null
     if (!container) return
     const targets = [
       ...container.querySelectorAll('.change-hl-green, .change-hl-red, .change-hl-target'),
@@ -320,7 +311,6 @@ watch(
     editDraft.value = props.file
       ? (getFileDraft(props.projectId, props.file.path) ?? props.file.content)
       : ''
-    confirmAdopt.value = null
     copyFormOpen.value = false
     copyError.value = ''
     copySavedPath.value = ''
@@ -420,6 +410,11 @@ function shouldRenderMarkdown(format: string) {
   return format === 'markdown'
 }
 
+/** 统一布局模式切换（预览/编辑）：禁用编辑类型已在布局层拦截，这里不再判空 */
+function setViewMode(mode: 'preview' | 'edit') {
+  viewMode.value = mode
+}
+
 /**
  * 编辑模式键盘处理：Ctrl/Cmd+S 立即收口（可选快捷方式，不显示「必须保存」提示）。
  */
@@ -450,7 +445,6 @@ function backToEditFromConflict() {
   if (pathKey.value) {
     collapseEditorConflict(props.projectId, pathKey.value)
   }
-  confirmAdopt.value = null
   copyFormOpen.value = false
   copyError.value = ''
   viewMode.value = 'edit'
@@ -466,8 +460,8 @@ async function reopenSaveConflict() {
 }
 
 /**
- * 采纳磁盘版本（§3-6 有损操作，需二次确认）：会话层先重新读取磁盘，读取成功才
- * 放弃人工内容并删除恢复记录；读取失败或文件又消失时草稿必须完整保留，
+ * 采纳磁盘版本（§3-6 有损操作，两击确认已由冲突布局完成）：会话层先重新读取磁盘，
+ * 读取成功才放弃人工内容并删除恢复记录；读取失败或文件又消失时草稿必须完整保留，
  * 冲突界面呈现最新探测结果（「采用 AI 版本」绝不先删稿后读盘）。
  */
 async function adoptDiskVersion() {
@@ -475,32 +469,22 @@ async function adoptDiskVersion() {
   if (!path || !conflictView.value) {
     return
   }
-  if (confirmAdopt.value !== 'disk') {
-    confirmAdopt.value = 'disk'
-    return
-  }
   const result = await adoptDiskInEditor(props.projectId, path)
-  confirmAdopt.value = null
   if (result === 'resolved' && props.file?.path === path) {
     await projectStore.openFile(path)
   }
 }
 
-/** 采纳我的草稿（§3-6 有损操作，需二次确认）：整份覆盖磁盘；等待期间新输入按新基线保留 */
+/** 采纳我的草稿（§3-6 有损操作，两击确认已由冲突布局完成）：整份覆盖磁盘；等待期间新输入按新基线保留 */
 async function adoptDraftVersion() {
   const path = pathKey.value
   if (!path || !conflictView.value || copyBusy.value) {
-    return
-  }
-  if (confirmAdopt.value !== 'draft') {
-    confirmAdopt.value = 'draft'
     return
   }
   copyBusy.value = true
   const result = await overwriteEditorContent(props.projectId, path)
   copyBusy.value = false
   if (result.ok) {
-    confirmAdopt.value = null
     return
   }
   copyError.value = result.message ?? '保存失败'
@@ -514,14 +498,20 @@ function openCopyForm(sourcePath: string) {
   copySavedPath.value = ''
 }
 
+/** 关闭冲突布局内的副本表单（守护表单取消同款语义） */
+function closeCopyForm() {
+  copyFormOpen.value = false
+  copyError.value = ''
+}
+
 /**
  * 另存为副本（§3-6）：新建文件语义保存人工内容，不覆盖任何已有文件；
  * 目标存在时提示另选名称。副本保存成功后是否解除来源草稿由调用点决定——
  * 冲突界面的副本保留原草稿与冲突状态；删除守护的副本即草稿去向（清原草稿）。
  */
-async function submitCopy(sourcePath: string, options: { resolveSource: boolean }) {
+async function submitCopy(sourcePath: string, options: { resolveSource: boolean }, name: string) {
   const projectId = props.projectId
-  const target = copyTarget.value.trim()
+  const target = name.trim()
   const source = options.resolveSource
     ? (getFileDraft(projectId, sourcePath) ?? session.value?.content ?? conflictView.value?.draft)
     : (conflictView.value?.draft ?? getFileDraft(projectId, sourcePath))
@@ -542,7 +532,6 @@ async function submitCopy(sourcePath: string, options: { resolveSource: boolean 
   if (options.resolveSource) {
     // 删除守护的「恢复为草稿副本」：草稿内容已成新文件，清原路径草稿并打开副本
     clearFileDraft(projectId, sourcePath)
-    confirmAdopt.value = null
     emit('guard-resolved')
     if (props.projectId === projectId) {
       await projectStore.refreshTree()
@@ -613,101 +602,52 @@ function handleContentMouseup() {
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col">
-    <PanelHeader @close="emit('close')">
-      <template #leading>
-        <h2 class="truncate text-sm font-semibold text-gray-800">
-          {{ file ? file.name : '内容预览' }}
-        </h2>
-        <!-- 保存状态（§四 按项目 + 路径隔离）：已保存 / 未保存 / 正在保存 / 保存失败 / 保存冲突 -->
-        <span
-          v-if="file"
-          class="flex shrink-0 items-center gap-1 text-xs"
-          :class="{
-            'text-gray-400': !isSavingThisFile && !conflictActive && !conflictFailure && !isDirty,
-            'text-amber-600': !isSavingThisFile && !conflictActive && !conflictFailure && isDirty,
-            'text-blue-600': isSavingThisFile,
-            'text-red-600': conflictActive || conflictFailure,
-          }"
-        >
-          <span
-            v-if="!isSavingThisFile && !conflictActive && !conflictFailure && isDirty"
-            class="h-1.5 w-1.5 rounded-full bg-amber-500"
-          />
-          {{ saveStatusLabel }}
-        </span>
-        <!-- 字数：统计当前阅读版本（编辑模式含未保存草稿） -->
-        <span v-if="wordCount !== null" class="shrink-0 text-xs text-gray-500">
-          正文 {{ wordCount.toLocaleString('zh-CN') }} 字
-        </span>
-        <span v-if="file" class="shrink-0 text-xs text-gray-500">
-          {{ getLanguageLabel(file.format) }}
-        </span>
-      </template>
-      <template #actions>
-        <!-- 预览/编辑 两态分段控件 -->
-        <div
-          v-if="file"
-          class="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5"
-        >
-          <Tooltip
-            v-for="mode in [
-              { key: 'preview', label: '预览', icon: 'eye' },
-              { key: 'edit', label: '编辑', icon: 'pencil' },
-            ]"
-            :key="mode.key"
-            :text="mode.key === 'edit' && !canEdit ? `${mode.label}（该文件类型不支持编辑）` : mode.label"
-            :disabled="mode.key === 'edit' && !canEdit"
-            :delay="300"
-            preferred-placement="bottom"
-          >
-            <button
-              :aria-label="mode.label"
-              :class="[
-                'flex items-center justify-center rounded-md p-1.5 transition-colors',
-                viewMode === mode.key
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700',
-                mode.key === 'edit' && !canEdit ? 'cursor-not-allowed opacity-40' : '',
-              ]"
-              :disabled="mode.key === 'edit' && !canEdit"
-              @click="viewMode = mode.key as typeof viewMode"
-            >
-              <!-- 预览（眼睛） -->
-              <AppIcon v-if="mode.icon === 'eye'" name="eye" :size="16" class="h-4 w-4" />
-              <!-- 编辑（铅笔） -->
-              <AppIcon name="square-pen" :size="16" class="h-4 w-4" v-else />
-            </button>
-          </Tooltip>
-        </div>
-      </template>
-    </PanelHeader>
+  <DetailLayout
+    :mode="viewMode"
+    :has-content="file !== null"
+    :save-phase="savePhase"
+    :path="file?.path ?? null"
+    :updated-at="file?.updatedAt ?? null"
+    :can-edit="canEdit"
+    edit-disabled-reason="编辑（该文件类型不支持编辑）"
+    :conflict-expanded="conflictView !== null"
+    save-testid="file-save-status"
+    @close="emit('close')"
+    @mode-change="setViewMode"
+  >
+    <template #title>
+      <h2 class="truncate text-sm font-semibold text-gray-800">
+        {{ file ? file.name : '内容预览' }}
+      </h2>
+    </template>
 
-    <!-- 内容区域：卡片撑满剩余高度，滚动发生在卡片内部（与计划详情一致） -->
-    <div class="flex min-h-0 flex-1 flex-col p-4">
+    <!-- 头部元信息：字数（统计当前阅读版本，编辑模式含未保存草稿）与格式 -->
+    <template #meta>
+      <span v-if="wordCount !== null" class="shrink-0 text-xs text-gray-500">
+        正文 {{ wordCount.toLocaleString('zh-CN') }} 字
+      </span>
+      <span v-if="file" class="shrink-0 text-xs text-gray-500">
+        {{ getLanguageLabel(file.format) }}
+      </span>
+    </template>
+
+    <!-- 消息区：守护横幅 / 恢复提示 / 变更通知 / 冲突紧凑条 / 保存失败 -->
+    <template #message>
       <!-- 草稿守护横幅（§3-3）：AI 删除/重命名有人工内容的文件时置入，不自动清空编辑现场 -->
-      <div
+      <GuardBanner
         v-if="guardState"
-        class="mb-3 flex shrink-0 flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2.5"
-        role="alert"
+        :kind="guardState.kind"
+        :title="guardState.kind === 'deleted'
+          ? `「${guardState.name}」已被 AI 删除并移入回收站`
+          : `「${guardState.name}」已被 AI 重命名为 ${guardState.toPath}`"
+        :description="guardState.kind === 'deleted'
+          ? '你尚未写入正文的内容已保留，不会被自动丢弃；可恢复为一份新文件，或放弃。'
+          : '你尚未写入正文的内容仍指向旧路径；迁移后以「等待保存」标记出现在新文件上。'"
+        :detail="guardState.kind === 'deleted'
+          ? guardState.trashPath ? { label: '原文在回收站', value: guardState.trashPath } : null
+          : null"
       >
-        <div class="flex items-start gap-2">
-          <AppIcon name="triangle-alert" :size="15" class="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-          <div class="min-w-0 flex-1 text-xs leading-5 text-amber-800">
-            <template v-if="guardState.kind === 'deleted'">
-              <p class="font-medium">「{{ guardState.name }}」已被 AI 删除并移入回收站</p>
-              <p class="text-amber-700">你尚未写入正文的内容已保留，不会被自动丢弃；可恢复为一份新文件，或放弃。</p>
-              <p v-if="guardState.trashPath" class="truncate text-[11px] text-amber-600" :title="guardState.trashPath">
-                原文在回收站：{{ guardState.trashPath }}
-              </p>
-            </template>
-            <template v-else>
-              <p class="font-medium">「{{ guardState.name }}」已被 AI 重命名为 {{ guardState.toPath }}</p>
-              <p class="text-amber-700">你尚未写入正文的内容仍指向旧路径；迁移后以「等待保存」标记出现在新文件上。</p>
-            </template>
-          </div>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
+        <template #actions>
           <template v-if="guardState.kind === 'deleted'">
             <button
               v-if="!copyFormOpen"
@@ -741,36 +681,38 @@ function handleContentMouseup() {
               放弃草稿并打开新文件
             </button>
           </template>
-        </div>
-        <!-- 删除守护的副本命名表单：新建文件语义，目标存在则要求另选名称 -->
-        <div v-if="copyFormOpen && guardState.kind === 'deleted'" class="flex flex-col gap-1.5">
-          <div class="flex items-center gap-2">
-            <input
-              v-model="copyTarget"
-              type="text"
-              class="min-w-0 flex-1 rounded-md border border-amber-300 bg-white px-2 py-1 font-mono text-xs text-gray-800 focus:border-amber-500 focus:outline-none"
-              placeholder="副本文件路径"
-            >
-            <button
-              type="button"
-              class="shrink-0 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
-              :disabled="copyBusy || !copyTarget.trim()"
-              @click="submitCopy(guardState.path, { resolveSource: true })"
-            >
-              {{ copyBusy ? '保存中…' : '保存副本' }}
-            </button>
-            <button
-              type="button"
-              class="shrink-0 rounded-md px-1.5 py-1 text-xs text-amber-700 hover:underline"
-              @click="copyFormOpen = false; copyError = ''"
-            >
-              取消
-            </button>
+        </template>
+        <template #form>
+          <!-- 删除守护的副本命名表单：新建文件语义，目标存在则要求另选名称 -->
+          <div v-if="copyFormOpen && guardState.kind === 'deleted'" class="flex flex-col gap-1.5">
+            <div class="flex items-center gap-2">
+              <input
+                v-model="copyTarget"
+                type="text"
+                class="min-w-0 flex-1 rounded-md border border-amber-300 bg-white px-2 py-1 font-mono text-xs text-gray-800 focus:border-amber-500 focus:outline-none"
+                placeholder="副本文件路径"
+              >
+              <button
+                type="button"
+                class="shrink-0 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
+                :disabled="copyBusy || !copyTarget.trim()"
+                @click="submitCopy(guardState.path, { resolveSource: true }, copyTarget)"
+              >
+                {{ copyBusy ? '保存中…' : '保存副本' }}
+              </button>
+              <button
+                type="button"
+                class="shrink-0 rounded-md px-1.5 py-1 text-xs text-amber-700 hover:underline"
+                @click="copyFormOpen = false; copyError = ''"
+              >
+                取消
+              </button>
+            </div>
+            <p v-if="copyError" class="text-[11px] text-red-600">{{ copyError }}</p>
+            <p class="text-[11px] text-amber-600">副本是新建文件，不会覆盖回收站或磁盘上的任何文件。</p>
           </div>
-          <p v-if="copyError" class="text-[11px] text-red-600">{{ copyError }}</p>
-          <p class="text-[11px] text-amber-600">副本是新建文件，不会覆盖回收站或磁盘上的任何文件。</p>
-        </div>
-      </div>
+        </template>
+      </GuardBanner>
 
       <!-- 刷新后恢复横幅（§3-2）：明确显示「已恢复未保存草稿」及磁盘基线是否变化 -->
       <div
@@ -827,214 +769,55 @@ function handleContentMouseup() {
         </div>
       </div>
 
-      <!-- 保存冲突界面（§五.2 非阻塞冲突）：展开时整页版本比较与四出口 -->
+      <!-- 冲突紧凑状态条（§五.2 非阻塞——AI 先落盘冻结/用户收起比较后的再入口） -->
       <div
-        v-if="conflictView"
-        class="flex min-h-0 flex-1 flex-col gap-3 rounded-lg border border-red-200 bg-white p-3"
+        v-if="conflictActive && !conflictView"
+        class="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2"
         role="alert"
       >
-        <div class="shrink-0">
-          <p class="text-sm font-semibold text-gray-800">此文件有两个版本：磁盘正文已被 AI 修改</p>
-          <p class="mt-1 font-mono text-[11px] text-gray-500">{{ conflictView.path }}</p>
-          <p class="mt-1.5 text-xs leading-5 text-gray-600">
-            浏览器中的草稿与磁盘上的 AI 修改都完整保留，查看期间互不覆盖。下面按段落对比两个版本：
-            <span class="text-red-600">红色段落 = 仅你的草稿有</span>（采纳 AI 版本会丢失），
-            <span class="text-green-700">绿色段落 = 仅磁盘有</span>（AI 的修改，采纳草稿会替换）；
-            段落内加深的字 = 实际变化的部分，未改动段落默认折叠。
-          </p>
-        </div>
-
-        <!-- 正在检查另一版本（读取在途，不能暂时退回「已保存」） -->
-        <div v-if="conflictView.probing" class="shrink-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-500">
-          正在检查另一版本…
-        </div>
-
-        <!-- 磁盘读取失败与版本变化分开提示（§3-6） -->
-        <div v-else-if="conflictView.missing" class="shrink-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          目标文件在磁盘上已不存在（可能已被删除）。你的草稿仍完整保留，可另存为副本后放弃本文件。
-        </div>
-
-        <div v-else-if="conflictView.unreadable" class="shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-          磁盘读取失败：{{ conflictView.unreadable }}。草稿仍完整保留，可返回编辑或另存副本；读取成功前不能采用磁盘版本。
-        </div>
-
-        <template v-else-if="conflictDiff">
-          <!-- 差异概览：正常按段计数；降级明示「不做逐段对齐」，不伪装精确 diff -->
-          <p v-if="conflictDiff.degraded" class="shrink-0 text-xs text-amber-700">
-            两个版本差异过大，无法逐段对齐；以下整块对比（红 = 仅你的草稿，绿 = 仅磁盘）。
-            <template v-if="conflictDiff.truncated.left > 0">草稿其余 {{ conflictDiff.truncated.left }} 行未显示。</template>
-            <template v-if="conflictDiff.truncated.right > 0">磁盘其余 {{ conflictDiff.truncated.right }} 行未显示。</template>
-          </p>
-          <p v-else-if="conflictDiff.stats.changed + conflictDiff.stats.added + conflictDiff.stats.removed === 0" class="shrink-0 text-xs text-gray-500">
-            两个版本的文字内容一致（可能只有结尾换行等格式差异）。
-          </p>
-          <p v-else class="shrink-0 text-xs text-gray-500">
-            差异概览：修改 {{ conflictDiff.stats.changed }} 段、新增 {{ conflictDiff.stats.added }} 段、删除 {{ conflictDiff.stats.removed }} 段。
-          </p>
-
-          <!-- 单栏差异块：上下文（灰）/ 折叠区（可展开）/ 修改（红原段落上、绿新段落下） -->
-          <div class="min-h-0 flex-1 overflow-y-auto rounded-md border border-gray-200 bg-white p-2">
-            <template v-for="(block, index) in conflictDiff.blocks" :key="index">
-              <template v-if="block.kind === 'context'">
-                <div
-                  v-for="(line, lineIndex) in block.lines"
-                  :key="lineIndex"
-                  class="whitespace-pre-wrap px-2 text-xs leading-5 text-gray-400"
-                >{{ line }}&nbsp;</div>
-              </template>
-              <template v-else-if="block.kind === 'fold'">
-                <div v-if="expandedFolds.has(block.id)">
-                  <div
-                    v-for="(line, lineIndex) in block.lines"
-                    :key="lineIndex"
-                    class="whitespace-pre-wrap px-2 text-xs leading-5 text-gray-400"
-                  >{{ line }}&nbsp;</div>
-                  <button
-                    type="button"
-                    class="my-1 w-full rounded border border-gray-100 bg-gray-50 px-2 py-1 text-[11px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                    @click="toggleFold(block.id)"
-                  >
-                    收起 {{ block.count }} 段未改动内容
-                  </button>
-                </div>
-                <button
-                  v-else
-                  type="button"
-                  class="my-1 w-full rounded border border-gray-100 bg-gray-50 px-2 py-1 text-[11px] text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                  @click="toggleFold(block.id)"
-                >
-                  ⋯ 展开 {{ block.count }} 段未改动内容
-                </button>
-              </template>
-              <div v-else class="my-1 flex flex-col gap-0.5">
-                <div v-for="(pair, pairIndex) in block.pairs" :key="pairIndex" class="flex flex-col gap-0.5">
-                  <!-- 原段落（仅草稿）：红底；有字级变换时只加深实际被替换的字 -->
-                  <div v-if="pair.old !== undefined" class="whitespace-pre-wrap rounded-sm px-2 text-xs leading-5 conflict-para-del">
-                    <template v-if="pair.inline">
-                      <template v-for="(seg, segIndex) in pair.inline" :key="segIndex">
-                        <span v-if="seg.kind !== 'add'" :class="seg.kind === 'del' ? 'conflict-inline-del' : ''">{{ seg.text }}</span>
-                      </template>
-                    </template>
-                    <template v-else>{{ pair.old }}</template>
-                  </div>
-                  <!-- 新段落（仅磁盘）：绿底；有字级变换时只加深实际新增的字 -->
-                  <div v-if="pair.new !== undefined" class="whitespace-pre-wrap rounded-sm px-2 text-xs leading-5 conflict-para-add">
-                    <template v-if="pair.inline">
-                      <template v-for="(seg, segIndex) in pair.inline" :key="segIndex">
-                        <span v-if="seg.kind !== 'del'" :class="seg.kind === 'add' ? 'conflict-inline-add' : ''">{{ seg.text }}</span>
-                      </template>
-                    </template>
-                    <template v-else>{{ pair.new }}</template>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-        </template>
-
-        <p v-if="copyError" class="shrink-0 text-xs text-red-600">{{ copyError }}</p>
-        <p v-if="copySavedPath" class="shrink-0 text-xs text-green-700">
-          副本已保存：{{ copySavedPath }}（原草稿与冲突状态保留，仍需决定原文件采用哪个版本）
+        <AppIcon name="triangle-alert" :size="14" class="h-3.5 w-3.5 shrink-0 text-amber-500" />
+        <p class="min-w-0 flex-1 text-xs leading-5 text-amber-800">
+          此文件有两个版本：磁盘正文已被 AI 修改，你尚未写入正文的内容已保留并暂停自动保存。
         </p>
-
-        <!-- 另存副本表单：新建文件语义，目标存在要求另选名称 -->
-        <div v-if="copyFormOpen" class="flex shrink-0 flex-col gap-1.5">
-          <div class="flex items-center gap-2">
-            <input
-              v-model="copyTarget"
-              type="text"
-              class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 font-mono text-xs text-gray-800 focus:border-blue-500 focus:outline-none"
-              placeholder="副本文件路径"
-            >
-            <button
-              type="button"
-              class="shrink-0 rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-40"
-              :disabled="copyBusy || !copyTarget.trim()"
-              @click="submitCopy(conflictView.path, { resolveSource: false })"
-            >
-              {{ copyBusy ? '保存中…' : '保存副本' }}
-            </button>
-            <button
-              type="button"
-              class="shrink-0 rounded-md px-1.5 py-1 text-xs text-gray-500 hover:underline"
-              @click="copyFormOpen = false; copyError = ''"
-            >
-              取消
-            </button>
-          </div>
-          <p class="text-[11px] text-gray-400">副本是新建文件，不覆盖任何已有文件；副本保存后本冲突仍保留。</p>
-        </div>
-
-        <!-- 四个出口（§3-6）：返回编辑 / 另存副本 / 两种需二次确认的有损采用 -->
-        <div class="flex shrink-0 flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
-          <button
-            type="button"
-            class="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
-            @click="backToEditFromConflict"
-          >
-            返回继续编辑
-          </button>
-          <button
-            v-if="!copyFormOpen"
-            type="button"
-            class="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
-            @click="openCopyForm(conflictView.path)"
-          >
-            将草稿另存为副本
-          </button>
-          <template v-if="!conflictView.missing && !conflictView.unreadable && !conflictView.probing">
-            <span class="min-w-0 flex-1" />
-            <button
-              type="button"
-              class="rounded-md px-2.5 py-1 text-xs font-medium transition-colors"
-              :class="confirmAdopt === 'disk'
-                ? 'bg-red-600 text-white hover:bg-red-500'
-                : 'border border-red-200 bg-white text-red-700 hover:bg-red-50'"
-              @click="adoptDiskVersion"
-            >
-              {{ confirmAdopt === 'disk' ? '确认放弃草稿，采用 AI 版本' : '采用 AI 版本' }}
-            </button>
-            <button
-              type="button"
-              class="rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40"
-              :class="confirmAdopt === 'draft'
-                ? 'bg-red-600 text-white hover:bg-red-500'
-                : 'border border-red-200 bg-white text-red-700 hover:bg-red-50'"
-              :disabled="copyBusy"
-              @click="adoptDraftVersion"
-            >
-              {{ confirmAdopt === 'draft' ? '确认覆盖磁盘，采用我的草稿' : '采用我的草稿' }}
-            </button>
-          </template>
-        </div>
-        <p class="shrink-0 text-[11px] leading-4 text-gray-400">
-          两种「采用」都是有损选择，需要点两次确认；应用不会替你决定，也不提供自动合并。
-        </p>
+        <button
+          type="button"
+          class="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
+          @click="reopenSaveConflict"
+        >
+          比较两个版本
+        </button>
       </div>
 
-      <!-- 冲突未展开：紧凑状态条（§五.2 非阻塞——AI 先落盘冻结/用户收起比较后的再入口）。
-           与内容区并列：冲突期间继续输入保留（自动写入冻结，直到用户在比较中明确选择） -->
-      <template v-else>
-        <div
-          v-if="conflictActive"
-          class="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2"
-          role="alert"
-        >
-          <AppIcon name="triangle-alert" :size="14" class="h-3.5 w-3.5 shrink-0 text-amber-500" />
-          <p class="min-w-0 flex-1 text-xs leading-5 text-amber-800">
-            此文件有两个版本：磁盘正文已被 AI 修改，你尚未写入正文的内容已保留并暂停自动保存。
-          </p>
+      <!-- 保存失败条（§6）：原因 + 重试 + 放弃更改（消息区承载，主内容重新分配剩余高度） -->
+      <div
+        v-if="conflictFailure && session?.failure"
+        class="mb-3 flex shrink-0 flex-col gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-2"
+        role="alert"
+      >
+        <p class="text-xs text-red-700">{{ session.failure.message }}</p>
+        <div class="flex items-center gap-2">
           <button
             type="button"
-            class="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
-            @click="reopenSaveConflict"
+            class="rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800"
+            @click="handleSave()"
           >
-            比较两个版本
+            重试
+          </button>
+          <button
+            type="button"
+            class="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            @click="discardDraft"
+          >
+            放弃更改
           </button>
         </div>
+      </div>
+    </template>
 
-        <!-- 空状态 -->
-        <div v-if="!file" class="flex flex-1 flex-col items-center justify-center">
+    <!-- 主内容：预览 / 编辑（统一正文表面） -->
+    <template #content>
+      <!-- 空状态 -->
+      <div v-if="!file" class="flex flex-1 flex-col items-center justify-center">
         <AppIcon name="file-text" :size="48" class="mb-4 h-12 w-12 text-gray-300" />
         <template v-if="notice">
           <p class="mb-1 text-sm font-medium text-gray-500">「{{ notice.name }}」已被删除</p>
@@ -1048,13 +831,13 @@ function handleContentMouseup() {
         </template>
       </div>
 
-        <!-- 文件内容 -->
-        <div v-else class="flex min-h-0 flex-1 flex-col space-y-3">
-        <!-- 预览模式 -->
-        <div
+      <template v-else>
+        <!-- 预览模式：统一正文表面（内部滚动；定位高亮反馈条 + 选文引用） -->
+        <PlainBodySurface
           v-if="viewMode === 'preview'"
-          ref="previewRef"
-          class="relative min-h-0 flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-4"
+          ref="previewSurface"
+          variant="preview"
+          class="relative"
           :class="{ 'hl-fading': panelJob?.phase === 'fading' }"
           @mouseup="handleContentMouseup"
         >
@@ -1134,10 +917,10 @@ function handleContentMouseup() {
             :class="seg.kind === 'green' ? 'change-hl-green' : seg.kind === 'red' ? 'change-hl-red' : ''"
           >{{ seg.text }}</span></pre>
           <pre v-else class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
-        </div>
+        </PlainBodySurface>
 
-        <!-- 编辑模式 -->
-        <div v-else-if="viewMode === 'edit'" class="flex min-h-0 flex-1 flex-col rounded-lg border border-gray-200 bg-white p-2">
+        <!-- 编辑模式：统一正文表面（外框不滚动，textarea 自身滚动） -->
+        <PlainBodySurface v-else variant="edit">
           <textarea
             v-model="editDraft"
             :disabled="!canEdit"
@@ -1145,41 +928,78 @@ function handleContentMouseup() {
             placeholder="该文件类型不支持编辑"
             @keydown="handleKeydown"
           />
-          <!-- 保存失败条：非冲突失败保留草稿与编辑位置，给出重试/放弃出口（§6） -->
-          <div
-            v-if="conflictFailure && session?.failure"
-            class="mt-2 flex shrink-0 flex-col gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-2"
-            role="alert"
-          >
-            <p class="text-xs text-red-700">{{ session.failure.message }}</p>
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                class="rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800"
-                @click="handleSave()"
-              >
-                重试
-              </button>
-              <button
-                type="button"
-                class="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
-                @click="discardDraft"
-              >
-                放弃更改
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 文件信息 -->
-        <div class="flex shrink-0 items-center justify-between text-xs text-gray-500">
-          <span>{{ file.path }}</span>
-          <span v-if="file.updatedAt">{{ new Date(file.updatedAt).toLocaleString('zh-CN') }}</span>
-        </div>
-        </div>
+        </PlainBodySurface>
       </template>
-    </div>
-  </div>
+    </template>
+
+    <!-- 冲突展开：统一冲突处理布局（§五.2 整页版本比较与四出口） -->
+    <template #conflict>
+      <ConflictResolutionLayout
+        :scope-key="conflictScopeKey"
+        :probing="conflictView?.probing ?? false"
+        :missing="conflictView?.missing ?? false"
+        :unreadable="conflictView?.unreadable ?? null"
+        :copy-open="copyFormOpen"
+        :default-copy-name="copyTarget"
+        :copy-busy="copyBusy"
+        :copy-error="copyError"
+        :copy-saved-note="copySavedPath ? `副本已保存：${copySavedPath}（原草稿与冲突状态保留，仍需决定原文件采用哪个版本）` : ''"
+        copy-placeholder="副本文件路径"
+        copy-open-label="将草稿另存为副本"
+        copy-submit-label="保存副本"
+        copy-busy-label="保存中…"
+        copy-hint="副本是新建文件，不覆盖任何已有文件；副本保存后本冲突仍保留。"
+        copy-input-class="font-mono"
+        adopt-disk-label="采用 AI 版本"
+        adopt-disk-confirm-label="确认放弃草稿，采用 AI 版本"
+        adopt-mine-label="采用我的草稿"
+        adopt-mine-confirm-label="确认覆盖磁盘，采用我的草稿"
+        @back="backToEditFromConflict"
+        @open-copy="openCopyForm(conflictView!.path)"
+        @close-copy="closeCopyForm"
+        @submit-copy="(name) => submitCopy(conflictView!.path, { resolveSource: false }, name)"
+        @adopt-disk="adoptDiskVersion"
+        @adopt-mine="adoptDraftVersion"
+      >
+        <template #header>
+          <p class="text-sm font-semibold text-gray-800">此文件有两个版本：磁盘正文已被 AI 修改</p>
+          <p class="mt-1 font-mono text-[11px] text-gray-500">{{ conflictView?.path }}</p>
+          <p class="mt-1.5 text-xs leading-5 text-gray-600">
+            浏览器中的草稿与磁盘上的 AI 修改都完整保留，查看期间互不覆盖。下面按段落对比两个版本：
+            <span class="text-red-600">红色段落 = 仅你的草稿有</span>（采纳 AI 版本会丢失），
+            <span class="text-green-700">绿色段落 = 仅磁盘有</span>（AI 的修改，采纳草稿会替换）；
+            段落内加深的字 = 实际变化的部分，未改动段落默认折叠。
+          </p>
+        </template>
+
+        <template #probing>正在检查另一版本…</template>
+        <template #missing>
+          目标文件在磁盘上已不存在（可能已被删除）。你的草稿仍完整保留，可另存为副本后放弃本文件。
+        </template>
+        <template #unreadable>
+          磁盘读取失败：{{ conflictView?.unreadable }}。草稿仍完整保留，可返回编辑或另存副本；读取成功前不能采用磁盘版本。
+        </template>
+
+        <template #compare>
+          <template v-if="conflictDiff">
+            <!-- 差异概览：正常按段计数；降级明示「不做逐段对齐」，不伪装精确 diff -->
+            <p v-if="conflictDiff.degraded" class="pb-2 text-xs text-amber-700">
+              两个版本差异过大，无法逐段对齐；以下整块对比（红 = 仅你的草稿，绿 = 仅磁盘）。
+              <template v-if="conflictDiff.truncated.left > 0">草稿其余 {{ conflictDiff.truncated.left }} 行未显示。</template>
+              <template v-if="conflictDiff.truncated.right > 0">磁盘其余 {{ conflictDiff.truncated.right }} 行未显示。</template>
+            </p>
+            <p v-else-if="conflictDiff.stats.changed + conflictDiff.stats.added + conflictDiff.stats.removed === 0" class="pb-2 text-xs text-gray-500">
+              两个版本的文字内容一致（可能只有结尾换行等格式差异）。
+            </p>
+            <p v-else class="pb-2 text-xs text-gray-500">
+              差异概览：修改 {{ conflictDiff.stats.changed }} 段、新增 {{ conflictDiff.stats.added }} 段、删除 {{ conflictDiff.stats.removed }} 段。
+            </p>
+            <ConflictDiffBlocks :diff="conflictDiff" :fold-scope="conflictScopeKey" />
+          </template>
+        </template>
+      </ConflictResolutionLayout>
+    </template>
+  </DetailLayout>
 </template>
 
 <script lang="ts">
@@ -1211,32 +1031,6 @@ export default { name: 'FilePanelBody' }
 .change-hl-static-red {
   background-color: rgb(254 242 242);
   border: 1px solid rgb(252 165 165 / 0.8);
-}
-
-/* 冲突比较（§3-6 + 修复批 2026-11-20 单栏差异块）：段落级底色 + 字级加深。
-   红系 = 仅草稿（原段落），绿系 = 仅磁盘（新段落）；未改动上下文灰显。 */
-.conflict-para-del {
-  background-color: rgb(254 226 226 / 0.55);
-  border-left: 2px solid rgb(248 113 113);
-  color: rgb(127 29 29);
-}
-
-.conflict-para-add {
-  background-color: rgb(220 252 231 / 0.6);
-  border-left: 2px solid rgb(74 222 128);
-  color: rgb(20 83 45);
-}
-
-.conflict-inline-del {
-  background-color: rgb(254 178 178 / 0.85);
-  border-radius: 2px;
-  font-weight: 500;
-}
-
-.conflict-inline-add {
-  background-color: rgb(134 239 172 / 0.85);
-  border-radius: 2px;
-  font-weight: 500;
 }
 
 .hl-fading .change-hl-green,

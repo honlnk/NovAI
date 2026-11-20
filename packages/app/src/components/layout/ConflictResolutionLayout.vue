@@ -41,6 +41,8 @@ const props = withDefaults(
     copySavedNote?: string
     /** 表单下方说明 */
     copyHint?: string
+    /** 副本名输入附加样式（文件路径表单传 font-mono） */
+    copyInputClass?: string
     /** 返回按钮文案 */
     backLabel?: string
     /** 两种有损采用（第一击确认、第二击执行）文案 */
@@ -63,6 +65,7 @@ const props = withDefaults(
     copyError: '',
     copySavedNote: '',
     copyHint: '',
+    copyInputClass: '',
     backLabel: '返回继续编辑',
     adoptDiskLabel: '采用磁盘版本',
     adoptDiskConfirmLabel: '确认放弃我的修改，采用磁盘版本',
@@ -112,7 +115,11 @@ function onAdopt(kind: 'disk' | 'mine') {
     return
   }
   confirmAdopt.value = null
-  emit(kind === 'disk' ? 'adoptDisk' : 'adoptMine')
+  if (kind === 'disk') {
+    emit('adoptDisk')
+  } else {
+    emit('adoptMine')
+  }
 }
 
 function onBack() {
@@ -166,6 +173,7 @@ function submitCopy() {
           v-model="copyName"
           type="text"
           class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 focus:border-blue-500 focus:outline-none"
+          :class="copyInputClass"
           :placeholder="copyPlaceholder"
         >
         <button

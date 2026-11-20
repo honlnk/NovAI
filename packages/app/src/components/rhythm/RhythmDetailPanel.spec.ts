@@ -10,8 +10,9 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import RhythmDetailPanel from './RhythmDetailPanel.vue'
+import type { RhythmCardView } from '@novai/core/services/types'
 
-function activeCard(overrides: Record<string, unknown> = {}) {
+function activeCard(overrides: Partial<RhythmCardView> = {}): RhythmCardView {
   return {
     id: 'r1',
     name: '第083章 节奏卡',
