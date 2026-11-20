@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import { buildConflictDiff } from '../../utils/conflict-diff'
-import type { DetailMode } from '../plan/detail-mode'
+import type { DetailMode } from '../layout/detail-mode'
 import Tooltip from '../ui/Tooltip.vue'
 import PanelHeader from '../layout/PanelHeader.vue'
 import AppIcon from '../ui/AppIcon.vue'

@@ -1,7 +1,7 @@
 import { computed, ref, shallowRef, watch } from 'vue'
 
 import { isSameBoardOrder, moveCardInBoard, type BoardColumns } from '../components/card-board/board-reorder'
-import { type DetailMode } from '../components/plan/detail-mode'
+import { type DetailMode } from '../components/layout/detail-mode'
 import {
   createSaveSessionRealm,
   type SaveSessionBase,

@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import type { PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
-import type { DetailMode } from './detail-mode'
+import type { DetailMode } from '../layout/detail-mode'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailPanel from '../card-board/DetailPanel.vue'
 

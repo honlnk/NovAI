@@ -4,7 +4,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { ForeshadowingCardView, ForeshadowingStatusView } from '@novai/core/services/types'
 import { FORESHADOWING_STATUSES, FORESHADOWING_STATUS_LABELS } from '@novai/core/types/foreshadowing'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
-import type { DetailMode } from '../plan/detail-mode'
+import type { DetailMode } from '../layout/detail-mode'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailPanel from '../card-board/DetailPanel.vue'
 

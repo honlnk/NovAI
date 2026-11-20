@@ -11,7 +11,7 @@
  * - 记录携带草稿所依据的卡片版本令牌（contentHash）与编辑模式。
  */
 
-import type { DetailMode } from '../components/plan/detail-mode'
+import type { DetailMode } from '../components/layout/detail-mode'
 
 const DATABASE_NAME = 'novai-card-drafts'
 const DATABASE_VERSION = 1

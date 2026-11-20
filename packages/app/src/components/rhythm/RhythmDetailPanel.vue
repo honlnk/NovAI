@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import type { RhythmCardView } from '@novai/core/services/types'
 import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_MOOD_DESCRIPTIONS, RHYTHM_PAYOFFS } from '@novai/core/types/rhythm'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
-import type { DetailMode } from '../plan/detail-mode'
+import type { DetailMode } from '../layout/detail-mode'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailPanel from '../card-board/DetailPanel.vue'
 
