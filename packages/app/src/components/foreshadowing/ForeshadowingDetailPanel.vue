@@ -38,6 +38,10 @@ const props = defineProps<{
   conflictFields: ReadonlyArray<CardConflictField>
   /** 守护信息（删除/重命名；null = 无守护） */
   guard: CardSessionGuard | null
+  /** 副本创建进行中（冲突比较「另存为新卡片」与守护「恢复为新卡片」共用） */
+  conflictCopyBusy: boolean
+  /** 副本创建失败原因（受控回灌：失败保留表单与名称） */
+  conflictCopyError: string
   /** 待确认的放弃操作态（null = 不在操作态；原因输入绑定） */
   abandonIntent: { reason: string } | null
   /** 确认放弃可点（字段收口完成 clean）；收口中/冲突时禁用 */
@@ -158,6 +162,8 @@ function onAbandonReasonInput(event: Event) {
         v-if="guard"
         :guard="guard"
         :title-value="titleValue"
+        :restore-busy="conflictCopyBusy"
+        :restore-error="conflictCopyError"
         @restore-as-copy="(name) => emit('restoreAsCopy', name)"
         @discard-guard="emit('discardGuard')"
       />
@@ -310,6 +316,8 @@ function onAbandonReasonInput(event: Event) {
         :title-value="titleValue"
         :conflict="conflict!"
         :conflict-fields="conflictFields"
+        :copy-busy="conflictCopyBusy"
+        :copy-error="conflictCopyError"
         @collapse="emit('collapseConflict')"
         @adopt-disk="emit('adoptDisk')"
         @adopt-mine="emit('adoptMine')"

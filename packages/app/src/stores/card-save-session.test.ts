@@ -677,6 +677,38 @@ describe('卡片冲突与守护（阶段 3：非阻塞版本比较）', () => {
     expect(store.draftBody).toBe('我的修改')
   })
 
+  it('副本受控状态事件序：进行中置 busy 禁重复提交 → 失败回灌错误且现场保留 → 原名重试成功清错误', async () => {
+    const store = await openDirtyCard()
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 改过的正文', { contentHash: 'hash-x' }))
+    await store.freezeForExternalChange(PROJECT, 'a')
+    await drainBackupWrites()
+
+    // 第一次提交：创建挂起在途，busy 立即为真、错误为空
+    const pending = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValueOnce(pending.promise)
+    const first = store.saveConflictCopy(PROJECT, '副本名')
+    expect(store.conflictCopyBusy).toBe(true)
+    expect(store.conflictCopyError).toBe('')
+    // 进行中重复提交被拒（防重复；不发出第二次创建）
+    await expect(store.saveConflictCopy(PROJECT, '重复名')).resolves.toBeNull()
+    expect(mockedCreatePlan).toHaveBeenCalledTimes(1)
+
+    // 异步失败：busy 回落、错误与 actionError 回灌，冲突与草稿现场不动
+    pending.reject(new Error('新建失败：目录写入被拒绝'))
+    await expect(first).resolves.toBeNull()
+    expect(store.conflictCopyBusy).toBe(false)
+    expect(store.conflictCopyError).toBe('新建失败：目录写入被拒绝')
+    expect(store.actionError).toBe('新建失败：目录写入被拒绝')
+    expect(store.conflictView).not.toBeNull()
+    expect(store.draftBody).toBe('我的修改')
+
+    // 原名重试成功：副本返回、错误清空
+    mockedCreatePlan.mockResolvedValueOnce(detail('b', '副本名'))
+    await expect(store.saveConflictCopy(PROJECT, '副本名')).resolves.toMatchObject({ id: 'b' })
+    expect(store.conflictCopyBusy).toBe(false)
+    expect(store.conflictCopyError).toBe('')
+  })
+
   it('删除守护：AI 删除 dirty 卡后重开保留现场，放弃并关闭清理会话', async () => {
     const store = await openDirtyCard()
     store.setCardGuard(PROJECT, 'a', { kind: 'deleted', trashPath: '.trash/plans/计划-1-a.md' })

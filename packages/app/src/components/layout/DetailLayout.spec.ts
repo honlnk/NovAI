@@ -98,15 +98,25 @@ describe('DetailLayout：区域开关', () => {
     expect(msgPos.compareDocumentPosition(toolsPos)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
-  it('冲突展开：替代常规工具、主内容与底部，只渲染冲突插槽', () => {
+  it('冲突展开：只替代常规工具、主内容与底部；消息区常驻（守护横幅等不消失）', () => {
     const wrapper = mountLayout(
       { conflictExpanded: true },
-      { tools: '<div data-testid="tools">工具</div>', conflict: '<div data-testid="conflict">比较</div>' },
+      {
+        message: '<div data-testid="msg">守护：文件已被删除</div>',
+        tools: '<div data-testid="tools">工具</div>',
+        conflict: '<div data-testid="conflict">比较</div>',
+      },
     )
     expect(wrapper.find('[data-testid="conflict"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="tools"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('主内容')
     expect(wrapper.findComponent(DetailFooterBar).exists()).toBe(false)
+    // 消息区常驻：守护、恢复等必要信息与出口不随冲突展开卸载（修复批）
+    expect(wrapper.find('[data-testid="msg"]').exists()).toBe(true)
+    // 消息区仍在头部下方、冲突比较区上方（比较区与出口同屏可达）
+    const msgEl = wrapper.find('[data-testid="msg"]').element
+    const conflictEl = wrapper.find('[data-testid="conflict"]').element
+    expect(msgEl.compareDocumentPosition(conflictEl)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     // 冲突展开时头部状态灯与切换仍可见（状态灯表达冲突阶段）
     expect(wrapper.findComponent(SaveStatusLight).exists()).toBe(true)
     expect(wrapper.findComponent(ViewModeToggle).exists()).toBe(true)

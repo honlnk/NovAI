@@ -10,6 +10,11 @@ import { ref, watch } from 'vue'
  * 界面状态（两击确认、副本名输入）由本组件持有；切换对象或收起冲突时随
  * scopeKey 变化清理。副本表单开合受控于 copyOpen（失败保持打开、成功由调用
  * 方关闭的文件语义需要外部控制）。
+ *
+ * 纵向滚动责任：本区整体是消息区（守护横幅等）之外剩余高度的滚动责任方——
+ * 消息区变高挤压可用空间时（如冲突展开后守护到达），说明/状态/表单/出口等
+ * 固定块随本区整体滚动可达，不再溢出面板造成页面级滚动；空间富余时内容
+ * 比较区仍是 flex-1 内部滚动（出口固定在底部）。
  */
 const props = withDefaults(
   defineProps<{
@@ -138,7 +143,7 @@ function submitCopy() {
 
 <template>
   <div
-    class="flex min-h-0 flex-1 flex-col gap-3 rounded-lg border border-red-200 bg-white p-3"
+    class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-red-200 bg-white p-3"
     role="alert"
     data-testid="detail-conflict-resolution"
   >
@@ -158,8 +163,10 @@ function submitCopy() {
       <slot name="unreadable">磁盘读取失败：{{ unreadable }}。读取成功前不能采用磁盘版本。</slot>
     </div>
 
-    <!-- 内容比较区：文件为整份正文差异块，卡片为短字段并排 + 长字段差异块 -->
-    <div v-else class="min-h-0 flex-1 overflow-y-auto rounded-md border border-gray-200 bg-white p-2">
+    <!-- 内容比较区：文件为整份正文差异块，卡片为短字段并排 + 长字段差异块。
+         min-h-32 保底：空间富余时 flex-1 内部滚动（出口固定底部）；被消息区
+         挤压时保住可用高度，随本区整体滚动可达 -->
+    <div v-else class="min-h-32 flex-1 overflow-y-auto rounded-md border border-gray-200 bg-white p-2">
       <slot name="compare" />
     </div>
 

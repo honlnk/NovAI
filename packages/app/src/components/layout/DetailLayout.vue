@@ -18,9 +18,12 @@ import type { DetailSavePhase } from './detail-save-phase'
  * 布局规则（§三.2 最终布局规格）：
  * - 未选择内容（hasContent=false）：标题用 fallback，隐藏状态灯、模式切换
  *   与整个底部；空状态提示仍在主内容插槽；
- * - 冲突展开（conflictExpanded）：替代常规工具区、主内容与底部；
+ * - 冲突展开（conflictExpanded）：只替代常规工具区、主内容与底部；消息区
+ *   常驻——守护横幅（含恢复/放弃出口）、恢复提示等必要信息不随冲突展开消失
+ *   （冲突紧凑条等由领域在展开态自行隐藏）；
  * - 领域工具区无内容不渲染容器；消息出现／收起只重新分配主内容剩余高度
- *   （消息 shrink-0、主内容 flex-1 内部滚动），页面级滚动只有面板一个责任方。
+ *   （消息 shrink-0、主内容与冲突比较区 flex-1 内部滚动），页面级滚动只有
+ *   面板一个责任方。
  */
 const props = withDefaults(
   defineProps<{
@@ -88,10 +91,11 @@ const emit = defineEmits<{
       </template>
     </PanelHeader>
 
-    <!-- 内容区：统一四边留白；消息 shrink-0 + 主内容 flex-1 内部滚动 -->
+    <!-- 内容区：统一四边留白；消息 shrink-0 + 主内容/冲突比较 flex-1 内部滚动 -->
     <div class="flex min-h-0 flex-1 flex-col p-4">
-      <!-- 消息区：守护、恢复、冲突紧凑条与失败提示（领域注入，自带容器与下间距） -->
-      <slot v-if="!conflictExpanded" name="message" />
+      <!-- 消息区：守护、恢复、冲突紧凑条与失败提示（领域注入，自带容器与下间距）。
+           冲突展开时常驻——守护横幅及其处理出口不能随冲突展开消失 -->
+      <slot name="message" />
 
       <template v-if="conflictExpanded">
         <!-- 冲突比较：接管主内容区（隐藏常规工具、主内容与底部） -->

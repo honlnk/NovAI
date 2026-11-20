@@ -31,6 +31,8 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       conflict: null,
       conflictFields: [],
       guard: null,
+      conflictCopyBusy: false,
+      conflictCopyError: '',
       actionError: '',
       ...overrides,
     },
@@ -84,5 +86,48 @@ describe('计划详情：领域字段与骨架接线', () => {
     await wrapper.setProps({ conflict: { probing: false, missing: false, expanded: false } })
     await wrapper.find('[data-testid="plan-detail-conflict-compare"]').trigger('click')
     expect(wrapper.emitted('expandConflict')).toHaveLength(1)
+  })
+
+  it('冲突展开后守护横幅与处理出口仍在（消息区常驻），常规工具与主内容被替代', () => {
+    const wrapper = mountPanel({
+      conflict: { probing: false, missing: false, expanded: true },
+      conflictFields: [
+        { key: 'body', label: '正文', kind: 'long', mine: '我的修改', disk: 'AI 的修改' },
+      ],
+      guard: { kind: 'deleted', trashPath: '.trash/plans/p1.md' },
+    })
+    // 守护横幅与其两个出口不随冲突展开消失（修复批：消息区常驻）
+    expect(wrapper.text()).toContain('已被删除')
+    expect(wrapper.find('[data-testid="card-guard-restore"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="card-guard-discard"]').exists()).toBe(true)
+    // 冲突比较同屏在场（说明与比较区可达）
+    expect(wrapper.find('[data-testid="detail-conflict-resolution"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('这张卡片有两个版本')
+    // 常规工具区与主内容被冲突比较替代
+    expect(wrapper.find('[data-testid="plan-detail-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="card-status-tools"]').exists()).toBe(false)
+  })
+
+  it('受控副本状态透传：守护恢复与冲突副本共用 conflictCopyBusy/Error', async () => {
+    const wrapper = mountPanel({
+      conflict: { probing: false, missing: false, expanded: true },
+      conflictFields: [
+        { key: 'body', label: '正文', kind: 'long', mine: '我的修改', disk: 'AI 的修改' },
+      ],
+      conflictCopyBusy: true,
+      conflictCopyError: '新建失败：目录写入被拒绝',
+    })
+    // 冲突副本：busy 禁用提交文案、错误行可见
+    await wrapper.findAll('button').find((b) => b.text() === '将我的内容另存为新卡片')!.trigger('click')
+    expect(wrapper.find('[data-testid="detail-conflict-copy-error"]').text()).toBe('新建失败：目录写入被拒绝')
+    const submit = wrapper.findAll('button').find((b) => b.text().includes('保存中…'))!
+    expect((submit.element as HTMLButtonElement).disabled).toBe(true)
+
+    // 守护恢复（非展开态横幅）：同源 busy/error 透传到恢复表单
+    const guarded = mountPanel({ guard: { kind: 'deleted' }, conflictCopyBusy: true, conflictCopyError: '新建失败' })
+    await guarded.find('[data-testid="card-guard-restore"]').trigger('click')
+    const restoreSubmit = guarded.find('[data-testid="card-guard-copy-submit"]')
+    expect((restoreSubmit.element as HTMLButtonElement).disabled).toBe(true)
+    expect(guarded.find('[data-testid="card-guard-copy-error"]').text()).toBe('新建失败')
   })
 })

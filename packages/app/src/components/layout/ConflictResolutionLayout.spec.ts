@@ -27,6 +27,16 @@ describe('ConflictResolutionLayout：三态与比较区', () => {
     expect(wrapper.text()).toContain('比较内容')
   })
 
+  it('纵向滚动责任：本区整体可滚（消息区挤压时出口可达），比较区保底 min-h-32', () => {
+    const wrapper = mountLayout()
+    const root = wrapper.find('[data-testid="detail-conflict-resolution"]')
+    expect(root.classes()).toContain('overflow-y-auto')
+    expect(root.classes()).toContain('flex-1')
+    const compare = wrapper.findAll('div').find((d) => d.classes().includes('min-h-32'))
+    expect(compare).toBeDefined()
+    expect(compare!.classes()).toContain('overflow-y-auto')
+  })
+
   it('probing / missing / unreadable 分别占位，且不提供有损采用出口', () => {
     const probing = mountLayout({ probing: true })
     expect(probing.text()).toContain('正在检查另一版本')

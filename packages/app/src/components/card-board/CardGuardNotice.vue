@@ -9,12 +9,27 @@ import GuardBanner from '../layout/GuardBanner.vue'
  * 卡片版守护装配——删除/重命名守护的文案、「恢复为新卡片」名称表单与「放弃并
  * 关闭」出口。横幅结构复用布局层 GuardBanner；副本表单开合是界面状态由本件
  * 持有（守护对象变化即清理），实际创建副本与清理由调用方负责。
+ *
+ * 「恢复为新卡片」是异步受控流程：提交后表单保持打开，进行中/失败原因由
+ * 调用方经 restoreBusy/restoreError 回灌（进行中禁用重复提交，失败保留表单
+ * 与用户自定义名称等待重试）；成功由现有守护会话清理流程关闭（guard 变化
+ * 随横幅卸载，本件的守护变化 watch 亦会收起表单）。
  */
-const props = defineProps<{
-  guard: CardSessionGuard
-  /** 卡片名（副本默认名与标题文案引用） */
-  titleValue: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    guard: CardSessionGuard
+    /** 卡片名（副本默认名与标题文案引用） */
+    titleValue: string
+    /** 「恢复为新卡片」创建进行中（禁用提交，防重复） */
+    restoreBusy?: boolean
+    /** 「恢复为新卡片」创建失败原因（表单内红字；空值不渲染） */
+    restoreError?: string
+  }>(),
+  {
+    restoreBusy: false,
+    restoreError: '',
+  },
+)
 
 const emit = defineEmits<{
   /** 「恢复为新卡片」提交：用领域新建能力落一张新卡（同名由服务层唯一化） */
@@ -23,7 +38,7 @@ const emit = defineEmits<{
   discardGuard: []
 }>()
 
-/** 守护「恢复为副本」表单（守护对象变化清残留） */
+/** 守护「恢复为副本」表单（守护对象变化清残留；名称在失败重试间保留） */
 const guardCopyOpen = ref(false)
 const guardCopyName = ref('')
 
@@ -41,10 +56,11 @@ function openGuardCopyForm() {
 
 function submitGuardCopy() {
   const name = guardCopyName.value.trim()
-  if (!name) {
+  if (!name || props.restoreBusy) {
     return
   }
-  guardCopyOpen.value = false
+  // 不在此处收起表单：结果由调用方经 restoreBusy/restoreError 回灌——失败保留
+  // 表单与名称，成功由守护会话清理流程关闭横幅
   emit('restoreAsCopy', name)
 }
 </script>
@@ -90,14 +106,16 @@ function submitGuardCopy() {
             type="text"
             class="min-w-0 flex-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs text-gray-800 focus:border-amber-500 focus:outline-none"
             placeholder="新卡片名称"
+            data-testid="card-guard-copy-name"
           >
           <button
             type="button"
             class="shrink-0 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-40"
-            :disabled="!guardCopyName.trim()"
+            :disabled="restoreBusy || !guardCopyName.trim()"
+            data-testid="card-guard-copy-submit"
             @click="submitGuardCopy"
           >
-            保存为新卡片
+            {{ restoreBusy ? '保存中…' : '保存为新卡片' }}
           </button>
           <button
             type="button"
@@ -107,6 +125,7 @@ function submitGuardCopy() {
             取消
           </button>
         </div>
+        <p v-if="restoreError" class="text-[11px] text-red-600" data-testid="card-guard-copy-error">{{ restoreError }}</p>
         <p class="text-[11px] text-gray-400">新卡片是独立创建，不恢复原文件；保存成功后这里的保留现场会关闭。</p>
       </div>
     </template>

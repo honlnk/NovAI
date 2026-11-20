@@ -38,6 +38,10 @@ const props = defineProps<{
   conflictFields: ReadonlyArray<CardConflictField>
   /** 守护信息（删除/重命名；null = 无守护） */
   guard: CardSessionGuard | null
+  /** 副本创建进行中（冲突比较「另存为新卡片」与守护「恢复为新卡片」共用） */
+  conflictCopyBusy: boolean
+  /** 副本创建失败原因（受控回灌：失败保留表单与名称） */
+  conflictCopyError: string
   actionError: string
 }>()
 
@@ -141,6 +145,8 @@ function onCharactersInput(event: Event) {
         v-if="guard"
         :guard="guard"
         :title-value="titleValue"
+        :restore-busy="conflictCopyBusy"
+        :restore-error="conflictCopyError"
         @restore-as-copy="(name) => emit('restoreAsCopy', name)"
         @discard-guard="emit('discardGuard')"
       />
@@ -158,8 +164,11 @@ function onCharactersInput(event: Event) {
       <p v-else-if="actionError" class="mb-3 shrink-0 text-xs text-red-600">{{ actionError }}</p>
     </template>
 
-    <!-- 主内容：状态徽标 + 计划值控件 + 实际值只读对比 + 节奏意图正文（无状态工具区） -->
+    <!-- 主内容：状态徽标 + 计划值控件 + 实际值只读对比 + 节奏意图正文（无状态工具区）。
+         短高度下整列纵向滚动（本区是滚动责任方；正文表面富余时自身滚动），
+         DetailLayout 固定底部路径/时间不参与滚动 -->
     <template #content>
+      <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="rhythm-detail-scroll">
       <!-- 状态徽标（只读：状态由回写偏差判定自动流转，不接受手改） -->
       <div class="mb-2 flex shrink-0 items-center gap-2">
         <span
@@ -286,8 +295,8 @@ function onCharactersInput(event: Event) {
         <p v-else-if="!activeCard.deviationFlag" class="mt-1 text-[11px] text-emerald-600">与计划一致 ✓</p>
       </div>
 
-      <!-- 节奏意图正文（统一正文表面：预览/编辑） -->
-      <div class="flex min-h-20 flex-1 flex-col">
+      <!-- 节奏意图正文（统一正文表面：预览/编辑；滚动列内保底高度，短高度随列滚动可达） -->
+      <div class="flex min-h-40 flex-1 flex-col">
         <p class="mb-1 shrink-0 text-[11px] font-medium text-gray-500">节奏意图（本章要什么温度、不要什么）</p>
         <PlainBodySurface
           v-if="detailMode === 'preview'"
@@ -302,12 +311,13 @@ function onCharactersInput(event: Event) {
           <textarea
             :value="intentBodyValue"
             :readonly="guard !== null"
-            class="min-h-0 w-full flex-1 resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            class="min-h-24 w-full flex-1 resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="本章要什么温度、不要什么；和前后章怎么衔接。"
             data-testid="rhythm-detail-intent-input"
             @input="onIntentInput"
           />
         </PlainBodySurface>
+      </div>
       </div>
     </template>
 
@@ -318,6 +328,8 @@ function onCharactersInput(event: Event) {
         :title-value="titleValue"
         :conflict="conflict!"
         :conflict-fields="conflictFields"
+        :copy-busy="conflictCopyBusy"
+        :copy-error="conflictCopyError"
         @collapse="emit('collapseConflict')"
         @adopt-disk="emit('adoptDisk')"
         @adopt-mine="emit('adoptMine')"

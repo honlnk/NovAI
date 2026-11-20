@@ -61,6 +61,8 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       conflict: null,
       conflictFields: [],
       guard: null,
+      conflictCopyBusy: false,
+      conflictCopyError: '',
       actionError: '',
       ...overrides,
     },
@@ -136,5 +138,45 @@ describe('节奏详情：只读状态与计划值控件', () => {
     await wrapper.setProps({ conflict: { probing: false, missing: false, expanded: false } })
     await wrapper.find('[data-testid="rhythm-detail-conflict-compare"]').trigger('click')
     expect(wrapper.emitted('expandConflict')).toHaveLength(1)
+  })
+
+  it('冲突展开后守护横幅与处理出口仍在（消息区常驻），主内容被替代', () => {
+    const wrapper = mountPanel({
+      conflict: { probing: false, missing: false, expanded: true },
+      conflictFields: [
+        { key: 'intentBody', label: '节奏意图', kind: 'long', mine: '我的修改', disk: 'AI 的修改' },
+      ],
+      guard: { kind: 'deleted', trashPath: '.trash/rhythm/r1.md' },
+    })
+    expect(wrapper.text()).toContain('已被删除')
+    expect(wrapper.find('[data-testid="card-guard-restore"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="card-guard-discard"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="detail-conflict-resolution"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('这张卡片有两个版本')
+    expect(wrapper.find('[data-testid="rhythm-detail-intent"]').exists()).toBe(false)
+  })
+
+  it('短高度纵向滚动责任：领域内容整列滚动承载全部控件与节奏意图，底部固定不参与滚动', () => {
+    const preview = mountPanel()
+    const scroll = preview.find('[data-testid="rhythm-detail-scroll"]')
+    expect(scroll.classes()).toContain('overflow-y-auto')
+    expect(scroll.classes()).toContain('flex-1')
+    // 全部计划值控件与节奏意图都在滚动列内（短高度下滚动可达）
+    expect(scroll.find('[data-testid="rhythm-detail-conflict-slider"]').exists()).toBe(true)
+    expect(scroll.find('[data-testid="rhythm-detail-mood"]').exists()).toBe(true)
+    expect(scroll.find('[data-testid="rhythm-detail-characters"]').exists()).toBe(true)
+    expect(scroll.find('[data-testid="rhythm-detail-planned-note"]').exists()).toBe(true)
+    expect(scroll.find('[data-testid="rhythm-detail-actual"]').exists()).toBe(true)
+    expect(scroll.find('[data-testid="rhythm-detail-intent"]').exists()).toBe(true)
+    // DetailLayout 固定底部仍在滚动列外（路径与时间不随内容滚动）
+    expect(preview.find('[data-testid="detail-footer-path"]').exists()).toBe(true)
+    expect(scroll.find('[data-testid="detail-footer-path"]').exists()).toBe(false)
+
+    // 编辑态同样整列滚动，意图输入在列内
+    const edit = mountPanel({ detailMode: 'edit' })
+    const editScroll = edit.find('[data-testid="rhythm-detail-scroll"]')
+    expect(editScroll.classes()).toContain('overflow-y-auto')
+    expect(editScroll.find('[data-testid="rhythm-detail-intent-input"]').exists()).toBe(true)
+    expect(edit.find('[data-testid="detail-footer-path"]').exists()).toBe(true)
   })
 })

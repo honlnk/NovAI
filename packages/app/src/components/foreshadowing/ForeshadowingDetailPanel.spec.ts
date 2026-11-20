@@ -55,6 +55,8 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       conflict: null,
       conflictFields: [],
       guard: null,
+      conflictCopyBusy: false,
+      conflictCopyError: '',
       abandonIntent: null,
       canConfirmAbandon: true,
       isConfirmingAbandon: false,
@@ -195,5 +197,24 @@ describe('伏笔详情：结构信息与骨架接线', () => {
     await wrapper.setProps({ conflict: { probing: false, missing: false, expanded: false } })
     await wrapper.find('[data-testid="foreshadowing-detail-conflict-compare"]').trigger('click')
     expect(wrapper.emitted('expandConflict')).toHaveLength(1)
+  })
+
+  it('冲突展开后守护横幅与处理出口仍在（消息区常驻），常规工具与主内容被替代', () => {
+    const wrapper = mountPanel({
+      conflict: { probing: false, missing: false, expanded: true },
+      conflictFields: [
+        { key: 'readerBody', label: '读者视角', kind: 'long', mine: '我的修改', disk: 'AI 的修改' },
+      ],
+      guard: { kind: 'deleted', trashPath: '.trash/foreshadowings/f1.md' },
+    })
+    expect(wrapper.text()).toContain('已被删除')
+    expect(wrapper.find('[data-testid="card-guard-restore"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="card-guard-discard"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="detail-conflict-resolution"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('这张卡片有两个版本')
+    expect(wrapper.find('[data-testid="foreshadowing-detail-reader"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="card-status-tools"]').exists()).toBe(false)
+    wrapper.unmount()
+    document.body.innerHTML = ''
   })
 })

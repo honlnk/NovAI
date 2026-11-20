@@ -954,10 +954,17 @@ export function createCardBoardCore<
   /**
    * 将人工视角完整卡另存为副本（领域新建能力）：不覆盖原卡、不解决原冲突。
    * 守护态的「恢复为副本」同走此入口，由调用方在成功后清理守护会话。
+   *
+   * 进行中与失败原因落在 conflictCopyBusy/conflictCopyError（受控副本状态）：
+   * 冲突比较区的「另存为新卡片」与守护横幅的「恢复为新卡片」共用——进行中
+   * 禁止重复提交；失败保持表单与名称（调用方据错误展示），成功由调用方收口。
    */
+  const conflictCopyBusy = ref(false)
+  const conflictCopyError = ref('')
+
   async function saveConflictCopy(projectId: string, name: string): Promise<TCard | null> {
     const card = activeCard.value
-    if (!card || currentProjectId !== projectId) {
+    if (!card || currentProjectId !== projectId || conflictCopyBusy.value) {
       return null
     }
     const session = cardRealm.getSession(projectId, card.id)
@@ -965,14 +972,20 @@ export function createCardBoardCore<
       return null
     }
     actionError.value = ''
+    conflictCopyBusy.value = true
+    conflictCopyError.value = ''
     try {
       const merged = config.buildSnapshotCard(session.diskCard, session.draft)
       const copy = await config.saveCopy(projectId, merged, name)
       await refreshBoard(projectId)
       return copy
     } catch (error) {
-      actionError.value = toMessage(error, config.messages.create)
+      const message = toMessage(error, config.messages.create)
+      actionError.value = message
+      conflictCopyError.value = message
       return null
+    } finally {
+      conflictCopyBusy.value = false
     }
   }
 
@@ -1462,6 +1475,8 @@ export function createCardBoardCore<
     adoptDiskVersion,
     overwriteWithMine,
     saveConflictCopy,
+    conflictCopyBusy,
+    conflictCopyError,
     discardGuardedSession,
     abandonIntent,
     canConfirmAbandon,

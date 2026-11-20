@@ -23,6 +23,7 @@ import {
   _resetEditorSessionsForTest,
   freezeEditorSessionForExternal,
   setAutosaveInputEnabled,
+  setEditorGuard,
   setEditorProbeHandler,
   setEditorSaveHandler,
   type EditorSaveHandler,
@@ -236,5 +237,28 @@ describe('FilePanelBody 非阻塞冲突与再入口（阶段 3）', () => {
     await collapseButton!.trigger('click')
     await vi.advanceTimersByTimeAsync(0)
     expect(wrapper.text()).not.toContain('第1段：保持原样。')
+  })
+
+  it('冲突展开后进入删除守护：守护横幅与「恢复为草稿副本/放弃」出口仍在（消息区常驻）', async () => {
+    const wrapper = mountPanel(fileView(A_PATH, '原文', 'v1'))
+    await editDraft(wrapper, '人工未落盘草稿')
+    await freezeEditorSessionForExternal('p1', A_PATH)
+    await vi.advanceTimersByTimeAsync(0)
+    await wrapper.findAll('button').find((item) => item.text() === '比较两个版本')!.trigger('click')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.text()).toContain('返回继续编辑')
+
+    // 冲突已展开时守护到达（会话已有未落盘内容）：横幅与出口不得随冲突展开消失
+    setEditorGuard('p1', A_PATH, { kind: 'deleted', trashPath: '.trash/chapters/a.txt' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.text()).toContain('已被 AI 删除并移入回收站')
+    expect(wrapper.text()).toContain('.trash/chapters/a.txt')
+    const restore = wrapper.findAll('button').find((item) => item.text() === '恢复为草稿副本')
+    const discard = wrapper.findAll('button').find((item) => item.text() === '放弃草稿并关闭')
+    expect(restore).toBeDefined()
+    expect(discard).toBeDefined()
+    // 冲突比较与四出口同屏在场（同一条会话的两种提示互不挤掉）
+    expect(wrapper.find('[data-testid="detail-conflict-resolution"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('AI 后台写盘的版本')
   })
 })
