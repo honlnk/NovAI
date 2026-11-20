@@ -102,6 +102,11 @@ export type SaveSessionRestoreRecord<TSnapshot> = {
   baseVersion?: string
   originKey?: string
   updatedAt: string
+  /**
+   * 会话携带快照之外的待处理状态（如卡片域待确认的放弃操作态）：草稿内容
+   * 已与磁盘一致时也不走「冗余清理」，保留会话让领域回填该状态。
+   */
+  keepAlive?: boolean
 }
 
 /** 每次写盘完成后的回执（卡片域据此同步看板/详情；正文不需要） */
@@ -171,6 +176,12 @@ export interface SaveSessionAdapter<
   removeMirror(projectId: string, key: string): void
   /** 每次写盘完成的回执（含后台收口；正文不需要，卡片同步看板用） */
   onSettled?(projectId: string, key: string, result: SaveSessionSettledResult<TDisk>): void
+  /**
+   * 会话是否携带快照之外的待处理人工状态（如卡片域待确认的放弃操作态）：
+   * 外部写盘冻结判定把它与未落盘内容同等对待——外部修改会作废该状态的
+   * 提交基线，干净会话也必须建冲突而不是静默重读（阶段 4）。
+   */
+  hasPendingState?(session: TSession): boolean
 }
 
 export type SaveSessionRestoreReport = {
@@ -676,7 +687,9 @@ export function createSaveSessionRealm<
     if (session.guard) {
       return 'none'
     }
-    if (!isDirty(session) && !session.conflict) {
+    // 快照外的待处理状态（待确认放弃操作态等）与未落盘内容同等对待：外部
+    // 修改作废其提交基线，干净会话也建冲突（领域通过 hasPendingState 声明）
+    if (!isDirty(session) && !session.conflict && !(adapter.hasPendingState?.(session) ?? false)) {
       return 'clean'
     }
     cancelAutosaveTimer(realmKey(projectId, key))
@@ -969,8 +982,9 @@ export function createSaveSessionRealm<
         adapter.isBaselineIntact?.(record, disk)
         ?? adapter.isSameSnapshot(record.baseSnapshot, adapter.snapshotFromDisk(disk))
 
-      if (probe?.kind === 'ok' && snapshotOnDisk(probe.disk)) {
+      if (probe?.kind === 'ok' && snapshotOnDisk(probe.disk) && !record.keepAlive) {
         // 恢复内容已与磁盘一致：冗余恢复记录清理，不回填
+        // （keepAlive：会话携带快照外的待处理状态，保留会话交给领域回填）
         adapter.removeMirror(projectId, record.key)
         discarded.push({ key: record.key })
         continue

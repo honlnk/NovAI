@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 import type { ForeshadowingCardView, ForeshadowingStatusView } from '@novai/core/services/types'
 import { FORESHADOWING_STATUSES, FORESHADOWING_STATUS_LABELS } from '@novai/core/types/foreshadowing'
@@ -14,6 +14,7 @@ import DetailPanel from '../card-board/DetailPanel.vue'
  * 界面，作者真相直接展示（标注「作者视角」）；状态按钮为完整 6 状态（frontmatter
  * 粒度），与看板展示列模式解耦。结构字段（埋设章节/回收窗口等）的修改走 AI 工具
  * 或直接编辑文件，面板内只读展示——正文三件（名/读者视角/作者真相）走草稿保存。
+ * 「已放弃」不走两秒延迟：进入原因操作态，明确确认后原子写入状态与原因（阶段 4）。
  */
 const props = defineProps<{
   activeCard: ForeshadowingCardView
@@ -30,6 +31,12 @@ const props = defineProps<{
   conflictFields: ReadonlyArray<CardConflictField>
   /** 守护信息（删除/重命名；null = 无守护） */
   guard: CardSessionGuard | null
+  /** 待确认的放弃操作态（null = 不在操作态；原因输入绑定） */
+  abandonIntent: { reason: string } | null
+  /** 确认放弃可点（字段收口完成 clean）；收口中/冲突时禁用 */
+  canConfirmAbandon: boolean
+  /** 确认放弃进行中（防重复提交） */
+  isConfirmingAbandon: boolean
   actionError: string
 }>()
 
@@ -39,6 +46,11 @@ const emit = defineEmits<{
   updateDraftReaderView: [readerView: string]
   updateDraftAuthorTruth: [authorTruth: string]
   updateDraftStatus: [status: ForeshadowingStatusView]
+  /** 进入放弃操作态（「已放弃」状态选择的拦截出口，不登记状态） */
+  startAbandon: []
+  updateAbandonReason: [reason: string]
+  cancelAbandon: []
+  confirmAbandon: []
   setDetailMode: [mode: DetailMode]
   retrySave: []
   expandConflict: []
@@ -66,12 +78,38 @@ const payoffWindowText = computed(() =>
     : '未设定',
 )
 
+const abandonReasonInput = ref<HTMLTextAreaElement | null>(null)
+// 进入操作态默认聚焦原因输入（计划 §四.1：输入框默认聚焦）
+watch(
+  () => props.abandonIntent,
+  async (intent) => {
+    if (intent !== null) {
+      await nextTick()
+      abandonReasonInput.value?.focus()
+    }
+  },
+  { flush: 'post' },
+)
+
+/** 状态选择出口：「已放弃」拦截进原因操作态（已放弃卡再点可登记新原因），其余走两秒延迟保存 */
+function onSelectStatus(status: ForeshadowingStatusView) {
+  if (status === 'abandoned') {
+    emit('startAbandon')
+    return
+  }
+  emit('updateDraftStatus', status)
+}
+
 function onReaderInput(event: Event) {
   emit('updateDraftReaderView', (event.target as HTMLTextAreaElement).value)
 }
 
 function onTruthInput(event: Event) {
   emit('updateDraftAuthorTruth', (event.target as HTMLTextAreaElement).value)
+}
+
+function onAbandonReasonInput(event: Event) {
+  emit('updateAbandonReason', (event.target as HTMLTextAreaElement).value)
 }
 </script>
 
@@ -95,7 +133,7 @@ function onTruthInput(event: Event) {
     @close="emit('close')"
     @update-title="emit('updateDraftName', $event)"
     @set-detail-mode="emit('setDetailMode', $event)"
-    @select-status="(columnKey) => emit('updateDraftStatus', columnKey as ForeshadowingStatusView)"
+    @select-status="(columnKey) => onSelectStatus(columnKey as ForeshadowingStatusView)"
     @retry-save="emit('retrySave')"
     @expand-conflict="emit('expandConflict')"
     @collapse-conflict="emit('collapseConflict')"
@@ -123,12 +161,53 @@ function onTruthInput(event: Event) {
         <dd v-if="activeCard.isRedHerring" class="text-gray-800">红鲱鱼（故意误导读者）</dd>
         <dt v-if="activeCard.resolvedAt" class="text-gray-500">实际回收</dt>
         <dd v-if="activeCard.resolvedAt" class="text-gray-800">{{ activeCard.resolvedAt }}</dd>
-        <dt v-if="activeCard.abandonedReason" class="text-gray-500">放弃原因</dt>
-        <dd v-if="activeCard.abandonedReason" class="text-gray-800">{{ activeCard.abandonedReason }}</dd>
+        <!-- 历史放弃原因：仅当前处于已放弃状态时醒目展示（操作态登记的是新原因，不在此显示） -->
+        <template v-if="activeCard.status === 'abandoned' && activeCard.abandonedReason">
+          <dt class="text-amber-600">放弃原因</dt>
+          <dd class="rounded bg-amber-50 px-1.5 py-px font-medium text-amber-800">{{ activeCard.abandonedReason }}</dd>
+        </template>
       </dl>
 
-      <!-- 读者视角：写正文章节时读者已知的事实 -->
-      <div class="mt-2 min-h-16 flex-1 basis-1/2 overflow-hidden">
+      <!-- 放弃操作态（阶段 4）：正文双区原位收起，原因登记 + 明确确认，不产生两秒计时器 -->
+      <div
+        v-if="abandonIntent"
+        class="mt-2 flex min-h-0 flex-1 flex-col rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5"
+        data-testid="foreshadowing-detail-abandon"
+      >
+        <p class="shrink-0 text-sm font-medium text-amber-800">为什么不再回收这条伏笔？</p>
+        <p class="mt-0.5 shrink-0 text-[11px] leading-4 text-amber-600">记录创作决策，避免以后误以为漏写。</p>
+        <textarea
+          ref="abandonReasonInput"
+          :value="abandonIntent.reason"
+          class="mt-2 min-h-0 w-full flex-1 resize-none rounded-md border border-amber-200 bg-white px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+          placeholder="例如：这条线索已被第三章的直接说明取代，继续回收会让节奏拖沓。"
+          data-testid="foreshadowing-detail-abandon-reason"
+          @input="onAbandonReasonInput"
+        />
+        <div class="mt-2 flex shrink-0 items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-100"
+            data-testid="foreshadowing-detail-abandon-cancel"
+            @click="emit('cancelAbandon')"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            :disabled="!abandonIntent.reason.trim() || !canConfirmAbandon || isConfirmingAbandon"
+            class="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+            :title="canConfirmAbandon || !abandonIntent.reason.trim() ? undefined : '等本卡片未落盘内容收口后可确认'"
+            data-testid="foreshadowing-detail-abandon-confirm"
+            @click="emit('confirmAbandon')"
+          >
+            {{ isConfirmingAbandon ? '正在放弃…' : '确认放弃' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 读者视角：写正文章节时读者已知的事实（操作态收起） -->
+      <div v-if="!abandonIntent" class="mt-2 min-h-16 flex-1 basis-1/2 overflow-hidden">
         <p class="mb-1 text-[11px] font-medium text-gray-500">读者视角（当时可见事实）</p>
         <div
           v-if="mode === 'preview'"
@@ -150,8 +229,8 @@ function onTruthInput(event: Event) {
         />
       </div>
 
-      <!-- 作者真相：剧透区，UI 是作者界面直接展示（§七），AI 工具链路才有遮蔽 -->
-      <div class="mt-2 min-h-16 flex-1 basis-1/2 overflow-hidden">
+      <!-- 作者真相：剧透区，UI 是作者界面直接展示（§七），AI 工具链路才有遮蔽（操作态收起） -->
+      <div v-if="!abandonIntent" class="mt-2 min-h-16 flex-1 basis-1/2 overflow-hidden">
         <p class="mb-1 flex items-center gap-1 text-[11px] font-medium text-amber-600">
           作者视角（真相 / 剧透）
         </p>

@@ -32,6 +32,11 @@ export type PersistedCardDraftRecord = {
   /** 草稿所依据的磁盘卡片版本令牌（恢复核对的基线） */
   baseContentHash?: string
   mode: DetailMode
+  /**
+   * 待确认的放弃操作态（阶段 4，伏笔域）：原因与看板拖入的暂存落点。
+   * 未确认绝不自动放弃；旧记录无此字段按无操作态恢复。
+   */
+  abandon?: { reason: string; afterId: string | null; beforeId: string | null }
   updatedAt: string
 }
 
@@ -160,7 +165,7 @@ async function writeLatestPending(key: string): Promise<void> {
 export function scheduleCardBackup(
   projectId: string,
   cardId: string,
-  entry: { draft: PersistedCardDraft; baseContentHash?: string; mode: DetailMode },
+  entry: { draft: PersistedCardDraft; baseContentHash?: string; mode: DetailMode; abandon?: PersistedCardDraftRecord['abandon'] },
 ): void {
   const key = buildCardDraftKey(projectId, cardId)
   pendingWrites.set(key, {
@@ -170,6 +175,7 @@ export function scheduleCardBackup(
     draft: { ...entry.draft },
     ...(entry.baseContentHash !== undefined ? { baseContentHash: entry.baseContentHash } : {}),
     mode: entry.mode,
+    ...(entry.abandon !== undefined ? { abandon: { ...entry.abandon } } : {}),
     updatedAt: new Date().toISOString(),
   })
   const existing = debounceTimers.get(key)

@@ -122,6 +122,17 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
       { key: 'authorTruth', label: '作者真相', mine: mine.authorTruth, disk: disk.authorTruth, kind: 'long' },
     ],
     moveCard: (projectId, id, status, afterId, beforeId) => updateForeshadowing(projectId, { id, status, afterId, beforeId }),
+    // 确认放弃（阶段 4）：以最新基线一次性提交「放弃状态 + 本次原因 + 拖入落点」；
+    // 落点只在有意拖入时携带（详情内进入操作态不传，服务层按列尾落位），
+    // 携带读取时 hash（外部修改冲突时确认冻结）
+    confirmAbandonCard: (projectId, card, intent) => updateForeshadowing(projectId, {
+      id: card.id,
+      status: 'abandoned',
+      abandonedReason: intent.reason,
+      ...(intent.afterId !== null ? { afterId: intent.afterId } : {}),
+      ...(intent.beforeId !== null ? { beforeId: intent.beforeId } : {}),
+      expectedContentHash: card.contentHash,
+    }),
     deleteCard: (projectId, id) => deleteForeshadowing(projectId, id),
     // 新建提交：可选字段只在有值时提交（回收窗口要求起止俱全才构成区间）
     submitCreate: (projectId, draft) => {

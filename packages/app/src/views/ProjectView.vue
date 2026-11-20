@@ -1188,6 +1188,22 @@ async function handleForeshadowingMove(id: string, status: ForeshadowingStatusVi
   if (!projectStore.currentProject) {
     return
   }
+  // 拖入「已放弃」列（阶段 4）：不直接写状态也不报缺少原因——打开该卡详情的
+  // 原因操作态并暂存本次落点，确认后一次性保存放弃状态、原因与位置；已放弃
+  // 卡在列内拖动仍走现有排序（不重复填写原因）
+  if (status === 'abandoned') {
+    const current = Object.values(foreshadowingStore.board?.columns ?? {})
+      .flat()
+      .find((card) => card.id === id)
+    if (current && current.status !== 'abandoned') {
+      const draggingProjectId = projectId.value
+      await foreshadowingStore.openCard(draggingProjectId, id)
+      if (projectId.value !== draggingProjectId || projectStore.currentProject?.id !== draggingProjectId) return
+      isContentPanelOpen.value = true
+      foreshadowingStore.startAbandon(draggingProjectId, { afterId, beforeId: beforeId ?? null })
+      return
+    }
+  }
   const movingProjectId = projectId.value
   const ok = await foreshadowingStore.moveCard(movingProjectId, id, status, afterId, beforeId)
   if (projectId.value !== movingProjectId || projectStore.currentProject?.id !== movingProjectId) return
@@ -1213,6 +1229,15 @@ async function handleForeshadowingRemove(id: string) {
 /** 状态条「重试」（阶段 2 无保存心智）：手动重开当前伏笔的失败保存 */
 function handleForeshadowingRetrySave() {
   void foreshadowingStore.retrySave(projectId.value)
+}
+
+/** 放弃操作态（阶段 4）：详情「已放弃」按钮/拖入已放弃列进入原因登记，确认后原子写入 */
+function handleForeshadowingStartAbandon() {
+  foreshadowingStore.startAbandon(projectId.value)
+}
+
+function handleForeshadowingConfirmAbandon() {
+  void foreshadowingStore.confirmAbandonCard(projectId.value)
 }
 
 /** 冲突/守护出口（阶段 3，与计划域同构） */
@@ -1685,12 +1710,19 @@ function handleGoToSettings() {
           :conflict="foreshadowingStore.conflictView"
           :conflict-fields="foreshadowingStore.conflictFields"
           :guard="foreshadowingStore.guardNotice"
+          :abandon-intent="foreshadowingStore.abandonIntent"
+          :can-confirm-abandon="foreshadowingStore.canConfirmAbandon"
+          :is-confirming-abandon="foreshadowingStore.isConfirmingAbandon"
           :action-error="foreshadowingStore.actionError"
           @close="handleCloseContentPanel"
           @update-draft-name="foreshadowingStore.updateDraftName"
           @update-draft-reader-view="foreshadowingStore.updateDraftReaderView"
           @update-draft-author-truth="foreshadowingStore.updateDraftAuthorTruth"
           @update-draft-status="foreshadowingStore.updateDraftStatus"
+          @start-abandon="handleForeshadowingStartAbandon"
+          @update-abandon-reason="(reason: string) => foreshadowingStore.updateAbandonReason(projectId, reason)"
+          @cancel-abandon="() => foreshadowingStore.cancelAbandon(projectId)"
+          @confirm-abandon="handleForeshadowingConfirmAbandon"
           @set-detail-mode="foreshadowingStore.setDetailMode"
           @retry-save="handleForeshadowingRetrySave"
           @expand-conflict="foreshadowingConflictHandlers.expandConflict"
