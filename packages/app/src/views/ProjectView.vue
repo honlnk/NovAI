@@ -970,6 +970,7 @@ function makeCardConflictHandlers(store: {
   adoptDiskVersion: (projectId: string) => Promise<boolean>
   overwriteWithMine: (projectId: string) => Promise<{ ok: boolean; message?: string }>
   saveConflictCopy: (projectId: string, name: string) => Promise<unknown>
+  restoreConflictCopy: (projectId: string, name: string) => Promise<unknown>
   discardGuardedSession: (projectId: string) => void
 }) {
   return {
@@ -994,9 +995,10 @@ function makeCardConflictHandlers(store: {
       }
     },
     restoreAsCopy: async (name: string) => {
-      const copy = await store.saveConflictCopy(projectId.value, name)
+      // 副本创建与守护清理都在 Store 内绑定发起卡：在途切卡后晚到成功
+      // 只清发起卡的守护会话，不误关当前查看的其他卡片
+      const copy = await store.restoreConflictCopy(projectId.value, name)
       if (copy) {
-        store.discardGuardedSession(projectId.value)
         toast.success(`已恢复为新卡片：${name}`)
       }
     },

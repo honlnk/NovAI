@@ -709,6 +709,79 @@ describe('卡片冲突与守护（阶段 3：非阻塞版本比较）', () => {
     expect(store.conflictCopyError).toBe('')
   })
 
+  it('跨卡副本事件序：A 在途切到 C → C 不继承 busy/错误、可另发起 → A 晚到失败不写 C 的全局错误 → 重开 A 不回显旧错误', async () => {
+    const store = await openDirtyCard()
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 改过的正文', { contentHash: 'hash-x' }))
+    await store.freezeForExternalChange(PROJECT, 'a')
+    await drainBackupWrites()
+
+    // A 提交副本：创建挂起在途
+    const pendingA = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValueOnce(pendingA.promise)
+    const fromA = store.saveConflictCopy(PROJECT, '副本A')
+
+    // 在途切到 C：C 不继承 A 的 busy/错误（受控状态按项目+卡片归属）
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 正文`)))
+    await store.openCard(PROJECT, 'c')
+    expect(store.activeCard?.id).toBe('c')
+    expect(store.conflictCopyBusy).toBe(false)
+    expect(store.conflictCopyError).toBe('')
+
+    // C 可另发起自己的副本：A 的在途不拦截其他卡片
+    const pendingC = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValueOnce(pendingC.promise)
+    const fromC = store.saveConflictCopy(PROJECT, '副本C')
+    expect(store.conflictCopyBusy).toBe(true)
+    expect(mockedCreatePlan).toHaveBeenCalledTimes(2)
+
+    // A 晚到失败：只结算到 A——不碰 C 的在途、不写 C 的全局错误、C 现场不动
+    pendingA.reject(new Error('A 新建失败：目录写入被拒绝'))
+    await expect(fromA).resolves.toBeNull()
+    expect(store.activeCard?.id).toBe('c')
+    expect(store.conflictCopyBusy).toBe(true)
+    expect(store.conflictCopyError).toBe('')
+    expect(store.actionError).toBe('')
+
+    // C 晚到成功：正常返回副本并回落 busy
+    pendingC.resolve(detail('copy-c', '副本C'))
+    await expect(fromC).resolves.toMatchObject({ id: 'copy-c' })
+    expect(store.conflictCopyBusy).toBe(false)
+    expect(store.conflictCopyError).toBe('')
+
+    // 重开 A：上一次已结算的副本错误不回显（冲突现场与草稿另行保留）
+    await store.openCard(PROJECT, 'a')
+    expect(store.conflictCopyError).toBe('')
+  })
+
+  it('守护恢复跨卡事件序：A 恢复在途切到 B 并输入 → 晚到成功只清 A 的守护会话，B 现场不动', async () => {
+    const store = await openDirtyCard()
+    store.setCardGuard(PROJECT, 'a', { kind: 'deleted', trashPath: '.trash/plans/计划-1-a.md' })
+    expect(store.guardNotice).not.toBeNull()
+
+    // A 从守护横幅提交「恢复为新卡片」：创建挂起在途，发起卡固定为 A
+    const pending = deferred<PlanCardView>()
+    mockedCreatePlan.mockReturnValueOnce(pending.promise)
+    const restoring = store.restoreConflictCopy(PROJECT, '恢复副本')
+
+    // 在途切到 B 并输入草稿（旧版全局收口会在这里被晚到成功误清）
+    mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 正文`)))
+    await store.openCard(PROJECT, 'b')
+    store.setDetailMode('edit')
+    store.updateDraft('B 的新草稿')
+    expect(store.activeCard?.id).toBe('b')
+
+    // 晚到成功：只清发起卡 A 的守护会话；B 保持打开、草稿与待处理状态不动
+    mockedGetPlanBoard.mockClear()
+    pending.resolve(detail('copy-a', '恢复副本'))
+    await expect(restoring).resolves.toMatchObject({ id: 'copy-a' })
+    expect(store.activeCard?.id).toBe('b')
+    expect(store.selectedCardId).toBe('b')
+    expect(store.draftBody).toBe('B 的新草稿')
+    expect(store.hasCardDraft(PROJECT, 'b')).toBe(true)
+    expect(store.hasCardDraft(PROJECT, 'a')).toBe(false)
+    expect(mockedGetPlanBoard).toHaveBeenCalled()
+  })
+
   it('删除守护：AI 删除 dirty 卡后重开保留现场，放弃并关闭清理会话', async () => {
     const store = await openDirtyCard()
     store.setCardGuard(PROJECT, 'a', { kind: 'deleted', trashPath: '.trash/plans/计划-1-a.md' })

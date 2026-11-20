@@ -645,10 +645,14 @@ export function createCardBoardCore<
     const previousCard = activeCard.value
     if (previousCard && previousCard.id !== id && currentProjectId != null) {
       void cardRealm.flushSession(currentProjectId, previousCard.id)
+      // 切卡收口副本受控状态：已结算的错误不带到下一张卡；在途操作留给晚到结果按发起卡结算
+      clearSettledConflictCopyUi(currentProjectId, previousCard.id)
     }
     const generation = beginProject(projectId)
     const sequence = ++openSequence
     const wasCreateOpen = isCreateOpen.value
+    // 重开同一张卡不回显上一次已结算的副本错误（在途操作保留，成功后由调用方收口）
+    clearSettledConflictCopyUi(projectId, id)
     actionError.value = ''
     conflictNotice.value = null
     detailError.value = null
@@ -734,6 +738,7 @@ export function createCardBoardCore<
     const id = activeCard.value?.id
     if (id && currentProjectId != null) {
       cardRealm.clearSession(currentProjectId, id)
+      invalidateConflictCopyUi(currentProjectId, id)
     }
     activeCard.value = null
     detailMode.value = 'preview'
@@ -953,40 +958,134 @@ export function createCardBoardCore<
 
   /**
    * 将人工视角完整卡另存为副本（领域新建能力）：不覆盖原卡、不解决原冲突。
-   * 守护态的「恢复为副本」同走此入口，由调用方在成功后清理守护会话。
+   * 守护态的「恢复为副本」走 restoreConflictCopy，成功后清理发起卡的守护会话。
    *
-   * 进行中与失败原因落在 conflictCopyBusy/conflictCopyError（受控副本状态）：
-   * 冲突比较区的「另存为新卡片」与守护横幅的「恢复为新卡片」共用——进行中
-   * 禁止重复提交；失败保持表单与名称（调用方据错误展示），成功由调用方收口。
+   * 进行中与失败原因按「项目 + 卡片」隔离（受控副本状态）：冲突比较区的
+   * 「另存为新卡片」与守护横幅的「恢复为新卡片」共用——发起卡进行中禁止重复
+   * 提交；失败保持表单与名称（调用方据错误展示），成功由调用方收口。晚到结果
+   * 只结算到发起卡：切卡后不把 busy/错误/收口动作应用到当前看到的其他卡片。
    */
-  const conflictCopyBusy = ref(false)
-  const conflictCopyError = ref('')
+  type ConflictCopyUiState = { busy: boolean; error: string }
+
+  const conflictCopyStates = shallowRef<Record<string, ConflictCopyUiState>>({})
+  /** 在途操作代次：关卡/切换清理后，晚到结果不得重新写入界面状态 */
+  const conflictCopyTokens = new Map<string, number>()
+  let conflictCopyTokenSeed = 0
+
+  function conflictCopyKey(projectId: string, cardId: string): string {
+    return JSON.stringify([projectId, cardId])
+  }
+
+  function readConflictCopyUi(projectId: string, cardId: string): ConflictCopyUiState | null {
+    return conflictCopyStates.value[conflictCopyKey(projectId, cardId)] ?? null
+  }
+
+  function writeConflictCopyUi(projectId: string, cardId: string, state: ConflictCopyUiState): void {
+    const key = conflictCopyKey(projectId, cardId)
+    conflictCopyStates.value = { ...conflictCopyStates.value, [key]: state }
+  }
+
+  /** 清理已结算的副本状态（重开卡片不回显旧错误）；在途操作保留给晚到结果结算 */
+  function clearSettledConflictCopyUi(projectId: string, cardId: string): void {
+    const key = conflictCopyKey(projectId, cardId)
+    if (conflictCopyStates.value[key]?.busy) {
+      return
+    }
+    conflictCopyTokens.delete(key)
+    if (conflictCopyStates.value[key] === undefined) {
+      return
+    }
+    const next = { ...conflictCopyStates.value }
+    delete next[key]
+    conflictCopyStates.value = next
+  }
+
+  /** 作废副本状态（含在途）：关卡/清理会话后晚到结果不得重新回显 */
+  function invalidateConflictCopyUi(projectId: string, cardId: string): void {
+    const key = conflictCopyKey(projectId, cardId)
+    conflictCopyTokens.delete(key)
+    if (conflictCopyStates.value[key] === undefined) {
+      return
+    }
+    const next = { ...conflictCopyStates.value }
+    delete next[key]
+    conflictCopyStates.value = next
+  }
+
+  /** 当前卡片的副本状态（视图只看到自己的操作；其他卡的在途/错误不串台） */
+  const conflictCopyBusy = computed(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return false
+    }
+    return readConflictCopyUi(currentProjectId, card.id)?.busy ?? false
+  })
+
+  const conflictCopyError = computed(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return ''
+    }
+    return readConflictCopyUi(currentProjectId, card.id)?.error ?? ''
+  })
 
   async function saveConflictCopy(projectId: string, name: string): Promise<TCard | null> {
     const card = activeCard.value
-    if (!card || currentProjectId !== projectId || conflictCopyBusy.value) {
+    if (!card || currentProjectId !== projectId) {
+      return null
+    }
+    if (readConflictCopyUi(projectId, card.id)?.busy) {
       return null
     }
     const session = cardRealm.getSession(projectId, card.id)
     if (!session?.diskCard) {
       return null
     }
+    const key = conflictCopyKey(projectId, card.id)
+    const token = ++conflictCopyTokenSeed
+    conflictCopyTokens.set(key, token)
     actionError.value = ''
-    conflictCopyBusy.value = true
-    conflictCopyError.value = ''
+    writeConflictCopyUi(projectId, card.id, { busy: true, error: '' })
+    let failureMessage: string | null = null
     try {
       const merged = config.buildSnapshotCard(session.diskCard, session.draft)
       const copy = await config.saveCopy(projectId, merged, name)
       await refreshBoard(projectId)
       return copy
     } catch (error) {
-      const message = toMessage(error, config.messages.create)
-      actionError.value = message
-      conflictCopyError.value = message
+      failureMessage = toMessage(error, config.messages.create)
+      // 全局 actionError 只跟随发起卡：晚到失败不写到用户已切到的其他卡片
+      if (currentProjectId === projectId && activeCard.value?.id === card.id) {
+        actionError.value = failureMessage
+      }
       return null
     } finally {
-      conflictCopyBusy.value = false
+      if (conflictCopyTokens.get(key) === token) {
+        conflictCopyTokens.delete(key)
+        writeConflictCopyUi(projectId, card.id, {
+          busy: false,
+          error: failureMessage ?? '',
+        })
+      }
     }
+  }
+
+  /**
+   * 守护出口「恢复为新卡片」：创建与清理都绑定发起卡——创建在途时用户切到
+   * 其他卡片，成功后只清发起卡的守护会话，不关闭/清理当前查看的新卡片。
+   */
+  async function restoreConflictCopy(projectId: string, name: string): Promise<TCard | null> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return null
+    }
+    const originCardId = card.id
+    const copy = await saveConflictCopy(projectId, name)
+    if (!copy) {
+      return null
+    }
+    discardGuardedSession(projectId, originCardId)
+    return copy
   }
 
   /** 守护态视图：当前卡片会话的删除/重命名守护信息（横幅与出口展示用） */
@@ -1000,14 +1099,25 @@ export function createCardBoardCore<
 
   /**
    * 守护出口「放弃并关闭」（阶段 3）：丢弃保留的未落盘现场并关闭详情。
-   * 「恢复为副本」走 saveConflictCopy，成功后由调用方再调这里清理守护会话。
+   * 「恢复为副本」走 restoreConflictCopy：成功后带发起卡 id 走这里——用户
+   * 已切到其他卡片时只清发起卡的守护会话，不关闭当前查看的卡片详情。
    */
-  function discardGuardedSession(projectId: string): void {
-    const card = activeCard.value
-    if (!card || currentProjectId !== projectId) {
+  function discardGuardedSession(projectId: string, cardId?: string): void {
+    if (currentProjectId !== projectId) {
       return
     }
-    cardRealm.clearSession(projectId, card.id)
+    const targetCardId = cardId ?? activeCard.value?.id
+    if (!targetCardId) {
+      return
+    }
+    cardRealm.clearSession(projectId, targetCardId)
+    invalidateConflictCopyUi(projectId, targetCardId)
+    if (activeCard.value?.id !== targetCardId) {
+      // 目标不是当前卡：只清发起卡现场（恢复镜像等随 clearSession 收口），
+      // 当前卡详情、草稿与各类提示一律不动
+      void refreshBoard(projectId)
+      return
+    }
     activeCard.value = null
     detailMode.value = 'preview'
     selectedCardId.value = null
@@ -1428,6 +1538,9 @@ export function createCardBoardCore<
     selectedCardId.value = null
     isCreateOpen.value = false
     createDraft.value = config.emptyCreateDraft()
+    // 作废全部副本操作：在途结果晚到时按代次比对丢弃，不回写到新项目的卡片
+    conflictCopyStates.value = {}
+    conflictCopyTokens.clear()
     // 清空全部卡片会话与恢复镜像（切项目后现场不跨项目保留；
     // 刷新场景的恢复由 IndexedDB 记录在下次进入项目时核对回填）
     for (const session of cardRealm.listAllSessions()) {
@@ -1475,6 +1588,7 @@ export function createCardBoardCore<
     adoptDiskVersion,
     overwriteWithMine,
     saveConflictCopy,
+    restoreConflictCopy,
     conflictCopyBusy,
     conflictCopyError,
     discardGuardedSession,
