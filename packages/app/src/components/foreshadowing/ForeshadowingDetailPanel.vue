@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import type { ForeshadowingCardView, ForeshadowingStatusView } from '@novai/core/services/types'
 import { FORESHADOWING_STATUSES, FORESHADOWING_STATUS_LABELS } from '@novai/core/types/foreshadowing'
+import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import type { DetailMode } from '../plan/detail-mode'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailPanel from '../card-board/DetailPanel.vue'
@@ -23,7 +24,12 @@ const props = defineProps<{
   draftStatus: ForeshadowingStatusView | null
   detailMode: DetailMode
   savePhase: 'clean' | 'pending' | 'saving' | 'failed' | 'conflict'
-  conflictNotice: unknown | null
+  /** 冲突视图（阶段 3：紧凑条与展开比较驱动） */
+  conflict: { probing: boolean; missing: boolean; unreadable?: string; expanded: boolean } | null
+  /** 冲突字段比较（store 按领域字段组合好的 mine/disk 文本） */
+  conflictFields: ReadonlyArray<CardConflictField>
+  /** 守护信息（删除/重命名；null = 无守护） */
+  guard: CardSessionGuard | null
   actionError: string
 }>()
 
@@ -35,8 +41,13 @@ const emit = defineEmits<{
   updateDraftStatus: [status: ForeshadowingStatusView]
   setDetailMode: [mode: DetailMode]
   retrySave: []
-  reloadFromConflict: []
-  keepDraft: []
+  expandConflict: []
+  collapseConflict: []
+  adoptDisk: []
+  adoptMine: []
+  saveCopy: [name: string]
+  restoreAsCopy: [name: string]
+  discardGuard: []
   removeCard: [id: string]
 }>()
 
@@ -74,7 +85,9 @@ function onTruthInput(event: Event) {
     :pending-column-key="draftStatus"
     :detail-mode="detailMode"
     :save-phase="savePhase"
-    :has-conflict="conflictNotice !== null"
+    :conflict="conflict"
+    :conflict-fields="conflictFields"
+    :guard="guard"
     :action-error="actionError"
     :updated-at="activeCard.updatedAt"
     delete-label="删除（移入回收站）"
@@ -84,11 +97,16 @@ function onTruthInput(event: Event) {
     @set-detail-mode="emit('setDetailMode', $event)"
     @select-status="(columnKey) => emit('updateDraftStatus', columnKey as ForeshadowingStatusView)"
     @retry-save="emit('retrySave')"
-    @reload-from-conflict="emit('reloadFromConflict')"
-    @keep-draft="emit('keepDraft')"
+    @expand-conflict="emit('expandConflict')"
+    @collapse-conflict="emit('collapseConflict')"
+    @adopt-disk="emit('adoptDisk')"
+    @adopt-mine="emit('adoptMine')"
+    @save-copy="emit('saveCopy', $event)"
+    @restore-as-copy="emit('restoreAsCopy', $event)"
+    @discard-guard="emit('discardGuard')"
     @remove-card="emit('removeCard', activeCard.id)"
   >
-    <template #content="{ detailMode: mode }">
+    <template #content="{ detailMode: mode, frozen }">
       <!-- 结构字段区（只读；修改走 AI 工具或直接编辑文件） -->
       <dl class="mt-2 grid shrink-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
         <dt class="text-gray-500">埋设章节</dt>
@@ -116,7 +134,7 @@ function onTruthInput(event: Event) {
           v-if="mode === 'preview'"
           class="h-[calc(100%-1.25rem)] overflow-y-auto rounded-md border border-gray-200 bg-gray-50 px-3 py-2"
           data-testid="foreshadowing-detail-reader"
-          @dblclick="emit('setDetailMode', 'edit')"
+          @dblclick="frozen ? undefined : emit('setDetailMode', 'edit')"
         >
           <MarkdownRenderer v-if="readerValue" :content="readerValue" />
           <p v-else class="text-sm text-gray-400">双击或点击「编辑」补写读者当时看到的事实。</p>
@@ -124,6 +142,7 @@ function onTruthInput(event: Event) {
         <textarea
           v-else
           :value="draftReaderView ?? activeCard.readerBody"
+          :readonly="frozen"
           class="h-[calc(100%-1.25rem)] w-full resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           placeholder="埋设当时读者能看到的事实（不含剧透）。"
           data-testid="foreshadowing-detail-reader-input"
@@ -140,7 +159,7 @@ function onTruthInput(event: Event) {
           v-if="mode === 'preview'"
           class="h-[calc(100%-1.25rem)] overflow-y-auto rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
           data-testid="foreshadowing-detail-truth"
-          @dblclick="emit('setDetailMode', 'edit')"
+          @dblclick="frozen ? undefined : emit('setDetailMode', 'edit')"
         >
           <MarkdownRenderer v-if="truthValue" :content="truthValue" />
           <p v-else class="text-sm text-amber-500">这条伏笔还没登记真相（可后补）。</p>
@@ -148,6 +167,7 @@ function onTruthInput(event: Event) {
         <textarea
           v-else
           :value="draftAuthorTruth ?? activeCard.authorTruth"
+          :readonly="frozen"
           class="h-[calc(100%-1.25rem)] w-full resize-none rounded-md border border-amber-200 bg-amber-50/50 px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
           placeholder="作者知道的真相——回收时的钥匙。"
           data-testid="foreshadowing-detail-truth-input"

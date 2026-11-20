@@ -87,12 +87,24 @@ export interface CardBoardConfig<
 > {
   loadBoard(projectId: string): Promise<TBoard>
   readCard(projectId: string, id: string): Promise<TCard | null>
-  /** 保存草稿；需要携带 card.contentHash 做外部修改校验的组合在这里完成 */
-  saveCard(projectId: string, card: TCard, draft: TDraft): Promise<TCard>
+  /**
+   * 保存草稿；需要携带 card.contentHash 做外部修改校验的组合在这里完成。
+   * overwrite = 冲突出口「采用我的当前内容」的整份覆盖写入：不携带版本校验。
+   */
+  saveCard(projectId: string, card: TCard, draft: TDraft, options?: { overwrite?: boolean }): Promise<TCard>
   moveCard(projectId: string, id: string, status: TStatus, afterId: string | null, beforeId?: string | null): Promise<TCard>
   deleteCard(projectId: string, id: string): Promise<unknown>
   /** 新建面板提交：草稿到创建入参的组合在这里完成 */
   submitCreate(projectId: string, draft: TCreateDraft): Promise<TCard>
+  /** 人工视角完整卡（磁盘基线 + 草稿覆盖）：冲突字段比较与另存副本共用 */
+  buildSnapshotCard(card: TCard, draft: TDraft): TCard
+  /** 用领域新建能力把完整卡按名称另存为副本（不覆盖原卡，不解决原冲突） */
+  saveCopy(projectId: string, card: TCard, name: string): Promise<TCard>
+  /**
+   * 冲突字段比较（阶段 3）：mine = 人工视角完整卡、disk = 磁盘最新卡，返回
+   * 领域字段的展示文本（枚举映射中文标签）。无差异字段的过滤在视图层。
+   */
+  conflictFields(mine: TCard, disk: TCard): ReadonlyArray<CardConflictField>
   /** 服务层冲突错误 → 带最新内容的卡片；非冲突错误返回 null */
   extractConflict(error: unknown, card: TCard): TCard | null
   /** 草稿与卡片是否有实际差异（null 字段 = 未修改，不参与比较） */
@@ -116,6 +128,24 @@ export interface CardBoardConfig<
     move: string
     delete: string
   }
+}
+
+/**
+ * 卡片会话守护（阶段 3）：AI/外部删除或重命名了有待写内容的卡片文件时置入，
+ * 禁止一切写入（自动保存与覆盖出口都被引擎拒绝），现场按会话保留，由用户在
+ * 详情里选择「恢复为副本 / 放弃并关闭」。
+ */
+export type CardSessionGuard =
+  | { kind: 'deleted'; trashPath?: string }
+  | { kind: 'renamed'; toPath: string }
+
+/** 冲突字段比较条目（阶段 3 展开比较区）：short = 单行并排，long = 段落差异块 */
+export type CardConflictField = {
+  key: string
+  label: string
+  mine: string
+  disk: string
+  kind: 'short' | 'long'
 }
 
 /** 卡片的最小约定：稳定 id + 读取时内容 hash（冲突流程的基线） */
@@ -258,7 +288,12 @@ export function createCardBoardCore<
         return { ok: false, conflict: false, message: '卡片会话缺少磁盘基线，请重新打开卡片' }
       }
       try {
-        const saved = await config.saveCard(ctx.session.projectId, card, snapshot)
+        const saved = await config.saveCard(
+          ctx.session.projectId,
+          card,
+          snapshot,
+          ctx.force ? { overwrite: true } : {},
+        )
         // 写盘成功即更新会话的磁盘基线（写盘期间继续输入的保存按新基线校验）
         ctx.session.diskCard = saved
         return { ok: true, disk: saved }
@@ -607,6 +642,16 @@ export function createCardBoardCore<
       const card = await config.readCard(projectId, id)
       if (!isLatest()) return
       if (!card) {
+        // 删除/重命名守护（阶段 3）：会话有未落盘内容且已被置入守护时不清理，
+        // 现场按会话保留，由守护横幅给出「恢复为副本/放弃并关闭」的去向选择
+        const guarded = cardRealm.getSession(projectId, id)
+        if (guarded?.guard && guarded.diskCard) {
+          activeCard.value = guarded.diskCard
+          detailMode.value = guarded.mode
+          selectedCardId.value = id
+          actionError.value = guarded.actionMessage ?? ''
+          return
+        }
         // 卡片刚被删除（外部或 AI）：清空详情与会话并刷新看板。
         cardRealm.clearSession(projectId, id)
         activeCard.value = null
@@ -734,48 +779,198 @@ export function createCardBoardCore<
   }
 
   /** 冲突处理：丢弃草稿（含会话缓存与恢复镜像），重新读取文件当前内容并回到预览 */
-  async function reloadFromConflict(projectId: string) {
-    const cardId = activeCard.value?.id
-    if (!conflictNotice.value || !cardId) return
-    if (manualSaveInFlight.has(manualSaveKey(projectId, cardId))) return
-    const session = cardRealm.getSession(projectId, cardId)
-    if (session?.inFlight != null) return
-    const generation = beginProject(projectId)
-    const sequence = ++openSequence
+  /* ---------- 版本冲突出口（阶段 3：非阻塞状态条 + 主动展开比较 + 四出口） ---------- */
 
-    cardRealm.clearSession(projectId, cardId)
+  /**
+   * AI/外部修改了该卡片文件且会话有未落盘内容：冻结自动写入并读取外部版本建立
+   * 冲突（变更链接入用）。返回值与正文域一致：conflict = 首次冲突、
+   * conflict-refresh = 既有冲突刷新磁盘版本、clean = 会话干净可安全刷新看板、
+   * none = 无会话或守护中。
+   */
+  function freezeForExternalChange(projectId: string, cardId: string) {
+    return cardRealm.freezeForExternal(projectId, cardId)
+  }
+
+  /**
+   * 该卡片是否有未落盘的草稿（变更链判定删除/重命名是否需要置守护；
+   * 冲突中的会话也算有待处理的人工内容）。
+   */
+  function hasCardDraft(projectId: string, cardId: string): boolean {
+    const session = cardRealm.getSession(projectId, cardId)
+    if (!session) {
+      return false
+    }
+    return !config.isEmptyDraft(session.draft) || session.conflict !== undefined
+  }
+
+  /** AI/外部删除或重命名了有待写内容的卡片文件：置入守护（禁止一切写入，现场保留） */
+  function setCardGuard(projectId: string, cardId: string, guard: CardSessionGuard): void {
+    const session = cardRealm.getSession(projectId, cardId)
+    if (!session) {
+      return
+    }
+    session.guard = guard
+    session.updatedAt = new Date().toISOString()
+  }
+
+  /**
+   * 冲突视图（阶段 3）：有冲突即返回（紧凑状态条与展开比较共用），
+   * expanded = 用户已展开比较；diskCard = 磁盘最新卡（探测完成后）。
+   */
+  const conflictView = computed(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return null
+    }
+    const conflict = cardRealm.getSession(currentProjectId, card.id)?.conflict
+    if (!conflict) {
+      return null
+    }
+    return {
+      probing: conflict.probing,
+      missing: conflict.missing,
+      ...(conflict.unreadable !== undefined ? { unreadable: conflict.unreadable } : {}),
+      expanded: conflict.expanded,
+      diskCard: (conflict.disk as TCard | undefined) ?? null,
+    }
+  })
+
+  /**
+   * 冲突字段比较（展开比较区渲染）：mine = 人工视角完整卡（磁盘基线 + 草稿
+   * 覆盖），disk = 磁盘最新卡；探测未完成时无比较数据。
+   */
+  const conflictFields = computed<ReadonlyArray<CardConflictField>>(() => {
+    const view = conflictView.value
+    const card = activeCard.value
+    if (!view?.diskCard || !card || currentProjectId == null) {
+      return []
+    }
+    const session = cardRealm.getSession(currentProjectId, card.id)
+    if (!session?.diskCard) {
+      return []
+    }
+    return config.conflictFields(config.buildSnapshotCard(session.diskCard, session.draft), view.diskCard)
+  })
+
+  /** 冲突再入口（紧凑状态条「比较并处理」）：重新读取磁盘最新并展开比较 */
+  function expandCardConflict(projectId: string): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    void cardRealm.expandConflict(projectId, card.id)
+  }
+
+  /** 返回继续编辑：收起比较，保留人工内容、待选择状态与冲突再入口 */
+  function collapseCardConflict(): void {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return
+    }
+    cardRealm.collapseConflict(currentProjectId, card.id)
+  }
+
+  /**
+   * 采用磁盘版本（二次确认在视图层）：引擎重新读取成功并清掉人工内容后才算
+   * 解决；resolved 后重开该卡展示最新内容并刷新看板。probe-failed 保持展开态
+   * 呈现最新探测结果；aborted（确认在途时用户离开）不动现场。
+   */
+  async function adoptDiskVersion(projectId: string): Promise<boolean> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return false
+    }
+    const result = await cardRealm.adoptDisk(projectId, card.id)
+    if (result !== 'resolved') {
+      return false
+    }
     conflictNotice.value = null
     actionError.value = ''
-    detailNotice.value = null
-    detailError.value = null
-    detailMode.value = 'preview'
+    await refreshBoard(projectId)
+    if (activeCard.value?.id === card.id) {
+      await openCard(projectId, card.id)
+    }
+    return true
+  }
+
+  /**
+   * 采用我的当前内容（二次确认在视图层）：用最新人工快照整份覆盖原卡。成功后
+   * 冲突解除（仍有未落盘输入时冲突保留）、可见字段立即同步到新内容。
+   */
+  async function overwriteWithMine(projectId: string): Promise<{ ok: boolean; message?: string }> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return { ok: false, message: '卡片已不在当前现场' }
+    }
+    const result = await cardRealm.overwriteContent(projectId, card.id)
+    if (!result.ok) {
+      return result
+    }
+    const settled = cardRealm.getSession(projectId, card.id)
+    if (settled?.diskCard) {
+      lastSavedCard.value = settled.diskCard
+      if (activeCard.value?.id === card.id) {
+        activeCard.value = settled.diskCard
+      }
+    }
+    conflictNotice.value = null
+    actionError.value = ''
+    await refreshBoard(projectId)
+    return { ok: true }
+  }
+
+  /**
+   * 将人工视角完整卡另存为副本（领域新建能力）：不覆盖原卡、不解决原冲突。
+   * 守护态的「恢复为副本」同走此入口，由调用方在成功后清理守护会话。
+   */
+  async function saveConflictCopy(projectId: string, name: string): Promise<TCard | null> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return null
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session?.diskCard) {
+      return null
+    }
+    actionError.value = ''
     try {
-      const card = await config.readCard(projectId, cardId)
-      if (!isCurrentProject(projectId, generation) || sequence !== openSequence) return
-      if (!card) {
-        activeCard.value = null
-        selectedCardId.value = null
-        await refreshBoard(projectId)
-        return
-      }
-      const fresh = cardRealm.openSession(projectId, cardId, {
-        snapshot: config.emptyDraft(),
-        baseSnapshot: config.emptyDraft(),
-        baseVersion: card.contentHash,
-      })
-      fresh.diskCard = card
-      activeCard.value = card
-      selectedCardId.value = card.id
+      const merged = config.buildSnapshotCard(session.diskCard, session.draft)
+      const copy = await config.saveCopy(projectId, merged, name)
+      await refreshBoard(projectId)
+      return copy
     } catch (error) {
-      if (isCurrentProject(projectId, generation) && sequence === openSequence) {
-        detailError.value = { cardId, message: toMessage(error, config.messages.readCard) }
-      }
+      actionError.value = toMessage(error, config.messages.create)
+      return null
     }
   }
 
-  /** 冲突处理：保留当前草稿继续编辑（下次保存仍会校验 hash） */
-  function keepDraft() {
+  /** 守护态视图：当前卡片会话的删除/重命名守护信息（横幅与出口展示用） */
+  const guardNotice = computed<CardSessionGuard | null>(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return null
+    }
+    return (cardRealm.getSession(currentProjectId, card.id)?.guard as CardSessionGuard | undefined) ?? null
+  })
+
+  /**
+   * 守护出口「放弃并关闭」（阶段 3）：丢弃保留的未落盘现场并关闭详情。
+   * 「恢复为副本」走 saveConflictCopy，成功后由调用方再调这里清理守护会话。
+   */
+  function discardGuardedSession(projectId: string): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    cardRealm.clearSession(projectId, card.id)
+    activeCard.value = null
+    detailMode.value = 'preview'
+    selectedCardId.value = null
+    actionError.value = ''
     conflictNotice.value = null
+    detailError.value = null
+    detailNotice.value = null
+    void refreshBoard(projectId)
   }
 
   /**
@@ -1068,8 +1263,18 @@ export function createCardBoardCore<
     updateDraft,
     setDetailMode,
     saveDraft,
-    reloadFromConflict,
-    keepDraft,
+    conflictView,
+    conflictFields,
+    guardNotice,
+    expandCardConflict,
+    collapseCardConflict,
+    adoptDiskVersion,
+    overwriteWithMine,
+    saveConflictCopy,
+    discardGuardedSession,
+    freezeForExternalChange,
+    hasCardDraft,
+    setCardGuard,
     restoreCardDrafts,
     retrySave,
     flushCard,

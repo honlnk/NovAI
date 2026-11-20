@@ -21,6 +21,7 @@ import {
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
 import { setupCardBackupLifecycle } from '../composables/card-backup'
 import { clearChangeHighlights } from '../composables/useChangeHighlights'
+import { useCardChangeFeedback } from '../composables/useCardChangeFeedback'
 import { useFileChangeFeedback } from '../composables/useFileChangeFeedback'
 import {
   clearFileDraft,
@@ -478,6 +479,68 @@ const { locateToken, handleLocateChange } = useFileChangeFeedback({
   },
 })
 
+// ===== 卡片域变更链（阶段 3）=====
+// 三个看板目录与正文链并行消费同一账本：有人工未落盘内容的会话在 AI 写盘时
+// 冻结并建立冲突（当前卡黄条唯一 / 非当前卡首次一次 toast / 后续静默）；删除/
+// 重命名命中 dirty 会话置守护。看板列刷新由下方三个 changedFiles watch 负责。
+useCardChangeFeedback({
+  projectId: () => projectId.value,
+  isCardOpen: (domain, cardId) => {
+    const kind = workspacePanel.value?.kind
+    if (domain === 'plans') {
+      return kind === 'plan-detail' && planStore.selectedCardId === cardId
+    }
+    if (domain === 'foreshadowing') {
+      return kind === 'foreshadowing-detail' && foreshadowingStore.selectedCardId === cardId
+    }
+    return kind === 'rhythm-detail' && rhythmStore.selectedCardId === cardId
+  },
+  openContentPanel: () => {
+    isContentPanelOpen.value = true
+  },
+  domains: {
+    plans: {
+      pathPrefix: 'plans/',
+      getCards: () => {
+        const board = planStore.board
+        return board
+          ? Object.values(board.columns).flat().map((s) => ({ id: s.id, sourcePath: s.sourcePath, name: s.title }))
+          : []
+      },
+      freeze: (pid, cardId) => planStore.freezeForExternalChange(pid, cardId),
+      hasDraft: (pid, cardId) => planStore.hasCardDraft(pid, cardId),
+      setGuard: (pid, cardId, guard) => planStore.setCardGuard(pid, cardId, guard),
+      reopen: (pid, cardId) => planStore.openCard(pid, cardId),
+    },
+    foreshadowing: {
+      pathPrefix: 'foreshadowing/',
+      getCards: () => {
+        const board = foreshadowingStore.board
+        return board
+          ? Object.values(board.columns).flat().map((s) => ({ id: s.id, sourcePath: s.sourcePath, name: s.name }))
+          : []
+      },
+      freeze: (pid, cardId) => foreshadowingStore.freezeForExternalChange(pid, cardId),
+      hasDraft: (pid, cardId) => foreshadowingStore.hasCardDraft(pid, cardId),
+      setGuard: (pid, cardId, guard) => foreshadowingStore.setCardGuard(pid, cardId, guard),
+      reopen: (pid, cardId) => foreshadowingStore.openCard(pid, cardId),
+    },
+    rhythm: {
+      pathPrefix: 'rhythm/',
+      getCards: () => {
+        const board = rhythmStore.board
+        return board
+          ? Object.values(board.columns).flat().map((s) => ({ id: s.id, sourcePath: s.sourcePath, name: s.name }))
+          : []
+      },
+      freeze: (pid, cardId) => rhythmStore.freezeForExternalChange(pid, cardId),
+      hasDraft: (pid, cardId) => rhythmStore.hasCardDraft(pid, cardId),
+      setGuard: (pid, cardId, guard) => rhythmStore.setCardGuard(pid, cardId, guard),
+      reopen: (pid, cardId) => rhythmStore.openCard(pid, cardId),
+    },
+  },
+})
+
 
 // 切项目：清空上一项目的反馈队列与高亮状态（跨项目不串扰；草稿守护随编辑会话
 // 按项目隔离，无需清理；消费游标由 useFileChangeFeedback 自清）；切走前把待写
@@ -911,6 +974,52 @@ function handlePlanRetrySave() {
   void planStore.retrySave(projectId.value)
 }
 
+/**
+ * 冲突/守护出口（阶段 3）三域共用的动作组合：紧凑条展开、收起、两击确认后的
+ * 有损采用（失败 toast 补可见性——详情 actionError 之外的成功提示也走 toast）。
+ */
+function makeCardConflictHandlers(store: {
+  expandCardConflict: (projectId: string) => void
+  collapseCardConflict: () => void
+  adoptDiskVersion: (projectId: string) => Promise<boolean>
+  overwriteWithMine: (projectId: string) => Promise<{ ok: boolean; message?: string }>
+  saveConflictCopy: (projectId: string, name: string) => Promise<unknown>
+  discardGuardedSession: (projectId: string) => void
+}) {
+  return {
+    expandConflict: () => store.expandCardConflict(projectId.value),
+    collapseConflict: () => store.collapseCardConflict(),
+    adoptDisk: async () => {
+      const ok = await store.adoptDiskVersion(projectId.value)
+      if (!ok) {
+        toast.error('采用磁盘版本未完成：磁盘读取失败或现场已变化，冲突仍保留')
+      }
+    },
+    adoptMine: async () => {
+      const result = await store.overwriteWithMine(projectId.value)
+      if (!result.ok) {
+        toast.error(result.message ?? '覆盖保存失败，冲突仍保留')
+      }
+    },
+    saveCopy: async (name: string) => {
+      const copy = await store.saveConflictCopy(projectId.value, name)
+      if (copy) {
+        toast.success(`已另存为新卡片：${name}`)
+      }
+    },
+    restoreAsCopy: async (name: string) => {
+      const copy = await store.saveConflictCopy(projectId.value, name)
+      if (copy) {
+        store.discardGuardedSession(projectId.value)
+        toast.success(`已恢复为新卡片：${name}`)
+      }
+    },
+    discardGuard: () => store.discardGuardedSession(projectId.value),
+  }
+}
+
+const planConflictHandlers = makeCardConflictHandlers(planStore)
+
 // 自动保存改写计划文件首行（计划名改动触发）后刷新文件树：只在同一张卡前后路径
 // 变化时触发，普通内容保存与切卡保存不打扰文件树
 watch(
@@ -1106,6 +1215,9 @@ function handleForeshadowingRetrySave() {
   void foreshadowingStore.retrySave(projectId.value)
 }
 
+/** 冲突/守护出口（阶段 3，与计划域同构） */
+const foreshadowingConflictHandlers = makeCardConflictHandlers(foreshadowingStore)
+
 // 自动保存重命名伏笔文件（伏笔名改动触发）后刷新文件树：同卡前后路径变化才触发
 watch(
   () => foreshadowingStore.lastSavedCard,
@@ -1282,6 +1394,9 @@ async function handleRhythmRemove(id: string) {
 function handleRhythmRetrySave() {
   void rhythmStore.retrySave(projectId.value)
 }
+
+/** 冲突/守护出口（阶段 3，与计划域同构） */
+const rhythmConflictHandlers = makeCardConflictHandlers(rhythmStore)
 
 // 自动保存重命名节奏卡文件（节奏卡名改动触发）后刷新文件树：同卡前后路径变化才触发
 watch(
@@ -1526,7 +1641,9 @@ function handleGoToSettings() {
           :draft-status="planStore.draftStatus"
           :detail-mode="planStore.detailMode"
           :save-phase="planStore.savePhase"
-          :conflict-notice="planStore.conflictNotice"
+          :conflict="planStore.conflictView"
+          :conflict-fields="planStore.conflictFields"
+          :guard="planStore.guardNotice"
           :action-error="planStore.actionError"
           @close="handleCloseContentPanel"
           @update-draft="planStore.updateDraft"
@@ -1534,8 +1651,13 @@ function handleGoToSettings() {
           @update-draft-status="planStore.updateDraftStatus"
           @set-detail-mode="planStore.setDetailMode"
           @retry-save="handlePlanRetrySave"
-          @reload-from-conflict="planStore.reloadFromConflict(projectId)"
-          @keep-draft="planStore.keepDraft()"
+          @expand-conflict="planConflictHandlers.expandConflict"
+          @collapse-conflict="planConflictHandlers.collapseConflict"
+          @adopt-disk="planConflictHandlers.adoptDisk"
+          @adopt-mine="planConflictHandlers.adoptMine"
+          @save-copy="planConflictHandlers.saveCopy"
+          @restore-as-copy="planConflictHandlers.restoreAsCopy"
+          @discard-guard="planConflictHandlers.discardGuard"
           @remove-card="handlePlanRemove"
         />
         <!-- 新建计划 -->
@@ -1560,7 +1682,9 @@ function handleGoToSettings() {
           :draft-status="foreshadowingStore.draftStatus"
           :detail-mode="foreshadowingStore.detailMode"
           :save-phase="foreshadowingStore.savePhase"
-          :conflict-notice="foreshadowingStore.conflictNotice"
+          :conflict="foreshadowingStore.conflictView"
+          :conflict-fields="foreshadowingStore.conflictFields"
+          :guard="foreshadowingStore.guardNotice"
           :action-error="foreshadowingStore.actionError"
           @close="handleCloseContentPanel"
           @update-draft-name="foreshadowingStore.updateDraftName"
@@ -1569,8 +1693,13 @@ function handleGoToSettings() {
           @update-draft-status="foreshadowingStore.updateDraftStatus"
           @set-detail-mode="foreshadowingStore.setDetailMode"
           @retry-save="handleForeshadowingRetrySave"
-          @reload-from-conflict="foreshadowingStore.reloadFromConflict(projectId)"
-          @keep-draft="foreshadowingStore.keepDraft()"
+          @expand-conflict="foreshadowingConflictHandlers.expandConflict"
+          @collapse-conflict="foreshadowingConflictHandlers.collapseConflict"
+          @adopt-disk="foreshadowingConflictHandlers.adoptDisk"
+          @adopt-mine="foreshadowingConflictHandlers.adoptMine"
+          @save-copy="foreshadowingConflictHandlers.saveCopy"
+          @restore-as-copy="foreshadowingConflictHandlers.restoreAsCopy"
+          @discard-guard="foreshadowingConflictHandlers.discardGuard"
           @remove-card="handleForeshadowingRemove"
         />
         <!-- 登记伏笔 -->
@@ -1604,14 +1733,21 @@ function handleGoToSettings() {
           :draft-intent-body="rhythmStore.draftIntentBody"
           :detail-mode="rhythmStore.detailMode"
           :save-phase="rhythmStore.savePhase"
-          :conflict-notice="rhythmStore.conflictNotice"
+          :conflict="rhythmStore.conflictView"
+          :conflict-fields="rhythmStore.conflictFields"
+          :guard="rhythmStore.guardNotice"
           :action-error="rhythmStore.actionError"
           @close="handleCloseContentPanel"
           @update-draft="rhythmStore.updateDraft"
           @set-detail-mode="rhythmStore.setDetailMode"
           @retry-save="handleRhythmRetrySave"
-          @reload-from-conflict="rhythmStore.reloadFromConflict(projectId)"
-          @keep-draft="rhythmStore.keepDraft()"
+          @expand-conflict="rhythmConflictHandlers.expandConflict"
+          @collapse-conflict="rhythmConflictHandlers.collapseConflict"
+          @adopt-disk="rhythmConflictHandlers.adoptDisk"
+          @adopt-mine="rhythmConflictHandlers.adoptMine"
+          @save-copy="rhythmConflictHandlers.saveCopy"
+          @restore-as-copy="rhythmConflictHandlers.restoreAsCopy"
+          @discard-guard="rhythmConflictHandlers.discardGuard"
           @remove-card="handleRhythmRemove"
         />
         <!-- 规划节奏卡 -->

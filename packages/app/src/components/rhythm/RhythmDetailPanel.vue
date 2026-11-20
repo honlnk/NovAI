@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import type { RhythmCardView } from '@novai/core/services/types'
 import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_MOOD_DESCRIPTIONS, RHYTHM_PAYOFFS } from '@novai/core/types/rhythm'
+import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import type { DetailMode } from '../plan/detail-mode'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailPanel from '../card-board/DetailPanel.vue'
@@ -11,7 +12,7 @@ import DetailPanel from '../card-board/DetailPanel.vue'
  * 节奏详情面板（§七）：计划值编辑区（冲突强度滑块、情绪/钩子/爽点下拉、出场
  * 角色多选输入、节奏意图文本）+ 实际值展示区（只读——回写走 AI 写后同步或直接
  * 编文件，UI 不提供手改 actual_*）+ 偏差说明。状态徽标只读展示：状态与偏差由
- * 系统按回写自动判定，面板不提供状态按钮（DetailPanel columns 传空数组）。
+ * 系统按回写偏差自动判定，面板不提供状态按钮（DetailPanel columns 传空数组）。
  */
 const props = defineProps<{
   activeCard: RhythmCardView
@@ -25,7 +26,12 @@ const props = defineProps<{
   draftIntentBody: string | null
   detailMode: DetailMode
   savePhase: 'clean' | 'pending' | 'saving' | 'failed' | 'conflict'
-  conflictNotice: unknown | null
+  /** 冲突视图（阶段 3：紧凑条与展开比较驱动） */
+  conflict: { probing: boolean; missing: boolean; unreadable?: string; expanded: boolean } | null
+  /** 冲突字段比较（store 按领域字段组合好的 mine/disk 文本） */
+  conflictFields: ReadonlyArray<CardConflictField>
+  /** 守护信息（删除/重命名；null = 无守护） */
+  guard: CardSessionGuard | null
   actionError: string
 }>()
 
@@ -43,8 +49,13 @@ const emit = defineEmits<{
   }]
   setDetailMode: [mode: DetailMode]
   retrySave: []
-  reloadFromConflict: []
-  keepDraft: []
+  expandConflict: []
+  collapseConflict: []
+  adoptDisk: []
+  adoptMine: []
+  saveCopy: [name: string]
+  restoreAsCopy: [name: string]
+  discardGuard: []
   removeCard: [id: string]
 }>()
 
@@ -97,7 +108,9 @@ function onCharactersInput(event: Event) {
     :pending-column-key="null"
     :detail-mode="detailMode"
     :save-phase="savePhase"
-    :has-conflict="conflictNotice !== null"
+    :conflict="conflict"
+    :conflict-fields="conflictFields"
+    :guard="guard"
     :action-error="actionError"
     :updated-at="activeCard.updatedAt"
     delete-label="删除（移入回收站）"
@@ -106,11 +119,16 @@ function onCharactersInput(event: Event) {
     @update-title="(value) => emit('updateDraft', { name: value })"
     @set-detail-mode="emit('setDetailMode', $event)"
     @retry-save="emit('retrySave')"
-    @reload-from-conflict="emit('reloadFromConflict')"
-    @keep-draft="emit('keepDraft')"
+    @expand-conflict="emit('expandConflict')"
+    @collapse-conflict="emit('collapseConflict')"
+    @adopt-disk="emit('adoptDisk')"
+    @adopt-mine="emit('adoptMine')"
+    @save-copy="emit('saveCopy', $event)"
+    @restore-as-copy="emit('restoreAsCopy', $event)"
+    @discard-guard="emit('discardGuard')"
     @remove-card="emit('removeCard', activeCard.id)"
   >
-    <template #content="{ detailMode: mode }">
+    <template #content="{ detailMode: mode, frozen }">
       <!-- 状态徽标（只读：状态由回写偏差判定自动流转，不接受手改） -->
       <div class="mt-2 flex shrink-0 items-center gap-2">
         <span
@@ -141,7 +159,7 @@ function onCharactersInput(event: Event) {
             class="h-1.5 flex-1 accent-gray-900"
             :value="plannedConflictValue"
             data-testid="rhythm-detail-conflict-slider"
-            :disabled="mode !== 'edit'"
+            :disabled="mode !== 'edit' || frozen"
             @input="emit('updateDraft', { plannedConflict: Number(($event.target as HTMLInputElement).value) })"
           >
           <span :class="['w-10 shrink-0 rounded px-1.5 py-0.5 text-center text-xs font-semibold', plannedConflictValue >= 7 ? 'bg-red-100 text-red-700' : plannedConflictValue >= 4 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700']">
@@ -156,7 +174,7 @@ function onCharactersInput(event: Event) {
               class="rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-800 disabled:bg-gray-50 disabled:text-gray-500"
               :value="plannedMoodValue"
               data-testid="rhythm-detail-mood"
-              :disabled="mode !== 'edit'"
+              :disabled="mode !== 'edit' || frozen"
               @change="emit('updateDraft', { plannedMood: ($event.target as HTMLSelectElement).value })"
             >
               <option v-for="mood in RHYTHM_MOODS" :key="mood" :value="mood" :title="RHYTHM_MOOD_DESCRIPTIONS[mood]">{{ mood }}</option>
@@ -168,7 +186,7 @@ function onCharactersInput(event: Event) {
               class="rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-800 disabled:bg-gray-50 disabled:text-gray-500"
               :value="plannedHookValue"
               data-testid="rhythm-detail-hook"
-              :disabled="mode !== 'edit'"
+              :disabled="mode !== 'edit' || frozen"
               @change="emit('updateDraft', { plannedHook: ($event.target as HTMLSelectElement).value })"
             >
               <option v-for="hook in RHYTHM_HOOKS" :key="hook" :value="hook">{{ hook }}</option>
@@ -180,7 +198,7 @@ function onCharactersInput(event: Event) {
               class="rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-800 disabled:bg-gray-50 disabled:text-gray-500"
               :value="plannedPayoffValue"
               data-testid="rhythm-detail-payoff"
-              :disabled="mode !== 'edit'"
+              :disabled="mode !== 'edit' || frozen"
               @change="emit('updateDraft', { plannedPayoff: ($event.target as HTMLSelectElement).value })"
             >
               <option v-for="payoff in RHYTHM_PAYOFFS" :key="payoff" :value="payoff">{{ payoff }}</option>
@@ -196,7 +214,7 @@ function onCharactersInput(event: Event) {
             placeholder="如：林远、苏晚、老周"
             :value="plannedCharactersValue"
             data-testid="rhythm-detail-characters"
-            :disabled="mode !== 'edit'"
+            :disabled="mode !== 'edit' || frozen"
             @input="onCharactersInput"
           >
         </div>
@@ -209,7 +227,7 @@ function onCharactersInput(event: Event) {
             placeholder="计划里说不清的细节（可选）"
             :value="plannedNoteValue"
             data-testid="rhythm-detail-planned-note"
-            :disabled="mode !== 'edit'"
+            :disabled="mode !== 'edit' || frozen"
             @input="onNoteInput"
           >
         </div>
@@ -244,7 +262,7 @@ function onCharactersInput(event: Event) {
           v-if="mode === 'preview'"
           class="flex-1 overflow-y-auto rounded-md border border-gray-200 bg-gray-50 px-3 py-2"
           data-testid="rhythm-detail-intent"
-          @dblclick="emit('setDetailMode', 'edit')"
+          @dblclick="frozen ? undefined : emit('setDetailMode', 'edit')"
         >
           <MarkdownRenderer v-if="intentBodyValue" :content="intentBodyValue" />
           <p v-else class="text-sm text-gray-400">双击或点击「编辑」补写本章的节奏意图。</p>
@@ -252,6 +270,7 @@ function onCharactersInput(event: Event) {
         <textarea
           v-else
           :value="intentBodyValue"
+          :readonly="frozen"
           class="flex-1 w-full resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           placeholder="本章要什么温度、不要什么；和前后章怎么衔接。"
           data-testid="rhythm-detail-intent-input"

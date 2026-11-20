@@ -257,7 +257,7 @@ describe('plan store 正文编辑与保存', () => {
     expect(mockedGetPlanBoard).toHaveBeenCalled()
   })
 
-  it('saveDraft 冲突（外部修改）：草稿保留 + 冲突提示；重新读取后取文件内容', async () => {
+  it('saveDraft 冲突（外部修改）：草稿保留 + 冲突紧凑条；采用磁盘版本后取文件内容', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockResolvedValue(detail('a', '原始正文'))
     mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
@@ -272,21 +272,25 @@ describe('plan store 正文编辑与保存', () => {
 
     expect(ok).toBe(false)
     expect(store.hasUnsavedChanges).toBe(true)
-    expect(store.conflictNotice).not.toBeNull()
-    expect(store.conflictNotice?.currentCard.body).toBe('外部改过的正文')
-    expect(store.actionError).not.toBe('')
+    // 阶段 3 非阻塞冲突：用户正主动保存，比较直接展开；自动保存冻结、草稿保留
+    expect(store.savePhase).toBe('conflict')
+    expect(store.conflictView).not.toBeNull()
+    expect(store.conflictView?.expanded).toBe(true)
+    expect(store.draftBody).toBe('我的草稿')
 
-    // 用户选择「重新读取」：草稿丢弃，读取文件当前内容
+    // 用户两击确认「采用磁盘版本」：重新读取成功后才清人工内容并重开详情
     mockedReadPlan.mockResolvedValue(detail('a', '外部改过的正文', { contentHash: 'hash-a2' }))
-    await store.reloadFromConflict(PROJECT)
+    mockedGetPlanBoard.mockClear()
+    const adopted = await store.adoptDiskVersion(PROJECT)
 
-    expect(store.conflictNotice).toBeNull()
+    expect(adopted).toBe(true)
+    expect(store.conflictView).toBeNull()
     expect(store.activeCard?.body).toBe('外部改过的正文')
     expect(store.hasUnsavedChanges).toBe(false)
-    expect(store.actionError).toBe('')
+    expect(mockedGetPlanBoard).toHaveBeenCalled()
   })
 
-  it('saveDraft 冲突后选择「保留草稿」：清提示但草稿不动', async () => {
+  it('saveDraft 冲突后返回继续编辑：比较收起，冲突与草稿保留（再入口持久）', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockResolvedValue(detail('a', '原始'))
     mockedGetPlanBoard.mockResolvedValue(board([summary('a', 'inbox', 0)]))
@@ -299,11 +303,19 @@ describe('plan store 正文编辑与保存', () => {
     }))
     await store.saveDraft(PROJECT)
 
-    store.keepDraft()
+    // 紧凑条「比较并处理」：重读磁盘并展开（外部正文进入比较区）
+    mockedReadPlan.mockResolvedValue(detail('a', '外部正文', { contentHash: 'hash-a2' }))
+    store.expandCardConflict(PROJECT)
+    await flushAsync()
+    expect(store.conflictView?.expanded).toBe(true)
+    expect(store.conflictView?.diskCard?.body).toBe('外部正文')
 
-    expect(store.conflictNotice).toBeNull()
+    // 返回继续编辑：收起比较，冲突与草稿都保留（比较再入口持久）
+    store.collapseCardConflict()
+    expect(store.conflictView?.expanded).toBe(false)
     expect(store.draftBody).toBe('草稿')
     expect(store.hasUnsavedChanges).toBe(true)
+    expect(store.savePhase).toBe('conflict')
   })
 
   it('saveDraft 网络失败（非冲突）：草稿保留 + 错误信息', async () => {
@@ -624,8 +636,8 @@ describe('plan store 卡片级编辑会话（布局统一计划 §5）', () => {
     expect(store.detailMode).toBe('edit')
     expect(store.activeCard?.contentHash).toBe('hash-a')
 
-    // 保留草稿继续编辑：保存仍冲突（旧 hash），草稿不丢
-    store.keepDraft()
+    // 保留草稿继续编辑（阶段 3：冲突常驻紧凑条，无需显式动作）：保存仍冲突（旧
+    // hash），草稿不丢
     mockedUpdatePlan.mockRejectedValue(new PlanConflictError('冲突', {
       id: 'a', status: 'inbox', order: 0, createdAt: '', updatedAt: '',
       body: '外部新内容', sourcePath: 'plans/计划-1-a.md',
@@ -635,9 +647,10 @@ describe('plan store 卡片级编辑会话（布局统一计划 §5）', () => {
     expect(store.draftBody).toBe('我的草稿')
     expect(store.conflictNotice?.currentCard.body).toBe('外部新内容')
 
-    // 重新读取：丢弃草稿（含会话），取文件当前内容
-    mockedReadPlan.mockResolvedValueOnce(detail('a', '外部新内容', { contentHash: 'hash-a2' }))
-    await store.reloadFromConflict(PROJECT)
+    // 采用磁盘版本：丢弃草稿（含会话），取文件当前内容并重开
+    mockedReadPlan.mockResolvedValue(detail('a', '外部新内容', { contentHash: 'hash-a2' }))
+    const adopted = await store.adoptDiskVersion(PROJECT)
+    expect(adopted).toBe(true)
     expect(store.draftBody).toBeNull()
     expect(store.detailMode).toBe('preview')
     expect(store.activeCard?.body).toBe('外部新内容')

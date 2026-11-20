@@ -14,7 +14,7 @@ import type {
   ForeshadowingCardView,
   ForeshadowingStatusView,
 } from '@novai/core/services/types'
-import { ForeshadowingConflictError } from '@novai/core/types/foreshadowing'
+import { ForeshadowingConflictError, FORESHADOWING_STATUS_LABELS } from '@novai/core/types/foreshadowing'
 import { createCardBoardCore } from './card-board'
 
 /**
@@ -75,8 +75,9 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
     loadBoard: (projectId) => getForeshadowingBoard(projectId),
     readCard: (projectId, id) => readForeshadowing(projectId, id),
     // 保存组合：只提交有实际变化的字段，普通状态与内容同一次写入（阶段 2），
-    // 携带读取时 hash（core 层校验外部修改）
-    saveCard: (projectId, card, draft) => {
+    // 携带读取时 hash（core 层校验外部修改）；overwrite（阶段 3「采用我的当前
+    // 内容」）为整份覆盖写入，不携带版本校验
+    saveCard: (projectId, card, draft, options) => {
       const name = draft.name?.trim()
       const nameChanged = draft.name !== null && name !== card.name
       const readerChanged = draft.readerView !== null && draft.readerView !== card.readerBody
@@ -88,9 +89,38 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
         ...(readerChanged ? { readerView: draft.readerView ?? '' } : {}),
         ...(truthChanged ? { authorTruth: draft.authorTruth ?? '' } : {}),
         ...(statusChanged ? { status: draft.status as ForeshadowingStatusView } : {}),
-        expectedContentHash: card.contentHash,
+        ...(options?.overwrite ? {} : { expectedContentHash: card.contentHash }),
       })
     },
+    // 人工视角完整卡（磁盘基线 + 草稿覆盖），与 saveCard 同一比较口径；冲突字段
+    // 比较与另存副本共用
+    buildSnapshotCard: (card, draft) => {
+      const name = draft.name !== null && draft.name.trim() !== card.name ? draft.name.trim() : null
+      const reader = draft.readerView !== null && draft.readerView !== card.readerBody ? draft.readerView : null
+      const truth = draft.authorTruth !== null && draft.authorTruth !== card.authorTruth ? draft.authorTruth : null
+      return {
+        ...card,
+        ...(name !== null ? { name } : {}),
+        ...(reader !== null ? { readerBody: reader } : {}),
+        ...(truth !== null ? { authorTruth: truth } : {}),
+        ...(draft.status != null && draft.status !== card.status ? { status: draft.status } : {}),
+      }
+    },
+    // 另存副本：完整卡按副本名新建（不覆盖原卡、不解冲突）；窗口起止俱全才构成区间
+    saveCopy: (projectId, card, name) => createForeshadowing(projectId, {
+      name,
+      readerView: card.readerBody,
+      plantedAt: card.plantedAt,
+      ...(card.authorTruth !== '' ? { authorTruth: card.authorTruth } : {}),
+      ...(card.payoffWindow ? { payoffWindow: [card.payoffWindow[0], card.payoffWindow[1]] } : {}),
+    }),
+    // 冲突字段比较：状态映射精确状态标签，两段正文按段落差异块展示
+    conflictFields: (mine, disk) => [
+      { key: 'name', label: '伏笔名', mine: mine.name, disk: disk.name, kind: 'short' },
+      { key: 'status', label: '状态', mine: FORESHADOWING_STATUS_LABELS[mine.status], disk: FORESHADOWING_STATUS_LABELS[disk.status], kind: 'short' },
+      { key: 'readerBody', label: '读者视角', mine: mine.readerBody, disk: disk.readerBody, kind: 'long' },
+      { key: 'authorTruth', label: '作者真相', mine: mine.authorTruth, disk: disk.authorTruth, kind: 'long' },
+    ],
     moveCard: (projectId, id, status, afterId, beforeId) => updateForeshadowing(projectId, { id, status, afterId, beforeId }),
     deleteCard: (projectId, id) => deleteForeshadowing(projectId, id),
     // 新建提交：可选字段只在有值时提交（回收窗口要求起止俱全才构成区间）

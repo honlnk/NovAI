@@ -42,6 +42,7 @@ vi.mock('@novai/core/services/plan-service', async (importOriginal) => ({
 const mockedGetPlanBoard = vi.mocked(getPlanBoard)
 const mockedReadPlan = vi.mocked(readPlan)
 const mockedUpdatePlan = vi.mocked(updatePlan)
+const mockedCreatePlan = vi.mocked(createPlan)
 
 const PROJECT = 'p-1'
 
@@ -576,5 +577,142 @@ describe('卡片详情自动保存（阶段 2：伏笔域状态组合）', () =>
       PROJECT,
       expect.objectContaining({ id: 'f1', status: 'hinted', readerView: '新的读者视角' }),
     )
+  })
+})
+
+describe('卡片冲突与守护（阶段 3：非阻塞版本比较）', () => {
+  /** 打开卡片（自动保存开）并留下未落盘修改，返回 store */
+  async function openDirtyCard(body = '原始正文', draft = '我的修改') {
+    vi.useFakeTimers()
+    const store = usePlanStore()
+    store.setCardAutosaveEnabled(true)
+    mockedReadPlan.mockResolvedValue(detail('a', body))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+    await store.openCard(PROJECT, 'a')
+    store.setDetailMode('edit')
+    store.updateDraft(draft)
+    return store
+  }
+
+  it('外部写盘冻结 dirty 会话：紧凑冲突条 + 冲突字段比较数据 + 草稿保留，自动保存冻结', async () => {
+    const store = await openDirtyCard()
+    // AI 写盘后变更链调用冻结：读取外部版本建立冲突
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 改过的正文', { contentHash: 'hash-x' }))
+    const outcome = await store.freezeForExternalChange(PROJECT, 'a')
+    await drainBackupWrites()
+
+    expect(outcome).toBe('conflict')
+    expect(store.savePhase).toBe('conflict')
+    // 紧凑条数据：未展开、探测完成、磁盘最新卡在场
+    expect(store.conflictView?.expanded).toBe(false)
+    expect(store.conflictView?.probing).toBe(false)
+    expect(store.conflictView?.diskCard?.body).toBe('AI 改过的正文')
+    // 字段比较：mine = 磁盘基线 + 草稿覆盖，disk = 外部版本
+    const bodyField = store.conflictFields.find((field) => field.key === 'body')
+    expect(bodyField?.kind).toBe('long')
+    expect(bodyField?.mine).toBe('我的修改')
+    expect(bodyField?.disk).toBe('AI 改过的正文')
+    // 草稿保留、自动保存冻结（两秒后不写盘）
+    expect(store.draftBody).toBe('我的修改')
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    expect(mockedUpdatePlan).not.toHaveBeenCalled()
+    // 同一冲突内的后续外部修改：conflict-refresh，冲突不堆叠
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 又改了', { contentHash: 'hash-y' }))
+    expect(await store.freezeForExternalChange(PROJECT, 'a')).toBe('conflict-refresh')
+    expect(store.conflictView?.diskCard?.body).toBe('AI 又改了')
+  })
+
+  it('展开比较后采用磁盘版本：先读后清，详情重开为外部内容', async () => {
+    const store = await openDirtyCard()
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 改过的正文', { contentHash: 'hash-x' }))
+    await store.freezeForExternalChange(PROJECT, 'a')
+    await drainBackupWrites()
+
+    // 紧凑条「比较并处理」：展开并重读磁盘最新
+    store.expandCardConflict(PROJECT)
+    await drainBackupWrites()
+    expect(store.conflictView?.expanded).toBe(true)
+
+    // 两击确认后「采用磁盘版本」：人工内容放弃、会话清除、详情重开
+    mockedGetPlanBoard.mockClear()
+    const adopted = await store.adoptDiskVersion(PROJECT)
+    expect(adopted).toBe(true)
+    expect(store.conflictView).toBeNull()
+    expect(store.draftBody).toBeNull()
+    expect(store.activeCard?.body).toBe('AI 改过的正文')
+    expect(store.editSessions.size).toBe(0)
+    expect(mockedGetPlanBoard).toHaveBeenCalled()
+  })
+
+  it('采用我的当前内容：覆盖写不带版本校验，成功后冲突解除、可见内容立即更新', async () => {
+    const store = await openDirtyCard()
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 改过的正文', { contentHash: 'hash-x' }))
+    await store.freezeForExternalChange(PROJECT, 'a')
+    await drainBackupWrites()
+
+    mockedUpdatePlan.mockResolvedValue(detail('a', '我的修改', { contentHash: 'hash-a2' }))
+    const result = await store.overwriteWithMine(PROJECT)
+    expect(result.ok).toBe(true)
+    // 覆盖写：只带变化字段、不带 expectedContentHash
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, { id: 'a', body: '我的修改' })
+    expect(store.conflictView).toBeNull()
+    expect(store.savePhase).toBe('clean')
+    expect(store.activeCard?.body).toBe('我的修改')
+  })
+
+  it('另存副本：用人工视角完整卡按名称新建，不覆盖原卡、不解冲突', async () => {
+    const store = await openDirtyCard()
+    mockedReadPlan.mockResolvedValue(detail('a', 'AI 改过的正文', { contentHash: 'hash-x' }))
+    await store.freezeForExternalChange(PROJECT, 'a')
+    await drainBackupWrites()
+
+    mockedCreatePlan.mockResolvedValue(detail('b', '副本名'))
+    const copy = await store.saveConflictCopy(PROJECT, '副本名')
+    expect(copy?.id).toBe('b')
+    // 副本正文 = 人工视角完整卡（基线被草稿覆盖）改写首行为副本名
+    expect(mockedCreatePlan).toHaveBeenCalledWith(PROJECT, { body: '副本名' })
+    // 原冲突保留
+    expect(store.conflictView).not.toBeNull()
+    expect(store.draftBody).toBe('我的修改')
+  })
+
+  it('删除守护：AI 删除 dirty 卡后重开保留现场，放弃并关闭清理会话', async () => {
+    const store = await openDirtyCard()
+    store.setCardGuard(PROJECT, 'a', { kind: 'deleted', trashPath: '.trash/plans/计划-1-a.md' })
+    expect(store.guardNotice).toEqual({ kind: 'deleted', trashPath: '.trash/plans/计划-1-a.md' })
+    // 守护也算有待处理的人工内容（变更链判定口径）
+    expect(store.hasCardDraft(PROJECT, 'a')).toBe(true)
+
+    // 重开（卡片已从磁盘消失）：守护现场保留，不清理会话
+    mockedReadPlan.mockResolvedValue(null)
+    await store.openCard(PROJECT, 'a')
+    expect(store.activeCard?.body).toBe('原始正文')
+    expect(store.draftBody).toBe('我的修改')
+    expect(store.detailMode).toBe('edit')
+    expect(store.guardNotice).not.toBeNull()
+
+    // 放弃并关闭：丢弃保留现场并刷新看板
+    mockedGetPlanBoard.mockClear()
+    store.discardGuardedSession(PROJECT)
+    await drainBackupWrites()
+    expect(store.activeCard).toBeNull()
+    expect(store.selectedCardId).toBeNull()
+    expect(store.hasCardDraft(PROJECT, 'a')).toBe(false)
+    expect(mockedGetPlanBoard).toHaveBeenCalled()
+  })
+
+  it('hasCardDraft：干净会话与无会话为 false，dirty 为 true', async () => {
+    const store = usePlanStore()
+    vi.useFakeTimers()
+    store.setCardAutosaveEnabled(true)
+    mockedReadPlan.mockResolvedValue(detail('a', '原始正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+    await store.openCard(PROJECT, 'a')
+    expect(store.hasCardDraft(PROJECT, 'a')).toBe(false)
+    expect(store.hasCardDraft(PROJECT, 'b')).toBe(false)
+
+    store.updateDraft('未落盘')
+    expect(store.hasCardDraft(PROJECT, 'a')).toBe(true)
   })
 })

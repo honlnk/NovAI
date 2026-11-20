@@ -16,6 +16,7 @@ import type {
   PlanStatusView,
 } from '@novai/core/services/types'
 import { PlanConflictError } from '@novai/core/types/plans'
+import { PLAN_COLUMN_LABELS } from '../constants/plans'
 import { createCardBoardCore, type BoardLoadSource, type CardBoardEditSession } from './card-board'
 
 /**
@@ -70,8 +71,9 @@ export const usePlanStore = defineStore('plan', () => {
     readCard: (projectId, id) => readPlan(projectId, id),
     // 保存组合：计划名变化时按新名改写正文首个非空行（body 同传以 body 为准的
     // 组合责任在调用方，见 core plans/store.ts 注释），普通状态与正文同一次写入
-    // （阶段 2：避免正文已保存但状态失败的半成功），携带读取时 hash。
-    saveCard: (projectId, card, draft) => {
+    // （阶段 2：避免正文已保存但状态失败的半成功），携带读取时 hash；overwrite
+    // （阶段 3「采用我的当前内容」）为整份覆盖写入，不携带版本校验。
+    saveCard: (projectId, card, draft, options) => {
       const title = draft.title?.trim() ?? ''
       const bodyChanged = draft.body !== null && draft.body !== card.body
       const titleChanged = draft.title !== null && draft.title.trim() !== card.title
@@ -85,9 +87,35 @@ export const usePlanStore = defineStore('plan', () => {
         ...(nextBody !== undefined ? { body: nextBody } : {}),
         ...(titleChanged ? { title } : {}),
         ...(statusChanged ? { status: draft.status as PlanStatusView } : {}),
-        expectedContentHash: card.contentHash,
+        ...(options?.overwrite ? {} : { expectedContentHash: card.contentHash }),
       })
     },
+    // 人工视角完整卡（磁盘基线 + 草稿覆盖）：与 saveCard 同一组合口径，冲突字段
+    // 比较与另存副本用它拿到「用户此刻眼里的这张卡」
+    buildSnapshotCard: (card, draft) => {
+      const title = draft.title !== null && draft.title.trim() !== card.title
+        ? draft.title.trim()
+        : card.title
+      const rawBody = draft.body !== null && draft.body !== card.body ? draft.body : null
+      const body = title !== card.title
+        ? replacePlanTitleLine(rawBody ?? card.body, title)
+        : rawBody ?? card.body
+      return {
+        ...card,
+        ...(title !== card.title ? { title } : {}),
+        ...(body !== card.body ? { body } : {}),
+        ...(draft.status != null && draft.status !== card.status ? { status: draft.status } : {}),
+      }
+    },
+    // 另存副本：完整卡正文改写首行为副本名后按新建落盘（不覆盖原卡、不解冲突）
+    saveCopy: (projectId, card, name) =>
+      createPlan(projectId, { body: replacePlanTitleLine(card.body, name) }),
+    // 冲突字段比较：状态映射列标签，正文按段落差异块展示
+    conflictFields: (mine, disk) => [
+      { key: 'title', label: '计划名', mine: mine.title, disk: disk.title, kind: 'short' },
+      { key: 'status', label: '状态', mine: PLAN_COLUMN_LABELS[mine.status], disk: PLAN_COLUMN_LABELS[disk.status], kind: 'short' },
+      { key: 'body', label: '正文', mine: mine.body, disk: disk.body, kind: 'long' },
+    ],
     moveCard: (projectId, id, status, afterId, beforeId) => updatePlan(projectId, { id, status, afterId, beforeId }),
     deleteCard: (projectId, id) => deletePlan(projectId, id),
     // 新建提交：计划名作为正文首个非空行，与正文合成完整内容

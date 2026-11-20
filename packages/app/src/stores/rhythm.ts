@@ -104,8 +104,9 @@ export const useRhythmStore = defineStore('rhythm', () => {
     loadBoard: (projectId) => getRhythmBoard(projectId),
     readCard: (projectId, id) => readRhythm(projectId, id),
     // 保存组合：只提交有实际变化的字段，携带读取时 hash；计划值改动会触发
-    // 偏差重判定（实际值已回写时），状态由服务层自动流转
-    saveCard: (projectId, card, draft) => {
+    // 偏差重判定（实际值已回写时），状态由服务层自动流转；overwrite（阶段 3
+    // 「采用我的当前内容」）为整份覆盖写入，不携带版本校验
+    saveCard: (projectId, card, draft, options) => {
       const name = draft.name?.trim()
       const characters = draft.plannedCharacters !== null ? splitCharacters(draft.plannedCharacters) : null
       return updateRhythm(projectId, {
@@ -118,9 +119,60 @@ export const useRhythmStore = defineStore('rhythm', () => {
         ...(characters !== null && characters.join('、') !== card.plannedCharacters.join('、') ? { plannedCharacters: characters } : {}),
         ...(draft.plannedNote !== null && draft.plannedNote.trim() !== (card.plannedNote ?? '') ? { plannedNote: draft.plannedNote.trim() } : {}),
         ...(draft.intentBody !== null && draft.intentBody !== card.intentBody ? { intentBody: draft.intentBody } : {}),
-        expectedContentHash: card.contentHash,
+        ...(options?.overwrite ? {} : { expectedContentHash: card.contentHash }),
       })
     },
+    // 人工视角完整卡（磁盘基线 + 草稿覆盖），与 saveCard/draftDiffers 同一比较口径
+    buildSnapshotCard: (card, draft) => {
+      const name = draft.name !== null && draft.name.trim() !== card.name ? draft.name.trim() : null
+      const conflict = draft.plannedConflict !== null && draft.plannedConflict !== card.plannedConflict ? draft.plannedConflict : null
+      const mood = draft.plannedMood !== null && draft.plannedMood !== card.plannedMood ? draft.plannedMood : null
+      const hook = draft.plannedHook !== null && draft.plannedHook !== card.plannedHook ? draft.plannedHook : null
+      const payoff = draft.plannedPayoff !== null && draft.plannedPayoff !== card.plannedPayoff ? draft.plannedPayoff : null
+      const characters = draft.plannedCharacters !== null && draft.plannedCharacters.trim() !== card.plannedCharacters.join('、')
+        ? splitCharacters(draft.plannedCharacters)
+        : null
+      const note = draft.plannedNote !== null && draft.plannedNote.trim() !== (card.plannedNote ?? '') ? draft.plannedNote.trim() : null
+      const intentBody = draft.intentBody !== null && draft.intentBody !== card.intentBody ? draft.intentBody : null
+      return {
+        ...card,
+        ...(name !== null ? { name } : {}),
+        ...(conflict !== null ? { plannedConflict: conflict } : {}),
+        ...(mood !== null ? { plannedMood: mood as RhythmCardView['plannedMood'] } : {}),
+        ...(hook !== null ? { plannedHook: hook as RhythmCardView['plannedHook'] } : {}),
+        ...(payoff !== null ? { plannedPayoff: payoff as RhythmCardView['plannedPayoff'] } : {}),
+        ...(characters !== null ? { plannedCharacters: characters } : {}),
+        ...(note !== null ? { plannedNote: note } : {}),
+        ...(intentBody !== null ? { intentBody } : {}),
+      }
+    },
+    // 另存副本：完整卡按副本名新建（不覆盖原卡、不解冲突），正文三节与计划值
+    // 全部带过去；同章重卡由服务层章号唯一性兜底报错
+    saveCopy: (projectId, card, name) => createRhythm(projectId, {
+      name,
+      chapterRef: card.chapterRef,
+      plannedConflict: card.plannedConflict,
+      plannedMood: card.plannedMood,
+      plannedHook: card.plannedHook,
+      plannedPayoff: card.plannedPayoff,
+      ...(card.plannedCharacters.length > 0 ? { plannedCharacters: [...card.plannedCharacters] } : {}),
+      ...(card.plannedNote ? { plannedNote: card.plannedNote } : {}),
+      ...(card.intentBody !== '' ? { intentBody: card.intentBody } : {}),
+      ...(card.linkBody !== '' ? { linkBody: card.linkBody } : {}),
+      ...(card.authorNoteBody !== '' ? { authorNoteBody: card.authorNoteBody } : {}),
+    }),
+    // 冲突字段比较：计划值与关联章节单行并排（枚举即中文），节奏意图按段落差异块
+    conflictFields: (mine, disk) => [
+      { key: 'name', label: '卡名', mine: mine.name, disk: disk.name, kind: 'short' },
+      { key: 'chapterRef', label: '关联章节', mine: mine.chapterRef, disk: disk.chapterRef, kind: 'short' },
+      { key: 'plannedConflict', label: '计划冲突强度', mine: String(mine.plannedConflict), disk: String(disk.plannedConflict), kind: 'short' },
+      { key: 'plannedMood', label: '计划情绪', mine: mine.plannedMood, disk: disk.plannedMood, kind: 'short' },
+      { key: 'plannedHook', label: '计划钩子', mine: mine.plannedHook, disk: disk.plannedHook, kind: 'short' },
+      { key: 'plannedPayoff', label: '计划爽点', mine: mine.plannedPayoff, disk: disk.plannedPayoff, kind: 'short' },
+      { key: 'plannedCharacters', label: '计划角色', mine: mine.plannedCharacters.join('、'), disk: disk.plannedCharacters.join('、'), kind: 'short' },
+      { key: 'plannedNote', label: '自然语言补充', mine: mine.plannedNote ?? '（无）', disk: disk.plannedNote ?? '（无）', kind: 'short' },
+      { key: 'intentBody', label: '节奏意图', mine: mine.intentBody, disk: disk.intentBody, kind: 'long' },
+    ],
     // 列内重排 only：跨列流转由 actual_* 回写驱动，status 形参只是工厂签名对齐
     // （调用方只会在同列重排时触达这里，见 constants/rhythm.ts 的落点放行）
     moveCard: (projectId, id, _status, afterId, beforeId) => updateRhythm(projectId, { id, afterId, beforeId }),
