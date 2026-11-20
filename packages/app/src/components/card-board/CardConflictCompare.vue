@@ -14,6 +14,8 @@ import ConflictDiffBlocks from '../layout/ConflictDiffBlocks.vue'
 const props = defineProps<{
   /** 领域 store 组合的 mine/disk 展示文本（无差异字段在这里过滤） */
   conflictFields: ReadonlyArray<CardConflictField>
+  /** 折叠复位作用域（切卡/收起再展开时清未改动折叠的展开残留） */
+  foldScope?: string
 }>()
 
 /** 有差异的短字段（红绿并排） */
@@ -67,7 +69,7 @@ const longFieldDiffs = computed(() =>
       <p v-else class="px-2 pb-1 text-[11px] text-gray-400">
         修改 {{ entry.diff.stats.changed }} 段、新增 {{ entry.diff.stats.added }} 段、删除 {{ entry.diff.stats.removed }} 段。
       </p>
-      <ConflictDiffBlocks :diff="entry.diff" :fold-prefix="entry.key" />
+      <ConflictDiffBlocks :diff="entry.diff" :fold-prefix="entry.key" :fold-scope="foldScope" />
     </div>
   </div>
 </template>
