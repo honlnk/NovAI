@@ -1199,7 +1199,9 @@ async function handleForeshadowingMove(id: string, status: ForeshadowingStatusVi
       const draggingProjectId = projectId.value
       await foreshadowingStore.openCard(draggingProjectId, id)
       if (projectId.value !== draggingProjectId || projectStore.currentProject?.id !== draggingProjectId) return
-      isContentPanelOpen.value = true
+      // 面板可见性按分类旗标解析（workspacePanel）：这里必须置伏笔面板开关，
+      // 不能错用文件面板的 isContentPanelOpen（否则操作态建了面板却不出现）
+      isForeshadowingPanelOpen.value = true
       foreshadowingStore.startAbandon(draggingProjectId, { afterId, beforeId: beforeId ?? null })
       return
     }

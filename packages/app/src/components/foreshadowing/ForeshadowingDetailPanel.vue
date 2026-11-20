@@ -79,7 +79,8 @@ const payoffWindowText = computed(() =>
 )
 
 const abandonReasonInput = ref<HTMLTextAreaElement | null>(null)
-// 进入操作态默认聚焦原因输入（计划 §四.1：输入框默认聚焦）
+// 进入操作态默认聚焦原因输入（计划 §四.1：输入框默认聚焦）。immediate 覆盖
+// 「拖入已放弃列」路径——面板挂载时操作态已在，靠变更触发会漏掉这次聚焦
 watch(
   () => props.abandonIntent,
   async (intent) => {
@@ -88,7 +89,7 @@ watch(
       abandonReasonInput.value?.focus()
     }
   },
-  { flush: 'post' },
+  { flush: 'post', immediate: true },
 )
 
 /** 状态选择出口：「已放弃」拦截进原因操作态（已放弃卡再点可登记新原因），其余走两秒延迟保存 */
