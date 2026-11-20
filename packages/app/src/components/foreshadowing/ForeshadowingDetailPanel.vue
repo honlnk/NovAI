@@ -19,11 +19,12 @@ const props = defineProps<{
   draftName: string | null
   draftReaderView: string | null
   draftAuthorTruth: string | null
+  /** 待保存的普通状态（状态按钮等待标记）；null = 无状态修改 */
+  draftStatus: ForeshadowingStatusView | null
   detailMode: DetailMode
-  isSaving: boolean
+  savePhase: 'clean' | 'pending' | 'saving' | 'failed' | 'conflict'
   conflictNotice: unknown | null
   actionError: string
-  hasUnsavedChanges: boolean
 }>()
 
 const emit = defineEmits<{
@@ -31,11 +32,11 @@ const emit = defineEmits<{
   updateDraftName: [name: string]
   updateDraftReaderView: [readerView: string]
   updateDraftAuthorTruth: [authorTruth: string]
+  updateDraftStatus: [status: ForeshadowingStatusView]
   setDetailMode: [mode: DetailMode]
-  saveDraft: []
+  retrySave: []
   reloadFromConflict: []
   keepDraft: []
-  moveCard: [id: string, status: ForeshadowingStatusView, afterId: string | null]
   removeCard: [id: string]
 }>()
 
@@ -70,21 +71,21 @@ function onTruthInput(event: Event) {
     title-placeholder="伏笔名"
     :columns="statusButtons"
     :active-column-key="activeCard.status"
+    :pending-column-key="draftStatus"
     :detail-mode="detailMode"
-    :is-saving="isSaving"
+    :save-phase="savePhase"
     :has-conflict="conflictNotice !== null"
     :action-error="actionError"
-    :has-unsaved-changes="hasUnsavedChanges"
     :updated-at="activeCard.updatedAt"
     delete-label="删除（移入回收站）"
     testid-prefix="foreshadowing"
     @close="emit('close')"
     @update-title="emit('updateDraftName', $event)"
     @set-detail-mode="emit('setDetailMode', $event)"
-    @save-draft="emit('saveDraft')"
+    @select-status="(columnKey) => emit('updateDraftStatus', columnKey as ForeshadowingStatusView)"
+    @retry-save="emit('retrySave')"
     @reload-from-conflict="emit('reloadFromConflict')"
     @keep-draft="emit('keepDraft')"
-    @move-card="(columnKey) => emit('moveCard', activeCard.id, columnKey as ForeshadowingStatusView, null)"
     @remove-card="emit('removeCard', activeCard.id)"
   >
     <template #content="{ detailMode: mode }">

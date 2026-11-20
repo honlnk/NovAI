@@ -24,10 +24,9 @@ const props = defineProps<{
   draftPlannedNote: string | null
   draftIntentBody: string | null
   detailMode: DetailMode
-  isSaving: boolean
+  savePhase: 'clean' | 'pending' | 'saving' | 'failed' | 'conflict'
   conflictNotice: unknown | null
   actionError: string
-  hasUnsavedChanges: boolean
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +42,7 @@ const emit = defineEmits<{
     intentBody?: string
   }]
   setDetailMode: [mode: DetailMode]
-  saveDraft: []
+  retrySave: []
   reloadFromConflict: []
   keepDraft: []
   removeCard: [id: string]
@@ -95,18 +94,18 @@ function onCharactersInput(event: Event) {
     title-placeholder="节奏卡名"
     :columns="[]"
     :active-column-key="activeCard.status"
+    :pending-column-key="null"
     :detail-mode="detailMode"
-    :is-saving="isSaving"
+    :save-phase="savePhase"
     :has-conflict="conflictNotice !== null"
     :action-error="actionError"
-    :has-unsaved-changes="hasUnsavedChanges"
     :updated-at="activeCard.updatedAt"
     delete-label="删除（移入回收站）"
     testid-prefix="rhythm"
     @close="emit('close')"
     @update-title="(value) => emit('updateDraft', { name: value })"
     @set-detail-mode="emit('setDetailMode', $event)"
-    @save-draft="emit('saveDraft')"
+    @retry-save="emit('retrySave')"
     @reload-from-conflict="emit('reloadFromConflict')"
     @keep-draft="emit('keepDraft')"
     @remove-card="emit('removeCard', activeCard.id)"

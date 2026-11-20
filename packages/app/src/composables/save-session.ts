@@ -417,9 +417,12 @@ export function createSaveSessionRealm<
    * - 无会话、无待写内容、守护或冲突未解决时不写（冲突的「采用我的当前内容」
    *   走 overwriteContent 强写出口，不经此处）；
    * - 写盘在途时按同键串行排队，前一个完成后以最新状态执行；
-   * - 会话引用与提交快照在请求时同步固定：排队间隙里会话被清除（切项目
-   *   reset 等）也不取消已请求的文件写入，结果只作用于该会话；请求后继续
-   * 输入的内容保留为待写。
+   * - 手动/去抖触发（用户输入的写盘承诺）：会话引用与提交快照在请求时同步
+   *   固定——排队间隙里会话被清除（切项目 reset 等）也不取消已请求的文件
+   *   写入，结果只作用于该会话；请求后继续输入的内容保留为待写；
+   * - 收口触发（flush）：执行时重读会话当前快照——排队间隙里待写内容已被
+   *   前一次保存落盘或会话已清时，本次请求自然收敛为 skipped，不重复提交
+   *   已落盘的内容（收口的目的是清空待写，不是兑现某次固定提交）。
    */
   function requestSave(
     projectId: string,
@@ -428,18 +431,20 @@ export function createSaveSessionRealm<
   ): Promise<SaveSessionRequestResult<TDisk>> {
     const trigger = options?.trigger ?? 'manual'
     const composite = realmKey(projectId, key)
+    const pinAtRequest = trigger !== 'flush' || options?.snapshot !== undefined
     // 请求时同步固定会话与快照（与调用方按钮点击同 tick；排队后写盘开始前
-    // 的新输入不算进本次提交）
+    // 的新输入不算进本次提交）。显式携带 snapshot 的调用（saveDraft 提交
+    // 草稿）始终固定，与触发方式无关。
     const sessionAtRequest = getSession(projectId, key)
     const submitted
       = options?.snapshot
-        ?? (sessionAtRequest !== undefined ? adapter.getSnapshot(sessionAtRequest) : undefined)
+        ?? (pinAtRequest && sessionAtRequest !== undefined ? adapter.getSnapshot(sessionAtRequest) : undefined)
     let result: SaveSessionRequestResult<TDisk> = { status: 'skipped' }
     const run = enqueueSaveWork(composite, async () => {
       result = await performSave(projectId, key, {
         trigger,
         force: false,
-        ...(sessionAtRequest !== undefined ? { session: sessionAtRequest } : {}),
+        ...(pinAtRequest && sessionAtRequest !== undefined ? { session: sessionAtRequest } : {}),
         ...(submitted !== undefined ? { submitted } : {}),
       })
     })
@@ -546,6 +551,10 @@ export function createSaveSessionRealm<
     }
 
     session.failure = { message: outcome.message }
+    // 手动触发（保存按钮/状态条重试）重新开启补试周期：用户明确动作后允许再补试一次
+    if (options.trigger === 'manual') {
+      clearAutoRetryCycle(realmKey(projectId, key))
+    }
     // 普通失败自动补试一次：持久错误必须可见，补试失败后不再自动打扰
     scheduleAutoRetry(projectId, key)
     await adapter.onSettled?.(projectId, key, { status: 'failed', message: outcome.message })

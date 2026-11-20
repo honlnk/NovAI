@@ -365,6 +365,16 @@ onUnmounted(() => {
   teardownDraftBackup?.()
   teardownEditorAutosave?.()
   teardownCardBackup?.()
+  for (const teardown of teardownCardSaveLifecycles) teardown()
+  teardownCardSaveLifecycles = []
+  // 离开项目视图（阶段 2）：关掉本视图打开的卡片输入自动保存，并尽力收口三域
+  // 待写会话（写盘发起即返回，来不及落盘的由恢复镜像兜底）
+  planStore.setCardAutosaveEnabled(false)
+  foreshadowingStore.setCardAutosaveEnabled(false)
+  rhythmStore.setCardAutosaveEnabled(false)
+  void planStore.flushAllCards(projectId.value)
+  void foreshadowingStore.flushAllCards(projectId.value)
+  void rhythmStore.flushAllCards(projectId.value)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   // 离开项目视图（§阶段 2 离开收口）：尽力收口全部待写会话；写盘服务等收口
   // 结束再注销（发起即返回，来不及落盘的内容由恢复镜像兜底）。注销前比对
@@ -383,14 +393,25 @@ onUnmounted(() => {
 
 // 草稿备份生命周期（数据安全计划 §3-2）：页面隐藏/关闭前立即落盘待写备份
 // 正文自动保存收口（§阶段 2）在同一时机独立挂接——写盘与镜像互不拖累；
-// 看板卡片草稿镜像（阶段 1）同样挂接
+// 看板卡片草稿镜像（阶段 1）与卡片写盘收口（阶段 2）同样挂接
 let teardownDraftBackup: (() => void) | null = null
 let teardownEditorAutosave: (() => void) | null = null
 let teardownCardBackup: (() => void) | null = null
+let teardownCardSaveLifecycles: Array<() => void> = []
 onMounted(() => {
   teardownDraftBackup = setupDraftBackupLifecycle()
   teardownEditorAutosave = setupEditorAutosaveLifecycle()
   teardownCardBackup = setupCardBackupLifecycle()
+  teardownCardSaveLifecycles = [
+    planStore.setupCardSaveLifecycle(),
+    foreshadowingStore.setupCardSaveLifecycle(),
+    rhythmStore.setupCardSaveLifecycle(),
+  ]
+  // 打开三域卡片输入自动保存（阶段 2）：2000ms 去抖由会话引擎承载；测试环境默认
+  // 关闭保持手动保存语义，只有生产视图挂载时打开
+  planStore.setCardAutosaveEnabled(true)
+  foreshadowingStore.setCardAutosaveEnabled(true)
+  rhythmStore.setCardAutosaveEnabled(true)
 })
 
 // 后台会话保存失败到达（§3-4 保存失败可见 / F11 错误持续）：错误 toast 默认持续显示
@@ -640,6 +661,10 @@ watch(activeCategory, async (category, previous) => {
   // 冲突/守护会话在收口内部被拒绝，现场按会话保留
   if (previous && projectStore.currentProject) {
     void flushEditorSessions(projectId.value)
+    // 三域看板卡片会话同样收口（阶段 2）：两秒去抖内还没写的字段立即落盘
+    void planStore.flushAllCards(projectId.value)
+    void foreshadowingStore.flushAllCards(projectId.value)
+    void rhythmStore.flushAllCards(projectId.value)
   }
   if (category === 'plan' && projectStore.currentProject) {
     await planStore.loadBoard(projectId.value)
@@ -713,10 +738,14 @@ function handleCloseContentPanel() {
     void flushDraftBackupsNow()
   } else if (target === 'plan') {
     isPlanPanelOpen.value = false
+    // 关闭详情面板（阶段 2 离开收口）：待写内容立即落盘，会话保留供重开恢复现场
+    void planStore.flushAllCards(projectId.value)
   } else if (target === 'foreshadowing') {
     isForeshadowingPanelOpen.value = false
+    void foreshadowingStore.flushAllCards(projectId.value)
   } else if (target === 'rhythm') {
     isRhythmPanelOpen.value = false
+    void rhythmStore.flushAllCards(projectId.value)
   }
 }
 
@@ -877,27 +906,31 @@ async function handlePlanRemove(id: string) {
   }
 }
 
-async function handlePlanSaveDraft() {
-  if (!projectStore.currentProject) {
-    return
-  }
-  const savingProjectId = projectId.value
-  const previousPath = planStore.activeCard?.sourcePath
-  const ok = await planStore.saveDraft(savingProjectId)
-  if (projectId.value !== savingProjectId || projectStore.currentProject?.id !== savingProjectId) return
-  if (ok) {
-    toast.success('已保存')
-    // 切卡后仍以保存完成的原卡片为准，不能让当前卡片决定文件树是否刷新。
-    const savedCard = planStore.lastSavedCard
-    if (savedCard && savedCard.sourcePath !== previousPath) {
-      await projectStore.refreshTree()
-    }
-  } else if (planStore.detailNotice) {
-    toast.error(planStore.detailNotice.message)
-  } else if (!planStore.conflictNotice) {
-    toast.error(planStore.actionError || '保存失败')
-  }
+/** 状态条「重试」（阶段 2 无保存心智）：手动重开当前卡片的失败保存，重开自动补试周期 */
+function handlePlanRetrySave() {
+  void planStore.retrySave(projectId.value)
 }
+
+// 自动保存改写计划文件首行（计划名改动触发）后刷新文件树：只在同一张卡前后路径
+// 变化时触发，普通内容保存与切卡保存不打扰文件树
+watch(
+  () => planStore.lastSavedCard,
+  (saved, previous) => {
+    if (saved && previous?.id === saved.id && previous.sourcePath !== saved.sourcePath) {
+      void projectStore.refreshTree()
+    }
+  },
+)
+
+// 非当前卡片的保存失败到达（阶段 2 反馈分层）：详情面板看不见，toast 补一层可见性
+watch(
+  () => planStore.detailNotice,
+  (notice) => {
+    if (notice) {
+      toast.error(notice.message)
+    }
+  },
+)
 
 // ===== 伏笔账本（创作心智模块阶段二：与计划板同构的看板分类） =====
 
@@ -1068,27 +1101,30 @@ async function handleForeshadowingRemove(id: string) {
   }
 }
 
-async function handleForeshadowingSaveDraft() {
-  if (!projectStore.currentProject) {
-    return
-  }
-  const savingProjectId = projectId.value
-  const previousPath = foreshadowingStore.activeCard?.sourcePath
-  const ok = await foreshadowingStore.saveDraft(savingProjectId)
-  if (projectId.value !== savingProjectId || projectStore.currentProject?.id !== savingProjectId) return
-  if (ok) {
-    toast.success('已保存')
-    // 伏笔名改动会重命名文件：以保存完成的原卡片为准决定是否刷新文件树
-    const savedCard = foreshadowingStore.lastSavedCard
-    if (savedCard && savedCard.sourcePath !== previousPath) {
-      await projectStore.refreshTree()
-    }
-  } else if (foreshadowingStore.detailNotice) {
-    toast.error(foreshadowingStore.detailNotice.message)
-  } else if (!foreshadowingStore.conflictNotice) {
-    toast.error(foreshadowingStore.actionError || '保存失败')
-  }
+/** 状态条「重试」（阶段 2 无保存心智）：手动重开当前伏笔的失败保存 */
+function handleForeshadowingRetrySave() {
+  void foreshadowingStore.retrySave(projectId.value)
 }
+
+// 自动保存重命名伏笔文件（伏笔名改动触发）后刷新文件树：同卡前后路径变化才触发
+watch(
+  () => foreshadowingStore.lastSavedCard,
+  (saved, previous) => {
+    if (saved && previous?.id === saved.id && previous.sourcePath !== saved.sourcePath) {
+      void projectStore.refreshTree()
+    }
+  },
+)
+
+// 非当前卡片的保存失败到达（阶段 2 反馈分层）：详情面板看不见，toast 补一层可见性
+watch(
+  () => foreshadowingStore.detailNotice,
+  (notice) => {
+    if (notice) {
+      toast.error(notice.message)
+    }
+  },
+)
 
 /** 看板顶栏列模式切换：写回项目设置（novel.config.json），所有伏笔视图随之换口径 */
 async function handleToggleForeshadowingColumnMode() {
@@ -1242,27 +1278,30 @@ async function handleRhythmRemove(id: string) {
   }
 }
 
-async function handleRhythmSaveDraft() {
-  if (!projectStore.currentProject) {
-    return
-  }
-  const savingProjectId = projectId.value
-  const previousPath = rhythmStore.activeCard?.sourcePath
-  const ok = await rhythmStore.saveDraft(savingProjectId)
-  if (projectId.value !== savingProjectId || projectStore.currentProject?.id !== savingProjectId) return
-  if (ok) {
-    toast.success('已保存')
-    // 节奏卡名改动会重命名文件：以保存完成的原卡片为准决定是否刷新文件树
-    const savedCard = rhythmStore.lastSavedCard
-    if (savedCard && savedCard.sourcePath !== previousPath) {
-      await projectStore.refreshTree()
-    }
-  } else if (rhythmStore.detailNotice) {
-    toast.error(rhythmStore.detailNotice.message)
-  } else if (!rhythmStore.conflictNotice) {
-    toast.error(rhythmStore.actionError || '保存失败')
-  }
+/** 状态条「重试」（阶段 2 无保存心智）：手动重开当前节奏卡的失败保存 */
+function handleRhythmRetrySave() {
+  void rhythmStore.retrySave(projectId.value)
 }
+
+// 自动保存重命名节奏卡文件（节奏卡名改动触发）后刷新文件树：同卡前后路径变化才触发
+watch(
+  () => rhythmStore.lastSavedCard,
+  (saved, previous) => {
+    if (saved && previous?.id === saved.id && previous.sourcePath !== saved.sourcePath) {
+      void projectStore.refreshTree()
+    }
+  },
+)
+
+// 非当前卡片的保存失败到达（阶段 2 反馈分层）：详情面板看不见，toast 补一层可见性
+watch(
+  () => rhythmStore.detailNotice,
+  (notice) => {
+    if (notice) {
+      toast.error(notice.message)
+    }
+  },
+)
 
 function selectCategory(category: Category) {
   activeCategory.value = category
@@ -1484,19 +1523,19 @@ function handleGoToSettings() {
           :active-card="planStore.activeCard"
           :draft-body="planStore.draftBody"
           :draft-title="planStore.draftTitle"
+          :draft-status="planStore.draftStatus"
           :detail-mode="planStore.detailMode"
-          :is-saving="planStore.isSaving"
+          :save-phase="planStore.savePhase"
           :conflict-notice="planStore.conflictNotice"
           :action-error="planStore.actionError"
-          :has-unsaved-changes="planStore.hasUnsavedChanges"
           @close="handleCloseContentPanel"
           @update-draft="planStore.updateDraft"
           @update-draft-title="planStore.updateDraftTitle"
+          @update-draft-status="planStore.updateDraftStatus"
           @set-detail-mode="planStore.setDetailMode"
-          @save-draft="handlePlanSaveDraft"
+          @retry-save="handlePlanRetrySave"
           @reload-from-conflict="planStore.reloadFromConflict(projectId)"
           @keep-draft="planStore.keepDraft()"
-          @move-card="handlePlanMove"
           @remove-card="handlePlanRemove"
         />
         <!-- 新建计划 -->
@@ -1518,20 +1557,20 @@ function handleGoToSettings() {
           :draft-name="foreshadowingStore.draftName"
           :draft-reader-view="foreshadowingStore.draftReaderView"
           :draft-author-truth="foreshadowingStore.draftAuthorTruth"
+          :draft-status="foreshadowingStore.draftStatus"
           :detail-mode="foreshadowingStore.detailMode"
-          :is-saving="foreshadowingStore.isSaving"
+          :save-phase="foreshadowingStore.savePhase"
           :conflict-notice="foreshadowingStore.conflictNotice"
           :action-error="foreshadowingStore.actionError"
-          :has-unsaved-changes="foreshadowingStore.hasUnsavedChanges"
           @close="handleCloseContentPanel"
           @update-draft-name="foreshadowingStore.updateDraftName"
           @update-draft-reader-view="foreshadowingStore.updateDraftReaderView"
           @update-draft-author-truth="foreshadowingStore.updateDraftAuthorTruth"
+          @update-draft-status="foreshadowingStore.updateDraftStatus"
           @set-detail-mode="foreshadowingStore.setDetailMode"
-          @save-draft="handleForeshadowingSaveDraft"
+          @retry-save="handleForeshadowingRetrySave"
           @reload-from-conflict="foreshadowingStore.reloadFromConflict(projectId)"
           @keep-draft="foreshadowingStore.keepDraft()"
-          @move-card="handleForeshadowingMove"
           @remove-card="handleForeshadowingRemove"
         />
         <!-- 登记伏笔 -->
@@ -1564,14 +1603,13 @@ function handleGoToSettings() {
           :draft-planned-note="rhythmStore.draftPlannedNote"
           :draft-intent-body="rhythmStore.draftIntentBody"
           :detail-mode="rhythmStore.detailMode"
-          :is-saving="rhythmStore.isSaving"
+          :save-phase="rhythmStore.savePhase"
           :conflict-notice="rhythmStore.conflictNotice"
           :action-error="rhythmStore.actionError"
-          :has-unsaved-changes="rhythmStore.hasUnsavedChanges"
           @close="handleCloseContentPanel"
           @update-draft="rhythmStore.updateDraft"
           @set-detail-mode="rhythmStore.setDetailMode"
-          @save-draft="handleRhythmSaveDraft"
+          @retry-save="handleRhythmRetrySave"
           @reload-from-conflict="rhythmStore.reloadFromConflict(projectId)"
           @keep-draft="rhythmStore.keepDraft()"
           @remove-card="handleRhythmRemove"

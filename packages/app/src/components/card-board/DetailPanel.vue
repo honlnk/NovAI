@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import type { DetailMode } from '../plan/detail-mode'
 import Tooltip from '../ui/Tooltip.vue'
@@ -12,12 +12,15 @@ import AppIcon from '../ui/AppIcon.vue'
  * 草稿、编辑模式与冲突真值都在各领域的 card-board store（卡片级编辑会话），
  * 本组件只展示与转发。
  *
- * 交互约定：
+ * 交互约定（阶段 2 无保存心智）：
  * - 头部名称输入 + 预览/编辑两态分段控件；正文区（预览/编辑的具体形态）
  *   由 #content 插槽按 detailMode 注入（计划是 Markdown/textarea，伏笔是
  *   读者视角/作者真相双区）。
- * - 分组按钮高亮读取 moveCard 同步后的当前列 key（与看板同源）。
- * - 删除进回收站，两步确认；保存与删除同在底部操作行。
+ * - 分组按钮：选中态读取已生效列 key（保存成功才切换）；待保存状态用中性底
+ *   与点状等待标记（不伪装成已生效），点击只登记待保存状态（两秒后随本卡
+ *   整体保存），不立即移动卡片。
+ * - 底部操作行无保存按钮：保存状态条（已保存/等待保存/正在保存/保存失败+
+ *   重试/保存冲突）+ 更新时间 + 删除（两步确认）。
  */
 const props = defineProps<{
   /** 当前卡片 id（删除两步确认随切卡清残留） */
@@ -25,17 +28,19 @@ const props = defineProps<{
   /** 头部名称输入框展示值（卡片名草稿 ?? 卡片名，由调用方组合） */
   titleValue: string
   titlePlaceholder: string
-  /** 领域列按钮（顺序即展示顺序）；点击即移动到该列 */
+  /** 领域列按钮（顺序即展示顺序）；点击登记待保存状态（节奏卡传空数组） */
   columns: ReadonlyArray<{ key: string; label: string }>
-  /** 当前卡片所在列 key（与看板同源） */
+  /** 当前已生效列 key（保存成功后随卡片更新，与看板同源） */
   activeColumnKey: string
+  /** 待保存状态列 key（等待标记；null = 无状态修改） */
+  pendingColumnKey: string | null
   /** 详情视图态（预览/编辑，随卡片编辑会话恢复） */
   detailMode: DetailMode
-  isSaving: boolean
+  /** 保存状态（clean=已保存 / pending=等待保存 / saving=正在保存 / failed / conflict） */
+  savePhase: 'clean' | 'pending' | 'saving' | 'failed' | 'conflict'
   /** 外部修改提醒是否在展示（重新读取/保留草稿） */
   hasConflict: boolean
   actionError: string
-  hasUnsavedChanges: boolean
   /** 底部展示的更新时间（空串隐藏） */
   updatedAt: string
   /** 删除按钮文案（如「删除（移入回收站）」） */
@@ -47,10 +52,12 @@ const emit = defineEmits<{
   close: []
   updateTitle: [title: string]
   setDetailMode: [mode: DetailMode]
-  saveDraft: []
+  /** 状态按钮点击：登记待保存状态（领域 store 的 updateDraftStatus） */
+  selectStatus: [columnKey: string]
+  /** 状态条「重试」：手动重试失败写入 */
+  retrySave: []
   reloadFromConflict: []
   keepDraft: []
-  moveCard: [columnKey: string]
   removeCard: []
 }>()
 
@@ -68,6 +75,22 @@ watch(
 
 function onTitleInput(event: Event) {
   emit('updateTitle', (event.target as HTMLInputElement).value)
+}
+
+/** 保存状态条文案（§六.1 无保存心智：等待保存 / 正在保存 / 已保存；异常单独解释） */
+const saveStatusLabel = computed(() => {
+  switch (props.savePhase) {
+    case 'saving': return '正在保存'
+    case 'pending': return '等待保存'
+    case 'failed': return '保存失败'
+    case 'conflict': return '保存冲突'
+    default: return '已保存'
+  }
+})
+
+/** 待保存状态按钮是否显示等待标记（已生效列不重复标记） */
+function isPendingColumn(columnKey: string): boolean {
+  return props.pendingColumnKey === columnKey && columnKey !== props.activeColumnKey
 }
 
 function formatTime(iso: string): string {
@@ -131,19 +154,26 @@ function formatTime(iso: string): string {
 
     <!-- 内容区：分组列按钮 + 领域字段/正文（内部滚动）+ 底部操作行 -->
     <div class="flex min-h-0 flex-1 flex-col px-4">
-      <!-- 分组列按钮（头部下方固定区，选中态与看板同源） -->
+      <!-- 分组列按钮（头部下方固定区，选中态与看板同源；待保存状态用等待标记） -->
       <div class="flex shrink-0 flex-wrap gap-1.5 pb-2 pt-3">
         <button
           v-for="column in columns"
           :key="column.key"
           :class="[
-            'rounded-md px-2 py-1 text-xs transition-colors',
+            'flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors',
             activeColumnKey === column.key
               ? 'bg-gray-900 text-white'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+              : isPendingColumn(column.key)
+                ? 'bg-gray-200 text-gray-700'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
           ]"
-          @click="emit('moveCard', column.key)"
+          :title="isPendingColumn(column.key) ? '两秒后随本卡片一起保存' : undefined"
+          @click="emit('selectStatus', column.key)"
         >
+          <span
+            v-if="isPendingColumn(column.key)"
+            class="h-1.5 w-1.5 animate-pulse rounded-full bg-gray-500"
+          />
           {{ column.label }}
         </button>
       </div>
@@ -166,20 +196,33 @@ function formatTime(iso: string): string {
 
       <p v-if="actionError" class="shrink-0 pt-1 text-xs text-red-600">{{ actionError }}</p>
 
-      <!-- 底部操作行：保存 + 未保存标记 + 更新时间 + 删除（同一行，宽度不足换行） -->
+      <!-- 底部操作行：保存状态条 + 更新时间 + 删除（同一行，宽度不足换行；无保存按钮） -->
       <div class="flex shrink-0 flex-wrap items-center gap-2 py-3">
-        <button
-          class="rounded-lg bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 disabled:opacity-40"
-          :disabled="!hasUnsavedChanges || isSaving"
-          :data-testid="`${testidPrefix}-detail-save`"
-          @click="emit('saveDraft')"
+        <span
+          class="flex shrink-0 items-center gap-1 text-xs"
+          :class="{
+            'text-gray-400': savePhase === 'clean',
+            'text-amber-600': savePhase === 'pending',
+            'text-blue-600': savePhase === 'saving',
+            'text-amber-700': savePhase === 'conflict',
+            'text-red-600': savePhase === 'failed',
+          }"
+          :data-testid="`${testidPrefix}-detail-save-status`"
         >
-          {{ isSaving ? '保存中…' : '保存' }}
-        </button>
-        <span v-if="hasUnsavedChanges" class="flex items-center gap-1 text-xs text-amber-600">
-          <span class="h-1.5 w-1.5 rounded-full bg-amber-500" />
-          未保存
+          <span
+            v-if="savePhase === 'pending'"
+            class="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
+          />
+          {{ saveStatusLabel }}
         </span>
+        <button
+          v-if="savePhase === 'failed'"
+          class="rounded-md border border-red-200 bg-white px-2 py-0.5 text-xs text-red-600 transition-colors hover:bg-red-50"
+          :data-testid="`${testidPrefix}-detail-retry`"
+          @click="emit('retrySave')"
+        >
+          重试
+        </button>
         <span v-if="updatedAt" class="text-[10px] text-gray-400">
           更新于 {{ formatTime(updatedAt) }}
         </span>

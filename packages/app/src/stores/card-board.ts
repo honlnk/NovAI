@@ -358,6 +358,40 @@ export function createCardBoardCore<
   })
 
   /**
+   * 详情保存状态条（阶段 2 无保存心智）：已保存 / 等待保存 / 正在保存 / 保存失败 /
+   * 保存冲突（与正文口径一致；普通成功不弹提示，状态区更新即可）。
+   */
+  const savePhase = computed<'clean' | 'pending' | 'saving' | 'failed' | 'conflict'>(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return 'clean'
+    }
+    const session = cardRealm.getSession(currentProjectId, card.id)
+    if (!session) {
+      return 'clean'
+    }
+    if (session.inFlight != null) {
+      return 'saving'
+    }
+    if (session.conflict) {
+      return 'conflict'
+    }
+    if (session.failure) {
+      return 'failed'
+    }
+    return config.isEmptyDraft(session.draft) ? 'clean' : 'pending'
+  })
+
+  /** 当前卡片的普通失败原因（状态条 hover / 辅助说明用；与 actionError 同源） */
+  const saveFailureMessage = computed(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return null
+    }
+    return cardRealm.getSession(currentProjectId, card.id)?.failure?.message ?? null
+  })
+
+  /**
    * 卡片级编辑会话兼容视图（key = 卡片 id）：从统一会话派生，clean 会话隐藏
    * （保存成功/关闭详情后不再出现在表里）。
    */
@@ -388,6 +422,41 @@ export function createCardBoardCore<
     }
     return view
   })
+
+  /** 状态条「重试」：手动重试当前卡片的失败写入（重新开启自动补试周期） */
+  async function retrySave(projectId: string): Promise<boolean> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) return false
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session || session.inFlight != null || session.conflict) return false
+    actionError.value = ''
+    const result = await cardRealm.requestSave(projectId, card.id, { trigger: 'manual' })
+    return result.status === 'saved'
+  }
+
+  /** 收口当前卡片（切卡 / 切预览 / 让位新建等时机）：立即保存待写内容（冲突/守护下跳过） */
+  function flushCard(projectId: string): Promise<unknown> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return Promise.resolve()
+    }
+    return cardRealm.flushSession(projectId, card.id)
+  }
+
+  /** 收口项目内全部有待写内容的卡片会话（切分类 / 关面板 / 离开项目） */
+  function flushAllCards(projectId: string): Promise<void> {
+    return cardRealm.flushSessions(projectId)
+  }
+
+  /** 打开/关闭输入自动保存触发（生产由 ProjectView 挂接；测试默认关闭保持手动语义） */
+  function setCardAutosaveEnabled(enabled: boolean): void {
+    cardRealm.setAutosaveInputEnabled(enabled)
+  }
+
+  /** 页面隐藏/关闭前收口全部待写会话（与正文各会话独立挂接） */
+  function setupCardSaveLifecycle(): () => void {
+    return cardRealm.setupLifecycle()
+  }
 
   /** 打开（或按需创建）卡片会话，磁盘基线取当前读取的卡片 */
   function ensureCardSession(projectId: string, card: TCard): CardSaveSession<TDraft, TCard> {
@@ -515,6 +584,12 @@ export function createCardBoardCore<
    * 服务层冲突校验），并置冲突提示。
    */
   async function openCard(projectId: string, id: string): Promise<void> {
+    // 切卡收口（阶段 2）：旧卡片的待写内容立即保存，不等剩余去抖窗口；
+    // 结果只作用于原会话与原看板（handleSaveSettled 按归属处理），不阻塞打开。
+    const previousCard = activeCard.value
+    if (previousCard && previousCard.id !== id && currentProjectId != null) {
+      void cardRealm.flushSession(currentProjectId, previousCard.id)
+    }
     const generation = beginProject(projectId)
     const sequence = ++openSequence
     const wasCreateOpen = isCreateOpen.value
@@ -615,10 +690,13 @@ export function createCardBoardCore<
     cardRealm.setInput(currentProjectId, card.id, next)
   }
 
-  /** 详情视图切换（预览/编辑）；值随卡片进入编辑会话，切卡可恢复 */
+  /** 详情视图切换（预览/编辑）；值随卡片进入编辑会话，切卡可恢复。切回预览即收口 */
   function setDetailMode(mode: DetailMode) {
     detailMode.value = mode
     syncModeToSession(mode)
+    if (mode === 'preview' && activeCard.value && currentProjectId != null) {
+      void cardRealm.flushSession(currentProjectId, activeCard.value.id)
+    }
   }
 
   /**
@@ -724,6 +802,24 @@ export function createCardBoardCore<
         session.mode = record.mode
       }
     }
+    // 回填待续存会话的磁盘基线（阶段 2 自动续存）：引擎的恢复核对只建立会话，
+    // 卡片域组装提交需要磁盘基线（diskCard）；基线一致已核对过的会话预读当前
+    // 卡片，两秒后的自动保存才能真实落盘。读不到（已删/读取异常）保持无基线，
+    // 首次自动保存会以明确错误停住，等用户打开卡片重建现场。
+    for (const entry of report.restored) {
+      const session = cardRealm.getSession(projectId, entry.key)
+      if (!session || session.diskCard) {
+        continue
+      }
+      try {
+        const card = await config.readCard(projectId, entry.key)
+        if (card) {
+          session.diskCard = card
+        }
+      } catch {
+        // 读取失败：保持无基线，保存入口的明确错误兜底
+      }
+    }
     return report
   }
 
@@ -752,9 +848,12 @@ export function createCardBoardCore<
     }
   }
 
-  /** 打开新建面板（看板右上 / 空状态入口共用）：切换展示对象，不清当前卡片草稿 */
+  /** 打开新建面板（看板右上 / 空状态入口共用）：切换展示对象，当前卡片待写内容收口（草稿仍随会话保留） */
   function openCreate() {
     if (isCreateOpen.value) return
+    if (activeCard.value && currentProjectId != null) {
+      void cardRealm.flushSession(currentProjectId, activeCard.value.id)
+    }
     isCreateOpen.value = true
   }
 
@@ -906,6 +1005,9 @@ export function createCardBoardCore<
 
   /** 切换项目 / 关闭项目时清理全部通用状态（领域界面状态由各模块的 reset 叠加） */
   function reset() {
+    // 切项目收口（阶段 2）：待写内容尽力落盘——写盘链已捕获会话引用，
+    // 后续清表不取消已请求的写入；失败时恢复镜像兜底
+    void cardRealm.flushAllSessions()
     projectGeneration += 1
     currentProjectId = null
     openSequence += 1
@@ -927,7 +1029,7 @@ export function createCardBoardCore<
     selectedCardId.value = null
     isCreateOpen.value = false
     createDraft.value = config.emptyCreateDraft()
-    // 清空全部卡片会话与恢复镜像（切项目丢弃未落盘草稿，与既有语义一致；
+    // 清空全部卡片会话与恢复镜像（切项目后现场不跨项目保留；
     // 刷新场景的恢复由 IndexedDB 记录在下次进入项目时核对回填）
     for (const session of cardRealm.listAllSessions()) {
       cardRealm.clearSession(session.projectId, session.cardId)
@@ -945,6 +1047,8 @@ export function createCardBoardCore<
     detailMode,
     editSessions,
     isSaving,
+    savePhase,
+    saveFailureMessage,
     lastSavedCard,
     conflictNotice,
     actionError,
@@ -967,6 +1071,11 @@ export function createCardBoardCore<
     reloadFromConflict,
     keepDraft,
     restoreCardDrafts,
+    retrySave,
+    flushCard,
+    flushAllCards,
+    setCardAutosaveEnabled,
+    setupCardSaveLifecycle,
     createCardVia,
     openCreate,
     closeCreate,

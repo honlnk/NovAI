@@ -31,6 +31,8 @@ export type ForeshadowingDraft = {
   name: string | null
   readerView: string | null
   authorTruth: string | null
+  /** 待保存的普通状态（阶段 2：点击状态按钮只登记，两秒后随本卡整体保存；「已放弃」走原因确认流程，阶段 4 接入） */
+  status: ForeshadowingStatusView | null
 }
 
 /** 新建面板输入：伏笔名/读者视角/埋设章节必填，作者真相与回收窗口可选 */
@@ -43,12 +45,18 @@ export type ForeshadowingCreateDraft = {
   payoffEnd: string
 }
 
-const EMPTY_DRAFT: ForeshadowingDraft = { name: null, readerView: null, authorTruth: null }
+const EMPTY_DRAFT: ForeshadowingDraft = { name: null, readerView: null, authorTruth: null, status: null }
 
+/**
+ * 草稿与卡片是否有实际差异（null = 未修改）。status 判定用宽松 null（!= null）：
+ * 阶段 1 之前的镜像记录没有该字段，恢复路径读到 undefined 不算差异，避免旧记录
+ * 恢复后被误判有修改而立即写盘。
+ */
 function draftDiffers(card: ForeshadowingCardView, draft: ForeshadowingDraft): boolean {
   return (draft.name !== null && draft.name.trim() !== card.name)
     || (draft.readerView !== null && draft.readerView !== card.readerBody)
     || (draft.authorTruth !== null && draft.authorTruth !== card.authorTruth)
+    || (draft.status != null && draft.status !== card.status)
 }
 
 function hasCreateInput(draft: ForeshadowingCreateDraft): boolean {
@@ -66,17 +74,20 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
   >({
     loadBoard: (projectId) => getForeshadowingBoard(projectId),
     readCard: (projectId, id) => readForeshadowing(projectId, id),
-    // 保存组合：只提交有实际变化的字段，并携带读取时 hash（core 层校验外部修改）
+    // 保存组合：只提交有实际变化的字段，普通状态与内容同一次写入（阶段 2），
+    // 携带读取时 hash（core 层校验外部修改）
     saveCard: (projectId, card, draft) => {
       const name = draft.name?.trim()
       const nameChanged = draft.name !== null && name !== card.name
       const readerChanged = draft.readerView !== null && draft.readerView !== card.readerBody
       const truthChanged = draft.authorTruth !== null && draft.authorTruth !== card.authorTruth
+      const statusChanged = draft.status != null && draft.status !== card.status
       return updateForeshadowing(projectId, {
         id: card.id,
         ...(nameChanged ? { name: name ?? '' } : {}),
         ...(readerChanged ? { readerView: draft.readerView ?? '' } : {}),
         ...(truthChanged ? { authorTruth: draft.authorTruth ?? '' } : {}),
+        ...(statusChanged ? { status: draft.status as ForeshadowingStatusView } : {}),
         expectedContentHash: card.contentHash,
       })
     },
@@ -99,7 +110,8 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
         ? { ...card, readerBody: error.currentCard.body, authorTruth: card.authorTruth }
         : null,
     draftDiffers,
-    isEmptyDraft: (draft) => draft.name === null && draft.readerView === null && draft.authorTruth === null,
+    isEmptyDraft: (draft) =>
+      draft.name === null && draft.readerView === null && draft.authorTruth === null && draft.status == null,
     emptyDraft: () => ({ ...EMPTY_DRAFT }),
     cardTitle: (card) => card.name,
     hasCreateInput,
@@ -133,6 +145,8 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
   const draftReaderView = computed(() => core.draft.value?.readerView ?? null)
   /** 作者真相草稿；null = 无未保存修改 */
   const draftAuthorTruth = computed(() => core.draft.value?.authorTruth ?? null)
+  /** 待保存的普通状态（详情状态按钮的等待标记）；null = 无状态修改 */
+  const draftStatus = computed(() => core.draft.value?.status ?? null)
   /** 新建面板各输入 */
   const newCardName = computed(() => core.createDraft.value.name)
   const newCardReaderView = computed(() => core.createDraft.value.readerView)
@@ -156,6 +170,11 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
     core.updateDraft({ authorTruth })
   }
 
+  /** 普通状态选择（阶段 2）：只登记待保存状态，不立即移动；连续点击以最后一次为准 */
+  function updateDraftStatus(status: ForeshadowingStatusView) {
+    core.updateDraft({ status })
+  }
+
   /** 新建面板草稿输入（按字段更新） */
   function updateCreateDraft(partial: Partial<ForeshadowingCreateDraft>) {
     core.updateCreateDraft(partial)
@@ -166,6 +185,7 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
     draftName,
     draftReaderView,
     draftAuthorTruth,
+    draftStatus,
     newCardName,
     newCardReaderView,
     newCardAuthorTruth,
@@ -176,6 +196,7 @@ export const useForeshadowingStore = defineStore('foreshadowing', () => {
     updateDraftName,
     updateDraftReaderView,
     updateDraftAuthorTruth,
+    updateDraftStatus,
     updateCreateDraft,
   }
 })

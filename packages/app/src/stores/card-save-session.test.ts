@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import type { PlanBoardView, PlanCardSummaryView, PlanCardView, PlanStatusView } from '@novai/core/services/types'
+import type {
+  ForeshadowingCardView,
+  PlanBoardView,
+  PlanCardSummaryView,
+  PlanCardView,
+  PlanStatusView,
+} from '@novai/core/services/types'
+import { PlanConflictError } from '@novai/core/types/plans'
 
 import {
   createPlan,
@@ -11,6 +18,7 @@ import {
   updatePlan,
 } from '@novai/core/services/plan-service'
 import { usePlanStore } from './plan'
+import { useForeshadowingStore } from './foreshadowing'
 import {
   buildCardDraftKey,
   type CardBackupStore,
@@ -164,7 +172,7 @@ describe('卡片统一保存会话：写盘与恢复镜像', () => {
 
     const key = buildCardDraftKey(PROJECT, 'a')
     const record = memoryStore.records.get(key)
-    expect(record?.draft).toEqual({ title: null, body: '新正文' })
+    expect(record?.draft).toEqual({ title: null, body: '新正文', status: null })
     expect(record?.mode).toBe('edit')
     expect(record?.baseContentHash).toBe('hash-a')
 
@@ -195,10 +203,11 @@ describe('卡片统一保存会话：写盘与恢复镜像', () => {
     expect(store.editSessions.size).toBe(0)
   })
 
-  it('切卡保留字段草稿与编辑模式，重开恢复', async () => {
+  it('切卡即收口落盘：待写内容立即保存，重开是已保存内容', async () => {
     vi.useFakeTimers()
     const store = usePlanStore()
     mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 正文`)))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
     await store.openCard(PROJECT, 'a')
     store.setDetailMode('edit')
     store.updateDraftTitle('新标题')
@@ -206,15 +215,22 @@ describe('卡片统一保存会话：写盘与恢复镜像', () => {
     vi.advanceTimersByTime(800)
     await drainBackupWrites()
 
+    // 阶段 2：切卡收口不等剩余去抖窗口，待写内容（含计划名）立即一次落盘
+    const savedCard = detail('a', '新标题\n\nA 草稿', { contentHash: 'hash-a2', title: '新标题' })
+    mockedUpdatePlan.mockResolvedValueOnce(savedCard)
     await store.openCard(PROJECT, 'b')
-    expect(store.draftBody).toBeNull()
-    expect(store.editSessions.get('a')?.body).toBe('A 草稿')
+    await drainBackupWrites()
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, expect.objectContaining({ id: 'a', title: '新标题' }))
+    // 落盘成功：会话 clean 隐藏、镜像清除
+    expect(store.editSessions.size).toBe(0)
+    expect(memoryStore.deletedKeys).toContain(buildCardDraftKey(PROJECT, 'a'))
 
     await store.openCard(PROJECT, 'a')
-    expect(store.draftTitle).toBe('新标题')
-    expect(store.draftBody).toBe('A 草稿')
+    expect(store.draftTitle).toBeNull()
+    expect(store.draftBody).toBeNull()
+    // 切卡收口时用户已离开本卡（「保存成功自动回预览」只作用于用户停留的
+    // 卡片），会话保留编辑模式，重开直接恢复编辑现场；基线一致不触发冲突
     expect(store.detailMode).toBe('edit')
-    // 重开基线一致不触发冲突
     expect(store.conflictNotice).toBeNull()
   })
 
@@ -344,5 +360,221 @@ describe('卡片统一保存会话：浏览器恢复核对', () => {
     const report = await store.restoreCardDrafts(PROJECT)
     expect(report.guarded).toEqual([{ key: 'a' }])
     expect(mockedUpdatePlan).not.toHaveBeenCalled()
+  })
+
+  it('恢复基线一致且自动保存已开：回填即续存，两秒后自动落盘清镜像', async () => {
+    vi.useFakeTimers()
+    const store = usePlanStore()
+    seedRecord(PROJECT, 'a', { draft: { title: null, body: '未落盘草稿' }, baseContentHash: 'hash-a', mode: 'edit' })
+    mockedReadPlan.mockResolvedValue(detail('a', '磁盘正文'))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+
+    // 生产由 ProjectView 打开输入自动保存；恢复核对在打开后进行
+    store.setCardAutosaveEnabled(true)
+    const report = await store.restoreCardDrafts(PROJECT)
+    expect(report.restored.map(entry => entry.key)).toEqual(['a'])
+
+    // 恢复的待写内容两秒后自动写盘（不等用户操作）
+    mockedUpdatePlan.mockResolvedValueOnce(detail('a', '未落盘草稿', { contentHash: 'hash-a2' }))
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, expect.objectContaining({ id: 'a', body: '未落盘草稿' }))
+    expect(memoryStore.deletedKeys).toContain(buildCardDraftKey(PROJECT, 'a'))
+
+    mockedReadPlan.mockResolvedValueOnce(detail('a', '未落盘草稿', { contentHash: 'hash-a2' }))
+    await store.openCard(PROJECT, 'a')
+    expect(store.draftBody).toBeNull()
+    expect(store.activeCard?.body).toBe('未落盘草稿')
+  })
+})
+
+describe('卡片详情自动保存（阶段 2：无保存心智）', () => {
+  /** 打开卡片并开启自动保存（生产由 ProjectView 挂载时打开）的通用前置 */
+  async function openCardWithAutosave(store: ReturnType<typeof usePlanStore>, body = '原始正文') {
+    vi.useFakeTimers()
+    store.setCardAutosaveEnabled(true)
+    mockedReadPlan.mockResolvedValue(detail('a', body))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
+    await store.openCard(PROJECT, 'a')
+  }
+
+  it('两秒去抖：输入后两秒才保存，连续输入只提交最终快照', async () => {
+    const store = usePlanStore()
+    await openCardWithAutosave(store)
+    mockedUpdatePlan.mockResolvedValue(detail('a', '第三段', { contentHash: 'hash-a2' }))
+
+    store.updateDraft('第一段')
+    expect(store.savePhase).toBe('pending')
+    vi.advanceTimersByTime(1500)
+    store.updateDraft('第二段')
+    // 去抖窗口被新输入重置：仍未写盘
+    vi.advanceTimersByTime(1500)
+    expect(mockedUpdatePlan).not.toHaveBeenCalled()
+    store.updateDraft('第三段')
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+
+    expect(mockedUpdatePlan).toHaveBeenCalledTimes(1)
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, expect.objectContaining({ id: 'a', body: '第三段' }))
+    expect(store.savePhase).toBe('clean')
+    expect(store.draftBody).toBeNull()
+  })
+
+  it('普通状态与内容并入同一次保存：成功前选中态与看板不动，成功后一起生效', async () => {
+    const store = usePlanStore()
+    await openCardWithAutosave(store)
+    expect(store.activeCard?.status).toBe('inbox')
+
+    store.updateDraftStatus('done')
+    // 等待标记指向待保存状态，已生效列不变
+    expect(store.draftStatus).toBe('done')
+    expect(store.activeCard?.status).toBe('inbox')
+    store.updateDraft('带状态的正文')
+
+    const saved = deferred<PlanCardView>()
+    mockedUpdatePlan.mockReturnValueOnce(saved.promise)
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    // 写盘在途：状态按钮等待标记仍在，正文未生效
+    expect(mockedUpdatePlan).toHaveBeenCalledTimes(1)
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(
+      PROJECT,
+      expect.objectContaining({ id: 'a', body: '带状态的正文', status: 'done' }),
+    )
+    expect(store.activeCard?.status).toBe('inbox')
+
+    saved.resolve(detail('a', '带状态的正文', { status: 'done', contentHash: 'hash-a2' }))
+    await drainBackupWrites()
+    expect(store.activeCard?.status).toBe('done')
+    expect(store.draftStatus).toBeNull()
+    expect(store.savePhase).toBe('clean')
+  })
+
+  it('点击已生效状态：收敛无修改，两秒后不发起任何写入', async () => {
+    const store = usePlanStore()
+    await openCardWithAutosave(store)
+
+    store.updateDraftStatus('inbox')
+    expect(store.draftStatus).toBeNull()
+    expect(store.savePhase).toBe('clean')
+
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    expect(mockedUpdatePlan).not.toHaveBeenCalled()
+  })
+
+  it('失败进入 failed 态：重试手动重开补试周期，成功后回到 clean', async () => {
+    const store = usePlanStore()
+    await openCardWithAutosave(store)
+
+    store.updateDraft('新正文')
+    mockedUpdatePlan.mockRejectedValue(new Error('写盘失败'))
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    expect(store.savePhase).toBe('failed')
+    expect(store.draftBody).toBe('新正文')
+
+    // 自动补试一次仍失败后不再自动打扰
+    vi.advanceTimersByTime(1000)
+    await drainBackupWrites()
+    expect(mockedUpdatePlan).toHaveBeenCalledTimes(2)
+
+    mockedUpdatePlan.mockReset()
+    mockedUpdatePlan.mockResolvedValueOnce(detail('a', '新正文', { contentHash: 'hash-a2' }))
+    expect(await store.retrySave(PROJECT)).toBe(true)
+    expect(store.savePhase).toBe('clean')
+    expect(store.draftBody).toBeNull()
+    expect(store.activeCard?.body).toBe('新正文')
+  })
+
+  it('冲突后自动保存冻结：继续输入不写盘，状态条停在 conflict', async () => {
+    const store = usePlanStore()
+    await openCardWithAutosave(store)
+
+    store.updateDraft('第一批')
+    mockedUpdatePlan.mockRejectedValueOnce(new PlanConflictError('冲突', {
+      id: 'a', status: 'inbox', order: 0, createdAt: '', updatedAt: '',
+      body: '外部改过', sourcePath: 'plans/计划-1-a.md',
+    }))
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    expect(store.savePhase).toBe('conflict')
+    expect(store.conflictNotice?.currentCard.body).toBe('外部改过')
+
+    // 冲突未决：新输入的去抖保存被拒绝（不覆盖别人）
+    store.updateDraft('第二批')
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+    expect(mockedUpdatePlan).toHaveBeenCalledTimes(1)
+    expect(store.savePhase).toBe('conflict')
+    expect(store.draftBody).toBe('第二批')
+  })
+})
+
+describe('卡片详情自动保存（阶段 2：伏笔域状态组合）', () => {
+  const { getForeshadowingBoard, readForeshadowing, updateForeshadowing } = vi.hoisted(() => ({
+    getForeshadowingBoard: vi.fn(),
+    readForeshadowing: vi.fn(),
+    updateForeshadowing: vi.fn(),
+  }))
+
+  vi.mock('@novai/core/services/foreshadowing-service', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@novai/core/services/foreshadowing-service')>(),
+    getForeshadowingBoard,
+    readForeshadowing,
+    updateForeshadowing,
+  }))
+
+  const mockedReadForeshadowing = vi.mocked(readForeshadowing)
+  const mockedUpdateForeshadowing = vi.mocked(updateForeshadowing)
+
+  function foreshadowingDetail(overrides: Partial<ForeshadowingCardView> = {}): ForeshadowingCardView {
+    return {
+      id: 'f1',
+      name: '镜子里的字',
+      status: 'planted',
+      order: 0,
+      createdAt: '2026-11-03T10:00:00.000Z',
+      updatedAt: '2026-11-03T10:00:00.000Z',
+      plantedAt: '第一卷/第一章',
+      payoffWindow: null,
+      isRedHerring: false,
+      relatedChapters: [],
+      relatedCharacters: [],
+      relatedEntities: [],
+      resolvedAt: null,
+      abandonedReason: null,
+      readerBody: '读者看到的',
+      authorTruth: '作者知道的',
+      summary: '读者看到的',
+      sourcePath: 'foreshadowing/镜子里的字.md',
+      contentHash: 'hash-f1',
+      ...overrides,
+    }
+  }
+
+  it('伏笔普通状态与读者视角一次写入；放弃状态不走普通自动保存入口（阶段 4 接入）', async () => {
+    vi.useFakeTimers()
+    const store = useForeshadowingStore()
+    store.setCardAutosaveEnabled(true)
+    mockedReadForeshadowing.mockResolvedValue(foreshadowingDetail())
+    getForeshadowingBoard.mockResolvedValue({
+      columns: {
+        planted: [], hinted: [], developed: [], revealed: [], resolved: [], abandoned: [],
+      },
+      issues: [],
+    })
+    await store.openCard(PROJECT, 'f1')
+
+    store.updateDraftStatus('hinted')
+    store.updateDraftReaderView('新的读者视角')
+    vi.advanceTimersByTime(2000)
+    await drainBackupWrites()
+
+    expect(mockedUpdateForeshadowing).toHaveBeenCalledTimes(1)
+    expect(mockedUpdateForeshadowing).toHaveBeenCalledWith(
+      PROJECT,
+      expect.objectContaining({ id: 'f1', status: 'hinted', readerView: '新的读者视角' }),
+    )
   })
 })

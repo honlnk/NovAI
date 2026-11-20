@@ -25,23 +25,24 @@ const props = defineProps<{
   draftBody: string | null
   /** 计划名草稿（详情头部输入框） */
   draftTitle: string | null
+  /** 待保存的普通状态（状态按钮等待标记）；null = 无状态修改 */
+  draftStatus: PlanStatusView | null
   /** 详情视图态（预览/编辑，随卡片编辑会话恢复） */
   detailMode: DetailMode
-  isSaving: boolean
+  savePhase: 'clean' | 'pending' | 'saving' | 'failed' | 'conflict'
   conflictNotice: { currentCard: { body: string } } | null
   actionError: string
-  hasUnsavedChanges: boolean
 }>()
 
 const emit = defineEmits<{
   close: []
   updateDraft: [body: string]
   updateDraftTitle: [title: string]
+  updateDraftStatus: [status: PlanStatusView]
   setDetailMode: [mode: DetailMode]
-  saveDraft: []
+  retrySave: []
   reloadFromConflict: []
   keepDraft: []
-  moveCard: [id: string, status: PlanStatusView, afterId: string | null]
   removeCard: [id: string]
 }>()
 
@@ -66,21 +67,21 @@ function onDraftInput(event: Event) {
     title-placeholder="计划名"
     :columns="columnButtons"
     :active-column-key="activeCard.status"
+    :pending-column-key="draftStatus"
     :detail-mode="detailMode"
-    :is-saving="isSaving"
+    :save-phase="savePhase"
     :has-conflict="conflictNotice !== null"
     :action-error="actionError"
-    :has-unsaved-changes="hasUnsavedChanges"
     :updated-at="activeCard.updatedAt"
     delete-label="删除（移入回收站）"
     testid-prefix="plan"
     @close="emit('close')"
     @update-title="emit('updateDraftTitle', $event)"
     @set-detail-mode="emit('setDetailMode', $event)"
-    @save-draft="emit('saveDraft')"
+    @select-status="(columnKey) => emit('updateDraftStatus', columnKey as PlanStatusView)"
+    @retry-save="emit('retrySave')"
     @reload-from-conflict="emit('reloadFromConflict')"
     @keep-draft="emit('keepDraft')"
-    @move-card="(columnKey) => emit('moveCard', activeCard.id, columnKey as PlanStatusView, null)"
     @remove-card="emit('removeCard', activeCard.id)"
   >
     <template #content="{ detailMode: mode }">

@@ -555,7 +555,8 @@ describe('plan store 卡片级编辑会话（布局统一计划 §5）', () => {
     await store.openCard(PROJECT, 'a')
     store.updateDraft('A 草稿')
 
-    // 删除另一张带草稿的卡片前先给它留下会话：打开 b 写草稿再切走
+    // 阶段 2 切卡即收口落盘：让两次切卡收口都失败，A/B 的草稿才会以会话形式保留
+    mockedUpdatePlan.mockRejectedValue(new Error('落盘失败'))
     mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
     await store.openCard(PROJECT, 'b')
     store.updateDraft('B 草稿')
@@ -612,10 +613,8 @@ describe('plan store 卡片级编辑会话（布局统一计划 §5）', () => {
     store.updateDraft('我的草稿')
     store.setDetailMode('edit')
 
-    mockedReadPlan.mockResolvedValueOnce(detail('b', 'B 正文'))
-    await store.openCard(PROJECT, 'b')
-
-    // 期间文件被外部修改（新 body + 新 hash），重开 a
+    // 期间文件被外部修改（新 body + 新 hash）。同卡重开（阶段 2 切卡会先收口
+    // 落盘，改用同卡重开保留「外部已改 + 草稿未写」的现场）
     mockedReadPlan.mockResolvedValueOnce(detail('a', '外部新内容', { contentHash: 'hash-a2' }))
     await store.openCard(PROJECT, 'a')
 
@@ -1110,25 +1109,31 @@ describe('plan store 异步事件序（布局统一 review 修复）', () => {
     expect(store.lastSavedCard?.sourcePath).toBe('plans/计划-1-A新名称-a.md')
   })
 
-  it('保存 A 时切到 B 再回 A：保存已提交的版本，B 的草稿不丢失', async () => {
+  it('保存 A 时切到 B 再回 A：保存已提交的版本，B 的草稿随切卡收口落盘', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
     await store.openCard(PROJECT, 'a')
     store.updateDraft('A 第一批内容')
     const saving = deferred<PlanCardView>()
-    mockedUpdatePlan.mockReturnValue(saving.promise)
+    mockedUpdatePlan.mockReturnValueOnce(saving.promise)
     const saveA = store.saveDraft(PROJECT)
     await store.openCard(PROJECT, 'b')
     store.updateDraft('B 的独立草稿')
+    // 阶段 2 切卡即收口：切回 A 时 B 的待写内容立即落盘（mock 这次保存成功）
+    mockedUpdatePlan.mockResolvedValueOnce(detail('b', 'B 的独立草稿', { contentHash: 'hash-b2' }))
     const backToA = store.openCard(PROJECT, 'a')
 
     saving.resolve(detail('a', 'A 第一批内容', { contentHash: 'hash-a2' }))
     await Promise.all([saveA, backToA])
+    await flushAsync()
 
     expect(store.activeCard?.id).toBe('a')
     expect(store.draftBody).toBeNull()
     expect(store.activeCard?.body).toBe('A 第一批内容')
-    expect(store.editSessions.get('b')?.body).toBe('B 的独立草稿')
+    // B 的草稿已随切卡收口写盘（clean 会话隐藏），不再以未保存会话存在
+    expect(store.editSessions.has('b')).toBe(false)
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, expect.objectContaining({ id: 'b', body: 'B 的独立草稿' }))
   })
 
   it('同卡保存途中继续输入：保留追加内容，保存后可继续编辑', async () => {
@@ -1153,25 +1158,30 @@ describe('plan store 异步事件序（布局统一 review 修复）', () => {
     expect(store.editSessions.get('a')?.baseContentHash).toBe('hash-a2')
   })
 
-  it('保存 A 时切到 B 再回 A 后继续输入：保留 A、B 各自的新草稿', async () => {
+  it('保存 A 时切到 B 再回 A 后继续输入：A 新草稿保留，B 的草稿随切卡收口落盘', async () => {
     const store = usePlanStore()
     mockedReadPlan.mockImplementation((_projectId, id) => Promise.resolve(detail(id, `${id} 原始`)))
+    mockedGetPlanBoard.mockResolvedValue(board([]))
     await store.openCard(PROJECT, 'a')
     store.updateDraft('A 第一批内容')
     const saving = deferred<PlanCardView>()
-    mockedUpdatePlan.mockReturnValue(saving.promise)
+    mockedUpdatePlan.mockReturnValueOnce(saving.promise)
     const saveA = store.saveDraft(PROJECT)
     await store.openCard(PROJECT, 'b')
     store.updateDraft('B 的独立草稿')
+    // 阶段 2 切卡即收口：切回 A 时 B 的待写内容立即落盘（mock 这次保存成功）
+    mockedUpdatePlan.mockResolvedValueOnce(detail('b', 'B 的独立草稿', { contentHash: 'hash-b2' }))
     const backToA = store.openCard(PROJECT, 'a')
     saving.resolve(detail('a', 'A 第一批内容', { contentHash: 'hash-a2' }))
     await Promise.all([saveA, backToA])
+    await flushAsync()
     store.updateDraft('A 第一批内容\n\n重开后追加内容')
 
     expect(store.activeCard?.id).toBe('a')
     expect(store.draftBody).toBe('A 第一批内容\n\n重开后追加内容')
     expect(store.hasUnsavedChanges).toBe(true)
-    expect(store.editSessions.get('b')?.body).toBe('B 的独立草稿')
+    expect(store.editSessions.has('b')).toBe(false)
+    expect(mockedUpdatePlan).toHaveBeenCalledWith(PROJECT, expect.objectContaining({ id: 'b', body: 'B 的独立草稿' }))
   })
 
   it('A 保存冲突晚于切到 B：不串冲突提示，重开 A 才显示自己的冲突', async () => {

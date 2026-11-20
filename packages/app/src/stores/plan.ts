@@ -26,10 +26,12 @@ import { createCardBoardCore, type BoardLoadSource, type CardBoardEditSession } 
  * 已搁置列筛选、新建面板的「计划名 + 正文」输入。
  */
 
-/** 计划编辑草稿：null 字段 = 该字段未修改（正文与计划名各自独立成草稿） */
+/** 计划编辑草稿：null 字段 = 该字段未修改（正文、计划名与普通状态各自独立成草稿） */
 export type PlanDraft = {
   body: string | null
   title: string | null
+  /** 待保存的普通状态（阶段 2：点击状态按钮只登记，两秒后随本卡整体保存） */
+  status: PlanStatusView | null
 }
 
 /** 卡片级编辑会话（草稿字段平铺；类型别名保留给既有引用） */
@@ -41,13 +43,18 @@ export type { BoardLoadSource }
 type PlanCreateDraft = { title: string; body: string }
 
 function emptyDraft(): PlanDraft {
-  return { body: null, title: null }
+  return { body: null, title: null, status: null }
 }
 
-/** 草稿与卡片是否有实际差异（null = 未修改；计划名按 trim 后比较） */
+/**
+ * 草稿与卡片是否有实际差异（null = 未修改；计划名按 trim 后比较）。status 判定
+ * 用宽松 null（!= null）：阶段 1 之前的镜像记录没有该字段，恢复路径读到
+ * undefined 不算差异，避免旧记录恢复后被误判有修改而立即写盘。
+ */
 function planDraftDiffers(card: PlanCardView, draft: PlanDraft): boolean {
   return (draft.body !== null && draft.body !== card.body)
     || (draft.title !== null && draft.title.trim() !== card.title)
+    || (draft.status != null && draft.status !== card.status)
 }
 
 export const usePlanStore = defineStore('plan', () => {
@@ -62,11 +69,13 @@ export const usePlanStore = defineStore('plan', () => {
     loadBoard: (projectId) => getPlanBoard(projectId),
     readCard: (projectId, id) => readPlan(projectId, id),
     // 保存组合：计划名变化时按新名改写正文首个非空行（body 同传以 body 为准的
-    // 组合责任在调用方，见 core plans/store.ts 注释），并携带读取时 hash。
+    // 组合责任在调用方，见 core plans/store.ts 注释），普通状态与正文同一次写入
+    // （阶段 2：避免正文已保存但状态失败的半成功），携带读取时 hash。
     saveCard: (projectId, card, draft) => {
       const title = draft.title?.trim() ?? ''
       const bodyChanged = draft.body !== null && draft.body !== card.body
       const titleChanged = draft.title !== null && draft.title.trim() !== card.title
+      const statusChanged = draft.status != null && draft.status !== card.status
       const rawBody = bodyChanged ? (draft.body as string) : null
       const nextBody = rawBody !== null && titleChanged
         ? replacePlanTitleLine(rawBody, title)
@@ -75,6 +84,7 @@ export const usePlanStore = defineStore('plan', () => {
         id: card.id,
         ...(nextBody !== undefined ? { body: nextBody } : {}),
         ...(titleChanged ? { title } : {}),
+        ...(statusChanged ? { status: draft.status as PlanStatusView } : {}),
         expectedContentHash: card.contentHash,
       })
     },
@@ -90,7 +100,7 @@ export const usePlanStore = defineStore('plan', () => {
     extractConflict: (error, card) =>
       error instanceof PlanConflictError ? { ...card, body: error.currentCard.body } : null,
     draftDiffers: planDraftDiffers,
-    isEmptyDraft: (draft) => draft.body === null && draft.title === null,
+    isEmptyDraft: (draft) => draft.body === null && draft.title === null && draft.status == null,
     emptyDraft,
     cardTitle: (card) => card.title,
     hasCreateInput: (draft) => draft.title.trim() !== '' || draft.body.trim() !== '',
@@ -131,6 +141,8 @@ export const usePlanStore = defineStore('plan', () => {
   const draftBody = computed(() => core.draft.value?.body ?? null)
   /** 计划名草稿（详情头部输入框绑定值）；null = 无未保存修改 */
   const draftTitle = computed(() => core.draft.value?.title ?? null)
+  /** 待保存的普通状态（详情状态按钮的等待标记）；null = 无状态修改 */
+  const draftStatus = computed(() => core.draft.value?.status ?? null)
   /** 新建计划名（独立输入；创建时作为正文首个非空行） */
   const newCardTitle = computed(() => core.createDraft.value.title)
   /** 新建正文（首个非空行之后的 Markdown 内容） */
@@ -145,6 +157,11 @@ export const usePlanStore = defineStore('plan', () => {
   /** 计划名输入（详情头部独立输入框） */
   function updateDraftTitle(title: string) {
     core.updateDraft({ title })
+  }
+
+  /** 普通状态选择（阶段 2）：只登记待保存状态，不立即移动；连续点击以最后一次为准 */
+  function updateDraftStatus(status: PlanStatusView) {
+    core.updateDraft({ status })
   }
 
   /** 新建面板草稿输入 */
@@ -169,10 +186,12 @@ export const usePlanStore = defineStore('plan', () => {
     visibleColumns,
     draftBody,
     draftTitle,
+    draftStatus,
     newCardTitle,
     newCardBody,
     updateDraft,
     updateDraftTitle,
+    updateDraftStatus,
     updateCreateDraft,
     createCard,
     reset,
