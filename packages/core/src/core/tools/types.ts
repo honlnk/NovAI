@@ -43,6 +43,13 @@ export type CoreToolName =
   | 'RhythmCheck'
   | 'RhythmSync'
   | 'RhythmCurve'
+  | 'RelationList'
+  | 'RelationRead'
+  | 'RelationCreate'
+  | 'RelationUpdate'
+  | 'RelationDelete'
+  | 'RelationQuery'
+  | 'RelationCheck'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -249,6 +256,8 @@ export type DeleteFileOutput = {
   trashPath: string
   contentLength: number
   linesRemoved: number
+  /** 删除要素文件时级联移除的引用关系数（非要素文件为 0） */
+  removedRelationCount: number
 }
 
 export type ListDirectoryInput = {
@@ -903,6 +912,146 @@ export type RhythmCurveOutput = {
   /** 实际范围（缺省侧开放时显示用）。 */
   chapterFrom: number | null
   chapterTo: number | null
+  guidance: string
+}
+
+/* ---------- 关系图谱（关系图谱施工计划 §五：主 Agent 专属七工具） ---------- */
+
+/** 工具入参的节点定位：稳定标识或「类型 + 精确名称」二选一（kind 第一版恒为 element）。 */
+export type RelationNodeInput = {
+  kind?: 'element'
+  id?: string
+  type?: string
+  name?: string
+}
+
+/** 已解析的节点摘要（List/Read/Query 输出用）。 */
+export type RelationNodeSummary = {
+  kind: 'element' | 'event'
+  id: string
+  /** 解析出的要素名；无法解析时为空串 */
+  name: string
+  /** 解析出的要素类型；无法解析时为空串 */
+  type: string
+}
+
+export type RelationSummaryItem = {
+  id: string
+  from: RelationNodeSummary
+  to: RelationNodeSummary
+  type: string
+  description: string
+  updatedAt: string
+}
+
+export type RelationListInput = {
+  /** 筛选：任一端为该类型要素（character/location/entity/plot/worldbuilding） */
+  elementType?: string
+  /** 筛选：关系类型精确匹配 */
+  relationType?: string
+}
+
+export type RelationListOutput = {
+  relations: RelationSummaryItem[]
+  totalCount: number
+  truncated: boolean
+  guidance: string
+}
+
+export type RelationReadInput = {
+  id: string
+}
+
+export type RelationReadOutput =
+  | { notFound: true; id: string }
+  | {
+    id: string
+    from: RelationNodeSummary
+    to: RelationNodeSummary
+    type: string
+    description: string
+    createdAt: string
+    updatedAt: string
+    /** 端点无法解析时的提示（悬空引用处理建议） */
+    resolutionNote: string
+  }
+
+export type RelationCreateInput = {
+  from: RelationNodeInput
+  to: RelationNodeInput
+  type: string
+  description?: string
+}
+
+export type RelationCreateOutput = {
+  id: string
+  from: RelationNodeSummary
+  to: RelationNodeSummary
+  type: string
+  description: string
+  /** 本次新建的账本文件（首条关系） */
+  created: boolean
+  sourcePath: string
+  /** 本次为要素懒分配的标识（要素文件 frontmatter 已写入） */
+  assignedElementIds: { sourcePath: string; id: string }[]
+  linesAdded: number
+  linesRemoved: number
+}
+
+export type RelationUpdateInput = {
+  id: string
+  type?: string
+  description?: string
+  from?: RelationNodeInput
+  to?: RelationNodeInput
+}
+
+export type RelationUpdateOutput = {
+  id: string
+  from: RelationNodeSummary
+  to: RelationNodeSummary
+  type: string
+  description: string
+  linesAdded: number
+  linesRemoved: number
+}
+
+export type RelationDeleteInput = {
+  id: string
+}
+
+export type RelationDeleteOutput = {
+  id: string
+  type: string
+  fromName: string
+  toName: string
+  linesAdded: number
+  linesRemoved: number
+}
+
+export type RelationQueryInput = {
+  /** 单个要素稳定标识：返回与它直接相连的全部关系 */
+  elementId?: string
+  /** 一组要素稳定标识：返回两端都在集合内的关系（两对象间 / 当前场景人物） */
+  elementIds?: string[]
+}
+
+export type RelationQueryOutput = {
+  relations: RelationSummaryItem[]
+  totalCount: number
+  truncated: boolean
+  guidance: string
+}
+
+export type RelationCheckInput = Record<string, never>
+
+export type RelationCheckOutput = {
+  ok: boolean
+  issues: Array<{
+    kind: string
+    detail: string
+  }>
+  totalCount: number
   guidance: string
 }
 

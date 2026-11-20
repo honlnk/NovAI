@@ -36,6 +36,15 @@ import {
   rhythmSyncTool,
   rhythmUpdateTool,
 } from './rhythm-tools'
+import {
+  relationCheckTool,
+  relationCreateTool,
+  relationDeleteTool,
+  relationListTool,
+  relationQueryTool,
+  relationReadTool,
+  relationUpdateTool,
+} from './relation-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
@@ -102,6 +111,20 @@ import type {
   RhythmSyncOutput,
   RhythmCurveInput,
   RhythmCurveOutput,
+  RelationListInput,
+  RelationListOutput,
+  RelationReadInput,
+  RelationReadOutput,
+  RelationCreateInput,
+  RelationCreateOutput,
+  RelationUpdateInput,
+  RelationUpdateOutput,
+  RelationDeleteInput,
+  RelationDeleteOutput,
+  RelationQueryInput,
+  RelationQueryOutput,
+  RelationCheckInput,
+  RelationCheckOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -182,6 +205,20 @@ export type {
   RhythmSyncOutput,
   RhythmCurveInput,
   RhythmCurveOutput,
+  RelationListInput,
+  RelationListOutput,
+  RelationReadInput,
+  RelationReadOutput,
+  RelationCreateInput,
+  RelationCreateOutput,
+  RelationUpdateInput,
+  RelationUpdateOutput,
+  RelationDeleteInput,
+  RelationDeleteOutput,
+  RelationQueryInput,
+  RelationQueryOutput,
+  RelationCheckInput,
+  RelationCheckOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -231,6 +268,13 @@ type ToolOutputMap = {
   RhythmCheck: RhythmCheckOutput
   RhythmSync: RhythmSyncOutput
   RhythmCurve: RhythmCurveOutput
+  RelationList: RelationListOutput
+  RelationRead: RelationReadOutput
+  RelationCreate: RelationCreateOutput
+  RelationUpdate: RelationUpdateOutput
+  RelationDelete: RelationDeleteOutput
+  RelationQuery: RelationQueryOutput
+  RelationCheck: RelationCheckOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -269,6 +313,13 @@ const tools = {
   RhythmCheck: rhythmCheckTool,
   RhythmSync: rhythmSyncTool,
   RhythmCurve: rhythmCurveTool,
+  RelationList: relationListTool,
+  RelationRead: relationReadTool,
+  RelationCreate: relationCreateTool,
+  RelationUpdate: relationUpdateTool,
+  RelationDelete: relationDeleteTool,
+  RelationQuery: relationQueryTool,
+  RelationCheck: relationCheckTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

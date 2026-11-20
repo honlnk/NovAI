@@ -23,6 +23,11 @@ const REFERENCE_ELEMENT_DIRECTORIES: readonly { dir: string; type: ElementType }
   { dir: 'elements/worldbuilding/', type: 'worldbuilding' },
 ]
 
+/** 路径是否落在要素目录内（删除要素级联清理关系账本用）。 */
+export function isElementSourcePath(path: string): boolean {
+  return REFERENCE_ELEMENT_DIRECTORIES.some(({ dir }) => path.startsWith(dir))
+}
+
 export type ElementReferenceEntry = {
   /** frontmatter id；未分配时为空串（等待领域懒分配）。 */
   id: string

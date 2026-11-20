@@ -22,12 +22,14 @@ export type LedgerProjectSnapshot = {
 export class JsonLedgerCorruptError extends Error {
   readonly path: string
   readonly raw: string
+  readonly reason: string
 
   constructor(path: string, raw: string, reason: string) {
     super(`账本文件 ${path} 已损坏（${reason}），不会自动覆盖；请在界面中查看原始内容或重新初始化`)
     this.name = 'JsonLedgerCorruptError'
     this.path = path
     this.raw = raw
+    this.reason = reason
   }
 }
 

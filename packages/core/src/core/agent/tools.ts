@@ -36,6 +36,15 @@ import {
   rhythmSyncTool,
   rhythmUpdateTool,
 } from '../tools/rhythm-tools'
+import {
+  relationCheckTool,
+  relationCreateTool,
+  relationDeleteTool,
+  relationListTool,
+  relationQueryTool,
+  relationReadTool,
+  relationUpdateTool,
+} from '../tools/relation-tools'
 import { FORESHADOWING_STATUS_LABELS } from '../../types/foreshadowing'
 import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_PAYOFFS } from '../../types/rhythm'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
@@ -81,6 +90,13 @@ import type {
   RhythmCheckOutput,
   RhythmSyncOutput,
   RhythmCurveOutput,
+  RelationListOutput,
+  RelationReadOutput,
+  RelationCreateOutput,
+  RelationUpdateOutput,
+  RelationDeleteOutput,
+  RelationQueryOutput,
+  RelationCheckOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -106,6 +122,42 @@ export type AgentRunnableTool<TInput = unknown, TOutput = unknown> = {
  * 要素管理员子代理面是白名单子集（无委派工具，深度写死 1）；模型误调未注册工具由执行层兜底回灌。
  */
 export type AgentRunnableToolMap = Partial<Record<AgentToolName, AgentRunnableTool>>
+
+/** 关系工具节点定位入参的 JSON Schema（from/to 共用同一形状，文案随字段名变化）。 */
+function relationNodeParameter(field: 'from' | 'to', role: string): {
+  type: 'object'
+  properties: Record<string, unknown>
+  required: string[]
+  additionalProperties: boolean
+  description: string
+} {
+  return {
+    type: 'object',
+    properties: {
+      kind: {
+        type: 'string',
+        enum: ['element'],
+        description: '可选，节点类别；第一版恒为 element（要素），事件引用等时间线事件账本上线后开放。',
+      },
+      id: {
+        type: 'string',
+        description: `可选，${role}要素的稳定标识（ELM- 开头）；与 type+name 二选一，都给时以 id 为准。`,
+      },
+      type: {
+        type: 'string',
+        enum: ['character', 'location', 'entity', 'plot', 'worldbuilding'],
+        description: `可选，按名称定位时的要素类型（旧时间线要素不是关系节点）。`,
+      },
+      name: {
+        type: 'string',
+        description: `可选，按名称定位时的要素精确名称（与 type 搭配使用）。`,
+      },
+    },
+    required: [],
+    additionalProperties: false,
+    description: `${role}（${field}）：稳定标识或「类型 + 精确名称」二选一。`,
+  }
+}
 
 export function createAgentTools(): AgentRunnableToolMap {
   return {
@@ -1590,6 +1642,271 @@ export function createAgentTools(): AgentRunnableToolMap {
         return sections.join('\n')
       },
     },
+    RelationList: {
+      name: 'RelationList',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationList',
+          description: '列出项目关系账本中的关系，可按要素类型或关系类型筛选。返回带两端要素名称与类型的摘要。',
+          parameters: {
+            type: 'object',
+            properties: {
+              elementType: {
+                type: 'string',
+                enum: ['character', 'location', 'entity', 'plot', 'worldbuilding'],
+                description: '可选，只看任一端为该类型要素的关系。',
+              },
+              relationType: {
+                type: 'string',
+                description: '可选，按关系类型精确匹配（如 盟友、血缘、隶属）。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationListTool,
+      formatResult(output: RelationListOutput) {
+        if (output.relations.length === 0) {
+          return `账本共 0 条关系。\n${output.guidance}`
+        }
+        const lines = output.relations.map((relation) => {
+          const from = relation.from.name ? `${relation.from.name}（${relation.from.type}）` : relation.from.id
+          const to = relation.to.name ? `${relation.to.name}（${relation.to.type}）` : relation.to.id
+          const description = relation.description ? `：${relation.description}` : ''
+          return `- ${relation.id} ${from} →[${relation.type}] ${to}${description}`
+        })
+        return [
+          `账本共 ${output.totalCount} 条关系${output.truncated ? `，仅返回前 ${output.relations.length} 条` : ''}：`,
+          '',
+          lines.join('\n'),
+          '',
+          output.guidance,
+        ].join('\n')
+      },
+    },
+    RelationRead: {
+      name: 'RelationRead',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationRead',
+          description: '按稳定标识读取一条关系的完整内容（两端要素、方向、类型、描述与登记时间）。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '关系稳定标识（REL- 开头，来自 RelationList/RelationQuery 返回）。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationReadTool,
+      formatResult(output: RelationReadOutput) {
+        if ('notFound' in output) {
+          return `关系 ${output.id} 不存在。请用 RelationList 重新查询。`
+        }
+        const from = output.from.name ? `${output.from.name}（${output.from.type}，${output.from.id}）` : `${output.from.id}（无法解析）`
+        const to = output.to.name ? `${output.to.name}（${output.to.type}，${output.to.id}）` : `${output.to.id}（无法解析）`
+        return [
+          `${output.id}：${from} →[${output.type}] ${to}`,
+          `描述：${output.description || '（未登记）'}`,
+          `登记：${output.createdAt}；更新：${output.updatedAt}`,
+          output.resolutionNote ? `⚠ ${output.resolutionNote}` : null,
+        ].filter((line) => line !== null).join('\n')
+      },
+    },
+    RelationCreate: {
+      name: 'RelationCreate',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationCreate',
+          description: '登记一条有向关系。两端用稳定标识（id）或「类型 + 精确名称」定位；type 用短词（如 盟友/血缘/隶属/位于），细腻语义写 description。同一方向同一类型只登记一条；反向是独立条目。',
+          parameters: {
+            type: 'object',
+            properties: {
+              from: relationNodeParameter('from', '起点'),
+              to: relationNodeParameter('to', '终点'),
+              type: {
+                type: 'string',
+                description: '关系类型短词（≤30 字符）：盟友、敌对、血缘、师徒、隶属、位于、暗恋等。',
+              },
+              description: {
+                type: 'string',
+                description: '可选，关系细节（恩怨由来、当前张力、约束条件等）。',
+              },
+            },
+            required: ['from', 'to', 'type'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationCreateTool,
+      formatResult(output: RelationCreateOutput) {
+        const lines = [
+          `已登记关系 ${output.id}：${output.from.name || output.from.id} →[${output.type}] ${output.to.name || output.to.id}`,
+          `描述：${output.description || '（未登记）'}`,
+          `账本：${output.sourcePath}${output.created ? '（本次新建）' : ''}`,
+        ]
+        if (output.assignedElementIds.length > 0) {
+          lines.push(`已为 ${output.assignedElementIds.length} 个要素首次分配稳定标识（写入要素文件 frontmatter）：${output.assignedElementIds.map((item) => `${item.id} → ${item.sourcePath}`).join('、')}`)
+        }
+        return lines.join('\n')
+      },
+    },
+    RelationUpdate: {
+      name: 'RelationUpdate',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationUpdate',
+          description: '按稳定标识修改一条关系：类型、描述或两端（改端点会重新校验引用与重复）。至少提供一项。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '关系稳定标识（REL- 开头）。',
+              },
+              type: {
+                type: 'string',
+                description: '可选，新的关系类型短词。',
+              },
+              description: {
+                type: 'string',
+                description: '可选，新的关系描述；传空串表示清空。',
+              },
+              from: relationNodeParameter('from', '新起点'),
+              to: relationNodeParameter('to', '新终点'),
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationUpdateTool,
+      formatResult(output: RelationUpdateOutput) {
+        return `已修改关系 ${output.id}：${output.from.name || output.from.id} →[${output.type}] ${output.to.name || output.to.id}\n描述：${output.description || '（未登记）'}`
+      },
+    },
+    RelationDelete: {
+      name: 'RelationDelete',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationDelete',
+          description: '按稳定标识删除一条关系。只在关系登记错误或用户明确要求时使用；关系已不成立本身也构成删除理由（账本登记当前事实）。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: '关系稳定标识（REL- 开头）。',
+              },
+            },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationDeleteTool,
+      formatResult(output: RelationDeleteOutput) {
+        return `已删除关系 ${output.id}：${output.fromName} →[${output.type}] ${output.toName}`
+      },
+    },
+    RelationQuery: {
+      name: 'RelationQuery',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationQuery',
+          description: '面向创作意图的关系查询：传 elementId 返回与该要素直接相连的全部关系；传 elementIds（如当前场景出场人物）返回两端都在集合内的关系。写人物对手戏、势力归属前先用它拿既有关系，不要凭记忆编。',
+          parameters: {
+            type: 'object',
+            properties: {
+              elementId: {
+                type: 'string',
+                description: '单个要素稳定标识（ELM- 开头）：返回与它直接相连的全部关系。',
+              },
+              elementIds: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 1,
+                description: '一组要素稳定标识：返回两端都在集合内的关系（两对象间 / 当前场景人物）。',
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationQueryTool,
+      formatResult(output: RelationQueryOutput) {
+        if (output.relations.length === 0) {
+          return `命中 0 条关系。\n${output.guidance}`
+        }
+        const lines = output.relations.map((relation) => {
+          const from = relation.from.name ? `${relation.from.name}（${relation.from.type}）` : relation.from.id
+          const to = relation.to.name ? `${relation.to.name}（${relation.to.type}）` : relation.to.id
+          const description = relation.description ? `：${relation.description}` : ''
+          return `- ${relation.id} ${from} →[${relation.type}] ${to}${description}`
+        })
+        return [
+          `命中 ${output.totalCount} 条关系${output.truncated ? `，仅返回前 ${output.relations.length} 条` : ''}：`,
+          '',
+          lines.join('\n'),
+          '',
+          output.guidance,
+        ].join('\n')
+      },
+    },
+    RelationCheck: {
+      name: 'RelationCheck',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'RelationCheck',
+          description: '检查关系账本数据健康：格式非法条目、重复关系、悬空引用（要素已删除）、标识重复与旧时间线要素误用。报告问题并给出处理建议。',
+          parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+      },
+      core: relationCheckTool,
+      formatResult(output: RelationCheckOutput) {
+        if (output.ok) {
+          return output.guidance
+        }
+        return [
+          `发现 ${output.totalCount} 个问题：`,
+          '',
+          output.issues.map((issue) => `- [${issue.kind}] ${issue.detail}`).join('\n'),
+          '',
+          output.guidance,
+        ].join('\n')
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -1794,6 +2111,13 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'RhythmCheck'
     || value === 'RhythmSync'
     || value === 'RhythmCurve'
+    || value === 'RelationList'
+    || value === 'RelationRead'
+    || value === 'RelationCreate'
+    || value === 'RelationUpdate'
+    || value === 'RelationDelete'
+    || value === 'RelationQuery'
+    || value === 'RelationCheck'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'
