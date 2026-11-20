@@ -1,4 +1,4 @@
-import { isAgentHiddenEntry, isNotFoundError, normalizeProjectDirectoryPath, shouldSkipInWalk } from './path'
+import { isAgentHiddenEntry, isNotFoundError, isProtectedLedgerPath, normalizeProjectDirectoryPath, shouldSkipInWalk } from './path'
 import { assertReadableDirectoryPath } from './file-tools/common'
 import { createSpillFileId, SPILL_DIR } from '../agent/spill'
 import { writeProjectTextFile } from '../fs/project-fs'
@@ -45,14 +45,15 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
     const entries: ListDirectoryEntry[] = []
 
     for await (const entry of directoryHandle.values()) {
-      // 点开头与内部条目对模型永远隐藏（D2，无开关）：判定单一来源在 path.ts
-      if (isAgentHiddenEntry(entry.name)) {
+      const entryPath = directoryPath ? `${directoryPath}/${entry.name}` : entry.name
+      // 点开头、内部条目与受保护账本对模型永远隐藏（D2，无开关）：判定单一来源在 path.ts
+      if (isAgentHiddenEntry(entry.name) || isProtectedLedgerPath(entryPath)) {
         continue
       }
 
       entries.push({
         name: entry.name,
-        path: directoryPath ? `${directoryPath}/${entry.name}` : entry.name,
+        path: entryPath,
         kind: entry.kind,
         hidden: false,
       })

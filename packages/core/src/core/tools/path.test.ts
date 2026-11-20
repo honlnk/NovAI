@@ -3,7 +3,9 @@ import {
   internalPathError,
   isAgentHiddenEntry,
   isInternalPath,
+  isProtectedLedgerPath,
   isSpillReadablePath,
+  protectedLedgerPathError,
   shouldSkipInWalk,
 } from './path'
 
@@ -120,3 +122,43 @@ describe('internalPathError 教学式报错（D5：边界 + 原因 + 出路）',
     expect(message).toContain('模型名与默认目标已在每条用户指令的上下文中给出，其余请直接询问用户，不要尝试读取配置文件')
   })
 })
+
+describe('受保护账本判定（关系账本，单一来源，大小写折叠）', () => {
+  it.each([
+    ['elements/relations.json'],
+    ['Elements/Relations.JSON'],
+    ['ELEMENTS/RELATIONS.json'],
+  ])('isProtectedLedgerPath("%s") 为 true', (path) => {
+    expect(isProtectedLedgerPath(path)).toBe(true)
+  })
+
+  it.each([
+    ['elements/relations.json.bak'],
+    ['elements/characters/relations.json'], // 子目录同名文件不受保护（按名字精确匹配路径）
+    ['relations.json'],
+    ['elements/relations.md'],
+    ['elements/characters/林澜.md'],
+    [''],
+  ])('isProtectedLedgerPath("%s") 为 false', (path) => {
+    expect(isProtectedLedgerPath(path)).toBe(false)
+  })
+
+  it('账本不是内部路径（两类保护分开判定），但遍历同样跳过', () => {
+    expect(isInternalPath('elements/relations.json')).toBe(false)
+    expect(isProtectedLedgerPath('elements/relations.json')).toBe(true)
+    expect(shouldSkipInWalk('elements/relations.json')).toBe(true)
+    // 名字判定不命中（ListDirectory 由调用方带全路径补判）
+    expect(isAgentHiddenEntry('relations.json')).toBe(false)
+  })
+
+  it('protectedLedgerPathError 教学式报错：边界 + 专用工具出路', () => {
+    const message = protectedLedgerPathError('ReadFile.path').message
+
+    expect(message.startsWith('ReadFile.path 不能指向关系账本文件（elements/relations.json）。')).toBe(true)
+    expect(message).toContain('查询用 RelationList / RelationQuery / RelationRead')
+    expect(message).toContain('登记与修改用 RelationCreate / RelationUpdate / RelationDelete')
+    expect(message).toContain('检查数据用 RelationCheck')
+    expect(message).toContain('该文件不会出现在目录列表与搜索结果中')
+  })
+})
+

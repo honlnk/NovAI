@@ -78,6 +78,21 @@ export function isInternalPath(path: string): boolean {
     || INTERNAL_DIRECTORIES.some((directory) => folded === directory || folded.startsWith(`${directory}/`))
 }
 
+/**
+ * 领域账本文件（受保护数据）：由领域服务统一维护的项目级结构化数据
+ * （关系图谱的关系账本；后续时间线事件账成文时在此登记）。
+ * 与内部路径分开判定：内部文件是「应用私有、模型无需知晓」，账本是「领域数据、
+ * 有专用工具」——对通用文件工具同样全部禁止读写，但教学式出路指向专用工具。
+ * 名单同样保持私有，消费方只消费「是不是」。
+ */
+const PROTECTED_LEDGER_FILES = ['elements/relations.json'] as const
+
+/** 项目根相对路径是否受保护账本文件。 */
+export function isProtectedLedgerPath(path: string): boolean {
+  const folded = foldInternalPath(path)
+  return PROTECTED_LEDGER_FILES.some((file) => folded === file)
+}
+
 /** 是否 spill 取回通道自身或其子路径（内部路径中唯一可读的例外）。 */
 export function isSpillReadablePath(path: string): boolean {
   const folded = foldInternalPath(path)
@@ -102,6 +117,11 @@ export function shouldSkipInWalk(path: string): boolean {
     return true
   }
 
+  // 受保护账本文件对模型不可见（查找/搜索遍历跳过），读写拦截在断言族
+  if (isProtectedLedgerPath(path)) {
+    return true
+  }
+
   return path.split('/').some((segment) => segment.startsWith('.'))
 }
 
@@ -115,6 +135,19 @@ export function internalPathError(label: string): Error {
     + '不通过工具读写，也不会出现在目录列表和搜索结果中。唯一例外是 .novel/spill/'
     + '（超长工具结果的取回通道，可按指引用 ReadFile 分段读取）。如果你需要项目配置信息（模型、默认目标、权限档位），'
     + '模型名与默认目标已在每条用户指令的上下文中给出，其余请直接询问用户，不要尝试读取配置文件。',
+  )
+}
+
+/**
+ * 受保护账本的教学式报错：陈述边界 + 陈述出路（专用工具）。
+ * 关系数据由关系图谱统一维护，画布与专用工具操作同一份事实来源。
+ */
+export function protectedLedgerPathError(label: string): Error {
+  return new Error(
+    `${label} 不能指向关系账本文件（elements/relations.json）。关系数据由关系图谱统一维护：`
+    + '查询用 RelationList / RelationQuery / RelationRead，登记与修改用 RelationCreate / RelationUpdate / RelationDelete，'
+    + '检查数据用 RelationCheck。作者界面中的关系图谱弹窗与这些工具操作同一份数据。'
+    + '该文件不会出现在目录列表与搜索结果中，也不要引导作者手工编辑它。',
   )
 }
 

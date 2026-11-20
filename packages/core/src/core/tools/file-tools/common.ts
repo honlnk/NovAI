@@ -3,8 +3,10 @@ import {
   assertWritableTextFilePath,
   internalPathError,
   isInternalPath,
+  isProtectedLedgerPath,
   isSpillReadablePath,
   normalizeProjectPath,
+  protectedLedgerPathError,
 } from '../path'
 
 export function asRecord(input: unknown) {
@@ -26,7 +28,14 @@ export function readString(value: unknown, label: string) {
 /**
  * 内部路径判定与教学式报错全部来自 path.ts 的单一来源模块（内部文件屏蔽计划 D1/D5），
  * 本文件不再保留私有副本——名单与文案变更只改 path.ts 一处。
+ * 受保护账本（关系账本等）同在 path.ts 单一来源，读写一律拦截，出路指向专用工具。
  */
+
+function assertNotProtectedLedger(path: string, label: string) {
+  if (isProtectedLedgerPath(path)) {
+    throw protectedLedgerPathError(label)
+  }
+}
 
 export function assertMutableDocumentPath(path: string, label: string) {
   assertTextFilePath(path)
@@ -34,6 +43,8 @@ export function assertMutableDocumentPath(path: string, label: string) {
   if (isInternalPath(path)) {
     throw internalPathError(label)
   }
+
+  assertNotProtectedLedger(path, label)
 }
 
 export function assertWritableDocumentPath(path: string, label: string) {
@@ -42,6 +53,8 @@ export function assertWritableDocumentPath(path: string, label: string) {
   if (isInternalPath(path)) {
     throw internalPathError(label)
   }
+
+  assertNotProtectedLedger(path, label)
 }
 
 /**
@@ -55,6 +68,8 @@ export function assertReadableDocumentPath(path: string, label: string) {
   if (isInternalPath(path) && !isSpillReadablePath(path)) {
     throw internalPathError(label)
   }
+
+  assertNotProtectedLedger(path, label)
 }
 
 /**
@@ -65,6 +80,8 @@ export function assertReadableDirectoryPath(path: string, label: string) {
   if (isInternalPath(path) && !isSpillReadablePath(path)) {
     throw internalPathError(label)
   }
+
+  assertNotProtectedLedger(path, label)
 }
 
 export function normalizeTextFilePath(value: unknown, label: string) {
