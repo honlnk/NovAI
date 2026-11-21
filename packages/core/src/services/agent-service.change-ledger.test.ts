@@ -107,6 +107,33 @@ describe('改动账本 service 层', () => {
     await createSession('proj-ledger')
   })
 
+  it('附带文件变更（关系工具懒分配标识写回要素）：逐条进账本并实时广播 file-changed', async () => {
+    mockedQuery.mockImplementation(async (input) => {
+      const emit = input.onEvent?.bind(input) ?? (() => {})
+      const call = { id: 'r1', name: 'RelationCreate' as const, input: {} }
+      emit({ type: 'tool-call', call, inputSummary: '登记关系' })
+      emit({
+        type: 'tool-result',
+        call,
+        ok: true,
+        resultSummary: '已登记关系',
+        fileChange: { type: 'updated', path: 'elements/relations.json' },
+        extraFileChanges: [{ type: 'updated', path: 'elements/characters/陈六.md' }],
+      })
+      input.onEvent?.({ type: 'done', messages: input.view.messages })
+      return input.view.messages
+    })
+
+    const { result, events } = await runOneTurn('登记陈六与林岚的关系')
+
+    const changedPaths = result.session.changedFiles.map((f) => ('path' in f ? f.path : ''))
+    expect(changedPaths).toEqual(expect.arrayContaining(['elements/relations.json', 'elements/characters/陈六.md']))
+    const broadcast = events
+      .filter((event) => event.type === 'file-changed')
+      .map((event) => JSON.stringify(event))
+    expect(broadcast.some((text) => text.includes('陈六.md'))).toBe(true)
+  })
+
   it('一轮改多个文件：changedFiles 全量列出（Bug 2 消解），change-summary 解析出含 diff 的记录', async () => {
     mockedQuery.mockImplementation(async (input) => {
       const emit = input.onEvent?.bind(input) ?? (() => {})

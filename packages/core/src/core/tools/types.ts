@@ -160,6 +160,11 @@ export type ToolDefinition<TName extends string, TInput, TOutput> = {
    */
   extractChangeCoords?(output: TOutput): FileChangeCoords | undefined
   /**
+   * 主变更之外顺带改动的其他文件（如关系工具为要素懒分配标识写回 frontmatter、
+   * 删除要素级联更新关系账本）。每条各进一条变更账本记录，界面同样收到实时变更通知。
+   */
+  extractExtraFileChanges?(output: TOutput): FileChange[] | undefined
+  /**
    * 写工具用它构造写入前确认预览；只读工具不实现。
    * 入参是经过 validateInput 校验的强类型 input，执行前调用。
    */
@@ -258,6 +263,8 @@ export type DeleteFileOutput = {
   linesRemoved: number
   /** 删除要素文件时级联移除的引用关系数（非要素文件为 0） */
   removedRelationCount: number
+  /** 级联清理失败原因（文件已删除但引用关系未清理）；成功或无需级联时为空串 */
+  relationCascadeError: string
 }
 
 export type ListDirectoryInput = {
@@ -1012,6 +1019,10 @@ export type RelationUpdateOutput = {
   to: RelationNodeSummary
   type: string
   description: string
+  /** 修改前的关系摘要（变更账本 oldText 用） */
+  previous: { from: RelationNodeSummary; to: RelationNodeSummary; type: string; description: string }
+  /** 本次为要素懒分配的标识（改端点到无标识要素时） */
+  assignedElementIds: { sourcePath: string; id: string }[]
   linesAdded: number
   linesRemoved: number
 }

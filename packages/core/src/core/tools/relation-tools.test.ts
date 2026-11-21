@@ -393,4 +393,55 @@ describe('DeleteFile 级联清理', () => {
     const deleteNote = await deleteFileTool.run(deleteFileTool.validateInput({ path: 'notes/随笔.md' }), runtime())
     expect(deleteNote.removedRelationCount).toBe(0)
   })
+
+  it('review #6：级联更新账本作为附带变更上报；级联失败时结果写明原因', async () => {
+    await seedPair()
+    await relationCreateTool.run(relationCreateTool.validateInput({
+      from: { id: 'ELM-aaaaaaaaaa' }, to: { id: 'ELM-bbbbbbbbbb' }, type: '盟友',
+    }), runtime())
+
+    const ok = await deleteFileTool.run(deleteFileTool.validateInput({ path: 'elements/characters/林澜.md' }), runtime())
+    expect(deleteFileTool.extractExtraFileChanges!(ok)).toEqual([{ type: 'updated', path: RELATION_LEDGER_PATH }])
+
+    // 账本整体损坏：要素照常删除，结果明确告知引用关系未清理
+    await writeProjectTextFile(root, RELATION_LEDGER_PATH, '坏掉的内容')
+    const failed = await deleteFileTool.run(deleteFileTool.validateInput({ path: 'elements/characters/老周.md' }), runtime())
+    expect(failed.removedRelationCount).toBe(0)
+    expect(failed.relationCascadeError).toContain('已损坏')
+    expect(deleteFileTool.summarizeOutput(failed)).toContain('未能清理')
+    expect(deleteFileTool.extractExtraFileChanges!(failed)).toBeUndefined()
+  })
+})
+
+/* ---------- review 修复批 ---------- */
+
+describe('review 修复批：变更记录与确认文案', () => {
+  it('#4 懒分配标识的要素文件作为附带变更上报', async () => {
+    await seedElement('elements/characters/陈六.md', { name: '陈六' })
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    const output = await relationCreateTool.run(relationCreateTool.validateInput({
+      from: { type: 'character', name: '陈六' }, to: { id: 'ELM-aaaaaaaaaa' }, type: '仇敌',
+    }), runtime())
+    expect(relationCreateTool.extractExtraFileChanges!(output)).toEqual([
+      { type: 'updated', path: 'elements/characters/陈六.md' },
+    ])
+  })
+
+  it('#8 RelationUpdate 的变更记录带修改前内容', async () => {
+    await seedPair()
+    const created = await relationCreateTool.run(relationCreateTool.validateInput({
+      from: { id: 'ELM-aaaaaaaaaa' }, to: { id: 'ELM-bbbbbbbbbb' }, type: '隶属', description: '旧描述',
+    }), runtime())
+    const output = await relationUpdateTool.run(relationUpdateTool.validateInput({ id: created.id, type: '叛离' }), runtime())
+    const diff = relationUpdateTool.extractChangeDiff!(output)!
+    expect(diff.oldText).toContain('隶属')
+    expect(diff.oldText).toContain('旧描述')
+    expect(diff.newText).toContain('叛离')
+    expect(output.previous.from.name).toBe('林澜')
+  })
+
+  it('#9 RelationDelete 确认路径带关系标识（界面据账本前缀显示「删除一条关系」）', () => {
+    const confirmation = relationDeleteTool.buildConfirmation(relationDeleteTool.validateInput({ id: 'REL-abcdefghij' }))!
+    expect(confirmation).toEqual({ kind: 'delete', path: `${RELATION_LEDGER_PATH}（关系 REL-abcdefghij）` })
+  })
 })

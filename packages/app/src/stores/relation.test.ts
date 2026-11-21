@@ -32,6 +32,7 @@ vi.mock('@novai/core/services/relation-service', async (importOriginal) => {
 
 import {
   RelationConflictError,
+  relationVersion,
   getGraph,
   createRelationEntry,
   updateRelationEntry,
@@ -127,6 +128,17 @@ function graphView(overrides: Partial<RelationGraphView> = {}) {
   }
 }
 
+/** 第一条关系（REL-1111111111）被改动后的图视图 */
+function graphViewWithFirst(overrides: Partial<RelationRecord>, viewOverrides: Partial<RelationGraphView> = {}) {
+  const base = graphView()
+  return graphView({
+    ...viewOverrides,
+    edges: base.edges.map((edge, index) =>
+      index === 0 ? { ...edge, relation: relation('REL-1111111111', overrides) } : edge,
+    ),
+  })
+}
+
 vi.mocked(getGraph).mockResolvedValue(graphView())
 
 beforeEach(() => {
@@ -140,6 +152,7 @@ beforeEach(() => {
     relation: relation(options.id, { type: options.type ?? '盟友' }),
     previous: relation(options.id),
     contentHash: 'hash-next',
+    assignedElementIds: [],
   }))
   vi.mocked(createRelationEntry).mockImplementation(async () => ({
     relation: relation('REL-new1111111'),
@@ -231,7 +244,7 @@ describe('画布节点与边派生', () => {
 /* ---------- Agent 写入联动 ---------- */
 
 describe('变更通知联动', () => {
-  it('Agent 写入触发重载并冻结有未落盘内容的编辑会话；UI 写入不回环', async () => {
+  it('Agent 改动了正在编辑的关系：重载并冻结待写会话；UI 写入不回环', async () => {
     const store = useRelationStore()
     await store.open('proj-1')
 
@@ -244,10 +257,11 @@ describe('变更通知联动', () => {
     await Promise.resolve()
     expect(vi.mocked(getGraph).mock.calls.length).toBe(callsBefore)
 
+    vi.mocked(getGraph).mockResolvedValue(graphViewWithFirst({ description: 'Agent 改的描述', updatedAt: '2026-01-03T00:00:00.000Z' }))
     emitChange({ projectId: 'proj-1', source: 'agent', kind: 'relations' })
     await vi.waitFor(() => expect(vi.mocked(getGraph).mock.calls.length).toBeGreaterThan(callsBefore))
     await vi.waitFor(() => expect(store.detailSession?.conflict).toBeTruthy())
-    expect(store.detailSession?.conflict?.probing).toBe(false)
+    await vi.waitFor(() => expect(store.detailSession?.conflict?.probing).toBe(false))
   })
 
   it('其他项目的事件不触发本现场', async () => {
@@ -310,29 +324,23 @@ describe('详情编辑会话（save-session）', () => {
     const store = useRelationStore()
     await store.open('proj-1')
     await store.openDetail('REL-1111111111')
-    expect(store.detailSession?.baseContentHash).toBe('hash-1')
+    expect(store.detailSession?.baseContentHash).toBe(relationVersion(relation('REL-1111111111')))
 
     vi.mocked(updateRelationEntry).mockRejectedValueOnce(new RelationConflictError('hash-disk'))
     store.setDetailDraft('REL-1111111111', { type: '决裂' })
     vi.advanceTimersByTime(2100)
     await vi.waitFor(() => expect(store.detailSession?.conflict).toBeTruthy())
 
-    // 外部改盘后的磁盘最新图：描述与内容哈希都已更新
-    vi.mocked(getGraph).mockResolvedValue(graphView({
-      contentHash: 'hash-disk',
-      edges: [graphView().edges[0], graphView().edges[1]].map((edge, i) =>
-        i === 0
-          ? { ...edge, relation: relation('REL-1111111111', { description: '外部改盘后的描述' }) }
-          : edge,
-      ),
-    }))
+    // 外部改盘后的磁盘最新图：这条关系的描述已更新
+    const diskRelation = relation('REL-1111111111', { description: '外部改盘后的描述', updatedAt: '2026-01-05T00:00:00.000Z' })
+    vi.mocked(getGraph).mockResolvedValue(graphViewWithFirst(diskRelation, { contentHash: 'hash-disk' }))
 
     const outcome = await store.adoptDiskVersion()
     expect(outcome).toBe('resolved')
     expect(store.detailSession?.conflict).toBeFalsy()
-    // 草稿采用磁盘版描述；基线哈希换成磁盘最新——而不是改盘前的 hash-1
+    // 草稿采用磁盘版描述；基线换成这条关系的最新版本——而不是改盘前的版本
     expect(store.detailSession?.draft.description).toBe('外部改盘后的描述')
-    expect(store.detailSession?.baseContentHash).toBe('hash-disk')
+    expect(store.detailSession?.baseContentHash).toBe(relationVersion(diskRelation))
 
     // 后续编辑保存带上新基线，正常落盘不再冲突
     store.setDetailDraft('REL-1111111111', { description: '采用磁盘后的新编辑' })
@@ -340,7 +348,7 @@ describe('详情编辑会话（save-session）', () => {
     await vi.waitFor(() => expect(updateRelationEntry).toHaveBeenCalledTimes(2))
     expect(updateRelationEntry).toHaveBeenLastCalledWith(
       'proj-1',
-      expect.objectContaining({ id: 'REL-1111111111', description: '采用磁盘后的新编辑', expectedContentHash: 'hash-disk' }),
+      expect.objectContaining({ id: 'REL-1111111111', description: '采用磁盘后的新编辑', expectedRelationVersion: relationVersion(diskRelation) }),
       'ui',
     )
     expect(store.detailSession?.conflict).toBeFalsy()
@@ -351,13 +359,84 @@ describe('详情编辑会话（save-session）', () => {
     await store.open('proj-1')
     await store.openDetail('REL-1111111111')
 
-    // 干净会话 + Agent 改动：只重载，不冲突
+    // 干净会话 + Agent 改了这条关系：跟随磁盘（草稿与基线都换成新版本），不冲突
+    const agentEdit = relation('REL-1111111111', { description: 'Agent 第一次改', updatedAt: '2026-01-03T00:00:00.000Z' })
+    vi.mocked(getGraph).mockResolvedValue(graphViewWithFirst(agentEdit))
     emitChange({ projectId: 'proj-1', source: 'agent', kind: 'relations' })
-    await vi.waitFor(() => expect(store.detailSession?.conflict).toBeUndefined())
+    await vi.waitFor(() => expect(store.detailSession?.draft.description).toBe('Agent 第一次改'))
+    expect(store.detailSession?.conflict).toBeUndefined()
+    expect(store.detailSession?.baseContentHash).toBe(relationVersion(agentEdit))
 
     store.setDetailDraft('REL-1111111111', { type: '决裂' })
+    vi.mocked(getGraph).mockResolvedValue(graphViewWithFirst({ description: 'Agent 第二次改', updatedAt: '2026-01-04T00:00:00.000Z' }))
     emitChange({ projectId: 'proj-1', source: 'agent', kind: 'relations' })
     await vi.waitFor(() => expect(store.detailSession?.conflict).toBeTruthy())
+  })
+
+  it('Agent 只改了别的关系：待写会话不冻结（按条判定冲突）', async () => {
+    const store = useRelationStore()
+    await store.open('proj-1')
+    await store.openDetail('REL-1111111111')
+    store.setDetailDraft('REL-1111111111', { type: '决裂' })
+
+    const base = graphView()
+    vi.mocked(getGraph).mockResolvedValue(graphView({
+      contentHash: 'hash-other-changed',
+      edges: [base.edges[0]!, { ...base.edges[1]!, relation: relation('REL-2222222222', { type: '悬空', description: 'Agent 改别的', to: { kind: 'element', id: 'ELM-zzzzzzzzzz' } }) }],
+    }))
+    const callsBefore = vi.mocked(getGraph).mock.calls.length
+    emitChange({ projectId: 'proj-1', source: 'agent', kind: 'relations' })
+    await vi.waitFor(() => expect(vi.mocked(getGraph).mock.calls.length).toBeGreaterThan(callsBefore))
+    await Promise.resolve()
+    expect(store.detailSession?.conflict).toBeUndefined()
+    expect(store.detailPhase(store.detailSession)).toBe('pending')
+  })
+
+  it('review #1：改完 A 再回到之前打开过的 B 编辑，B 以自己这条关系的版本提交（不因 A 的写入误报冲突）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const store = useRelationStore()
+    await store.open('proj-1')
+
+    await store.openDetail('REL-2222222222')
+    await store.openDetail('REL-1111111111')
+    store.setDetailDraft('REL-1111111111', { description: 'A 改' })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(updateRelationEntry).toHaveBeenCalledTimes(1))
+
+    // A 落盘后账本整体哈希变了，但 B 这条关系本身没变
+    vi.mocked(getGraph).mockResolvedValue(graphView({ contentHash: 'hash-after-A' }))
+    await store.openDetail('REL-2222222222')
+    store.setDetailDraft('REL-2222222222', { description: 'B 改' })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(updateRelationEntry).toHaveBeenCalledTimes(2))
+    const bRelation = graphView().edges[1]!.relation
+    expect(updateRelationEntry).toHaveBeenLastCalledWith(
+      'proj-1',
+      expect.objectContaining({ id: 'REL-2222222222', expectedRelationVersion: relationVersion(bRelation) }),
+      'ui',
+    )
+    expect(vi.mocked(updateRelationEntry).mock.lastCall?.[1]).not.toHaveProperty('expectedContentHash')
+  })
+
+  it('review #3：只改描述不提交端点（悬空端点不再被重新解析）；改了端点才提交', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const store = useRelationStore()
+    await store.open('proj-1')
+
+    await store.openDetail('REL-2222222222')
+    store.setDetailDraft('REL-2222222222', { description: '只改描述' })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(updateRelationEntry).toHaveBeenCalledTimes(1))
+    const firstCall = vi.mocked(updateRelationEntry).mock.lastCall![1]
+    expect(firstCall).not.toHaveProperty('from')
+    expect(firstCall).not.toHaveProperty('to')
+
+    store.setDetailDraft('REL-2222222222', { toId: 'path:elements/characters/陈六.md' })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(updateRelationEntry).toHaveBeenCalledTimes(2))
+    const secondCall = vi.mocked(updateRelationEntry).mock.lastCall![1]
+    expect(secondCall.to).toEqual({ kind: 'element', sourcePath: 'elements/characters/陈六.md' })
+    expect(secondCall).not.toHaveProperty('from')
   })
 })
 
@@ -469,6 +548,59 @@ describe('搜索添加节点', () => {
     await store.submitCreate()
     expect(store.canvasNodes.filter((node) => node.id === 'ELM-cccccccccc').length).toBe(1)
     expect(store.canvasNodes.some((node) => node.id === 'ELM-cccccccccc' && node.label === '青云山')).toBe(true)
+  })
+})
+
+describe('尚无稳定标识的要素（review 真机新发现）', () => {
+  const idless: RelationElementOptionView = {
+    id: '',
+    type: 'character',
+    name: '陈六',
+    summary: '散修',
+    sourcePath: 'elements/characters/陈六.md',
+  }
+
+  it('搜索添加：以 path: 键上画布（非空 id），坐标只本地生效不写账本', async () => {
+    vi.useFakeTimers()
+    const store = useRelationStore()
+    await store.open('proj-1')
+
+    store.addExtraNode(idless)
+    const node = store.canvasNodes.find((item) => item.label === '陈六')
+    expect(node?.id).toBe('path:elements/characters/陈六.md')
+    expect(store.canvasNodes.every((item) => item.id !== '')).toBe(true)
+
+    store.recordNodePosition('path:elements/characters/陈六.md', { x: 5, y: 6 })
+    expect(store.canvasNodes.find((item) => item.label === '陈六')).toMatchObject({ x: 5, y: 6 })
+    vi.advanceTimersByTime(900)
+    await Promise.resolve()
+    expect(saveLayout).not.toHaveBeenCalled()
+  })
+
+  it('新建关系：path: 键按要素路径提交，由服务层懒分配标识', async () => {
+    const store = useRelationStore()
+    await store.open('proj-1')
+    store.openCreateForm()
+    store.createDraft.fromId = 'path:elements/characters/陈六.md'
+    store.createDraft.toId = 'ELM-aaaaaaaaaa'
+    store.createDraft.type = '仇敌'
+    expect(await store.submitCreate()).toBe(true)
+    expect(createRelationEntry).toHaveBeenCalledWith(
+      'proj-1',
+      expect.objectContaining({
+        from: { kind: 'element', sourcePath: 'elements/characters/陈六.md' },
+        to: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      }),
+      'ui',
+    )
+  })
+
+  it('选择器缓存的名称用于端点展示', async () => {
+    const store = useRelationStore()
+    await store.open('proj-1')
+    store.rememberOption(idless)
+    expect(store.nodeLabelOf('path:elements/characters/陈六.md')).toBe('陈六')
+    expect(store.nodeLabelOf('ELM-aaaaaaaaaa')).toBe('林澜')
   })
 })
 

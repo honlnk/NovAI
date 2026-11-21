@@ -79,8 +79,10 @@ const parallel = computed(() => {
   return { nodeSlots, edgeSlot }
 })
 
+// 空 id 节点会让 Vue Flow 报 NODE_INVALID 且此后不再同步节点数据（画布停在旧显示），
+// 上游已改用 path: 键，这里再兜一道：绝不把空 id 交给 Vue Flow
 const flowNodes = computed<Node<RelationNodeData>[]>(() =>
-  props.nodes.map((node) => ({
+  props.nodes.filter((node) => node.id !== '').map((node) => ({
     id: node.id,
     type: 'relation',
     position: { x: node.x, y: node.y },

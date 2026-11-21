@@ -132,6 +132,15 @@ function describeSelectorNode(node: RelationNodeInput): string {
   return '未定位的节点'
 }
 
+/** 懒分配标识写回的要素文件：作为附带变更进变更账本（编辑器与文件树据此刷新）。 */
+function assignedIdChanges(assigned: readonly { sourcePath: string }[]) {
+  return assigned.map((item) => ({ type: 'updated' as const, path: item.sourcePath }))
+}
+
+function relationDiffText(item: { from: RelationNodeSummary; to: RelationNodeSummary; type: string; description: string }, id: string): string {
+  return JSON.stringify({ id, from: item.from, to: item.to, type: item.type, description: item.description }, null, 2)
+}
+
 function listGuidance(totalCount: number): string {
   return totalCount > 0
     ? `共 ${totalCount} 条关系。写人物对手戏前建议用 RelationQuery 只取相关人物之间的关系，避免整账本进上下文`
@@ -344,6 +353,8 @@ export const relationCheckTool: ToolDefinition<'RelationCheck', RelationCheckInp
       switch (issue.kind) {
         case 'invalid-relation':
           return { kind: issue.kind, detail: `格式非法的关系条目：第 ${issue.index + 1} 条，${issue.reason}` }
+        case 'duplicate-relation-id':
+          return { kind: issue.kind, detail: `关系标识重复：第 ${issue.index + 1} 条的标识 ${issue.id} 与前面的关系相同，已被隔离（按标识修改/删除会同时命中多条）；请在关系图谱中清理后重新登记` }
         case 'invalid-layout-entry':
           return { kind: issue.kind, detail: `格式非法的画布坐标：坐标键 ${issue.key}，${issue.reason}` }
         case 'duplicate-relation':
@@ -365,6 +376,7 @@ export const relationCheckTool: ToolDefinition<'RelationCheck', RelationCheckInp
       totalCount: issues.length,
       guidance: issues.length === 0
         ? '账本数据健康：无重复、无悬空引用、无非法条目'
+        // 隔离条目（格式非法/标识重复）会阻止结构写入，处理优先
         : '以上问题可在关系图谱弹窗中处理：悬空/误用条目可删除后重建，重复标识需先在要素库修正；格式非法条目会阻止账本写入',
     }
   },
@@ -443,6 +455,9 @@ export const relationCreateTool: ToolDefinition<'RelationCreate', RelationCreate
       ? { type: 'created' as const, path: RELATION_LEDGER_PATH }
       : { type: 'updated' as const, path: RELATION_LEDGER_PATH }
   },
+  extractExtraFileChanges(output) {
+    return assignedIdChanges(output.assignedElementIds)
+  },
   extractChangeDiff(output) {
     return {
       oldText: '',
@@ -492,6 +507,9 @@ export const relationUpdateTool: ToolDefinition<'RelationUpdate', RelationUpdate
     }
   },
   async run(input, runtime) {
+    // 修改前先取端点名称（改端点后旧端点可能不在新图里）
+    const before = await getGraph(runtime.project.id)
+    const beforeNames = nameMapFromGraph(before)
     const result = await updateRelationEntry(
       runtime.project.id,
       {
@@ -506,14 +524,25 @@ export const relationUpdateTool: ToolDefinition<'RelationUpdate', RelationUpdate
 
     const graph = await getGraph(runtime.project.id)
     const names = nameMapFromGraph(graph)
-    const diff = countDiffLines(JSON.stringify(result.previous, null, 2), JSON.stringify(result.relation, null, 2))
-
-    return {
-      id: result.relation.id,
+    const previous = {
+      from: beforeNames.get(result.previous.from.id) ?? unresolvedSummary(result.previous.from.id, result.previous.from.kind),
+      to: beforeNames.get(result.previous.to.id) ?? unresolvedSummary(result.previous.to.id, result.previous.to.kind),
+      type: result.previous.type,
+      description: result.previous.description,
+    }
+    const current = {
       from: names.get(result.relation.from.id) ?? unresolvedSummary(result.relation.from.id, result.relation.from.kind),
       to: names.get(result.relation.to.id) ?? unresolvedSummary(result.relation.to.id, result.relation.to.kind),
       type: result.relation.type,
       description: result.relation.description,
+    }
+    const diff = countDiffLines(relationDiffText(previous, result.relation.id), relationDiffText(current, result.relation.id))
+
+    return {
+      id: result.relation.id,
+      ...current,
+      previous,
+      assignedElementIds: result.assignedElementIds,
       linesAdded: diff.linesAdded,
       linesRemoved: diff.linesRemoved,
     }
@@ -533,10 +562,13 @@ export const relationUpdateTool: ToolDefinition<'RelationUpdate', RelationUpdate
   extractFileChange() {
     return { type: 'updated' as const, path: RELATION_LEDGER_PATH }
   },
+  extractExtraFileChanges(output) {
+    return assignedIdChanges(output.assignedElementIds)
+  },
   extractChangeDiff(output) {
     return {
-      oldText: '',
-      newText: JSON.stringify({ id: output.id, from: output.from, to: output.to, type: output.type, description: output.description }, null, 2),
+      oldText: relationDiffText(output.previous, output.id),
+      newText: relationDiffText(output, output.id),
       linesAdded: output.linesAdded,
       linesRemoved: output.linesRemoved,
     }
@@ -608,9 +640,10 @@ export const relationDeleteTool: ToolDefinition<'RelationDelete', RelationDelete
     }
   },
   buildConfirmation(input) {
+    // 与计划/伏笔/节奏同一先例：路径带上条目标识，确认界面据账本前缀改用「删除一条关系」文案
     return {
       kind: 'delete' as const,
-      path: RELATION_LEDGER_PATH,
+      path: `${RELATION_LEDGER_PATH}（关系 ${input.id}）`,
     }
   },
 }

@@ -11,6 +11,7 @@ import {
   searchElementEntries,
 } from '../elements/reference-index'
 import { rescanProject } from '../fs/project-fs'
+import { hashContent } from '../util/hash'
 
 import type { ElementReferenceEntry, ElementReferenceIndex } from '../elements/reference-index'
 import type { ProjectSnapshot } from '../../types/project'
@@ -134,9 +135,20 @@ function reviveRelationLedger(raw: unknown): { relations: RelationRecord[]; layo
   const relations: RelationRecord[] = []
 
   if (Array.isArray(root.relations)) {
+    const seenIds = new Set<string>()
     root.relations.forEach((item, index) => {
       const record = reviveRelationRecord(item)
-      if (record) {
+      if (record && seenIds.has(record.id)) {
+        // 重复 id：按 id 的改删会同时命中多条，后出现者隔离（首条照常可用）
+        issues.push({
+          kind: 'duplicate-relation-id',
+          index,
+          id: record.id,
+          reason: `关系标识 ${record.id} 与前面的条目重复`,
+          raw: item,
+        })
+      } else if (record) {
+        seenIds.add(record.id)
         relations.push(record)
       } else {
         issues.push({
@@ -221,15 +233,40 @@ function describeRelationRecord(raw: unknown): string {
   return missing.length > 0 ? `缺少或非法字段：${missing.join('、')}` : '字段格式不合法'
 }
 
-function serializeRelationLedger(document: RelationLedgerDocument): string {
+function serializeRelationLedger(document: RelationLedgerDocument, options: { preserveIssues?: boolean } = {}): string {
+  let relations: unknown[] = document.relations
+  let layout: Record<string, unknown> = document.layout
+  if (options.preserveIssues && document.issues.length > 0) {
+    // 原样写回隔离条目（按原位置插回），只有用户明确「清理」时才丢弃
+    relations = [...document.relations]
+    const relationIssues = document.issues
+      .filter((issue): issue is Extract<RelationLedgerIssue, { index: number }> => 'index' in issue && issue.index >= 0)
+      .sort((left, right) => left.index - right.index)
+    for (const issue of relationIssues) {
+      relations.splice(Math.min(issue.index, relations.length), 0, issue.raw)
+    }
+    layout = { ...document.layout }
+    for (const issue of document.issues) {
+      if (issue.kind === 'invalid-layout-entry' && issue.key && !(issue.key in layout)) {
+        layout[issue.key] = issue.raw
+      }
+    }
+  }
   return JSON.stringify(
     {
       version: RELATION_LEDGER_VERSION,
-      relations: document.relations,
-      layout: document.layout,
+      relations,
+      layout,
     },
     null,
     2,
+  )
+}
+
+/** 结构性损坏（relations/layout 整体不是数组/对象）无法原样写回，任何写入都必须先清理。 */
+function hasStructuralIssue(document: RelationLedgerDocument): boolean {
+  return document.issues.some(
+    (issue) => (issue.kind === 'invalid-relation' && issue.index < 0) || (issue.kind === 'invalid-layout-entry' && !issue.key),
   )
 }
 
@@ -243,14 +280,14 @@ function assertWritable(document: RelationLedgerDocument): void {
   }
 }
 
-async function persistLedger(project: ProjectSnapshot, document: RelationLedgerDocument): Promise<string> {
+async function persistLedger(project: ProjectSnapshot, document: RelationLedgerDocument, options: { preserveIssues?: boolean } = {}): Promise<string> {
   try {
     const { contentHash } = await writeJsonLedger({
       project,
       path: RELATION_LEDGER_PATH,
       ledger: null,
       expectedContentHash: document.contentHash,
-      serialize: () => serializeRelationLedger(document),
+      serialize: () => serializeRelationLedger(document, options),
     })
     return contentHash
   } catch (error) {
@@ -274,6 +311,8 @@ async function freshReferenceIndex(project: ProjectSnapshot): Promise<{ snapshot
 export type RelationNodeSelector =
   | { kind: 'element'; id: string }
   | { kind: 'element'; type: ElementType; name: string }
+  /** 按要素文件路径定位（界面选择尚未分配标识的要素用） */
+  | { kind: 'element'; sourcePath: string }
 
 export type ResolvedNode = {
   ref: RelationNodeRef
@@ -282,14 +321,20 @@ export type ResolvedNode = {
   assignedId: boolean
 }
 
-export async function resolveRelationNode(
-  project: ProjectSnapshot,
-  index: ElementReferenceIndex,
-  selector: RelationNodeSelector,
-): Promise<ResolvedNode> {
+/**
+ * 只读解析节点（不写盘）：校验存在性、唯一性与节点类型。
+ * 懒分配标识必须等全部校验通过后再做（assignNodeId），否则失败的调用也会改写要素文件。
+ */
+export function locateRelationNode(index: ElementReferenceIndex, selector: RelationNodeSelector): ElementReferenceEntry {
   let entry: ElementReferenceEntry
 
-  if ('id' in selector) {
+  if ('sourcePath' in selector) {
+    const hit = index.entries.find((candidate) => candidate.sourcePath === selector.sourcePath)
+    if (!hit) {
+      throw new RelationError(`找不到要素文件 ${selector.sourcePath}；可能已被删除或改名，请重新选择`)
+    }
+    entry = hit
+  } else if ('id' in selector) {
     const resolution = resolveElementById(index, selector.id)
     if (resolution.status === 'missing') {
       throw new RelationError(
@@ -326,7 +371,11 @@ export async function resolveRelationNode(
   if (!RELATION_ELEMENT_NODE_TYPES.includes(entry.type)) {
     throw new RelationError(`「${entry.name}」的要素类型（${entry.type}）不能作为关系节点`)
   }
+  return entry
+}
 
+/** 为已校验的节点确保稳定标识（缺失时写回 frontmatter）。 */
+export async function assignNodeId(project: ProjectSnapshot, entry: ElementReferenceEntry): Promise<ResolvedNode> {
   const ensured = await ensureElementId(project, entry.sourcePath)
   return {
     ref: { kind: 'element', id: ensured.id },
@@ -406,20 +455,29 @@ export async function createRelation(project: ProjectSnapshot, options: CreateRe
     const document = await loadRelationLedger(project)
     assertWritable(document)
 
-    const { snapshot, index } = await freshReferenceIndex(project)
-    const from = await resolveRelationNode(snapshot, index, options.from)
-    const to = await resolveRelationNode(snapshot, index, options.to)
+    const type = options.type.trim()
+    assertTypeText(type)
 
-    assertTypeText(options.type)
-    assertDistinctEndpoints(from.ref, to.ref)
-    assertNotDuplicate(document.relations, from.ref, to.ref, options.type)
+    // 先做完全部只读校验，再懒分配标识：失败的登记不得改写任何要素文件
+    const { snapshot, index } = await freshReferenceIndex(project)
+    const fromEntry = locateRelationNode(index, options.from)
+    const toEntry = locateRelationNode(index, options.to)
+    if (fromEntry.sourcePath === toEntry.sourcePath) {
+      assertDistinctEndpoints({ kind: 'element', id: 'self' }, { kind: 'element', id: 'self' })
+    }
+    if (fromEntry.id && toEntry.id) {
+      assertNotDuplicate(document.relations, { kind: 'element', id: fromEntry.id }, { kind: 'element', id: toEntry.id }, type)
+    }
+
+    const from = await assignNodeId(snapshot, fromEntry)
+    const to = await assignNodeId(snapshot, toEntry)
 
     const now = (options.now ?? new Date()).toISOString()
     const relation: RelationRecord = {
       id: generateRelationId(),
       from: from.ref,
       to: to.ref,
-      type: options.type,
+      type,
       description: options.description?.trim() ?? '',
       createdAt: now,
       updatedAt: now,
@@ -447,12 +505,29 @@ export type UpdateRelationOptions = {
   description?: string
   from?: RelationNodeSelector
   to?: RelationNodeSelector
-  /** 调用方（UI 编辑会话）持有的基线内容哈希；与磁盘不一致即冲突 */
+  /** 调用方持有的整本账本基线内容哈希；与磁盘不一致即冲突（任何账本写入都会使其失效） */
   expectedContentHash?: string
+  /**
+   * 调用方持有的这一条关系的版本（relationVersion）；只有这条关系本身被改过才算冲突。
+   * UI 编辑会话用它：别的关系或画布坐标的写入不应让正在编辑的关系误报冲突。
+   */
+  expectedRelationVersion?: string
   now?: Date
 }
 
-export async function updateRelation(project: ProjectSnapshot, options: UpdateRelationOptions): Promise<{ relation: RelationRecord; previous: RelationRecord; contentHash: string }> {
+/** 单条关系的版本令牌（内容决定，跨读取稳定）。 */
+export function relationVersion(relation: RelationRecord): string {
+  return hashContent(JSON.stringify([relation.id, relation.from, relation.to, relation.type, relation.description, relation.updatedAt]))
+}
+
+export type UpdateRelationResult = {
+  relation: RelationRecord
+  previous: RelationRecord
+  contentHash: string
+  assignedElementIds: { sourcePath: string; id: string }[]
+}
+
+export async function updateRelation(project: ProjectSnapshot, options: UpdateRelationOptions): Promise<UpdateRelationResult> {
   return withRelationWriteLock(project, async () => {
     const document = await loadRelationLedger(project)
     assertWritable(document)
@@ -463,7 +538,14 @@ export async function updateRelation(project: ProjectSnapshot, options: UpdateRe
 
     const current = document.relations.find((relation) => relation.id === options.id)
     if (!current) {
+      if (options.expectedRelationVersion !== undefined) {
+        // 编辑会话的这条关系已被删除：按冲突处理（界面走「磁盘版本已不存在」出口）
+        throw new RelationConflictError(document.contentHash)
+      }
       throw new RelationError(`关系 ${options.id} 不存在；可能已被删除，请用 RelationList 重新查看`)
+    }
+    if (options.expectedRelationVersion !== undefined && relationVersion(current) !== options.expectedRelationVersion) {
+      throw new RelationConflictError(document.contentHash)
     }
 
     if (
@@ -475,19 +557,49 @@ export async function updateRelation(project: ProjectSnapshot, options: UpdateRe
       throw new RelationError('至少提供 type、description、from、to 中要修改的一项')
     }
 
-    const type = options.type !== undefined ? options.type : current.type
+    const type = options.type !== undefined ? options.type.trim() : current.type
     assertTypeText(type)
 
-    const { snapshot, index } = await freshReferenceIndex(project)
-    const from = options.from !== undefined
-      ? (await resolveRelationNode(snapshot, index, options.from)).ref
-      : current.from
-    const to = options.to !== undefined
-      ? (await resolveRelationNode(snapshot, index, options.to)).ref
-      : current.to
+    // 端点未变（选择器标识即当前引用）不重新解析：悬空/重复标识的关系仍可改类型与描述
+    const isUnchanged = (selector: RelationNodeSelector | undefined, ref: RelationNodeRef) =>
+      selector === undefined || ('id' in selector && ref.kind === 'element' && selector.id === ref.id)
+    const needsFrom = !isUnchanged(options.from, current.from)
+    const needsTo = !isUnchanged(options.to, current.to)
 
-    assertDistinctEndpoints(from, to)
-    assertNotDuplicate(document.relations, from, to, type, options.id)
+    let fromEntry: ElementReferenceEntry | null = null
+    let toEntry: ElementReferenceEntry | null = null
+    let snapshot: ProjectSnapshot = project
+    if (needsFrom || needsTo) {
+      const fresh = await freshReferenceIndex(project)
+      snapshot = fresh.snapshot
+      if (needsFrom) fromEntry = locateRelationNode(fresh.index, options.from!)
+      if (needsTo) toEntry = locateRelationNode(fresh.index, options.to!)
+    }
+
+    // 只读校验（含自环/重复）先于懒分配
+    const plannedFrom: RelationNodeRef | null = fromEntry ? (fromEntry.id ? { kind: 'element', id: fromEntry.id } : null) : current.from
+    const plannedTo: RelationNodeRef | null = toEntry ? (toEntry.id ? { kind: 'element', id: toEntry.id } : null) : current.to
+    if (fromEntry && toEntry && fromEntry.sourcePath === toEntry.sourcePath) {
+      assertDistinctEndpoints({ kind: 'element', id: 'self' }, { kind: 'element', id: 'self' })
+    }
+    if (plannedFrom && plannedTo) {
+      assertDistinctEndpoints(plannedFrom, plannedTo)
+      assertNotDuplicate(document.relations, plannedFrom, plannedTo, type, options.id)
+    }
+
+    const assignedElementIds: { sourcePath: string; id: string }[] = []
+    let from = current.from
+    let to = current.to
+    if (fromEntry) {
+      const resolved = await assignNodeId(snapshot, fromEntry)
+      from = resolved.ref
+      if (resolved.assignedId) assignedElementIds.push({ sourcePath: fromEntry.sourcePath, id: resolved.ref.id })
+    }
+    if (toEntry) {
+      const resolved = await assignNodeId(snapshot, toEntry)
+      to = resolved.ref
+      if (resolved.assignedId) assignedElementIds.push({ sourcePath: toEntry.sourcePath, id: resolved.ref.id })
+    }
 
     const relation: RelationRecord = {
       ...current,
@@ -500,7 +612,7 @@ export async function updateRelation(project: ProjectSnapshot, options: UpdateRe
 
     document.relations = document.relations.map((item) => (item.id === options.id ? relation : item))
     const contentHash = await persistLedger(project, document)
-    return { relation, previous: current, contentHash }
+    return { relation, previous: current, contentHash, assignedElementIds }
   })
 }
 
@@ -526,9 +638,13 @@ export async function saveRelationLayout(project: ProjectSnapshot, layout: Relat
   return withRelationWriteLock(project, async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const document = await loadRelationLedger(project)
+      if (hasStructuralIssue(document)) {
+        throw new RelationError('关系账本的 relations 或 layout 整体格式不合法，坐标暂不能保存；请先在关系图谱中清理异常条目')
+      }
       document.layout = { ...layout }
       try {
-        const contentHash = await persistLedger(project, document)
+        // 坐标是纯展示状态：隔离的异常条目原样写回，不借坐标保存把手工数据洗掉
+        const contentHash = await persistLedger(project, document, { preserveIssues: true })
         return { contentHash }
       } catch (error) {
         if (error instanceof RelationConflictError && attempt === 0) {
@@ -561,7 +677,10 @@ export async function removeInvalidRelationEntries(project: ProjectSnapshot): Pr
 async function removeRelationsToElementIds(project: ProjectSnapshot, elementIds: ReadonlySet<string>): Promise<{ removedRelations: RelationRecord[]; contentHash: string | null }> {
   return withRelationWriteLock(project, async () => {
     const document = await loadRelationLedger(project)
-    assertWritable(document)
+    // 级联不受隔离条目阻挡：要素已删除，留着引用只会制造悬空；隔离条目原样写回
+    if (hasStructuralIssue(document)) {
+      assertWritable(document)
+    }
 
     const removedRelations = document.relations.filter(
       (relation) =>
@@ -576,7 +695,7 @@ async function removeRelationsToElementIds(project: ProjectSnapshot, elementIds:
     for (const id of elementIds) {
       delete document.layout[id]
     }
-    const contentHash = await persistLedger(project, document)
+    const contentHash = await persistLedger(project, document, { preserveIssues: true })
     return { removedRelations, contentHash }
   })
 }

@@ -3,13 +3,14 @@
  * 关系节点选择器（关系图谱施工计划 §六）：按名称子串搜索引用索引里的要素
  * （旧时间线要素已被服务层过滤），选中后以稳定标识回传。
  *
- * 受控组件：modelValue = 要素稳定标识（空串 = 未选）；已选态展示由 label prop
+ * 受控组件：modelValue = 节点键（稳定标识；尚无标识的要素为 path:<路径>；空串 = 未选）；已选态展示由 label prop
  * 提供（父层从图视图解析，未解析时兜底显示标识本身）。
  */
 import { computed, ref, watch } from 'vue'
 
 import type { RelationElementOptionView } from '@novai/core/services/relation-service'
 import type { ElementType } from '@novai/core/types/rag'
+import { relationNodeKey } from '../../utils/relation-node-key'
 
 const props = withDefaults(
   defineProps<{
@@ -59,7 +60,8 @@ watch(query, async (value) => {
   try {
     const result = await props.search(text, props.typeFilter || undefined)
     if (token === searchToken) {
-      options.value = result.filter((option) => option.id !== props.excludeId)
+      // 按节点键比较：尚无标识的要素键为 path:…，不会被「对端未选」的空串误排除
+      options.value = result.filter((option) => relationNodeKey(option) !== props.excludeId)
       open.value = true
     }
   } finally {
@@ -72,7 +74,7 @@ watch(query, async (value) => {
 const displayLabel = computed(() => props.label || props.modelValue)
 
 function choose(option: RelationElementOptionView) {
-  emit('update:modelValue', option.id)
+  emit('update:modelValue', relationNodeKey(option))
   emit('select', option)
   query.value = ''
   options.value = []
@@ -126,7 +128,7 @@ function onInputBlur() {
         v-if="open && options.length > 0"
         class="absolute left-0 right-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
       >
-        <li v-for="option in options" :key="option.id">
+        <li v-for="option in options" :key="relationNodeKey(option)">
           <button
             type="button"
             class="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-gray-50"

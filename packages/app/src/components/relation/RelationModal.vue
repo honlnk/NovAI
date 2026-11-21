@@ -10,6 +10,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { useRelationStore } from '../../stores/relation'
+import { relationNodeKey } from '../../utils/relation-node-key'
 import type { RelationElementOptionView } from '@novai/core/services/relation-service'
 import type { ElementType } from '@novai/core/types/rag'
 import WorkspaceModal from '../layout/WorkspaceModal.vue'
@@ -172,7 +173,7 @@ function onSearchBlur() {
             v-if="searchOpen && searchOptions.length > 0"
             class="absolute left-0 top-full z-30 mt-1 max-h-56 w-72 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
           >
-            <li v-for="option in searchOptions" :key="option.id">
+            <li v-for="option in searchOptions" :key="relationNodeKey(option)">
               <button
                 type="button"
                 class="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-gray-50"
@@ -235,10 +236,14 @@ function onSearchBlur() {
         <template v-if="store.issueCount > 0">
           <ul class="mb-2 flex flex-col gap-1 text-xs text-amber-800">
             <li v-for="(issue, index) in store.graph?.issues ?? []" :key="index">
-              · {{ issue.kind === 'invalid-relation' ? `第 ${issue.index + 1} 条关系格式非法：${issue.reason}` : `画布坐标键 ${issue.key} 格式非法：${issue.reason}` }}
+              · {{ issue.kind === 'invalid-relation'
+                ? `第 ${issue.index + 1} 条关系格式非法：${issue.reason}`
+                : issue.kind === 'duplicate-relation-id'
+                  ? `第 ${issue.index + 1} 条关系的标识 ${issue.id} 与前面的关系重复（已隔离；清理将移除这一条）`
+                  : `画布坐标键 ${issue.key} 格式非法：${issue.reason}` }}
             </li>
           </ul>
-          <p class="mb-2 text-xs text-amber-700">异常数据会阻止关系写入。清理后可继续登记（原始内容已隔离，不会静默丢数据）。</p>
+          <p class="mb-2 text-xs text-amber-700">异常数据会阻止登记、修改和删除关系（拖动坐标与删除要素时的级联清理照常，异常条目原样保留）。清理会移除这些条目。</p>
           <button
             type="button"
             class="rounded-lg border border-amber-400 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"

@@ -7,6 +7,7 @@ import { createTrashPath } from '../../fs/trash'
 import { isElementSourcePath } from '../../elements/reference-index'
 import { parseElementFile } from '../../elements/parser'
 import { removeReferences } from '../../../services/relation-service'
+import { RELATION_LEDGER_PATH } from '../../../types/relation'
 import { normalizeProjectPath } from '../path'
 import type { DeleteFileInput, DeleteFileOutput, ToolDefinition } from '../types'
 import {
@@ -42,14 +43,15 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
     await writeProjectTextFile(runtime.project.handle, trashPath, content)
     await removeProjectFile(runtime.project.handle, input.path)
 
-    // 文件删除已成功，级联失败不回滚删除，只不计入结果。
+    // 文件删除已成功，级联失败不回滚删除；失败原因写进结果，让模型与作者知道引用关系没清理。
     let removedRelationCount = 0
+    let relationCascadeError = ''
     if (elementId) {
       try {
         const result = await removeReferences(runtime.project.id, { elementId }, 'agent')
         removedRelationCount = result.removedRelations.length
-      } catch {
-        // 账本损坏等场景下级联跳过；RelationCheck 与画布幽灵节点兜底报告
+      } catch (error) {
+        relationCascadeError = error instanceof Error ? error.message : '关系账本更新失败'
       }
     }
 
@@ -59,19 +61,25 @@ export const deleteFileTool: ToolDefinition<'DeleteFile', DeleteFileInput, Delet
       contentLength: content.length,
       linesRemoved: countDiffLines(content, '').linesRemoved,
       removedRelationCount,
+      relationCascadeError,
     }
   },
   summarizeInput(input) {
     return `删除 ${input.path}`
   },
   summarizeOutput(output) {
-    const cascade = output.removedRelationCount > 0
-      ? `；级联移除 ${output.removedRelationCount} 条引用该要素的关系（关系账本已更新）`
-      : ''
+    const cascade = output.relationCascadeError
+      ? `；⚠ 引用该要素的关系未能清理（${output.relationCascadeError}），关系图谱中会留下悬空引用，请提醒作者用 RelationCheck 检查并处理`
+      : output.removedRelationCount > 0
+        ? `；级联移除 ${output.removedRelationCount} 条引用该要素的关系（关系账本已更新）`
+        : ''
     return `已将 ${output.path} 移入回收站 ${output.trashPath}，原文件共 ${output.linesRemoved} 行，${output.contentLength} 个字符${cascade}`
   },
   extractFileChange(output) {
     return { type: 'deleted', path: output.path, trashPath: output.trashPath, linesRemoved: output.linesRemoved }
+  },
+  extractExtraFileChanges(output) {
+    return output.removedRelationCount > 0 ? [{ type: 'updated' as const, path: RELATION_LEDGER_PATH }] : undefined
   },
   buildConfirmation(input) {
     return { kind: 'delete', path: input.path }

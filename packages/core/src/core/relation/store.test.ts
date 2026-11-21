@@ -12,6 +12,7 @@ import {
   removeInvalidRelationEntries,
   removeRelationsReferencing,
   removeRelationsReferencingPath,
+  relationVersion,
   saveRelationLayout,
   updateRelation,
 } from './store'
@@ -468,5 +469,146 @@ describe('queryRelations / checkRelationLedger', () => {
 
     const { issues } = await checkRelationLedger(project)
     expect(issues.map((issue) => issue.kind).sort()).toEqual(['dangling-reference', 'duplicate-relation'])
+  })
+})
+
+/* ---------- review 修复批回归 ---------- */
+
+describe('review 修复批', () => {
+  async function seedPairWithRelation() {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedElement('elements/characters/老周.md', { name: '老周', id: 'ELM-bbbbbbbbbb' })
+    return createRelation(project, {
+      from: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      to: { kind: 'element', id: 'ELM-bbbbbbbbbb' },
+      type: '盟友',
+    })
+  }
+
+  async function injectRaw(extraRelations: unknown[], extraLayout: Record<string, unknown> = {}) {
+    const document = await loadRelationLedger(project)
+    await writeProjectTextFile(root, RELATION_LEDGER_PATH, JSON.stringify({
+      version: 1,
+      relations: [...document.relations, ...extraRelations],
+      layout: { ...document.layout, ...extraLayout },
+    }, null, 2))
+  }
+
+  it('#2 坐标保存不洗掉隔离条目：非法关系与非法坐标原样写回', async () => {
+    await seedPairWithRelation()
+    const bad = { id: 'REL-handwrite0', type: '手写', from: { kind: 'element', id: 'ELM-aaaaaaaaaa' } }
+    await injectRaw([bad], { 'ELM-zzzzzzzzzz': { x: '东', y: 1 } })
+
+    await saveRelationLayout(project, { 'ELM-aaaaaaaaaa': { x: 1, y: 2 } })
+
+    const raw = JSON.parse(await readProjectTextFile(root, RELATION_LEDGER_PATH))
+    expect(raw.relations).toHaveLength(2)
+    expect(raw.relations[1]).toEqual(bad)
+    expect(raw.layout['ELM-zzzzzzzzzz']).toEqual({ x: '东', y: 1 })
+    expect(raw.layout['ELM-aaaaaaaaaa']).toEqual({ x: 1, y: 2 })
+    expect((await loadRelationLedger(project)).issues).toHaveLength(2)
+  })
+
+  it('#2 relations 整体不是数组时坐标保存拒绝（无法原样写回）', async () => {
+    await writeProjectTextFile(root, RELATION_LEDGER_PATH, JSON.stringify({ version: 1, relations: { 坏: true }, layout: {} }))
+    await expect(saveRelationLayout(project, { 'ELM-aaaaaaaaaa': { x: 1, y: 2 } })).rejects.toThrow('清理异常条目')
+    expect(JSON.parse(await readProjectTextFile(root, RELATION_LEDGER_PATH)).relations).toEqual({ 坏: true })
+  })
+
+  it('#3 只改类型/描述时端点即使悬空也能保存；传入与当前相同的标识不重新解析', async () => {
+    const created = await seedPairWithRelation()
+    // 删掉两端要素文件（账本保留）：两端都悬空
+    const elements = await root.getDirectoryHandle('elements')
+    await elements.removeEntry('characters', { recursive: true })
+    const updated = await updateRelation(project, {
+      id: created.relation.id,
+      description: '悬空后改描述',
+      from: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      to: { kind: 'element', id: 'ELM-bbbbbbbbbb' },
+    })
+    expect(updated.relation.description).toBe('悬空后改描述')
+  })
+
+  it('#4 校验失败不改写要素文件：终点找不到时起点不被分配标识', async () => {
+    await seedElement('elements/characters/孙七.md', { name: '孙七' })
+    await expect(createRelation(project, {
+      from: { kind: 'element', type: 'character', name: '孙七' },
+      to: { kind: 'element', type: 'character', name: '不存在的人' },
+      type: '合作',
+    })).rejects.toThrow('找不到')
+    expect(await readProjectTextFile(root, 'elements/characters/孙七.md')).toMatch(/^id: $/m)
+  })
+
+  it('#4 自环在分配标识前拦截（同一无标识要素按路径判定）', async () => {
+    await seedElement('elements/characters/孙七.md', { name: '孙七' })
+    await expect(createRelation(project, {
+      from: { kind: 'element', type: 'character', name: '孙七' },
+      to: { kind: 'element', sourcePath: 'elements/characters/孙七.md' },
+      type: '自省',
+    })).rejects.toThrow('自环')
+    expect(await readProjectTextFile(root, 'elements/characters/孙七.md')).toMatch(/^id: $/m)
+  })
+
+  it('按路径定位无标识要素：登记成功并懒分配标识', async () => {
+    await seedElement('elements/characters/陈六.md', { name: '陈六' })
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    const result = await createRelation(project, {
+      from: { kind: 'element', sourcePath: 'elements/characters/陈六.md' },
+      to: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      type: '仇敌',
+    })
+    expect(result.assignedElementIds).toEqual([{ sourcePath: 'elements/characters/陈六.md', id: result.relation.from.id }])
+  })
+
+  it('#5 重复关系 id：后出现者隔离，按 id 删除只命中首条且写入被阻止直至清理', async () => {
+    const created = await seedPairWithRelation()
+    await injectRaw([{ ...created.relation, type: '长老' }])
+
+    const loaded = await loadRelationLedger(project)
+    expect(loaded.relations).toHaveLength(1)
+    expect(loaded.issues.map((issue) => issue.kind)).toEqual(['duplicate-relation-id'])
+    await expect(deleteRelation(project, created.relation.id)).rejects.toThrow('写入已被阻止')
+
+    await removeInvalidRelationEntries(project)
+    await deleteRelation(project, created.relation.id)
+    expect((await loadRelationLedger(project)).relations).toHaveLength(0)
+  })
+
+  it('#6 账本有隔离条目时删除要素的级联照常执行，隔离条目保留', async () => {
+    const created = await seedPairWithRelation()
+    const bad = { id: 'REL-bad0000000', type: '坏' }
+    await injectRaw([bad])
+
+    const result = await removeRelationsReferencing(project, 'ELM-aaaaaaaaaa')
+    expect(result.removedRelations.map((relation) => relation.id)).toEqual([created.relation.id])
+    const raw = JSON.parse(await readProjectTextFile(root, RELATION_LEDGER_PATH))
+    expect(raw.relations).toEqual([bad])
+  })
+
+  it('#7 类型首尾空格被 trim；空白类型拒绝', async () => {
+    const created = await seedPairWithRelation()
+    const updated = await updateRelation(project, { id: created.relation.id, type: ' 敌对 ' })
+    expect(updated.relation.type).toBe('敌对')
+    await expect(updateRelation(project, { id: created.relation.id, type: '   ' })).rejects.toThrow('不能为空')
+  })
+
+  it('#1 expectedRelationVersion：别的关系或坐标写入不冲突；这条关系被改才冲突', async () => {
+    const created = await seedPairWithRelation()
+    await seedElement('elements/characters/第三者.md', { name: '第三者', id: 'ELM-cccccccccc' })
+    const version = relationVersion(created.relation)
+
+    // 其他写入：新增别的关系 + 保存坐标
+    await createRelation(project, { from: { kind: 'element', id: 'ELM-bbbbbbbbbb' }, to: { kind: 'element', id: 'ELM-cccccccccc' }, type: '隶属' })
+    await saveRelationLayout(project, { 'ELM-aaaaaaaaaa': { x: 3, y: 4 } })
+
+    const saved = await updateRelation(project, { id: created.relation.id, description: '我的修改', expectedRelationVersion: version })
+    expect(saved.relation.description).toBe('我的修改')
+
+    // 这条关系已被改过，旧版本令牌再提交 → 冲突；被删除 → 冲突
+    await expect(updateRelation(project, { id: created.relation.id, description: '过期提交', expectedRelationVersion: version }))
+      .rejects.toThrow(RelationConflictError)
+    await deleteRelation(project, created.relation.id)
+    await expect(updateRelation(project, { id: created.relation.id, description: 'x', expectedRelationVersion: relationVersion(saved.relation) }))
+      .rejects.toThrow(RelationConflictError)
   })
 })

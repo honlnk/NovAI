@@ -301,3 +301,6 @@ export { RelationConflictError, RelationCorruptError }
 
 /** 只读查询透传（RelationQuery 工具与画布聚焦共用）。 */
 export { queryRelations }
+
+/** 单条关系版本令牌（UI 编辑会话按条做冲突判定）。 */
+export { relationVersion } from '../core/relation/store'

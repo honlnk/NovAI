@@ -40,9 +40,9 @@ const conflictDisk = computed<RelationRecord | null>(() => {
 
 const TYPE_DATALIST_ID = 'relation-type-suggestions'
 
-/** 端点 id → 展示名（画布节点解析；不在画布时回退标识） */
-function nodeLabel(id: string): string {
-  return store.canvasNodes.find((node) => node.id === id)?.label ?? id
+/** 端点节点键 → 展示名（画布节点 > 选择器缓存 > 键本身） */
+function nodeLabel(key: string): string {
+  return store.nodeLabelOf(key)
 }
 
 /* ---------- 编辑输入 ---------- */
@@ -285,6 +285,7 @@ async function submitCreate() {
             :label="nodeLabel(session.draft.fromId)"
             placeholder="起点（搜索要素）"
             :exclude-id="session.draft.toId"
+            @select="store.rememberOption"
             @update:model-value="store.setDetailDraft(store.selectedRelationId, { fromId: $event })"
           />
         </label>
@@ -296,6 +297,7 @@ async function submitCreate() {
             :label="nodeLabel(session.draft.toId)"
             placeholder="终点（搜索要素）"
             :exclude-id="session.draft.fromId"
+            @select="store.rememberOption"
             @update:model-value="store.setDetailDraft(store.selectedRelationId, { toId: $event })"
           />
         </label>

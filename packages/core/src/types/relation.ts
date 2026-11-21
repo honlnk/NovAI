@@ -53,6 +53,8 @@ export const RELATION_ELEMENT_NODE_TYPES: readonly ElementType[] = [
 /** 账本加载时隔离出的单条非法数据（保留原始内容呈现，写入被阻止直至清理）。 */
 export type RelationLedgerIssue =
   | { kind: 'invalid-relation'; index: number; reason: string; raw: unknown }
+  /** 与前面条目 id 相同的关系（后出现者隔离）：按 id 改删会同时命中多条，必须先清理 */
+  | { kind: 'duplicate-relation-id'; index: number; id: string; reason: string; raw: unknown }
   | { kind: 'invalid-layout-entry'; key: string; reason: string; raw: unknown }
 
 /** 加载后的账本文档：合法数据 + 隔离 issue + 基线内容哈希（null = 文件尚不存在）。 */

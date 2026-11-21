@@ -438,6 +438,20 @@ async function runDriverTurn(options: {
           },
         ]
       }
+      // 顺带改动的其他文件（懒分配标识写回要素、级联更新账本）：各记一条，无片段 diff
+      if (event.ok && event.extraFileChanges?.length) {
+        const at = new Date().toISOString()
+        session.changeLedger = [
+          ...(session.changeLedger ?? []),
+          ...event.extraFileChanges.map((change) => ({
+            id: createId('change'),
+            runId,
+            at,
+            change,
+            ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
+          })),
+        ]
+      }
 
       pushMessage(
         session,

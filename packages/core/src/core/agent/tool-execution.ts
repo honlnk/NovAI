@@ -9,7 +9,7 @@ import { maybeSpill, SPILLABLE_TOOLS } from './spill'
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
   /** fileChange/diff/coords 仅在写工具成功执行后存在；diff 是片段级 before/after，coords 是定位坐标（均不进模型视图）。 */
-  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff; coords?: FileChangeCoords }
+  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff; coords?: FileChangeCoords; extraFileChanges?: FileChange[] }
 
 /**
  * 事件归属标记：要素管理员子代理的内层工具事件由委派工具透传时带上，
@@ -157,6 +157,7 @@ export async function executeAgentTool(input: {
     const fileChange = tool.core.extractFileChange?.(output)
     const diff = tool.core.extractChangeDiff?.(output)
     const coords = tool.core.extractChangeCoords?.(output)
+    const extraFileChanges = tool.core.extractExtraFileChanges?.(output)
 
     // 超长工具结果 spill：只对 RagSearch（无分页能力的内容型工具）。
     // ReadFile 已被三道闸豁免（单次 ≤50KB 字节）；spill 路径自身豁免二次 spill。
@@ -174,6 +175,7 @@ export async function executeAgentTool(input: {
       fileChange,
       diff,
       ...(coords ? { coords } : {}),
+      ...(extraFileChanges && extraFileChanges.length > 0 ? { extraFileChanges } : {}),
     })
 
     return {

@@ -10,10 +10,12 @@ import {
   getGraph,
   getElementOptions,
   reinitializeLedger,
+  relationVersion,
   saveLayout,
   subscribeRelationChange,
   updateRelationEntry,
 } from '@novai/core/services/relation-service'
+import { isPathNodeKey, relationNodeKey, relationNodeSelector } from '../utils/relation-node-key'
 import type {
   RelationChangeEvent,
   RelationEdgeView,
@@ -99,8 +101,16 @@ type RelationDetailSession = {
   updatedAt: string
 }
 
-/** 磁盘版本：关系记录 + 账本内容哈希 */
-type RelationDisk = { relation: RelationRecord; contentHash: string }
+/**
+ * 磁盘版本：关系记录 + 这一条关系的版本令牌（relationVersion）。
+ * 版本按条而非整本账本：别的关系、画布坐标或 Agent 对其他关系的写入
+ * 都不应让正在编辑的这条关系误报冲突（review 修复批 #1）。
+ */
+type RelationDisk = { relation: RelationRecord; version: string }
+
+function diskOf(relation: RelationRecord): RelationDisk {
+  return { relation, version: relationVersion(relation) }
+}
 
 export const RELATION_TYPE_SUGGESTIONS = [
   '盟友', '敌对', '血缘', '师徒', '隶属', '位于', '暗恋', '合作', '竞争', '守护',
@@ -328,7 +338,7 @@ export const useRelationStore = defineStore('relation', () => {
       if (!edge) {
         return { kind: 'missing' }
       }
-      return { kind: 'ok', disk: { relation: edge.relation, contentHash: view.contentHash ?? '' } }
+      return { kind: 'ok', disk: diskOf(edge.relation) }
     } catch (error) {
       return { kind: 'unreadable', message: toMessage(error, '读取关系最新版本失败') }
     }
@@ -371,6 +381,15 @@ export const useRelationStore = defineStore('relation', () => {
       session.baseDraft = data.baseSnapshot
     },
     save: async (pid, relationId, snapshot, ctx) => {
+      // 恢复会话的基线是空模板，端点与之必然不同——那时按标识提交，服务层对
+      // 「与当前引用相同的标识」同样不重新解析，悬空端点不受影响
+      const base = ctx.base
+      // 端点只在确实改动时提交：未改的端点（含已悬空/标识重复/事件引用）原样保留，
+      // 否则只改描述也会因端点重新解析失败而永远存不进去（review 修复批 #3）
+      const endpointPatch = (key: string, baseKey: string | undefined) =>
+        key && key !== baseKey ? relationNodeSelector(key) : undefined
+      const from = endpointPatch(snapshot.fromId, base.fromId)
+      const to = endpointPatch(snapshot.toId, base.toId)
       try {
         const result = await updateRelationEntry(
           pid,
@@ -378,14 +397,14 @@ export const useRelationStore = defineStore('relation', () => {
             id: relationId,
             type: snapshot.type,
             description: snapshot.description,
-            from: { kind: 'element', id: snapshot.fromId },
-            to: { kind: 'element', id: snapshot.toId },
-            // force（冲突出口「采用我的当前内容」）= 不带基线哈希直接写
-            ...(ctx.force || ctx.baseVersion === undefined ? {} : { expectedContentHash: ctx.baseVersion }),
+            ...(from ? { from } : {}),
+            ...(to ? { to } : {}),
+            // force（冲突出口「采用我的当前内容」）= 不带基线版本直接写
+            ...(ctx.force || ctx.baseVersion === undefined ? {} : { expectedRelationVersion: ctx.baseVersion }),
           },
           'ui',
         )
-        return { ok: true, disk: { relation: result.relation, contentHash: result.contentHash } }
+        return { ok: true, disk: diskOf(result.relation) }
       } catch (error) {
         if (error instanceof RelationConflictError) {
           const probe = await probeRelation(pid, relationId)
@@ -400,9 +419,9 @@ export const useRelationStore = defineStore('relation', () => {
       }
     },
     probe: (pid, relationId) => probeRelation(pid, relationId),
-    versionOf: (disk) => disk.contentHash,
+    versionOf: (disk) => disk.version,
     snapshotFromDisk: (disk) => draftOf(disk.relation),
-    isBaselineIntact: (record, disk) => record.baseVersion === disk.contentHash,
+    isBaselineIntact: (record, disk) => record.baseVersion === disk.version,
     isSnapshotOnDisk: (record, disk) => isSameDraft(record.snapshot, draftOf(disk.relation)),
     scheduleMirror: (session) => {
       scheduleRelationBackup(session.projectId, session.relationId, {
@@ -450,10 +469,33 @@ export const useRelationStore = defineStore('relation', () => {
     detailRealm.openSession(pid, relationId, {
       snapshot: { ...draft },
       baseSnapshot: { ...draft },
-      ...(graph.value?.contentHash !== null && graph.value?.contentHash !== undefined
-        ? { baseVersion: graph.value.contentHash }
-        : {}),
+      baseVersion: relationVersion(edge.relation),
     })
+  }
+
+  /**
+   * 图重载后让会话跟上磁盘：干净会话直接重定基线到这条关系的最新版本；
+   * 有待写内容的会话只在「这条关系本身被别处改过/删除」时冻结为冲突。
+   */
+  async function syncSessionsWithGraph(options: { freezeChanged: boolean }): Promise<void> {
+    const pid = projectId.value
+    const view = graph.value
+    if (!pid || !view || view.status !== 'ok') {
+      return
+    }
+    for (const session of detailRealm.listSessions(pid)) {
+      const edge = view.edges.find((item) => item.relation.id === session.relationId)
+      if (edge && relationVersion(edge.relation) === session.baseContentHash) {
+        continue
+      }
+      if (detailRealm.isDirty(session)) {
+        if (options.freezeChanged) {
+          await detailRealm.freezeForExternal(pid, session.relationId)
+        }
+      } else if (edge) {
+        detailRealm.rebaseCleanBaseline(pid, session.relationId, diskOf(edge.relation))
+      }
+    }
   }
 
   /** 编辑输入（自动保存去抖在引擎内） */
@@ -532,12 +574,6 @@ export const useRelationStore = defineStore('relation', () => {
     }
   }
 
-  /** Agent 写入命中编辑会话：有未落盘内容的会话冻结成冲突（干净会话由重载跟随） */
-  async function freezeEditingSessions(): Promise<void> {
-    for (const session of detailRealm.listSessions(projectId.value)) {
-      await detailRealm.freezeForExternal(projectId.value, session.relationId)
-    }
-  }
 
   /* ---------- 图谱读写 ---------- */
 
@@ -547,19 +583,14 @@ export const useRelationStore = defineStore('relation', () => {
     if (event.projectId !== projectId.value) {
       return
     }
-    // UI 自身写入现场已同步，不回环；只响应 Agent 写入（画布重载 + 编辑会话冻结）
+    // UI 自身写入现场已同步，不回环；只响应 Agent 写入（画布重载 + 被改动关系的待写会话冻结）
     if (event.source !== 'agent') {
       return
     }
-    void reloadGraph({ preserveViewport: true }).then(() => {
-      if (event.kind !== 'layout') {
-        return freezeEditingSessions()
-      }
-      return undefined
-    })
+    void reloadGraph({ preserveViewport: true, freezeChangedSessions: true })
   }
 
-  async function reloadGraph(options: { preserveViewport?: boolean } = {}): Promise<void> {
+  async function reloadGraph(options: { preserveViewport?: boolean; freezeChangedSessions?: boolean } = {}): Promise<void> {
     const pid = projectId.value
     if (!pid) {
       return
@@ -596,10 +627,8 @@ export const useRelationStore = defineStore('relation', () => {
         focusedNodeId.value = ''
       }
       extraNodeIds.value = extraNodeIds.value.filter((id) => knownIds.has(id) || extraNodeCache.has(id))
-      if (options.preserveViewport !== true) {
-        // 首载提示画布 fitView；保持视口的重载不重置
-      }
       actionError.value = ''
+      await syncSessionsWithGraph({ freezeChanged: options.freezeChangedSessions === true })
     } catch (error) {
       if (pid !== projectId.value) {
         return
@@ -658,11 +687,14 @@ export const useRelationStore = defineStore('relation', () => {
 
   /** 搜索添加节点：把无关系的要素补上画布（缓存解析信息供渲染） */
   function addExtraNode(option: RelationElementOptionView): void {
-    if (!extraNodeIds.value.includes(option.id)) {
-      extraNodeIds.value = [...extraNodeIds.value, option.id]
+    // 尚无标识的要素以 path: 键上画布（空串 id 会被画布丢弃，review 真机新发现）
+    const key = relationNodeKey(option)
+    if (!extraNodeIds.value.includes(key)) {
+      extraNodeIds.value = [...extraNodeIds.value, key]
     }
-    extraNodeCache.set(option.id, {
-      id: option.id,
+    rememberOption(option)
+    extraNodeCache.set(key, {
+      id: key,
       elementId: option.id,
       label: option.name,
       nodeType: option.type,
@@ -671,6 +703,18 @@ export const useRelationStore = defineStore('relation', () => {
       x: 0,
       y: 0,
     })
+  }
+
+  /** 选择器选中项的展示名缓存（节点键 → 名称；端点改到画布外要素时详情仍显示名称） */
+  const optionLabels = reactive(new Map<string, string>())
+
+  function rememberOption(option: RelationElementOptionView): void {
+    optionLabels.set(relationNodeKey(option), option.name)
+  }
+
+  /** 节点键 → 展示名：画布节点 > 选择器缓存 > 键本身 */
+  function nodeLabelOf(key: string): string {
+    return canvasNodes.value.find((node) => node.id === key)?.label ?? optionLabels.get(key) ?? key
   }
 
   /** 新建关系（新建表单提交） */
@@ -691,8 +735,9 @@ export const useRelationStore = defineStore('relation', () => {
       const result = await createRelationEntry(
         pid,
         {
-          from: { kind: 'element', id: fromId },
-          to: { kind: 'element', id: toId },
+          // 节点键可能是尚无标识要素的 path:…，服务层按路径定位并懒分配标识
+          from: relationNodeSelector(fromId),
+          to: relationNodeSelector(toId),
           type: createDraft.type.trim(),
           ...(createDraft.description.trim() ? { description: createDraft.description.trim() } : {}),
         },
@@ -704,8 +749,13 @@ export const useRelationStore = defineStore('relation', () => {
       createDraft.toId = ''
       createDraft.type = ''
       createDraft.description = ''
-      // 补充节点已因建关系进入图视图，清出补充列表
+      // 补充节点已因建关系进入图视图（path: 键此时已换成新分配的标识），清出补充列表
       extraNodeIds.value = extraNodeIds.value.filter((id) => id !== fromId && id !== toId)
+      for (const key of [fromId, toId]) {
+        if (isPathNodeKey(key)) {
+          extraNodeCache.delete(key)
+        }
+      }
       await reloadGraph({ preserveViewport: true })
       await openDetail(result.relation.id)
       return true
@@ -749,6 +799,10 @@ export const useRelationStore = defineStore('relation', () => {
 
   function recordNodePosition(nodeId: string, position: { x: number; y: number }): void {
     layoutOverride.value = { ...layoutOverride.value, [nodeId]: { x: position.x, y: position.y } }
+    if (isPathNodeKey(nodeId)) {
+      // 尚无标识的补充节点：坐标只在本次画布生效，不写进账本（账本坐标按稳定标识存）
+      return
+    }
     if (layoutTimer) {
       clearTimeout(layoutTimer)
     }
@@ -764,9 +818,13 @@ export const useRelationStore = defineStore('relation', () => {
       return
     }
     try {
-      const layout: RelationLayoutMap = { ...(graph.value?.layout ?? {}), ...layoutOverride.value }
+      const persistable = Object.fromEntries(Object.entries(layoutOverride.value).filter(([key]) => !isPathNodeKey(key)))
+      if (Object.keys(persistable).length === 0) {
+        return
+      }
+      const layout: RelationLayoutMap = { ...(graph.value?.layout ?? {}), ...persistable }
       await saveLayout(pid, layout, 'ui')
-      layoutOverride.value = {}
+      layoutOverride.value = Object.fromEntries(Object.entries(layoutOverride.value).filter(([key]) => isPathNodeKey(key)))
       // 保存成功后把新坐标并入图快照：否则覆盖层清空而快照无新坐标，节点视觉回跳
       if (graph.value && graph.value.status === 'ok') {
         graph.value = { ...graph.value, layout }
@@ -890,6 +948,8 @@ export const useRelationStore = defineStore('relation', () => {
     submitCreate,
     // 节点与坐标
     addExtraNode,
+    rememberOption,
+    nodeLabelOf,
     recordNodePosition,
     saveLayoutNow,
     searchElementOptions,

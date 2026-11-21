@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 import type { FileChangeConfirmationView } from '@novai/core/services/types'
+import { RELATION_LEDGER_PATH } from '@novai/core/types/relation'
 
 import TakeoverStopButton from './TakeoverStopButton.vue'
 import AppIcon from '../ui/AppIcon.vue'
@@ -82,6 +83,13 @@ function handleKeydown(event: KeyboardEvent) {
         </div>
 
         <!-- 删除：路径 + 去向说明（§8 明确回收站或永久删除的后果） -->
+        <!-- 关系账本条目删除：只删账本里的一条关系，账本文件本身保留（不进回收站） -->
+        <p
+          v-else-if="props.confirmation.confirmation.kind === 'delete' && props.confirmation.confirmation.path.startsWith(RELATION_LEDGER_PATH)"
+          class="mt-1.5 text-xs text-gray-500"
+        >
+          将从关系账本中删除这一条关系，其他关系与账本文件保持不变；删除后可在关系图谱中重新登记。
+        </p>
         <p
           v-else-if="props.confirmation.confirmation.kind === 'delete'"
           class="mt-1.5 text-xs text-gray-500"
