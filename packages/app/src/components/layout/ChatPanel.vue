@@ -65,7 +65,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   toggleSidebar: []
   toggleContentPanel: []
-  toggleMobileSidebar: []
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
@@ -738,13 +737,6 @@ onBeforeUnmount(() => {
     <!-- 头部 -->
     <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex items-center gap-2">
-        <button
-          aria-label="打开分类面板"
-          class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
-          @click="emit('toggleMobileSidebar')"
-        >
-          <AppIcon name="menu" :size="20" class="h-5 w-5" />
-        </button>
         <button
           :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
           class="hidden rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:block"

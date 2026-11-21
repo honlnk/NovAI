@@ -73,7 +73,9 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
 </script>
 
 <template>
-  <nav class="flex w-14 shrink-0 flex-col items-center justify-between border-r border-white/10 bg-[#171717] py-2">
+  <!-- z-[46]：显式层级让分类抽屉（z-[45]）收起时从工具栏下方滑过而不是盖过它；
+       仍低于全屏弹窗/tooltip 的 z-50（z 序：遮罩 40 < 抽屉 45 < 工具栏 46 < 弹窗 50） -->
+  <nav class="z-[46] flex w-14 shrink-0 flex-col items-center justify-between border-r border-white/10 bg-[#171717] py-2">
     <!-- 顶部分类图标 -->
     <div class="flex flex-col items-center gap-1">
       <Tooltip

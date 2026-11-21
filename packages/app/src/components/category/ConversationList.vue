@@ -200,14 +200,18 @@ function formatRelativeTime(iso: string): string {
   <div class="flex h-full flex-col">
     <div class="flex items-center justify-between px-4 py-3">
       <h2 class="text-sm font-semibold text-white">对话</h2>
-      <button
-        class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-        title="开始新对话"
-        @click="emit('create')"
-      >
-        <AppIcon name="plus" :size="14" class="h-3.5 w-3.5" />
-        <span>新对话</span>
-      </button>
+      <div class="flex items-center gap-1">
+        <button
+          class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+          title="开始新对话"
+          @click="emit('create')"
+        >
+          <AppIcon name="plus" :size="14" class="h-3.5 w-3.5" />
+          <span>新对话</span>
+        </button>
+        <!-- 移动端关闭：由 CategoryPanel 注入，并排在标题行右端 -->
+        <slot name="mobile-close" />
+      </div>
     </div>
 
     <!-- 标题搜索 -->

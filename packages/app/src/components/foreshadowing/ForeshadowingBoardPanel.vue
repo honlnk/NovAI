@@ -41,7 +41,6 @@ const emit = defineEmits<{
   retryLoad: []
   toggleColumnMode: []
   toggleSidebar: []
-  toggleMobileSidebar: []
   toggleContentPanel: []
 }>()
 
@@ -95,7 +94,6 @@ function statusLabel(status: ForeshadowingStatus): string {
     @move-card="onBoardMoveCard"
     @retry-load="emit('retryLoad')"
     @toggle-sidebar="emit('toggleSidebar')"
-    @toggle-mobile-sidebar="emit('toggleMobileSidebar')"
     @toggle-content-panel="emit('toggleContentPanel')"
   >
     <template #header-extra>

@@ -8,7 +8,7 @@ import ConversationList from '../category/ConversationList.vue'
 import PlanList from '../category/PlanList.vue'
 import ForeshadowingList from '../category/ForeshadowingList.vue'
 import RhythmList from '../category/RhythmList.vue'
-import AppIcon from '../ui/AppIcon.vue'
+import MobilePanelClose from './MobilePanelClose.vue'
 
 defineProps<{
   activeCategory: Category
@@ -90,21 +90,20 @@ const emit = defineEmits<{
   <aside
     :class="[
       'flex shrink-0 flex-col bg-[#171717] text-gray-100 transition-all duration-200',
-      'max-lg:fixed max-lg:inset-y-0 max-lg:left-[56px] max-lg:z-50',
-      isOpen ? 'w-64' : 'w-0 overflow-hidden',
-      isMobileOpen ? 'max-lg:translate-x-0' : 'max-lg:-translate-x-full',
+      // 高度对齐右侧内容面板抽屉（ContentPanel top-0 bottom-7）：底部让出 28px 状态栏
+      // z-[45]：高于遮罩(40)、低于 ActivityBar(46)——收起滑过时从工具栏下方经过
+      'max-lg:fixed max-lg:top-0 max-lg:bottom-7 max-lg:left-[56px] max-lg:z-[45]',
+      // 宽度折叠只属于桌面端；移动端恒为 w-64，可见性由 translate 控制
+      // （否则桌面收起态泄漏到移动端：汉堡打开一个 0 宽的空抽屉）
+      isOpen ? 'w-64' : 'w-0 overflow-hidden max-lg:w-64',
+      // 收起位移必须超过自身宽度：面板锚在 left-[56px]，只移 -100% 会在屏幕
+      // 左缘留下 56px 宽的残条，恰好盖住 ActivityBar
+      isMobileOpen ? 'max-lg:translate-x-0' : 'max-lg:translate-x-[calc(-100%_-_56px)]',
     ]"
   >
-    <!-- 移动端关闭按钮 -->
-    <button
-      aria-label="关闭分类面板"
-      class="absolute right-2 top-2 z-10 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
-      @click="emit('closeMobile')"
-    >
-      <AppIcon name="x" :size="16" class="h-4 w-4" />
-    </button>
-
-    <!-- 按分类切换内容 -->
+    <!-- 按分类切换内容：移动端「关旧开新」的动画由抽屉本体承担
+         （ProjectView selectCategory 关合抽屉），列表本身直接切换 -->
+    <!-- 移动端关闭按钮经各列表的 mobile-close 插槽注入标题行右端（与既有按钮并排，不占独立行） -->
     <ConversationList
       v-if="activeCategory === 'conversation'"
       :sessions="sessions"
@@ -118,7 +117,9 @@ const emit = defineEmits<{
       @archive="emit('archiveSession', $event)"
       @unarchive="emit('unarchiveSession', $event)"
       @remove="emit('deleteSession', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </ConversationList>
     <ChapterList
       v-else-if="activeCategory === 'chapter'"
       :files="files"
@@ -128,13 +129,17 @@ const emit = defineEmits<{
       @select-file="emit('selectFile', $event)"
       @open-foreshadowing="emit('openForeshadowingCard', $event)"
       @open-rhythm="emit('openRhythmCard', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </ChapterList>
     <ElementList
       v-else-if="activeCategory === 'element'"
       :files="files"
       :active-file-path="activeFilePath"
       @select-file="emit('selectFile', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </ElementList>
     <PromptList
       v-else-if="activeCategory === 'prompt'"
       :files="files"
@@ -142,7 +147,9 @@ const emit = defineEmits<{
       :active-outline-path="activeOutlinePath"
       @select-file="emit('selectFile', $event)"
       @change-outline="emit('changeOutline', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </PromptList>
     <PlanList
       v-else-if="activeCategory === 'plan'"
       :cards="planCards"
@@ -152,7 +159,9 @@ const emit = defineEmits<{
       @refresh="emit('refreshPlan')"
       @open-create="emit('openPlanCreate')"
       @open-card="emit('openPlanCard', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </PlanList>
     <ForeshadowingList
       v-else-if="activeCategory === 'foreshadowing'"
       :cards="foreshadowingCards"
@@ -162,7 +171,9 @@ const emit = defineEmits<{
       @refresh="emit('refreshForeshadowing')"
       @open-create="emit('openForeshadowingCreate')"
       @open-card="emit('openForeshadowingCard', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </ForeshadowingList>
     <RhythmList
       v-else-if="activeCategory === 'rhythm'"
       :cards="rhythmCards"
@@ -172,6 +183,8 @@ const emit = defineEmits<{
       @refresh="emit('refreshRhythm')"
       @open-create="emit('openRhythmCreate')"
       @open-card="emit('openRhythmCard', $event)"
-    />
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </RhythmList>
   </aside>
 </template>

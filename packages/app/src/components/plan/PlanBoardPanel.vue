@@ -32,7 +32,6 @@ const emit = defineEmits<{
   retryLoad: []
   toggleOnHold: []
   toggleSidebar: []
-  toggleMobileSidebar: []
   toggleContentPanel: []
 }>()
 
@@ -96,7 +95,6 @@ function formatTime(iso: string): string {
     @move-card="(id, columnKey, afterId, beforeId) => onBoardMoveCard(id, columnKey, afterId, beforeId)"
     @retry-load="emit('retryLoad')"
     @toggle-sidebar="emit('toggleSidebar')"
-    @toggle-mobile-sidebar="emit('toggleMobileSidebar')"
     @toggle-content-panel="emit('toggleContentPanel')"
   >
     <template #header-extra>

@@ -364,6 +364,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  if (mobileReopenTimer !== null) window.clearTimeout(mobileReopenTimer)
   workspaceGeneration += 1
   indexStore.dispose()
   teardownDraftBackup?.()
@@ -1408,10 +1409,41 @@ watch(
   },
 )
 
+/** 移动端「关旧开新」的重开定时器：展开态点其他分类，抽屉关合间隙换内容 */
+let mobileReopenTimer: number | null = null
+
 function selectCategory(category: Category) {
-  activeCategory.value = category
   // 切换分类时确保面板展开
   isCategoryOpen.value = true
+  // 桌面端直接切换；不设置 isMobileCategoryOpen，避免缩窗时抽屉意外弹出
+  // （64rem 与 Tailwind lg 断点一致）
+  if (!window.matchMedia('(width < 64rem)').matches) {
+    activeCategory.value = category
+    return
+  }
+  // 移动端：ActivityBar 分类点击即展开抽屉（移动端唯一的抽屉入口，顶栏汉堡已移除）
+  if (mobileReopenTimer !== null) {
+    window.clearTimeout(mobileReopenTimer)
+    mobileReopenTimer = null
+  }
+  if (!isMobileCategoryOpen.value) {
+    // 抽屉收着：直接换内容并展开
+    activeCategory.value = category
+    isMobileCategoryOpen.value = true
+    return
+  }
+  if (category === activeCategory.value) {
+    // 同分类：保持展开不动
+    return
+  }
+  // 已展开且换了分类：抽屉先滑出（关旧），关合间隙换内容，再滑入（开新）。
+  // 抽屉过渡 duration-200，220ms 留余量保证完全滑出后再重开
+  isMobileCategoryOpen.value = false
+  mobileReopenTimer = window.setTimeout(() => {
+    mobileReopenTimer = null
+    activeCategory.value = category
+    isMobileCategoryOpen.value = true
+  }, 220)
 }
 
 function toggleSidebar() {
@@ -1427,10 +1459,6 @@ function toggleContentPanel() {
   isContentPanelOpen.value = !isContentPanelOpen.value
 }
 
-function toggleMobileSidebar() {
-  isMobileCategoryOpen.value = !isMobileCategoryOpen.value
-}
-
 function handleCloseGuide() {
   showGuide.value = false
 }
@@ -1444,12 +1472,16 @@ function handleGoToSettings() {
 <template>
   <div class="flex h-screen flex-col bg-white">
     <div class="flex min-h-0 flex-1">
-      <!-- 移动端分类面板遮罩 -->
-      <div
-        v-if="isMobileCategoryOpen"
-        class="fixed inset-0 z-40 bg-black/50 lg:hidden"
-        @click="isMobileCategoryOpen = false"
-      />
+      <!-- 移动端分类面板遮罩：全屏铺满（与右侧内容面板遮罩一致）。工具栏 z-[46]
+           高于遮罩 z-40，侧栏始终可见可点——展开态点其他分类触发「关旧开新」，
+           不会点到遮罩先关抽屉；Transition 让遮罩随抽屉开合淡入淡出不闪变 -->
+      <Transition name="mask-fade">
+        <div
+          v-if="isMobileCategoryOpen"
+          class="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          @click="isMobileCategoryOpen = false"
+        />
+      </Transition>
 
       <!-- Activity Bar（最左竖条） -->
       <ActivityBar
@@ -1526,7 +1558,6 @@ function handleGoToSettings() {
         @retry-load="handlePlanRetryLoad"
         @toggle-on-hold="planStore.showOnHold = !planStore.showOnHold"
         @toggle-sidebar="toggleSidebar"
-        @toggle-mobile-sidebar="toggleMobileSidebar"
         @toggle-content-panel="handleTogglePlanPanel"
       />
       <ForeshadowingBoardPanel
@@ -1545,7 +1576,6 @@ function handleGoToSettings() {
         @retry-load="handleForeshadowingRetryLoad"
         @toggle-column-mode="handleToggleForeshadowingColumnMode"
         @toggle-sidebar="toggleSidebar"
-        @toggle-mobile-sidebar="toggleMobileSidebar"
         @toggle-content-panel="handleToggleForeshadowingPanel"
       />
       <RhythmBoardPanel
@@ -1561,7 +1591,6 @@ function handleGoToSettings() {
         @move-card="handleRhythmMove"
         @retry-load="handleRhythmRefresh"
         @toggle-sidebar="toggleSidebar"
-        @toggle-mobile-sidebar="toggleMobileSidebar"
         @toggle-content-panel="handleToggleRhythmPanel"
       />
       <ChatPanel
@@ -1574,7 +1603,6 @@ function handleGoToSettings() {
         :active-outline-path="activeOutlinePath"
         @toggle-sidebar="toggleSidebar"
         @toggle-content-panel="toggleContentPanel"
-        @toggle-mobile-sidebar="toggleMobileSidebar"
         @clear-quote="handleClearQuote"
         @change-outline="handleChangeOutline"
         @open-confirm-review="isConfirmPanelOpen = true"
@@ -1817,3 +1845,16 @@ function handleGoToSettings() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 遮罩淡入淡出：与抽屉滑入滑出（duration-200）同步，开关瞬间不再生硬闪现 */
+.mask-fade-enter-active,
+.mask-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.mask-fade-enter-from,
+.mask-fade-leave-to {
+  opacity: 0;
+}
+</style>

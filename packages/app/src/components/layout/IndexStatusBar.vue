@@ -119,8 +119,10 @@ function formatTime(iso: string) {
 </script>
 
 <template>
+  <!-- z-[46]：应用骨架层（与 ActivityBar 同级）。高于左右抽屉遮罩（z-40）——
+       抽屉/内容面板蒙层不压状态栏；低于全屏弹窗与 toast（z-50） -->
   <div
-    class="flex h-7 shrink-0 items-center gap-3 border-t border-gray-200 bg-gray-50 px-3 text-xs text-gray-600"
+    class="z-[46] flex h-7 shrink-0 items-center gap-3 border-t border-gray-200 bg-gray-50 px-3 text-xs text-gray-600"
   >
     <!-- 左侧：项目层状态（索引 + 大纲） -->
     <div class="flex min-w-0 items-center gap-3">

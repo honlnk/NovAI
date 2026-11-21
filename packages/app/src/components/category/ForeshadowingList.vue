@@ -34,21 +34,25 @@ const openCount = computed(() =>
   <div class="flex h-full flex-col">
     <div class="flex items-center justify-between px-4 py-3">
       <h2 class="text-sm font-semibold text-white">伏笔</h2>
-      <Tooltip
-        text="刷新伏笔"
-        :delay="300"
-        preferred-placement="bottom"
-      >
-        <button
-          class="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
-          :disabled="isLoading"
-          aria-label="刷新伏笔"
-          data-testid="foreshadowing-refresh-button"
-          @click="emit('refresh')"
+      <div class="flex items-center gap-1">
+        <Tooltip
+          text="刷新伏笔"
+          :delay="300"
+          preferred-placement="bottom"
         >
-          <AppIcon name="refresh-cw" :size="16" :class="['h-4 w-4', isLoading ? 'animate-spin' : '']" />
-        </button>
-      </Tooltip>
+          <button
+            class="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="isLoading"
+            aria-label="刷新伏笔"
+            data-testid="foreshadowing-refresh-button"
+            @click="emit('refresh')"
+          >
+            <AppIcon name="refresh-cw" :size="16" :class="['h-4 w-4', isLoading ? 'animate-spin' : '']" />
+          </button>
+        </Tooltip>
+        <!-- 移动端关闭：由 CategoryPanel 注入，并排在标题行右端 -->
+        <slot name="mobile-close" />
+      </div>
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">

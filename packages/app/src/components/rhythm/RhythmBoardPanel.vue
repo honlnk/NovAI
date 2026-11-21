@@ -35,7 +35,6 @@ const emit = defineEmits<{
   moveCard: [id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null]
   retryLoad: []
   toggleSidebar: []
-  toggleMobileSidebar: []
   toggleContentPanel: []
 }>()
 
@@ -95,7 +94,6 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
     @move-card="onBoardMoveCard"
     @retry-load="emit('retryLoad')"
     @toggle-sidebar="emit('toggleSidebar')"
-    @toggle-mobile-sidebar="emit('toggleMobileSidebar')"
     @toggle-content-panel="emit('toggleContentPanel')"
   >
     <template #board-hint>
