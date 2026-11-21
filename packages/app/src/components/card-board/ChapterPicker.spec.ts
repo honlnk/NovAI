@@ -18,7 +18,7 @@ import { mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 
 import ChapterPicker from './ChapterPicker.vue'
-import type { ChapterCreateOutcome } from './chapter-picker-state'
+import type { ChapterCreateHandler, ChapterCreateOutcome } from './chapter-picker-state'
 import type { ChapterCatalogEntry } from '@novai/core/types/chapters'
 
 function entry(options: Partial<ChapterCatalogEntry> & { number: number }): ChapterCatalogEntry {
@@ -69,7 +69,7 @@ function mountPicker(options: {
       clearable: options.clearable ?? false,
       suggestedNumber: options.suggestedNumber ?? null,
       sessionKey: 'session-a',
-      createHandler,
+      createHandler: createHandler as ChapterCreateHandler | null,
     },
   })
 

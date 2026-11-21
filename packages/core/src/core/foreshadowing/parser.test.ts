@@ -20,6 +20,8 @@ function baseCard(overrides: Partial<Omit<ForeshadowingCard, 'sourcePath'>> = {}
     updatedAt: '2026-11-02T00:00:00.000Z',
     plantedAt: '第一卷/第012章',
     payoffWindow: ['第二卷/第080章', '第二卷/第090章'],
+    payoffStart: null,
+    payoffEnd: null,
     relatedCharacters: ['主角', '研究员K', '母亲'],
     relatedEntities: ['旧照片'],
     relatedChapters: ['第一卷/第028章', '第一卷/第051章'],

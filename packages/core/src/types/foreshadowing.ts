@@ -67,6 +67,25 @@ export const FORESHADOWING_COLUMN_LABELS: Record<ForeshadowingColumn, string> = 
   abandoned: '已放弃',
 }
 
+/**
+ * 结构化计划回收位置（作者字段控制权计划阶段 2，§三.5）：
+ * - chapter：指向确定的已有章节（「卷/章」引用形态）；
+ * - future：明确但当前尚未创建的固定章号；
+ * - relative：以选择时的最新章为固定基准偏移 N 章，保存时确定目标，不随
+ *   最新章节漂移；
+ * - none：未设置（不要求伪造章节）；
+ * - raw：外部写入的无法识别值，保留原文待作者确认，不自动改绑。
+ */
+export type PlannedPosition =
+  | { kind: 'none' }
+  | { kind: 'chapter'; ref: string }
+  | { kind: 'future'; target: number }
+  | { kind: 'relative'; target: number; base: number; offset: number }
+  | { kind: 'raw'; raw: string }
+
+/** 窗口终点额外支持「开放终点」：从起点开始、暂无截止章；与未设置可区分。 */
+export type PlannedWindowEnd = { kind: 'open' } | PlannedPosition
+
 /** 状态展示名（六状态精确值）。 */
 export const FORESHADOWING_STATUS_LABELS: Record<ForeshadowingStatus, string> = {
   planted: '埋入',
@@ -83,8 +102,15 @@ export type ForeshadowingCard = CardBoardCard<ForeshadowingStatus> & {
   name: string
   /** 埋设章节（完整路径「卷/章」，如 第一卷/第012章）。 */
   plantedAt: string
-  /** 预计回收窗口（区间两端；连载节奏会调整，建议给区间而非单点）。 */
+  /** 预计回收窗口（可读旧字段；结构化数据存在时以 payoffStart/payoffEnd 为有效值）。 */
   payoffWindow: readonly [string, string] | null
+  /**
+   * 结构化计划窗口起点；null = 卡片尚无结构化数据（旧卡，按旧窗口读取，
+   * 首次打开不批量迁移）。
+   */
+  payoffStart: PlannedPosition | null
+  /** 结构化计划窗口终点；null 同上。 */
+  payoffEnd: PlannedWindowEnd | null
   /** 关联角色。 */
   relatedCharacters: readonly string[]
   /** 关联物品/实体。 */

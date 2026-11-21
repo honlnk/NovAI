@@ -9,10 +9,21 @@ import {
 import { hashContent } from '../util/hash'
 import { scanForeshadowingCards, type CardProjectSnapshot } from './catalog'
 import {
+  deriveLegacyPayoffWindow,
+  derivePositionsFromLegacyWindow,
+  effectivePlannedWindow,
+  validatePlannedWindow,
+} from './positions'
+import {
   ForeshadowingConflictError,
   ForeshadowingError,
 } from '../../types/foreshadowing'
-import type { ForeshadowingCard, ForeshadowingStatus } from '../../types/foreshadowing'
+import type {
+  ForeshadowingCard,
+  ForeshadowingStatus,
+  PlannedPosition,
+  PlannedWindowEnd,
+} from '../../types/foreshadowing'
 
 /**
  * 伏笔卡片的领域读写：所有操作以 foreshadowing/ 目录文件为唯一事实来源
@@ -21,9 +32,13 @@ import type { ForeshadowingCard, ForeshadowingStatus } from '../../types/foresha
  * - 读取按 frontmatter.id 定位（文件名只是外部友好，改名不丢卡片）。
  * - 读者视角与作者真相是正文的两节：readerView / authorTruth 分别可替换，
  *   未提供的节保持原样（写正文链路只拿 readerView，也不会误伤真相节）。
- * - 暗示历史（related_chapters）通过 addRelatedChapters 追加（去重保序）。
- * - 状态推进到 revealed/resolved 时可同步登记 resolvedAt（回收章节）；
- *   abandoned 必须给 abandonedReason（避免日后误以为漏写）。
+ * - 暗示历史（related_chapters）两条链路：作者界面走 relatedChapters 完整替换
+ *   （去重保序），AI 走 addRelatedChapters 追加（去重保序），互斥提供。
+ * - 实际回收章节（resolvedAt）只在显式传入时变化；状态切换不隐式清空——
+ *   保留作者的事实记录，与状态的不一致由界面提示。
+ * - 结构化计划窗口（payoff_start/payoff_end）提供时校验并同步重写可读旧字段
+ *   payoff_window；AI 旧窗口链路反向推导结构化，两套数据保持一致。
+ * - abandoned 必须给 abandonedReason（避免日后误以为漏写）。
  * - 冲突检测与删除回收站语义同计划：expectedContentHash 校验 + .novel/trash/。
  */
 
@@ -37,9 +52,19 @@ export type CreateForeshadowingOptions = {
   /** 埋设章节（完整路径「卷/章」）。 */
   plantedAt: string
   status?: ForeshadowingStatus
+  /**
+   * 可读旧窗口：与 payoffStart/payoffEnd 互斥；提供时反向推导结构化数据
+   * （新建面板旧链路与 AI 工具共用）。
+   */
   payoffWindow?: readonly [string, string] | null
+  /** 结构化计划窗口起点（新建直接落新表达，不再经过旧窗口中转）。 */
+  payoffStart?: PlannedPosition
+  /** 结构化计划窗口终点。 */
+  payoffEnd?: PlannedWindowEnd
   relatedCharacters?: readonly string[]
   relatedEntities?: readonly string[]
+  /** 暗示历史初始列表（去空白、去重保首次出现位置）。 */
+  relatedChapters?: readonly string[]
   isRedHerring?: boolean
   now?: Date
 }
@@ -53,15 +78,28 @@ export type UpdateForeshadowingOptions = {
   authorTruth?: string
   status?: ForeshadowingStatus
   plantedAt?: string
+  /**
+   * 可读旧窗口（AI 工具链路兼容）：与 payoffStart/payoffEnd 互斥；提供时按旧值
+   * 反向推导结构化数据，保持两套一致（原相对位置记录不保留）。
+   */
   payoffWindow?: readonly [string, string] | null
+  /** 结构化计划窗口起点；提供时校验并同步重写可读旧字段。 */
+  payoffStart?: PlannedPosition
+  /** 结构化计划窗口终点；提供时校验并同步重写可读旧字段。 */
+  payoffEnd?: PlannedWindowEnd
   relatedCharacters?: readonly string[]
   relatedEntities?: readonly string[]
+  /**
+   * 作者完整替换暗示历史列表（去空白、去重保首次出现位置，保留作者排列）；
+   * 与 addRelatedChapters 互斥使用——AI 追加链路不会恢复作者删除的条目。
+   */
+  relatedChapters?: readonly string[]
   /** 追加暗示历史章节（去重保序；与 relatedChapters 的显式覆盖互斥使用）。 */
   addRelatedChapters?: readonly string[]
   isRedHerring?: boolean
-  /** 实际回收章节；传 null 清除。 */
+  /** 实际回收章节；传 null 清除；状态变化不隐式清空（保留作者的事实记录）。 */
   resolvedAt?: string | null
-  /** 放弃原因；状态改为 abandoned 时必填。 */
+  /** 放弃原因；状态改为 abandoned 时必填（已放弃卡的历史修订同走本字段）。 */
   abandonedReason?: string | null
   /** 移动到目标列某个卡片之后；null = 列末尾。 */
   afterId?: string | null
@@ -101,6 +139,24 @@ export async function createForeshadowingCard(
   const sequence = nextCardSequence(existing.cards.map((card) => card.sourcePath), extractForeshadowingSequence)
   const id = createForeshadowingId(sequence)
   const path = createForeshadowingPath(id, name)
+  // 窗口双链路互斥：旧窗口（反向推导）与结构化位置不能同时提供
+  if (options.payoffWindow !== undefined && (options.payoffStart !== undefined || options.payoffEnd !== undefined)) {
+    throw new ForeshadowingError('payoffWindow 与 payoffStart/payoffEnd 不能同时提供')
+  }
+  // 新建即带结构化数据：旧窗口链路反向推导，结构化链路直接落新表达并校验、
+  // 同步派生可读旧字段（计划 §八.1）
+  const noPosition = { kind: 'none' } as const
+  const derivedWindow: { start: PlannedPosition; end: PlannedWindowEnd } =
+    options.payoffStart !== undefined || options.payoffEnd !== undefined
+      ? {
+          start: options.payoffStart ?? noPosition,
+          end: options.payoffEnd ?? noPosition,
+        }
+      : options.payoffWindow !== undefined
+        ? derivePositionsFromLegacyWindow(options.payoffWindow ?? null)
+        : { start: noPosition, end: noPosition }
+  validatePlannedWindow(derivedWindow.start, derivedWindow.end)
+  const derivedLegacyWindow = deriveLegacyPayoffWindow(derivedWindow.start, derivedWindow.end)
   const card: Omit<ForeshadowingCard, 'sourcePath'> = {
     id,
     name,
@@ -109,10 +165,12 @@ export async function createForeshadowingCard(
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     plantedAt,
-    payoffWindow: options.payoffWindow ?? null,
-    relatedCharacters: options.relatedCharacters ? [...options.relatedCharacters] : [],
-    relatedEntities: options.relatedEntities ? [...options.relatedEntities] : [],
-    relatedChapters: [],
+    payoffWindow: derivedLegacyWindow,
+    payoffStart: derivedWindow.start,
+    payoffEnd: derivedWindow.end,
+    relatedCharacters: normalizeRefList(options.relatedCharacters),
+    relatedEntities: normalizeRefList(options.relatedEntities),
+    relatedChapters: normalizeRefList(options.relatedChapters),
     isRedHerring: options.isRedHerring ?? false,
     resolvedAt: null,
     abandonedReason: null,
@@ -177,8 +235,11 @@ export async function updateForeshadowingCard(
     || options.status !== undefined
     || options.plantedAt !== undefined
     || options.payoffWindow !== undefined
+    || options.payoffStart !== undefined
+    || options.payoffEnd !== undefined
     || options.relatedCharacters !== undefined
     || options.relatedEntities !== undefined
+    || options.relatedChapters !== undefined
     || options.addRelatedChapters !== undefined
     || options.isRedHerring !== undefined
     || options.resolvedAt !== undefined
@@ -188,6 +249,14 @@ export async function updateForeshadowingCard(
 
   if (!hasFieldUpdate) {
     throw new ForeshadowingError('至少提供 name、readerView、authorTruth、status、addRelatedChapters 等要更新的字段之一')
+  }
+
+  if (options.payoffWindow !== undefined && (options.payoffStart !== undefined || options.payoffEnd !== undefined)) {
+    throw new ForeshadowingError('payoffWindow（旧窗口）与 payoffStart/payoffEnd（结构化窗口）不能同时提供')
+  }
+
+  if (options.relatedChapters !== undefined && options.addRelatedChapters !== undefined) {
+    throw new ForeshadowingError('relatedChapters（作者完整替换）与 addRelatedChapters（AI 追加）不能同时提供')
   }
 
   // 名称
@@ -208,7 +277,7 @@ export async function updateForeshadowingCard(
     }
   }
 
-  // 状态：abandoned 必须有原因（新给或沿用已有）；revealed/resolved 可同步登记回收章节
+  // 状态：abandoned 必须有原因（新给或沿用已有）
   let status = current.card.status
   if (options.status !== undefined) {
     status = options.status
@@ -222,10 +291,29 @@ export async function updateForeshadowingCard(
     throw new ForeshadowingError('放弃伏笔必须登记原因（abandonedReason），避免日后误以为漏写')
   }
 
-  // 回收章节：显式传入优先；状态离开「已收」区间时清掉残留（避免误导后续查账）
-  let resolvedAt = options.resolvedAt !== undefined ? options.resolvedAt : current.card.resolvedAt
-  if (status !== 'revealed' && status !== 'resolved') {
-    resolvedAt = null
+  // 实际回收章节：只在显式传入时变化；状态切换不隐式清空（作者的事实记录，
+  // 与状态的不一致由界面提示，不伪装成一致——作者字段控制权计划 §三.3）
+  let resolvedAt = current.card.resolvedAt
+  if (options.resolvedAt !== undefined) {
+    const nextResolved = options.resolvedAt?.trim()
+    resolvedAt = nextResolved ? nextResolved : null
+  }
+
+  // 计划窗口：结构化优先（校验后重写旧字段）；AI 旧窗口链路反向推导结构化
+  let payoffWindow = current.card.payoffWindow
+  let payoffStart = current.card.payoffStart
+  let payoffEnd = current.card.payoffEnd
+  if (options.payoffStart !== undefined || options.payoffEnd !== undefined) {
+    const currentEffective = effectivePlannedWindow(current.card)
+    payoffStart = options.payoffStart ?? currentEffective.start
+    payoffEnd = options.payoffEnd ?? currentEffective.end
+    validatePlannedWindow(payoffStart, payoffEnd)
+    payoffWindow = deriveLegacyPayoffWindow(payoffStart, payoffEnd)
+  } else if (options.payoffWindow !== undefined) {
+    const derived = derivePositionsFromLegacyWindow(options.payoffWindow)
+    payoffStart = derived.start
+    payoffEnd = derived.end
+    payoffWindow = options.payoffWindow
   }
 
   // 正文：读者视角 / 作者真相分别替换，未提供的节保持原样
@@ -241,8 +329,12 @@ export async function updateForeshadowingCard(
     })
   }
 
-  // 暗示历史：显式追加（去重保序）
+  // 暗示历史：作者完整替换（去空白、去重保留首次出现位置、保留排列顺序）
+  // 与 AI 追加（去重保序）两条独立链路——追加不得恢复作者删除的条目
   let relatedChapters = [...current.card.relatedChapters]
+  if (options.relatedChapters !== undefined) {
+    relatedChapters = normalizeRefList(options.relatedChapters)
+  }
   if (options.addRelatedChapters !== undefined) {
     for (const chapter of options.addRelatedChapters) {
       const trimmed = chapter.trim()
@@ -277,9 +369,11 @@ export async function updateForeshadowingCard(
     createdAt: current.card.createdAt,
     updatedAt: now,
     plantedAt,
-    payoffWindow: options.payoffWindow !== undefined ? options.payoffWindow : current.card.payoffWindow,
-    relatedCharacters: options.relatedCharacters !== undefined ? [...options.relatedCharacters] : current.card.relatedCharacters,
-    relatedEntities: options.relatedEntities !== undefined ? [...options.relatedEntities] : current.card.relatedEntities,
+    payoffWindow,
+    payoffStart,
+    payoffEnd,
+    relatedCharacters: options.relatedCharacters !== undefined ? normalizeRefList(options.relatedCharacters) : current.card.relatedCharacters,
+    relatedEntities: options.relatedEntities !== undefined ? normalizeRefList(options.relatedEntities) : current.card.relatedEntities,
     relatedChapters,
     isRedHerring: options.isRedHerring !== undefined ? options.isRedHerring : current.card.isRedHerring,
     resolvedAt,
@@ -308,6 +402,18 @@ function foreshadowingFileErrors() {
     renameFailed: (from: string, to: string, reason: string) =>
       new ForeshadowingError(`重命名失败，旧文件删除出错，已回滚：${from} → ${to}${reason}`),
   }
+}
+
+/** 列表字段规范化：去首尾空白、丢弃空项、去重保留首次出现位置（不重排）。 */
+function normalizeRefList(values: readonly string[] | undefined): string[] {
+  const result: string[] = []
+  for (const value of values ?? []) {
+    const trimmed = value.trim()
+    if (trimmed && !result.includes(trimmed)) {
+      result.push(trimmed)
+    }
+  }
+  return result
 }
 
 /**

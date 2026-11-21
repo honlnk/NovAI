@@ -37,6 +37,11 @@ export type PersistedCardDraftRecord = {
    * 未确认绝不自动放弃；旧记录无此字段按无操作态恢复。
    */
   abandon?: { reason: string; afterId: string | null; beforeId: string | null }
+  /**
+   * 待确认的放弃原因修订操作态（作者字段控制权计划阶段 2，伏笔域）：
+   * 已放弃卡的历史原因修订。未确认绝不自动写盘；旧记录无此字段按无操作态恢复。
+   */
+  reasonRevision?: { reason: string }
   updatedAt: string
 }
 

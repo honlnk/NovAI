@@ -15,6 +15,7 @@ import {
   isForeshadowingStatus,
 } from '../../types/foreshadowing'
 import type { ForeshadowingCard, ForeshadowingCardView } from '../../types/foreshadowing'
+import { formatPlannedPosition, parsePlannedPosition, parsePlannedStart } from './positions'
 
 /**
  * 伏笔卡片的解析与序列化（frontmatter 原语来自 card-board/parser）。
@@ -57,6 +58,8 @@ export function parseForeshadowingFile(sourcePath: string, content: string): Par
   const createdAt = normalizeTime(record.createdAt)
   const updatedAt = normalizeTime(record.updatedAt)
   const payoffWindow = parsePayoffWindow(record.payoff_window)
+  const payoffStart = parsePlannedStart(record.payoff_start)
+  const payoffEnd = parsePlannedPosition(record.payoff_end)
   const { readerBody, truthBody } = splitForeshadowingBody(bodyText)
 
   return {
@@ -69,6 +72,8 @@ export function parseForeshadowingFile(sourcePath: string, content: string): Par
       updatedAt,
       plantedAt: (record.planted_at ?? '').trim(),
       payoffWindow,
+      payoffStart,
+      payoffEnd,
       relatedCharacters: parseStringList(record.related_characters),
       relatedEntities: parseStringList(record.related_entities),
       relatedChapters: parseStringList(record.related_chapters),
@@ -87,14 +92,21 @@ export function parseForeshadowingFile(sourcePath: string, content: string): Par
 /**
  * 序列化卡片为完整 Markdown 文件内容（frontmatter + 空行 + 正文）。
  * 领域字段固定顺序输出，看板骨架字段（order/createdAt/updatedAt）收尾。
+ * 结构化计划窗口（payoff_start/payoff_end）只在存在时输出——旧卡首次保存
+ * 前不写入新增字段，保持「无结构化数据按旧窗口读取」的兼容语义。
  */
 export function serializeForeshadowingCard(card: Omit<ForeshadowingCard, 'sourcePath'>): string {
+  // 旧内存形状（测试直造的卡片）可能缺新字段；按 null（无结构化数据）处理
+  const payoffStart = card.payoffStart ?? null
+  const payoffEnd = card.payoffEnd ?? null
   const frontmatter = formatFrontmatter([
     ['id', card.id],
     ['name', card.name],
     ['status', card.status],
     ['planted_at', card.plantedAt],
     ['payoff_window', card.payoffWindow ? formatStringList(card.payoffWindow) : 'null'],
+    ...(payoffStart !== null ? ([['payoff_start', formatPlannedPosition(payoffStart)]] as const) : []),
+    ...(payoffEnd !== null ? ([['payoff_end', formatPlannedPosition(payoffEnd)]] as const) : []),
     ['related_characters', formatStringList(card.relatedCharacters)],
     ['related_entities', formatStringList(card.relatedEntities)],
     ['related_chapters', formatStringList(card.relatedChapters)],

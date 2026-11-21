@@ -2,7 +2,12 @@ import type { ForeshadowingStatusMode, PermissionPreset, ProjectConfig, SearchCo
 import type { ReasoningEffort } from '../types/ai'
 import type { AgentRoleId } from '../core/agent/roles'
 import type { PlanScanIssue } from '../types/plans'
-import type { ForeshadowingScanIssue, ForeshadowingStatus } from '../types/foreshadowing'
+import type {
+  ForeshadowingScanIssue,
+  ForeshadowingStatus,
+  PlannedPosition,
+  PlannedWindowEnd,
+} from '../types/foreshadowing'
 import type {
   RhythmHook,
   RhythmMood,
@@ -299,8 +304,12 @@ export type ForeshadowingCardSummaryView = {
   updatedAt: string
   /** 埋设章节（完整路径「卷/章」）。 */
   plantedAt: string
-  /** 预计回收窗口（区间两端）；未设置为 null。 */
+  /** 预计回收窗口（可读旧字段；结构化数据存在时以 payoffStart/payoffEnd 为有效值）。 */
   payoffWindow: readonly [string, string] | null
+  /** 结构化计划窗口起点；null = 卡片尚无结构化数据（旧卡，按旧窗口读取）。 */
+  payoffStart: PlannedPosition | null
+  /** 结构化计划窗口终点；null 同上。 */
+  payoffEnd: PlannedWindowEnd | null
   /** 是否故意误导（红鲱鱼）。 */
   isRedHerring: boolean
   /**

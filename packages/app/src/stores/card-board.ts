@@ -70,6 +70,14 @@ export type CardSaveSession<TDraft extends object, TCard> = SaveSessionBase & {
    * 便于手滑取消后继续填写；确认成功或会话清除时随之作废。
    */
   lastAbandonReason?: string
+  /**
+   * 待确认的放弃原因修订操作态（作者字段控制权计划阶段 2，伏笔域）：已放弃卡
+   * 的历史原因修订——不进草稿快照、不触发自动保存；确认前只随会话与恢复镜像
+   * 保留，绝不自动写盘。
+   */
+  reasonRevision?: { reason: string }
+  /** 取消修订操作态时暂存的原因文本（仅内存，不进镜像；再次进入时回填）。 */
+  lastReasonRevision?: string
 }
 
 /** 放弃操作态载荷：原因文本 + 看板拖入已放弃列时的暂存落点（列内定位） */
@@ -122,6 +130,11 @@ export interface CardBoardConfig<
    * 原因 + 拖入落点」，携带读取时 hash；不提供则该域不开放放弃操作态。
    */
   confirmAbandonCard?(projectId: string, card: TCard, intent: { reason: string; afterId: string | null; beforeId: string | null }): Promise<TCard>
+  /**
+   * 确认放弃原因修订（作者字段控制权计划阶段 2，可选——伏笔域注入）：以最新
+   * 磁盘基线一次性提交修订后的原因，携带读取时 hash；不提供则该域不开放修订。
+   */
+  confirmReasonRevisionCard?(projectId: string, card: TCard, intent: { reason: string }): Promise<TCard>
   /**
    * 冲突字段比较（阶段 3）：mine = 人工视角完整卡、disk = 磁盘最新卡，返回
    * 领域字段的展示文本（枚举映射中文标签）。无差异字段的过滤在视图层。
@@ -264,6 +277,7 @@ export function createCardBoardCore<
       baseContentHash: session.baseContentHash,
       mode: session.mode,
       ...(session.abandon !== undefined ? { abandon: { ...session.abandon } } : {}),
+      ...(session.reasonRevision !== undefined ? { reasonRevision: { ...session.reasonRevision } } : {}),
     })
   }
 
@@ -348,7 +362,7 @@ export function createCardBoardCore<
       // 引擎在会话 clean 时清镜像；待确认的放弃操作态必须跨刷新保留，
       // 有槽时改写为「保留槽的记录」而不是删除（阶段 4）
       const session = cardRealm.getSession(projectId, cardId)
-      if (session?.abandon) {
+      if (session?.abandon || session?.reasonRevision) {
         scheduleSessionMirror(session)
         return
       }
@@ -356,7 +370,7 @@ export function createCardBoardCore<
     },
     // 待确认的放弃操作态 = 快照外的待处理人工状态：外部写盘作废其提交基线，
     // 干净会话也建冲突（不是静默重读），用户先处理版本关系再确认（阶段 4）
-    hasPendingState: (session) => session.abandon !== undefined,
+    hasPendingState: (session) => session.abandon !== undefined || session.reasonRevision !== undefined,
     onSettled: (projectId, cardId, result) => handleSaveSettled(projectId, cardId, result),
   })
 
@@ -909,6 +923,7 @@ export function createCardBoardCore<
     // 待确认的放弃操作态跨「采用磁盘」保留（计划 §四：任何采用磁盘都不能顺带
     // 清除原因）；引擎成功路径会清除会话，由下方重开回填
     const preservedAbandon = cardRealm.getSession(projectId, card.id)?.abandon
+    const preservedReasonRevision = cardRealm.getSession(projectId, card.id)?.reasonRevision
     const result = await cardRealm.adoptDisk(projectId, card.id)
     if (result !== 'resolved') {
       return false
@@ -919,10 +934,15 @@ export function createCardBoardCore<
     if (activeCard.value?.id === card.id) {
       await openCard(projectId, card.id)
     }
-    if (preservedAbandon) {
+    if (preservedAbandon || preservedReasonRevision) {
       const session = cardRealm.getSession(projectId, card.id)
       if (session) {
-        session.abandon = { ...preservedAbandon }
+        if (preservedAbandon) {
+          session.abandon = { ...preservedAbandon }
+        }
+        if (preservedReasonRevision) {
+          session.reasonRevision = { ...preservedReasonRevision }
+        }
         session.updatedAt = new Date().toISOString()
         scheduleSessionMirror(session)
       }
@@ -1275,6 +1295,141 @@ export function createCardBoardCore<
     }
   }
 
+  /* ---------- 放弃原因修订操作态（作者字段控制权计划阶段 2：伏笔域） ---------- */
+
+  /** 当前打开卡片的待确认原因修订操作态（null = 不在操作态） */
+  const reasonRevisionIntent = computed<{ reason: string } | null>(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return null
+    }
+    const revision = cardRealm.getSession(currentProjectId, card.id)?.reasonRevision
+    return revision ? { reason: revision.reason } : null
+  })
+
+  /** 应用修订可点：操作态中、字段收口完成（clean）、领域钩子已注入 */
+  const canConfirmReasonRevision = computed(() =>
+    reasonRevisionIntent.value !== null
+    && savePhase.value === 'clean'
+    && config.confirmReasonRevisionCard !== undefined,
+  )
+
+  /** 应用修订进行中（按钮禁用与重复提交防护） */
+  const isConfirmingReasonRevision = ref(false)
+
+  /**
+   * 进入原因修订操作态：不登记草稿、不产生两秒计时器；若此刻有字段修改或写盘
+   * 在途先请求收口（「应用修订」等 clean 后才可点）。回填上次取消时的暂存文本。
+   */
+  function startReasonRevision(projectId: string): boolean {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId || config.confirmReasonRevisionCard === undefined) {
+      return false
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session) {
+      return false
+    }
+    if (!session.reasonRevision) {
+      session.reasonRevision = { reason: session.lastReasonRevision ?? '' }
+      session.updatedAt = new Date().toISOString()
+      scheduleSessionMirror(session)
+    }
+    if (savePhase.value !== 'clean') {
+      void cardRealm.flushSession(projectId, card.id)
+    }
+    return true
+  }
+
+  /** 修订原因输入（只更新操作态，不触发自动保存） */
+  function updateReasonRevision(projectId: string, reason: string): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session?.reasonRevision) {
+      return
+    }
+    session.reasonRevision.reason = reason
+    session.updatedAt = new Date().toISOString()
+    scheduleSessionMirror(session)
+  }
+
+  /** 取消修订：退出输入态，回到先前编辑现场；已填文本暂存（再次进入回填） */
+  function cancelReasonRevision(projectId: string): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session?.reasonRevision) {
+      return
+    }
+    session.lastReasonRevision = session.reasonRevision.reason
+    delete session.reasonRevision
+    session.updatedAt = new Date().toISOString()
+    if (config.isEmptyDraft(session.draft) && session.abandon === undefined) {
+      removeCardBackup(projectId, card.id)
+    } else {
+      scheduleSessionMirror(session)
+    }
+  }
+
+  /**
+   * 应用修订（领域 UI 的明确操作）：以最新磁盘基线一次性提交修订后的原因，
+   * 不等待两秒。成功后原因立即生效；失败或冲突时原原因不动、输入保留（冲突
+   * 会冻结应用，待版本出口处理）。已放弃状态下空原因由领域服务拒绝。
+   */
+  async function confirmReasonRevision(projectId: string): Promise<boolean> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId || !config.confirmReasonRevisionCard || isConfirmingReasonRevision.value) {
+      return false
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    const intent = session?.reasonRevision
+    if (!session || !intent || !session.diskCard || savePhase.value !== 'clean') {
+      return false
+    }
+    const reason = intent.reason.trim()
+    if (!reason) {
+      return false
+    }
+    isConfirmingReasonRevision.value = true
+    actionError.value = ''
+    try {
+      const updated = await config.confirmReasonRevisionCard(projectId, session.diskCard, { reason })
+      // 成功：只收口操作态与修订基线，不动其余草稿（clean 下草稿本就为空）
+      delete session.reasonRevision
+      delete session.lastReasonRevision
+      session.diskCard = updated
+      session.baseContentHash = updated.contentHash
+      if (config.isEmptyDraft(session.draft) && session.abandon === undefined) {
+        removeCardBackup(projectId, card.id)
+      } else {
+        scheduleSessionMirror(session)
+      }
+      lastSavedCard.value = updated
+      if (currentProjectId === projectId) {
+        if (activeCard.value?.id === card.id) {
+          activeCard.value = updated
+        }
+        await refreshBoard(projectId)
+      }
+      return true
+    } catch (error) {
+      // 失败：原原因不动、输入与操作态保留；外部修改冲突则建立冲突（应用随之冻结）
+      const conflictCard = config.extractConflict(error, session.diskCard)
+      if (conflictCard) {
+        await cardRealm.freezeForExternal(projectId, card.id)
+      }
+      actionError.value = toMessage(error, config.messages.saveCard)
+      return false
+    } finally {
+      isConfirmingReasonRevision.value = false
+    }
+  }
+
   /**
    * 重新进入项目时从浏览器恢复镜像回填卡片会话（不写盘；核对规则见
    * save-session：内容已一致清冗余；基线一致回填待续存；磁盘已变建立冲突；
@@ -1291,7 +1446,7 @@ export function createCardBoardCore<
         ...(record.baseContentHash !== undefined ? { baseVersion: record.baseContentHash } : {}),
         // 带放弃操作态的记录：草稿内容即使已全部落盘也不做冗余清理，
         // 保留会话让下方回填操作态（阶段 4）
-        ...(record.abandon !== undefined ? { keepAlive: true } : {}),
+        ...(record.abandon !== undefined || record.reasonRevision !== undefined ? { keepAlive: true } : {}),
         updatedAt: record.updatedAt,
       })),
     )
@@ -1303,6 +1458,9 @@ export function createCardBoardCore<
         session.mode = record.mode
         if (record.abandon !== undefined) {
           session.abandon = { ...record.abandon }
+        }
+        if (record.reasonRevision !== undefined) {
+          session.reasonRevision = { ...record.reasonRevision }
         }
       }
     }
@@ -1599,6 +1757,13 @@ export function createCardBoardCore<
     updateAbandonReason,
     cancelAbandon,
     confirmAbandonCard,
+    reasonRevisionIntent,
+    canConfirmReasonRevision,
+    isConfirmingReasonRevision,
+    startReasonRevision,
+    updateReasonRevision,
+    cancelReasonRevision,
+    confirmReasonRevision,
     freezeForExternalChange,
     hasCardDraft,
     setCardGuard,

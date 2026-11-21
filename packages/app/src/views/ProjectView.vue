@@ -20,6 +20,7 @@ import {
 } from '../composables/editor-session'
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
 import { setupCardBackupLifecycle } from '../composables/card-backup'
+import { useChapterCatalog } from '../composables/chapter-catalog'
 import { clearChangeHighlights } from '../composables/useChangeHighlights'
 import { useCardChangeFeedback } from '../composables/useCardChangeFeedback'
 import { useFileChangeFeedback } from '../composables/useFileChangeFeedback'
@@ -1222,6 +1223,88 @@ function handleForeshadowingConfirmAbandon() {
 /** 冲突/守护出口（阶段 3，与计划域同构） */
 const foreshadowingConflictHandlers = makeCardConflictHandlers(foreshadowingStore)
 
+/* ---------- 章节目录接线（作者字段控制权计划阶段 2） ---------- */
+
+/** 目录随项目文件树纯派生；真实新建经 core chapter-service 落盘并刷新树 */
+const chapterCatalog = useChapterCatalog()
+
+/** 「章节已创建，卡片引用尚未保存」提示：切卡/保存收口后清除 */
+const chapterCreateNotice = ref<string | null>(null)
+watch(
+  () => [projectId.value, foreshadowingStore.activeCard?.id] as const,
+  () => {
+    chapterCreateNotice.value = null
+  },
+)
+watch(
+  () => foreshadowingStore.savePhase,
+  (phase) => {
+    if (phase === 'clean') {
+      chapterCreateNotice.value = null
+    }
+  },
+)
+
+/** 选择器的真实新建出口：成功后提示「引用尚未保存」，失败信息由选择器自显 */
+async function handlePickerChapterCreate(input: { chapterNumber: number; title: string | null }) {
+  const outcome = await chapterCatalog.createChapter(input)
+  if (outcome.kind === 'created') {
+    chapterCreateNotice.value = `章节已创建（${outcome.entry.ref}），卡片引用尚未保存。`
+  }
+  return outcome
+}
+
+/** 详情高级信息的选择器接线（会话键随项目 + 卡片变化，晚到结果不串卡） */
+const foreshadowingPicker = computed(() => ({
+  catalog: chapterCatalog.catalog.value,
+  catalogReady: chapterCatalog.catalogReady.value,
+  loading: false,
+  loadError: null,
+  suggestedNumber: chapterCatalog.suggestedNumber.value,
+  createHandler: handlePickerChapterCreate,
+  sessionKey: `${projectId.value}:${foreshadowingStore.activeCard?.id ?? 'none'}`,
+  latestChapterNumber: latestChapterNumber.value,
+}))
+
+/** 新建面板的选择器接线（会话键固定 :create，与详情互不串扰） */
+const foreshadowingCreatePicker = computed(() => ({
+  catalog: chapterCatalog.catalog.value,
+  catalogReady: chapterCatalog.catalogReady.value,
+  loading: false,
+  loadError: null,
+  suggestedNumber: chapterCatalog.suggestedNumber.value,
+  createHandler: handlePickerChapterCreate,
+  sessionKey: `${projectId.value}:create`,
+  latestChapterNumber: latestChapterNumber.value,
+}))
+
+/* ---------- 放弃原因修订（阶段 2：明确操作，应用时立即保存） ---------- */
+
+function handleForeshadowingStartReasonRevision() {
+  foreshadowingStore.startReasonRevision(projectId.value)
+}
+
+function handleForeshadowingUpdateReasonRevision(reason: string) {
+  foreshadowingStore.updateReasonRevision(projectId.value, reason)
+}
+
+function handleForeshadowingCancelReasonRevision() {
+  foreshadowingStore.cancelReasonRevision(projectId.value)
+}
+
+function handleForeshadowingConfirmReasonRevision() {
+  void foreshadowingStore.confirmReasonRevision(projectId.value)
+}
+
+/** 回收窗口三出口（阶段 2 §八.1）：成功才改变有效结果 */
+function handleAdoptStructuredWindow() {
+  void foreshadowingStore.adoptWindowResolution(projectId.value, 'structured')
+}
+
+function handleAdoptLegacyWindow() {
+  void foreshadowingStore.adoptWindowResolution(projectId.value, 'legacy')
+}
+
 // 自动保存重命名伏笔文件（伏笔名改动触发）后刷新文件树：同卡前后路径变化才触发
 watch(
   () => foreshadowingStore.lastSavedCard,
@@ -1672,6 +1755,22 @@ function handleGoToSettings() {
           :draft-reader-view="foreshadowingStore.draftReaderView"
           :draft-author-truth="foreshadowingStore.draftAuthorTruth"
           :draft-status="foreshadowingStore.draftStatus"
+          :draft-planted-at="foreshadowingStore.draftPlantedAt"
+          :draft-payoff-start="foreshadowingStore.draftPayoffStart"
+          :draft-payoff-end="foreshadowingStore.draftPayoffEnd"
+          :draft-related-characters-text="foreshadowingStore.draftRelatedCharactersText"
+          :draft-related-entities-text="foreshadowingStore.draftRelatedEntitiesText"
+          :draft-related-chapters="foreshadowingStore.draftRelatedChapters"
+          :draft-is-red-herring="foreshadowingStore.draftIsRedHerring"
+          :draft-resolved-at="foreshadowingStore.draftResolvedAt"
+          :picker="foreshadowingPicker"
+          :chapter-create-notice="chapterCreateNotice"
+          :window-mismatch="foreshadowingStore.windowMismatch"
+          :window-mismatch-views="foreshadowingStore.windowMismatchViews"
+          :can-adopt-window="foreshadowingStore.savePhase === 'clean'"
+          :reason-revision="foreshadowingStore.reasonRevisionIntent"
+          :can-confirm-reason-revision="foreshadowingStore.canConfirmReasonRevision"
+          :is-confirming-reason-revision="foreshadowingStore.isConfirmingReasonRevision"
           :detail-mode="foreshadowingStore.detailMode"
           :save-phase="foreshadowingStore.savePhase"
           :conflict="foreshadowingStore.conflictView"
@@ -1688,6 +1787,21 @@ function handleGoToSettings() {
           @update-draft-reader-view="foreshadowingStore.updateDraftReaderView"
           @update-draft-author-truth="foreshadowingStore.updateDraftAuthorTruth"
           @update-draft-status="foreshadowingStore.updateDraftStatus"
+          @update-draft-planted-at="foreshadowingStore.updateDraftPlantedAt"
+          @update-draft-payoff-start="foreshadowingStore.updateDraftPayoffStart"
+          @update-draft-payoff-end="foreshadowingStore.updateDraftPayoffEnd"
+          @update-draft-related-characters-text="foreshadowingStore.updateDraftRelatedCharactersText"
+          @update-draft-related-entities-text="foreshadowingStore.updateDraftRelatedEntitiesText"
+          @update-draft-related-chapters="foreshadowingStore.updateDraftRelatedChapters"
+          @update-draft-is-red-herring="foreshadowingStore.updateDraftIsRedHerring"
+          @update-draft-resolved-at="foreshadowingStore.updateDraftResolvedAt"
+          @retry-chapter-load="() => chapterCatalog.retryLoad()"
+          @adopt-structured-window="handleAdoptStructuredWindow"
+          @adopt-legacy-window="handleAdoptLegacyWindow"
+          @start-reason-revision="handleForeshadowingStartReasonRevision"
+          @update-reason-revision="handleForeshadowingUpdateReasonRevision"
+          @cancel-reason-revision="handleForeshadowingCancelReasonRevision"
+          @confirm-reason-revision="handleForeshadowingConfirmReasonRevision"
           @start-abandon="handleForeshadowingStartAbandon"
           @update-abandon-reason="(reason: string) => foreshadowingStore.updateAbandonReason(projectId, reason)"
           @cancel-abandon="() => foreshadowingStore.cancelAbandon(projectId)"
@@ -1711,6 +1825,8 @@ function handleGoToSettings() {
           :new-planted-at="foreshadowingStore.newCardPlantedAt"
           :new-payoff-start="foreshadowingStore.newCardPayoffStart"
           :new-payoff-end="foreshadowingStore.newCardPayoffEnd"
+          :picker="foreshadowingCreatePicker"
+          :latest-chapter-number="latestChapterNumber"
           :can-submit="foreshadowingStore.hasRequiredCreateInput"
           :is-creating="foreshadowingStore.isCreating"
           :action-error="foreshadowingStore.actionError"

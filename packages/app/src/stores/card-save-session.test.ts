@@ -538,6 +538,8 @@ describe('卡片详情自动保存（阶段 2：伏笔域状态组合）', () =>
       createdAt: '2026-11-03T10:00:00.000Z',
       updatedAt: '2026-11-03T10:00:00.000Z',
       plantedAt: '第一卷/第一章',
+    payoffStart: null,
+    payoffEnd: null,
       payoffWindow: null,
       isRedHerring: false,
       relatedChapters: [],
