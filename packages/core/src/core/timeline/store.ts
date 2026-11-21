@@ -678,15 +678,25 @@ function assertChapterRefsResolvable(project: ProjectSnapshot, chapters: readonl
 /**
  * 组装事件详情：先做完全部只读校验（要素引用 / 章节解析 / 事件互引），再懒分配标识
  * （assignElementIds）——失败的调用不得改写任何要素文件（与关系域同一铁律）。
+ *
+ * `baseEvent`（update 语境传入修改前的事件）：与基线相同的引用不重新解析——悬空参与者、
+ * 失效相对锚、章号已删的章节引用不阻塞其他字段编辑，留给检查层提示（对齐关系域
+ * review 修复批「与当前引用相同的标识不再重新解析」的口径）。
  */
 async function assembleTimelineEvent(
   project: ProjectSnapshot,
   existingEventIds: ReadonlySet<string>,
   input: TimelineEventInput,
   label: string,
-  options: { validateRelativeAnchor?: boolean } = {},
+  options: { validateRelativeAnchor?: boolean; baseEvent?: TimelineEvent } = {},
 ): Promise<{ event: TimelineEvent; assignedElementIds: { sourcePath: string; id: string }[] }> {
   const validateRelativeAnchor = options.validateRelativeAnchor ?? true
+  const base = options.baseEvent
+  const baseParticipantIds = new Set(base?.participants.map((participant) => participant.id) ?? [])
+  const basePlotIds = new Set(base?.plotIds ?? [])
+  const baseChapterNumbers = new Set(base?.chapters.map((ref) => ref.chapterNumber) ?? [])
+  const baseCausedBy = new Set(base?.causedBy ?? [])
+  const baseRelativeTime = base?.relativeTime ?? null
   const title = (input.title ?? '').trim()
   if (!title) {
     throw new TimelineError(`${label}.title 不能为空；用一句话概括这个事件（如「小张出生」「旧桥决裂」）`)
@@ -695,13 +705,13 @@ async function assembleTimelineEvent(
     throw new TimelineError(`${label}.storyTime.year 必须是数值（架空纪年可为负）；系统不理解历法语义，只做记录`)
   }
 
-  // 事件互引（因果前驱 / 相对时间锚）：只校验本次显式给出的引用
+  // 事件互引（因果前驱 / 相对时间锚）：只校验本次显式给出的引用；与基线相同的引用跳过存在性核对
   const causedBy = (input.causedBy ?? []).map((id) => id.trim())
   for (const id of causedBy) {
     if (!EVENT_ID_PATTERN.test(id)) {
       throw new TimelineError(`${label}.causedBy 的 ${id} 不是合法事件标识（EVT- 前缀）`)
     }
-    if (!existingEventIds.has(id)) {
+    if (!baseCausedBy.has(id) && !existingEventIds.has(id)) {
       throw new TimelineError(`${label}.causedBy 引用的事件 ${id} 不存在；请先用 TimelineList/Read 核对事件标识`)
     }
   }
@@ -710,7 +720,9 @@ async function assembleTimelineEvent(
     if (!EVENT_ID_PATTERN.test(relative.anchorEventId)) {
       throw new TimelineError(`${label}.relativeTime.anchorEventId 必须是 EVT- 事件标识`)
     }
-    if (!existingEventIds.has(relative.anchorEventId)) {
+    // 与基线完全相同的相对时间（含已失效锚）不重新核对存在性，原样保留
+    const sameAsBase = JSON.stringify(relative) === JSON.stringify(baseRelativeTime)
+    if (!sameAsBase && !existingEventIds.has(relative.anchorEventId)) {
       throw new TimelineError(
         `${label}.relativeTime 的锚事件 ${relative.anchorEventId} 不存在；相对时间必须锚定既有事件（如「决战后的第三天」锚定决战事件）`,
       )
@@ -736,20 +748,29 @@ async function assembleTimelineEvent(
     }
   }
 
-  // 只读解析要素引用（参与者四类 + 情节），校验全部通过后才懒分配
+  // 只读解析要素引用（参与者四类 + 情节），校验全部通过后才懒分配；与基线相同的按标识引用原样透传
   const { snapshot, index } = await freshReferenceIndex(project)
-  const participantEntries: { entry: ElementReferenceEntry; role?: string }[] = []
+  const participantEntries: Array<{ entry: ElementReferenceEntry | null; passthrough?: TimelineParticipant; role?: string }> = []
   for (const participant of input.participants ?? []) {
+    if ('id' in participant && baseParticipantIds.has(participant.id)) {
+      participantEntries.push({ entry: null, passthrough: participant, ...(participant.role !== undefined ? { role: participant.role } : {}) })
+      continue
+    }
     participantEntries.push({
       entry: locateTimelineElement(index, participant, TIMELINE_PARTICIPANT_TYPES, `${label}.participants`),
       ...(participant.role !== undefined ? { role: participant.role } : {}),
     })
   }
-  const plotEntries: ElementReferenceEntry[] = []
+  const plotEntries: Array<{ entry: ElementReferenceEntry | null; passthroughId?: string }> = []
   for (const plot of input.plots ?? []) {
-    plotEntries.push(locateTimelineElement(index, plot, ['plot'], `${label}.plots`))
+    if ('id' in plot && basePlotIds.has(plot.id)) {
+      plotEntries.push({ entry: null, passthroughId: plot.id })
+      continue
+    }
+    plotEntries.push({ entry: locateTimelineElement(index, plot, ['plot'], `${label}.plots`) })
   }
-  assertChapterRefsResolvable(snapshot, chapters)
+  const chaptersToResolve = chapters.filter((ref) => !baseChapterNumbers.has(ref.chapterNumber))
+  assertChapterRefsResolvable(snapshot, chaptersToResolve)
 
   const assignedElementIds: { sourcePath: string; id: string }[] = []
   const resolveId = async (entry: ElementReferenceEntry): Promise<string> => {
@@ -760,12 +781,21 @@ async function assembleTimelineEvent(
     return ensured.id
   }
   const participants: TimelineParticipant[] = []
-  for (const { entry, role } of participantEntries) {
+  for (const { entry, passthrough, role } of participantEntries) {
+    if (!entry) {
+      // 基线透传：引用未变，即使已悬空也原样保留（检查层负责提示）
+      participants.push({ ...(passthrough ?? { kind: 'element', id: '' }) })
+      continue
+    }
     const id = await resolveId(entry)
-    participants.push({ kind: 'element', id, ...(role !== undefined ? { role } : {}) })
+    participants.push({ kind: 'element', id, ...(role !== undefined ? { role: role } : {}) })
   }
   const plotIds: string[] = []
-  for (const entry of plotEntries) {
+  for (const { entry, passthroughId } of plotEntries) {
+    if (!entry) {
+      plotIds.push(passthroughId ?? '')
+      continue
+    }
     plotIds.push(await resolveId(entry))
   }
 
@@ -979,7 +1009,7 @@ export async function updateTimelineEvent(project: ProjectSnapshot, options: Upd
       { ...merged, title: merged.title },
       'TimelineUpdate',
       // 锚事件已删除的旧 relativeTime 不阻塞其他字段编辑（失效提示交给检查层，不自动清除）
-      { validateRelativeAnchor: patch.relativeTime !== undefined },
+      { validateRelativeAnchor: patch.relativeTime !== undefined, baseEvent: current.event },
     )
 
     const previous = current.event

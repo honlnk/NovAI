@@ -368,3 +368,11 @@ export { TimelineConflictError, TimelineCorruptError }
 
 /** 单事件版本令牌（UI 编辑会话按条做冲突判定）。 */
 export { timelineEventVersion } from '../core/timeline/store'
+
+/** 领域输入与检查类型再导出（app 只能经服务层访问 core，见架构边界）。 */
+export type {
+  TimelineCheckIssue,
+  TimelineEventInput,
+  TimelineElementSelector,
+  TimelineParticipantInput,
+} from '../core/timeline/store'

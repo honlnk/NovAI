@@ -733,3 +733,55 @@ describe('removeTimelineReferences', () => {
     expect(marker.kind === 'point' && marker.event.plotIds).toEqual(['ELM-bbbbbbbbbb'])
   })
 })
+
+describe('updateTimelineEvent 基线透传（阶段 3）', () => {
+  it('未变更的悬空参与者/已删章号/失效锚不阻塞其他字段编辑；新引用照常校验', async () => {
+    await seedChapter('第001章-开端.txt')
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    const anchor = await createTimelinePoint(project, {
+      event: { title: '锚事件' },
+      position: { at: 'last' },
+    })
+    const dependent = await createTimelinePoint(project, {
+      event: {
+        title: '三天后',
+        participants: [{ kind: 'element', id: 'ELM-aaaaaaaaaa' }],
+        chapters: [{ chapterNumber: 1, mode: 'current' }],
+        relativeTime: { anchorEventId: anchor.marker.eventId, offset: 3, unit: 'day', direction: 'after' },
+      },
+      position: { at: 'last' },
+    })
+
+    // 外部删掉参与者要素与锚事件、再删章节 → 引用悬空
+    await deleteTimelineEvent(project, { eventId: anchor.marker.eventId })
+    await writeProjectTextFile(root, 'chapters/第001章-开端.txt', '__deleted__')
+    await (await import('../fs/project-fs')).removeProjectFile(root, 'chapters/第001章-开端.txt')
+
+    // 只改标题：悬空参与者 + 失效锚 + 已删章号全部原样保留，保存成功
+    const result = await updateTimelineEvent(project, {
+      eventId: dependent.marker.eventId,
+      patch: { title: '三天后（改）' },
+    })
+    expect(result.marker.kind === 'point' && result.marker.event.participants).toEqual([
+      { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+    ])
+    expect(result.marker.kind === 'point' && result.marker.event.chapters).toEqual([
+      { chapterNumber: 1, mode: 'current' },
+    ])
+    expect(result.marker.kind === 'point' && result.marker.event.relativeTime).toMatchObject({
+      anchorEventId: anchor.marker.eventId,
+    })
+
+    // 新增的悬空参与者照常拒绝
+    await expect(updateTimelineEvent(project, {
+      eventId: dependent.marker.eventId,
+      patch: { participants: [{ kind: 'element', id: 'ELM-zzzzzzzzzz' }] },
+    })).rejects.toThrow('找不到')
+
+    // 新章号照常拒绝
+    await expect(updateTimelineEvent(project, {
+      eventId: dependent.marker.eventId,
+      patch: { chapters: [{ chapterNumber: 7, mode: 'current' }] },
+    })).rejects.toThrow('无法解析')
+  })
+})
