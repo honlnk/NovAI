@@ -45,6 +45,14 @@ import {
   relationReadTool,
   relationUpdateTool,
 } from './relation-tools'
+import {
+  timelineCreatePointTool,
+  timelineCreateSpanTool,
+  timelineDeleteTool,
+  timelineListTool,
+  timelineReadTool,
+  timelineUpdateTool,
+} from './timeline-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
@@ -125,6 +133,17 @@ import type {
   RelationQueryOutput,
   RelationCheckInput,
   RelationCheckOutput,
+  TimelineListInput,
+  TimelineListOutput,
+  TimelineReadInput,
+  TimelineReadOutput,
+  TimelineCreatePointInput,
+  TimelineCreateSpanInput,
+  TimelineCreateOutput,
+  TimelineUpdateInput,
+  TimelineUpdateOutput,
+  TimelineDeleteInput,
+  TimelineDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -219,6 +238,17 @@ export type {
   RelationQueryOutput,
   RelationCheckInput,
   RelationCheckOutput,
+  TimelineListInput,
+  TimelineListOutput,
+  TimelineReadInput,
+  TimelineReadOutput,
+  TimelineCreatePointInput,
+  TimelineCreateSpanInput,
+  TimelineCreateOutput,
+  TimelineUpdateInput,
+  TimelineUpdateOutput,
+  TimelineDeleteInput,
+  TimelineDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -275,6 +305,12 @@ type ToolOutputMap = {
   RelationDelete: RelationDeleteOutput
   RelationQuery: RelationQueryOutput
   RelationCheck: RelationCheckOutput
+  TimelineList: TimelineListOutput
+  TimelineRead: TimelineReadOutput
+  TimelineCreatePoint: TimelineCreateOutput
+  TimelineCreateSpan: TimelineCreateOutput
+  TimelineUpdate: TimelineUpdateOutput
+  TimelineDelete: TimelineDeleteOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -320,6 +356,12 @@ const tools = {
   RelationDelete: relationDeleteTool,
   RelationQuery: relationQueryTool,
   RelationCheck: relationCheckTool,
+  TimelineList: timelineListTool,
+  TimelineRead: timelineReadTool,
+  TimelineCreatePoint: timelineCreatePointTool,
+  TimelineCreateSpan: timelineCreateSpanTool,
+  TimelineUpdate: timelineUpdateTool,
+  TimelineDelete: timelineDeleteTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

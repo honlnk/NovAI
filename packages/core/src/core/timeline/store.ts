@@ -4,19 +4,37 @@ import {
   readJsonLedger,
   writeJsonLedger,
 } from '../ledger/json-ledger'
+import {
+  buildElementReferenceIndex,
+  ensureElementId,
+  resolveElementById,
+  searchElementEntries,
+} from '../elements/reference-index'
+import { buildChapterCatalog } from '../chapters/catalog'
+import { rescanProject } from '../fs/project-fs'
+import { hashContent } from '../util/hash'
 
+import type { ElementReferenceEntry, ElementReferenceIndex } from '../elements/reference-index'
 import type { ProjectSnapshot } from '../../types/project'
+import type { ElementType } from '../../types/rag'
 import type {
+  NarrativeMode,
+  RelativeTime,
+  StoryTime,
+  TimelineChapterRef,
   TimelineEvent,
+  TimelineInsertPosition,
   TimelineLedgerDocument,
   TimelineLedgerIssue,
   TimelineMarker,
+  TimelineParticipant,
 } from '../../types/timeline'
 import {
   EVENT_ID_PATTERN,
   MARKER_ID_PATTERN,
   TIMELINE_LEDGER_PATH,
   TIMELINE_LEDGER_VERSION,
+  TIMELINE_PARTICIPANT_TYPES,
 } from '../../types/timeline'
 
 /**
@@ -174,7 +192,23 @@ function reviveTimelineLedger(raw: unknown): { markers: TimelineMarker[]; issues
     usable.push(candidate)
   }
 
-  /* 第三遍：区间配对与顺序（孤立结束 / 无结束开始 / 倒置一律隔离，不自动修补） */
+  const pairing = collectPairingIssues(usable, (index) => markerList[index])
+  issues.push(...pairing.issues)
+  issues.sort((left, right) => left.index - right.index)
+
+  return { markers: pairing.markers, issues }
+}
+
+/**
+ * 配对与顺序判定（第三遍校验，revive 与移动标记后的重校验共用）：
+ * 孤立结束 / 无结束开始 / 倒置一律按 issue 报告，绝不自动修补。
+ * 返回通过配对的标记列表（保持原顺序）与全部配对 issue。
+ */
+function collectPairingIssues(
+  usable: { index: number; marker: TimelineMarker }[],
+  rawOf: (index: number) => unknown,
+): { markers: TimelineMarker[]; issues: TimelineLedgerIssue[] } {
+  const issues: TimelineLedgerIssue[] = []
   const claimedStartIds = new Set<string>()
   const pairingIsolatedIndexes = new Set<number>()
   for (const { index, marker } of usable) {
@@ -189,19 +223,19 @@ function reviveTimelineLedger(raw: unknown): { markers: TimelineMarker[]; issues
       pairingIsolatedIndexes.add(index)
     }
     if (!start) {
-      fail({ kind: 'orphan-end', index, id: marker.id, startId: marker.startId, reason: `结束标记回指的开始标记 ${marker.startId} 不存在`, raw: markerList[index] })
+      fail({ kind: 'orphan-end', index, id: marker.id, startId: marker.startId, reason: `结束标记回指的开始标记 ${marker.startId} 不存在`, raw: rawOf(index) })
       continue
     }
     if (start.marker.eventId !== marker.eventId) {
-      fail({ kind: 'orphan-end', index, id: marker.id, startId: marker.startId, reason: `结束标记的事件标识 ${marker.eventId} 与其回指开始标记的事件标识 ${start.marker.eventId} 不一致`, raw: markerList[index] })
+      fail({ kind: 'orphan-end', index, id: marker.id, startId: marker.startId, reason: `结束标记的事件标识 ${marker.eventId} 与其回指开始标记的事件标识 ${start.marker.eventId} 不一致`, raw: rawOf(index) })
       continue
     }
     if (claimedStartIds.has(marker.startId)) {
-      fail({ kind: 'orphan-end', index, id: marker.id, startId: marker.startId, reason: `开始标记 ${marker.startId} 已有其他结束标记配对（一一配对约束）`, raw: markerList[index] })
+      fail({ kind: 'orphan-end', index, id: marker.id, startId: marker.startId, reason: `开始标记 ${marker.startId} 已有其他结束标记配对（一一配对约束）`, raw: rawOf(index) })
       continue
     }
     if (index < start.index) {
-      fail({ kind: 'reversed-span', index, id: marker.id, eventId: marker.eventId, reason: `结束标记出现在开始标记 ${marker.startId} 之前（区间倒置）`, raw: markerList[index] })
+      fail({ kind: 'reversed-span', index, id: marker.id, eventId: marker.eventId, reason: `结束标记出现在开始标记 ${marker.startId} 之前（区间倒置）`, raw: rawOf(index) })
       continue
     }
     claimedStartIds.add(marker.startId)
@@ -216,15 +250,13 @@ function reviveTimelineLedger(raw: unknown): { markers: TimelineMarker[]; issues
           id: marker.id,
           eventId: marker.eventId,
           reason: `开始标记没有对应的结束标记（区间两端必须成对）`,
-          raw: markerList[index],
+          raw: rawOf(index),
         })
         return false
       }
       return !pairingIsolatedIndexes.has(index)
     })
     .map(({ marker }) => marker)
-
-  issues.sort((left, right) => left.index - right.index)
 
   return { markers, issues }
 }
@@ -540,4 +572,751 @@ export function generateTimelineEventId(): string {
 
 export function generateTimelineMarkerId(): string {
   return generateDomainId('TM')
+}
+
+/* ---------- 事件输入、定位与引用校验（阶段 2） ---------- */
+
+/** 要素引用选择器：稳定标识或「类型 + 精确名称」二选一（与关系节点同款语义）。 */
+export type TimelineElementSelector =
+  | { kind: 'element'; id: string }
+  | { kind: 'element'; type: ElementType; name: string }
+
+export type TimelineParticipantInput = TimelineElementSelector & { role?: string }
+
+/** 事件详情写入输入（create / update 共用；undefined = 不改动，update 语义）。 */
+export type TimelineEventInput = {
+  title?: string
+  summary?: string
+  storyTime?: StoryTime | null
+  relativeTime?: RelativeTime | null
+  participants?: TimelineParticipantInput[]
+  plots?: TimelineElementSelector[]
+  chapters?: TimelineChapterRef[]
+  causedBy?: string[]
+}
+
+/** 单事件版本令牌（内容决定，跨读取稳定；UI 编辑会话按条做冲突判定）。 */
+export function timelineEventVersion(event: TimelineEvent): string {
+  return hashContent(JSON.stringify([event.title, event.summary, event.storyTime, event.relativeTime, event.participants, event.plotIds, event.chapters, event.causedBy, event.updatedAt]))
+}
+
+/** 结构写入前刷新文件树并重建引用索引（新要素落盘后立即可被引用）。 */
+async function freshReferenceIndex(project: ProjectSnapshot): Promise<{ snapshot: ProjectSnapshot; index: ElementReferenceIndex }> {
+  const tree = await rescanProject(project)
+  const snapshot = { ...project, tree }
+  return { snapshot, index: await buildElementReferenceIndex(snapshot) }
+}
+
+/** 只读解析要素引用（不写盘）：存在性、唯一性、类型限定；旧时间线要素拒绝。 */
+function locateTimelineElement(
+  index: ElementReferenceIndex,
+  selector: TimelineElementSelector,
+  allowedTypes: readonly ElementType[],
+  label: string,
+): ElementReferenceEntry {
+  let entry: ElementReferenceEntry
+
+  if ('id' in selector) {
+    const resolution = resolveElementById(index, selector.id)
+    if (resolution.status === 'missing') {
+      throw new TimelineError(
+        `${label} 引用的要素 ${selector.id} 找不到；要素可能已删除或标识有误，请改用「类型 + 名称」定位或先创建该要素`,
+      )
+    }
+    if (resolution.status === 'ambiguous') {
+      throw new TimelineError(
+        `${label} 引用的标识 ${selector.id} 被多个要素占用（${resolution.sourcePaths.join('、')}），无法确定指向；请先在要素库中修正重复标识`,
+      )
+    }
+    entry = resolution.entry
+  } else {
+    const exact = searchElementEntries(index, selector.name, selector.type).filter((candidate) => candidate.name === selector.name)
+    if (exact.length === 0) {
+      throw new TimelineError(
+        `${label} 在 ${selector.type} 中找不到名为「${selector.name}」的要素；请核对要素名（区分大小写与全半角），或先创建该要素文件`,
+      )
+    }
+    if (exact.length > 1) {
+      throw new TimelineError(
+        `${label}：${selector.type} 中有 ${exact.length} 个名为「${selector.name}」的要素，无法确定指向；请先消除重名`,
+      )
+    }
+    entry = exact[0]!
+  }
+
+  if (entry.type === 'timeline') {
+    throw new TimelineError(
+      `${label} 不能引用旧时间线要素「${entry.name}」（时间线不再是要素）；时间线事件请直接登记到事件账本`,
+    )
+  }
+  if (!allowedTypes.includes(entry.type)) {
+    throw new TimelineError(
+      `${label} 引用的「${entry.name}」类型是 ${entry.type}，不在允许范围（${allowedTypes.join(' / ')}）`,
+    )
+  }
+  return entry
+}
+
+/** 章节引用校验：章号必须能在章节目录中解析（重号允许多候选，视图侧呈现待消歧）。 */
+function assertChapterRefsResolvable(project: ProjectSnapshot, chapters: readonly TimelineChapterRef[]): void {
+  if (chapters.length === 0) {
+    return
+  }
+  const catalog = buildChapterCatalog(project.tree)
+  for (const ref of chapters) {
+    if (!catalog.entries.some((entry) => entry.number === ref.chapterNumber)) {
+      const hint = catalog.maxNumber === null
+        ? '项目里还没有任何章节'
+        : `当前最大章号是第${catalog.maxNumber}章`
+      throw new TimelineError(
+        `章节引用「第${ref.chapterNumber}章」无法解析：${hint}；请先创建该章节或核对章号（章节按全本章号位置关联）`,
+      )
+    }
+  }
+}
+
+/**
+ * 组装事件详情：先做完全部只读校验（要素引用 / 章节解析 / 事件互引），再懒分配标识
+ * （assignElementIds）——失败的调用不得改写任何要素文件（与关系域同一铁律）。
+ */
+async function assembleTimelineEvent(
+  project: ProjectSnapshot,
+  existingEventIds: ReadonlySet<string>,
+  input: TimelineEventInput,
+  label: string,
+  options: { validateRelativeAnchor?: boolean } = {},
+): Promise<{ event: TimelineEvent; assignedElementIds: { sourcePath: string; id: string }[] }> {
+  const validateRelativeAnchor = options.validateRelativeAnchor ?? true
+  const title = (input.title ?? '').trim()
+  if (!title) {
+    throw new TimelineError(`${label}.title 不能为空；用一句话概括这个事件（如「小张出生」「旧桥决裂」）`)
+  }
+  if (input.storyTime !== undefined && input.storyTime !== null && (typeof input.storyTime.year !== 'number' || !Number.isFinite(input.storyTime.year))) {
+    throw new TimelineError(`${label}.storyTime.year 必须是数值（架空纪年可为负）；系统不理解历法语义，只做记录`)
+  }
+
+  // 事件互引（因果前驱 / 相对时间锚）：只校验本次显式给出的引用
+  const causedBy = (input.causedBy ?? []).map((id) => id.trim())
+  for (const id of causedBy) {
+    if (!EVENT_ID_PATTERN.test(id)) {
+      throw new TimelineError(`${label}.causedBy 的 ${id} 不是合法事件标识（EVT- 前缀）`)
+    }
+    if (!existingEventIds.has(id)) {
+      throw new TimelineError(`${label}.causedBy 引用的事件 ${id} 不存在；请先用 TimelineList/Read 核对事件标识`)
+    }
+  }
+  if (validateRelativeAnchor && input.relativeTime !== undefined && input.relativeTime !== null) {
+    const relative = input.relativeTime
+    if (!EVENT_ID_PATTERN.test(relative.anchorEventId)) {
+      throw new TimelineError(`${label}.relativeTime.anchorEventId 必须是 EVT- 事件标识`)
+    }
+    if (!existingEventIds.has(relative.anchorEventId)) {
+      throw new TimelineError(
+        `${label}.relativeTime 的锚事件 ${relative.anchorEventId} 不存在；相对时间必须锚定既有事件（如「决战后的第三天」锚定决战事件）`,
+      )
+    }
+    if (typeof relative.offset !== 'number' || !Number.isFinite(relative.offset)) {
+      throw new TimelineError(`${label}.relativeTime.offset 必须是数值`)
+    }
+    if (!String(relative.unit).trim()) {
+      throw new TimelineError(`${label}.relativeTime.unit 不能为空（如 day / month / year / era）`)
+    }
+    if (relative.direction !== 'before' && relative.direction !== 'after') {
+      throw new TimelineError(`${label}.relativeTime.direction 必须是 before 或 after`)
+    }
+  }
+
+  const chapters = input.chapters ?? []
+  for (const ref of chapters) {
+    if (!Number.isInteger(ref.chapterNumber) || ref.chapterNumber < 1) {
+      throw new TimelineError(`${label}.chapters 的章号必须是正整数`)
+    }
+    if (ref.mode !== 'current' && ref.mode !== 'recall' && ref.mode !== 'prophecy' && ref.mode !== 'dream') {
+      throw new TimelineError(`${label}.chapters.mode 必须是 current / recall / prophecy / dream 之一（正文当下 / 回忆 / 预言 / 梦境）`)
+    }
+  }
+
+  // 只读解析要素引用（参与者四类 + 情节），校验全部通过后才懒分配
+  const { snapshot, index } = await freshReferenceIndex(project)
+  const participantEntries: { entry: ElementReferenceEntry; role?: string }[] = []
+  for (const participant of input.participants ?? []) {
+    participantEntries.push({
+      entry: locateTimelineElement(index, participant, TIMELINE_PARTICIPANT_TYPES, `${label}.participants`),
+      ...(participant.role !== undefined ? { role: participant.role } : {}),
+    })
+  }
+  const plotEntries: ElementReferenceEntry[] = []
+  for (const plot of input.plots ?? []) {
+    plotEntries.push(locateTimelineElement(index, plot, ['plot'], `${label}.plots`))
+  }
+  assertChapterRefsResolvable(snapshot, chapters)
+
+  const assignedElementIds: { sourcePath: string; id: string }[] = []
+  const resolveId = async (entry: ElementReferenceEntry): Promise<string> => {
+    const ensured = await ensureElementId(snapshot, entry.sourcePath)
+    if (ensured.assigned) {
+      assignedElementIds.push({ sourcePath: entry.sourcePath, id: ensured.id })
+    }
+    return ensured.id
+  }
+  const participants: TimelineParticipant[] = []
+  for (const { entry, role } of participantEntries) {
+    const id = await resolveId(entry)
+    participants.push({ kind: 'element', id, ...(role !== undefined ? { role } : {}) })
+  }
+  const plotIds: string[] = []
+  for (const entry of plotEntries) {
+    plotIds.push(await resolveId(entry))
+  }
+
+  const now = new Date().toISOString()
+  return {
+    event: {
+      title,
+      summary: input.summary ?? '',
+      storyTime: input.storyTime ?? null,
+      relativeTime: input.relativeTime ?? null,
+      participants,
+      plotIds,
+      chapters,
+      causedBy,
+      createdAt: now,
+      updatedAt: now,
+    },
+    assignedElementIds,
+  }
+}
+
+/** 解析插入定位为候选列表下标（first=0 / last=len / before|after 锚标记）。 */
+function resolveInsertIndex(markers: readonly TimelineMarker[], position: TimelineInsertPosition, label: string): number {
+  if (position.at === 'first') {
+    return 0
+  }
+  if (position.at === 'last') {
+    return markers.length
+  }
+  const anchorIndex = markers.findIndex((marker) => marker.id === position.anchorMarkerId)
+  if (anchorIndex === -1) {
+    throw new TimelineError(
+      `${label} 的锚标记 ${position.anchorMarkerId} 不存在；插入前建议先用 TimelineRead 读锚点附近的局部时间线，拿最新的标记标识`,
+    )
+  }
+  return position.at === 'before' ? anchorIndex : anchorIndex + 1
+}
+
+/* ---------- 增删改（全部走写锁） ---------- */
+
+export type CreateTimelinePointOptions = {
+  event: TimelineEventInput
+  position: TimelineInsertPosition
+  now?: Date
+}
+
+export type CreateTimelineResult = {
+  marker: TimelineMarker
+  /** 区间事件才有：结束标记 */
+  endMarker?: TimelineMarker
+  contentHash: string
+  assignedElementIds: { sourcePath: string; id: string }[]
+  /** 账本文件是否为本次新建（变更账本 created/updated 区分用） */
+  created: boolean
+}
+
+/** 当前账本中「携带详情的事件标识」集合（causedBy / 相对时间锚的合法域）。 */
+function collectExistingEventIds(markers: readonly TimelineMarker[]): Set<string> {
+  const ids = new Set<string>()
+  for (const marker of markers) {
+    if (marker.kind !== 'end') {
+      ids.add(marker.eventId)
+    }
+  }
+  return ids
+}
+
+export async function createTimelinePoint(project: ProjectSnapshot, options: CreateTimelinePointOptions): Promise<CreateTimelineResult> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    assertWritable(document)
+
+    const insertIndex = resolveInsertIndex(document.markers, options.position, 'TimelineCreatePoint.position')
+    const { event, assignedElementIds } = await assembleTimelineEvent(
+      project,
+      collectExistingEventIds(document.markers),
+      options.event,
+      'TimelineCreatePoint',
+    )
+
+    const marker: TimelineMarker = {
+      id: generateTimelineMarkerId(),
+      kind: 'point',
+      eventId: generateTimelineEventId(),
+      event: options.now ? { ...event, createdAt: options.now.toISOString(), updatedAt: options.now.toISOString() } : event,
+    }
+    document.markers = [...document.markers.slice(0, insertIndex), marker, ...document.markers.slice(insertIndex)]
+    const contentHash = await persistLedger(project, document)
+
+    return { marker, contentHash, assignedElementIds, created: document.contentHash === null }
+  })
+}
+
+export type CreateTimelineSpanOptions = {
+  event: TimelineEventInput
+  startPosition: TimelineInsertPosition
+  endPosition: TimelineInsertPosition
+  now?: Date
+}
+
+export async function createTimelineSpan(project: ProjectSnapshot, options: CreateTimelineSpanOptions): Promise<CreateTimelineResult> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    assertWritable(document)
+
+    const startIndex = resolveInsertIndex(document.markers, options.startPosition, 'TimelineCreateSpan.startPosition')
+    const endIndex = resolveInsertIndex(document.markers, options.endPosition, 'TimelineCreateSpan.endPosition')
+    if (endIndex < startIndex) {
+      throw new TimelineError(
+        `区间事件的结束标记必须位于开始标记之后（当前开始落在第 ${startIndex + 1} 位、结束落在第 ${endIndex + 1} 位）；`
+        + '结束位置请锚定在开始位置之后的标记（区间可跨越任意多的事件，表达并行与嵌套）',
+      )
+    }
+
+    const { event, assignedElementIds } = await assembleTimelineEvent(
+      project,
+      collectExistingEventIds(document.markers),
+      options.event,
+      'TimelineCreateSpan',
+    )
+    const timestamp = options.now?.toISOString()
+    const detail = timestamp ? { ...event, createdAt: timestamp, updatedAt: timestamp } : event
+    const eventId = generateTimelineEventId()
+    const startMarker: TimelineMarker = {
+      id: generateTimelineMarkerId(),
+      kind: 'start',
+      eventId,
+      event: detail,
+    }
+    const endMarker: TimelineMarker = {
+      id: generateTimelineMarkerId(),
+      kind: 'end',
+      eventId,
+      startId: startMarker.id,
+    }
+
+    // 先插开始（下标及之后整体右移一位），结束的落点相应右移；两端相邻（endIndex === startIndex）合法
+    const shiftedEndIndex = endIndex >= startIndex ? endIndex + 1 : endIndex
+    const markers = [...document.markers.slice(0, startIndex), startMarker, ...document.markers.slice(startIndex)]
+    document.markers = [...markers.slice(0, shiftedEndIndex), endMarker, ...markers.slice(shiftedEndIndex)]
+    const contentHash = await persistLedger(project, document)
+
+    return { marker: startMarker, endMarker, contentHash, assignedElementIds, created: document.contentHash === null }
+  })
+}
+
+export type UpdateTimelineEventOptions = {
+  eventId: string
+  /** 至少提供一项要修改的字段 */
+  patch: TimelineEventInput
+  /** 调用方持有的整本账本基线内容哈希；与磁盘不一致即冲突 */
+  expectedContentHash?: string
+  /** 调用方持有的这一事件版本令牌；只有该事件本身被改过才算冲突（UI 编辑会话用） */
+  expectedEventVersion?: string
+  now?: Date
+}
+
+export type UpdateTimelineEventResult = {
+  marker: TimelineMarker
+  previous: TimelineEvent
+  contentHash: string
+  assignedElementIds: { sourcePath: string; id: string }[]
+}
+
+export async function updateTimelineEvent(project: ProjectSnapshot, options: UpdateTimelineEventOptions): Promise<UpdateTimelineEventResult> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    assertWritable(document)
+
+    if (options.expectedContentHash !== undefined && document.contentHash !== options.expectedContentHash) {
+      throw new TimelineConflictError(document.contentHash)
+    }
+
+    const markerIndex = document.markers.findIndex(
+      (marker) => marker.kind !== 'end' && marker.eventId === options.eventId,
+    )
+    if (markerIndex === -1) {
+      if (options.expectedEventVersion !== undefined) {
+        // 编辑会话的这条事件已被删除：按冲突处理（界面走「磁盘版本已不存在」出口）
+        throw new TimelineConflictError(document.contentHash)
+      }
+      throw new TimelineError(`事件 ${options.eventId} 不存在；可能已被删除，请用 TimelineList 重新查看`)
+    }
+    const current = document.markers[markerIndex]!
+    if (current.kind === 'end') {
+      throw new TimelineError(`事件 ${options.eventId} 的载体异常（结束标记不携带详情），请联系开发者`)
+    }
+    if (options.expectedEventVersion !== undefined && timelineEventVersion(current.event) !== options.expectedEventVersion) {
+      throw new TimelineConflictError(document.contentHash)
+    }
+
+    const patch = options.patch
+    if (
+      patch.title === undefined
+      && patch.summary === undefined
+      && patch.storyTime === undefined
+      && patch.relativeTime === undefined
+      && patch.participants === undefined
+      && patch.plots === undefined
+      && patch.chapters === undefined
+      && patch.causedBy === undefined
+    ) {
+      throw new TimelineError('TimelineUpdate 至少提供一项要修改的字段（title/summary/storyTime/relativeTime/participants/plots/chapters/causedBy）')
+    }
+
+    const existingIds = collectExistingEventIds(document.markers)
+    const merged = mergeEventPatch(current.event, patch)
+    const { event, assignedElementIds } = await assembleTimelineEvent(
+      project,
+      existingIds,
+      { ...merged, title: merged.title },
+      'TimelineUpdate',
+      // 锚事件已删除的旧 relativeTime 不阻塞其他字段编辑（失效提示交给检查层，不自动清除）
+      { validateRelativeAnchor: patch.relativeTime !== undefined },
+    )
+
+    const previous = current.event
+    const next: TimelineMarker = {
+      ...current,
+      event: { ...event, createdAt: previous.createdAt, updatedAt: (options.now ?? new Date()).toISOString() },
+    }
+    document.markers = document.markers.map((marker, index) => (index === markerIndex ? next : marker))
+    const contentHash = await persistLedger(project, document)
+    return { marker: next, previous, contentHash, assignedElementIds }
+  })
+}
+
+/** update 的字段合并：undefined = 保留现值（相对时间锚已失效的旧值不动，不被隐式重校验卡死）。 */
+function mergeEventPatch(current: TimelineEvent, patch: TimelineEventInput): TimelineEventInput {
+  return {
+    title: patch.title ?? current.title,
+    summary: patch.summary ?? current.summary,
+    storyTime: patch.storyTime !== undefined ? patch.storyTime : current.storyTime,
+    relativeTime: patch.relativeTime !== undefined ? patch.relativeTime : current.relativeTime,
+    // 参与者/情节持有的是已解析的 ELM 标识，直接透传（update 不换绑引用时不再重解析）
+    participants: patch.participants ?? current.participants.map((participant) => ({ ...participant })),
+    plots: patch.plots ?? current.plotIds.map((id) => ({ kind: 'element' as const, id })),
+    chapters: patch.chapters ?? current.chapters,
+    causedBy: patch.causedBy ?? current.causedBy,
+  }
+}
+
+export type MoveTimelineMarkerOptions = {
+  markerId: string
+  position: TimelineInsertPosition
+  now?: Date
+}
+
+export type MoveTimelineMarkerResult = {
+  markers: TimelineMarker[]
+  contentHash: string
+}
+
+export async function moveTimelineMarker(project: ProjectSnapshot, options: MoveTimelineMarkerOptions): Promise<MoveTimelineMarkerResult> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    assertWritable(document)
+
+    const fromIndex = document.markers.findIndex((marker) => marker.id === options.markerId)
+    if (fromIndex === -1) {
+      throw new TimelineError(`时间标记 ${options.markerId} 不存在；可能已被删除，请重新读取时间线`)
+    }
+    if ((options.position.at === 'before' || options.position.at === 'after') && options.position.anchorMarkerId === options.markerId) {
+      throw new TimelineError('移动标记不能以它自己为锚点；请锚定其他标记或用 first / last')
+    }
+
+    const without = document.markers.filter((_, index) => index !== fromIndex)
+    const insertIndex = resolveInsertIndex(without, options.position, 'TimelineUpdate.position')
+    const candidate = [...without.slice(0, insertIndex), document.markers[fromIndex]!, ...without.slice(insertIndex)]
+
+    // 移动后重校验配对与顺序（锚点不得落在本区间内部 / 开始必须先于结束）
+    const pairing = collectPairingIssues(candidate.map((marker, index) => ({ index, marker })), () => null)
+    if (pairing.issues.length > 0) {
+      const reason = pairing.issues.map((issue) => issue.reason).join('；')
+      throw new TimelineError(
+        `移动 ${options.markerId} 会破坏区间配对：${reason}。区间开始必须先于结束，且不能把任一端移进自己区间的内部`,
+      )
+    }
+
+    document.markers = candidate
+    const contentHash = await persistLedger(project, document)
+    return { markers: document.markers, contentHash }
+  })
+}
+
+export type DeleteTimelineEventOptions = {
+  eventId: string
+}
+
+export type DeleteTimelineEventResult = {
+  removed: TimelineMarker[]
+  /** 其他事件 causedBy 中指向该事件的引用清除计数（relativeTime 锚不自动清除，进失效提示） */
+  cascadedCausedBy: number
+  contentHash: string
+}
+
+export async function deleteTimelineEvent(project: ProjectSnapshot, options: DeleteTimelineEventOptions): Promise<DeleteTimelineEventResult> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    assertWritable(document)
+
+    const removed = document.markers.filter((marker) => marker.eventId === options.eventId)
+    if (removed.length === 0) {
+      throw new TimelineError(`事件 ${options.eventId} 不存在；可能已被删除`)
+    }
+    if (removed.some((marker) => marker.kind === 'end') && removed.length === 1) {
+      // 只有孤立 end 指向该事件：end 不携带详情，不可能单独成为删除目标
+      throw new TimelineError(`事件 ${options.eventId} 在账本中只剩结束标记（数据异常），请先在时间轴中清理异常条目`)
+    }
+
+    document.markers = document.markers.filter((marker) => marker.eventId !== options.eventId)
+
+    // 级联：清除其他事件 causedBy 中指向该事件的引用；relativeTime 锚保留并进失效提示
+    let cascadedCausedBy = 0
+    document.markers = document.markers.map((marker) => {
+      if (marker.kind === 'end') {
+        return marker
+      }
+      const causedBy = marker.event.causedBy.filter((id) => {
+        if (id === options.eventId) {
+          cascadedCausedBy += 1
+          return false
+        }
+        return true
+      })
+      return causedBy === marker.event.causedBy ? marker : { ...marker, event: { ...marker.event, causedBy } }
+    })
+
+    const contentHash = await persistLedger(project, document)
+    return { removed, cascadedCausedBy, contentHash }
+  })
+}
+
+/* ---------- 异常清理与要素级联 ---------- */
+
+/** 清理账本中的隔离条目（用户在时间轴中明确确认后调用）。 */
+export async function removeInvalidTimelineEntries(project: ProjectSnapshot): Promise<{ removed: TimelineLedgerIssue[]; contentHash: string }> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    if (document.issues.length === 0) {
+      return { removed: [], contentHash: document.contentHash ?? '' }
+    }
+    const removed = document.issues
+    document.issues = []
+    const contentHash = await persistLedger(project, document)
+    return { removed, contentHash }
+  })
+}
+
+/**
+ * 级联：删除要素时清理事件里对它的引用（参与者条目 / plotIds 项）。
+ * 事件失去全部参与者仍然合法，不删除事件本身；隔离条目原样写回（级联不受隔离阻挡，
+ * 但结构性损坏时让位于 assertWritable——那种状态下手工清理更安全）。
+ */
+async function removeElementReferences(
+  project: ProjectSnapshot,
+  elementIds: ReadonlySet<string>,
+): Promise<{ removedParticipants: number; removedPlotLinks: number; contentHash: string | null }> {
+  return withTimelineWriteLock(project, async () => {
+    const document = await loadTimelineLedger(project)
+    if (hasStructuralIssue(document)) {
+      assertWritable(document)
+    }
+
+    let removedParticipants = 0
+    let removedPlotLinks = 0
+    let changed = false
+    document.markers = document.markers.map((marker) => {
+      if (marker.kind === 'end') {
+        return marker
+      }
+      const participants = marker.event.participants.filter((participant) => {
+        if (elementIds.has(participant.id)) {
+          removedParticipants += 1
+          return false
+        }
+        return true
+      })
+      const plotIds = marker.event.plotIds.filter((id) => {
+        if (elementIds.has(id)) {
+          removedPlotLinks += 1
+          return false
+        }
+        return true
+      })
+      if (participants === marker.event.participants && plotIds === marker.event.plotIds) {
+        return marker
+      }
+      changed = true
+      return { ...marker, event: { ...marker.event, participants, plotIds, updatedAt: new Date().toISOString() } }
+    })
+
+    if (!changed) {
+      return { removedParticipants: 0, removedPlotLinks: 0, contentHash: document.contentHash }
+    }
+    const contentHash = await persistLedger(project, document, { preserveIssues: true })
+    return { removedParticipants, removedPlotLinks, contentHash }
+  })
+}
+
+/** 级联（按标识）：DeleteFile 等握有 ELM 标识的链路调用。 */
+export async function removeTimelineReferences(project: ProjectSnapshot, elementId: string): Promise<{ removedParticipants: number; removedPlotLinks: number }> {
+  const result = await removeElementReferences(project, new Set([elementId]))
+  return { removedParticipants: result.removedParticipants, removedPlotLinks: result.removedPlotLinks }
+}
+
+/** 级联（按路径）：先经引用索引把路径映射为标识，再统一清理。 */
+export async function removeTimelineReferencesByPath(project: ProjectSnapshot, sourcePath: string): Promise<{ removedParticipants: number; removedPlotLinks: number; elementIds: string[] }> {
+  const { index } = await freshReferenceIndex(project)
+  const ids = index.entries.filter((entry) => entry.sourcePath === sourcePath && entry.id).map((entry) => entry.id)
+  if (ids.length === 0) {
+    return { removedParticipants: 0, removedPlotLinks: 0, elementIds: [] }
+  }
+  const result = await removeElementReferences(project, new Set(ids))
+  return { removedParticipants: result.removedParticipants, removedPlotLinks: result.removedPlotLinks, elementIds: ids }
+}
+
+/* ---------- 查询与检查（只读，无锁） ---------- */
+
+export type TimelineQueryFilter = {
+  participantElementId?: string
+  participantElementIds?: string[]
+  plotId?: string
+  chapterNumber?: number
+  /** 明确时间可比较时按年份过滤（含两端；系统不跨历法换算） */
+  yearFrom?: number
+  yearTo?: number
+}
+
+export async function queryTimelineEvents(project: ProjectSnapshot, filter: TimelineQueryFilter): Promise<TimelineLedgerDocument> {
+  const document = await loadTimelineLedger(project)
+  document.markers = document.markers.filter((marker) => {
+    if (marker.kind === 'end') {
+      // 区间事件的详情在开始标记上；过滤时保留与开始同事件的结束标记，视图才能画出区间
+      return true
+    }
+    const event = marker.event
+    if (filter.participantElementId !== undefined) {
+      if (!event.participants.some((participant) => participant.id === filter.participantElementId)) {
+        return false
+      }
+    }
+    if (filter.participantElementIds !== undefined) {
+      const idSet = new Set(filter.participantElementIds)
+      if (!event.participants.some((participant) => idSet.has(participant.id))) {
+        return false
+      }
+    }
+    if (filter.plotId !== undefined && !event.plotIds.includes(filter.plotId)) {
+      return false
+    }
+    if (filter.chapterNumber !== undefined && !event.chapters.some((ref) => ref.chapterNumber === filter.chapterNumber)) {
+      return false
+    }
+    const year = event.storyTime?.year
+    if (filter.yearFrom !== undefined && (year === null || year === undefined || year < filter.yearFrom)) {
+      return false
+    }
+    if (filter.yearTo !== undefined && (year === null || year === undefined || year > filter.yearTo)) {
+      return false
+    }
+    return true
+  })
+  // 过滤掉的 point/start 若是区间开始，其结束标记也应移除（悬空的 end 不参与结果）
+  const retainedEventIds = new Set(document.markers.map((marker) => marker.eventId))
+  document.markers = document.markers.filter((marker) => {
+    if (marker.kind !== 'end') {
+      return true
+    }
+    return retainedEventIds.has(marker.eventId) && document.markers.some((candidate) => candidate.kind === 'start' && candidate.eventId === marker.eventId)
+  })
+  return document
+}
+
+export type TimelineContextResult = {
+  /** 锚标记本身 */
+  anchor: TimelineMarker
+  /** 之前（或之后）N 条标记（含锚点，按列表顺序） */
+  markers: TimelineMarker[]
+}
+
+/** 指定标记之前 / 之后 N 条的局部时间线（含锚点自身；插入前读局部上下文用）。 */
+export function timelineMarkerContext(document: TimelineLedgerDocument, anchorMarkerId: string, direction: 'before' | 'after', count: number): TimelineContextResult {
+  const anchorIndex = document.markers.findIndex((marker) => marker.id === anchorMarkerId)
+  if (anchorIndex === -1) {
+    throw new TimelineError(`时间标记 ${anchorMarkerId} 不存在；请重新读取时间线`)
+  }
+  const bounded = Math.max(1, Math.min(count, 30))
+  const from = direction === 'before' ? Math.max(0, anchorIndex - bounded + 1) : anchorIndex
+  const to = direction === 'before' ? anchorIndex + 1 : Math.min(document.markers.length, anchorIndex + bounded)
+  return { anchor: document.markers[anchorIndex]!, markers: document.markers.slice(from, to) }
+}
+
+export type TimelineCheckIssue =
+  | TimelineLedgerIssue
+  | { kind: 'dangling-participant'; eventId: string; id: string }
+  | { kind: 'ambiguous-participant'; eventId: string; id: string; sourcePaths: string[] }
+  | { kind: 'dangling-plot'; eventId: string; id: string }
+  | { kind: 'ambiguous-plot'; eventId: string; id: string; sourcePaths: string[] }
+  | { kind: 'missing-chapter'; eventId: string; chapterNumber: number }
+  | { kind: 'ambiguous-chapter'; eventId: string; chapterNumber: number }
+  | { kind: 'dangling-caused-by'; eventId: string; targetEventId: string }
+  | { kind: 'dangling-relative-anchor'; eventId: string; anchorEventId: string }
+
+/** 全量检查：账本隔离条目 + 悬空/歧义引用 + 章节可解析性 + 事件互引。 */
+export async function checkTimelineLedger(project: ProjectSnapshot): Promise<{ issues: TimelineCheckIssue[] }> {
+  const { snapshot, index } = await freshReferenceIndex(project)
+  const document = await loadTimelineLedger(project)
+  const issues: TimelineCheckIssue[] = [...document.issues]
+  const catalog = buildChapterCatalog(snapshot.tree)
+  const eventIds = collectExistingEventIds(document.markers)
+
+  for (const marker of document.markers) {
+    if (marker.kind === 'end') {
+      continue
+    }
+    const event = marker.event
+    for (const participant of event.participants) {
+      const resolution = resolveElementById(index, participant.id)
+      if (resolution.status === 'missing') {
+        issues.push({ kind: 'dangling-participant', eventId: marker.eventId, id: participant.id })
+      } else if (resolution.status === 'ambiguous') {
+        issues.push({ kind: 'ambiguous-participant', eventId: marker.eventId, id: participant.id, sourcePaths: resolution.sourcePaths })
+      }
+    }
+    for (const plotId of event.plotIds) {
+      const resolution = resolveElementById(index, plotId)
+      if (resolution.status === 'missing') {
+        issues.push({ kind: 'dangling-plot', eventId: marker.eventId, id: plotId })
+      } else if (resolution.status === 'ambiguous') {
+        issues.push({ kind: 'ambiguous-plot', eventId: marker.eventId, id: plotId, sourcePaths: resolution.sourcePaths })
+      }
+    }
+    for (const ref of event.chapters) {
+      const matches = catalog.entries.filter((entry) => entry.number === ref.chapterNumber)
+      if (matches.length === 0) {
+        issues.push({ kind: 'missing-chapter', eventId: marker.eventId, chapterNumber: ref.chapterNumber })
+      } else if (matches.length > 1) {
+        issues.push({ kind: 'ambiguous-chapter', eventId: marker.eventId, chapterNumber: ref.chapterNumber })
+      }
+    }
+    for (const target of event.causedBy) {
+      if (!eventIds.has(target)) {
+        issues.push({ kind: 'dangling-caused-by', eventId: marker.eventId, targetEventId: target })
+      }
+    }
+    if (event.relativeTime && !eventIds.has(event.relativeTime.anchorEventId)) {
+      // 锚事件已删除：字段进入失效提示（不自动清除），作者决定改锚或删字段
+      issues.push({ kind: 'dangling-relative-anchor', eventId: marker.eventId, anchorEventId: event.relativeTime.anchorEventId })
+    }
+  }
+
+  return { issues }
 }

@@ -1,4 +1,5 @@
 import { RELATION_LEDGER_PATH } from '../types/relation'
+import { TIMELINE_LEDGER_PATH } from '../types/timeline'
 import {
   createChatSession,
   enqueueChatMessage,
@@ -1307,8 +1308,11 @@ function buildConfirmationTitle(confirmation: WriteConfirmation): string {
     case 'rename':
       return `重命名：${confirmation.fromPath} → ${confirmation.toPath}`
     case 'delete':
-      return confirmation.path.startsWith(RELATION_LEDGER_PATH)
-        ? `删除关系：${confirmation.path}`
+      if (confirmation.path.startsWith(RELATION_LEDGER_PATH)) {
+        return `删除关系：${confirmation.path}`
+      }
+      return confirmation.path.startsWith(TIMELINE_LEDGER_PATH)
+        ? `删除事件：${confirmation.path}`
         : `删除文件：${confirmation.path}`
   }
 }
@@ -1322,9 +1326,12 @@ function buildConfirmationSummary(confirmation: WriteConfirmation): string {
     case 'rename':
       return `将 ${confirmation.fromPath} 重命名为 ${confirmation.toPath}`
     case 'delete':
-      // 关系账本条目删除只移除账本里的一条，账本文件不进回收站
-      return confirmation.path.startsWith(RELATION_LEDGER_PATH)
-        ? '将从关系账本删除这一条关系（账本文件保留，不进回收站）'
+      // 账本条目删除只移除账本里的一条，账本文件不进回收站
+      if (confirmation.path.startsWith(RELATION_LEDGER_PATH)) {
+        return '将从关系账本删除这一条关系（账本文件保留，不进回收站）'
+      }
+      return confirmation.path.startsWith(TIMELINE_LEDGER_PATH)
+        ? '将从时间线账本删除这一个事件（区间事件两端同删，账本文件保留，不进回收站）'
         : `将删除 ${confirmation.path}（移入回收站）`
   }
 }

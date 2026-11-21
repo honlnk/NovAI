@@ -45,6 +45,14 @@ import {
   relationReadTool,
   relationUpdateTool,
 } from '../tools/relation-tools'
+import {
+  timelineCreatePointTool,
+  timelineCreateSpanTool,
+  timelineDeleteTool,
+  timelineListTool,
+  timelineReadTool,
+  timelineUpdateTool,
+} from '../tools/timeline-tools'
 import { FORESHADOWING_STATUS_LABELS } from '../../types/foreshadowing'
 import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_PAYOFFS } from '../../types/rhythm'
 import { getFileChangeHistoryTool } from '../tools/change-history-tool'
@@ -97,6 +105,11 @@ import type {
   RelationDeleteOutput,
   RelationQueryOutput,
   RelationCheckOutput,
+  TimelineListOutput,
+  TimelineReadOutput,
+  TimelineCreateOutput,
+  TimelineUpdateOutput,
+  TimelineDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   RagSearchOutput,
@@ -156,6 +169,134 @@ function relationNodeParameter(field: 'from' | 'to', role: string): {
     required: [],
     additionalProperties: false,
     description: `${role}（${field}）：稳定标识或「类型 + 精确名称」二选一。`,
+  }
+}
+
+/** 时间线工具的要素引用入参 Schema（参与者四类 / 情节，文案随用途变化）。 */
+function timelineElementRefParameter(description: string, types: string[]): {
+  type: 'object'
+  properties: Record<string, unknown>
+  required: string[]
+  additionalProperties: boolean
+  description: string
+} {
+  return {
+    type: 'object',
+    properties: {
+      id: {
+        type: 'string',
+        description: '可选，要素稳定标识（ELM- 开头）；与 type+name 二选一，都给时以 id 为准。',
+      },
+      type: {
+        type: 'string',
+        enum: types,
+        description: '可选，按名称定位时的要素类型。',
+      },
+      name: {
+        type: 'string',
+        description: '可选，按名称定位时的要素精确名称（与 type 搭配使用）。',
+      },
+    },
+    required: [],
+    additionalProperties: false,
+    description,
+  }
+}
+
+/** 明确时间 Schema：年必填，历法自由文本；系统不换算历法语义。 */
+function timelineStoryTimeSchema() {
+  return {
+    type: 'object',
+    properties: {
+      calendar: { type: 'string', description: '可选，历法名（如 苍穹历、公历）；空 = 未命名历法。' },
+      year: { type: 'number', description: '年（必填；架空纪年可为负）。' },
+      season: { type: 'string', description: '可选，季节（如 春、雨季）。' },
+      month: { type: 'number', description: '可选，月。' },
+      day: { type: 'number', description: '可选，日。' },
+    },
+    required: ['year'],
+    additionalProperties: false,
+  }
+}
+
+/** 相对时间 Schema：锚定另一事件 + 开放单位偏移。 */
+function timelineRelativeTimeSchema() {
+  return {
+    type: 'object',
+    properties: {
+      anchorEventId: { type: 'string', description: '锚事件标识（EVT- 开头，来自 TimelineList/TimelineRead）。' },
+      offset: { type: 'number', description: '偏移量（正数）。' },
+      unit: { type: 'string', description: '单位短词：day / month / year / era 等（系统不换算）。' },
+      direction: { type: 'string', enum: ['before', 'after'], description: '锚事件之前 / 之后。' },
+    },
+    required: ['anchorEventId', 'offset', 'unit', 'direction'],
+    additionalProperties: false,
+  }
+}
+
+/** 插入定位 Schema：first/last 或锚定标记前后。 */
+function timelinePositionSchema(description: string) {
+  return {
+    type: 'object',
+    properties: {
+      at: { type: 'string', enum: ['first', 'last', 'before', 'after'], description: '列表开头 / 末尾 / 锚标记之前 / 之后。' },
+      anchorMarkerId: { type: 'string', description: 'at 为 before/after 时必填：锚时间标记标识（TM- 开头，来自 TimelineList/TimelineRead）。' },
+    },
+    required: ['at'],
+    additionalProperties: false,
+    description,
+  }
+}
+
+/** 事件详情字段 Schema（create 的 event 对象 / update 顶层展平共用）。 */
+function timelineEventProperties(): Record<string, unknown> {
+  return {
+    title: { type: 'string', description: '事件标题：一句话概括（≤60 字符）。' },
+    summary: { type: 'string', description: '可选，事件摘要（自然语言）。' },
+    storyTime: {
+      ...timelineStoryTimeSchema(),
+      description: '可选，明确时间（历法自由文本 + 数值段）；传 null 清空。不填 = 无明确时间（纯顺序，合法）。',
+    },
+    relativeTime: {
+      ...timelineRelativeTimeSchema(),
+      description: '可选，相对时间（锚定另一事件）；传 null 清空。与明确时间可并存。',
+    },
+    participants: {
+      type: 'array',
+      items: {
+        ...timelineElementRefParameter('事件参与要素', ['character', 'location', 'entity', 'worldbuilding']),
+        properties: {
+          id: { type: 'string', description: '可选，要素稳定标识（ELM- 开头）。' },
+          type: { type: 'string', enum: ['character', 'location', 'entity', 'worldbuilding'], description: '可选，按名称定位时的要素类型。' },
+          name: { type: 'string', description: '可选，要素精确名称（与 type 搭配）。' },
+          role: { type: 'string', description: '可选，该要素在本事件中的角色（如 主谋、目击者）。' },
+        },
+      },
+      description: '可选，参与要素列表（人物/地点/实体/世界观）；情节走 plots。',
+    },
+    plots: {
+      type: 'array',
+      items: timelineElementRefParameter('关联情节', ['plot']),
+      description: '可选，关联的情节要素列表。',
+    },
+    chapters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          chapterNumber: { type: 'integer', minimum: 1, description: '全本章号（按位置引用，改名不影响关联）。' },
+          mode: { type: 'string', enum: ['current', 'recall', 'prophecy', 'dream'], description: '叙述方式：current=正叙 / recall=回忆 / prophecy=预言 / dream=梦境（区分故事内发生与读者读到）。' },
+        },
+        required: ['chapterNumber', 'mode'],
+        additionalProperties: false,
+      },
+      description: '可选，关联章节列表。',
+    },
+    causedBy: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '可选，因果前驱事件标识列表（EVT- 开头，须已登记）。',
+    },
   }
 }
 
@@ -1907,6 +2048,235 @@ export function createAgentTools(): AgentRunnableToolMap {
         ].join('\n')
       },
     },
+    TimelineList: {
+      name: 'TimelineList',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'TimelineList',
+          description: '列出时间线事件账本中的事件（按故事内顺序），可按参与者、情节、章号或年份范围筛选。返回带要素名称的摘要；区间事件只出现一次。写场景前先查相关事件，不要凭记忆编时间线。',
+          parameters: {
+            type: 'object',
+            properties: {
+              participantElementId: { type: 'string', description: '可选，单个参与者要素稳定标识（ELM- 开头）。' },
+              participantElementIds: { type: 'array', items: { type: 'string' }, minItems: 1, description: '可选，一组参与者标识（当前场景出场人物）。' },
+              plotId: { type: 'string', description: '可选，关联情节的要素标识。' },
+              chapterNumber: { type: 'integer', minimum: 1, description: '可选，按本章号筛选（事件关联章节含该章号）。' },
+              yearFrom: { type: 'integer', description: '可选，明确时间年份下界（含）；无明确时间的事件不命中。' },
+              yearTo: { type: 'integer', description: '可选，明确时间年份上界（含）。' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      core: timelineListTool,
+      formatResult(output: TimelineListOutput) {
+        if (output.events.length === 0) {
+          return `账本共 0 个事件。\n${output.guidance}`
+        }
+        const lines = output.events.map((event) => {
+          const time = event.storyTime
+            ? `${event.storyTime.year}年${event.storyTime.calendar ? `（${event.storyTime.calendar}）` : ''}`
+            : event.relativeTime
+              ? `相对 ${event.relativeTime.anchorEventId} ${event.relativeTime.direction === 'before' ? '前' : '后'} ${event.relativeTime.offset} ${event.relativeTime.unit}`
+              : '纯顺序'
+          const participants = event.participants
+            .filter((participant) => participant.name)
+            .map((participant) => participant.name)
+            .slice(0, 4)
+            .join('、')
+          return `- ${event.ordinal}. ${event.eventId}${event.kind === 'span' ? ' [区间]' : ''}《${event.title}》｜${time}${participants ? `｜${participants}` : ''}｜标记 ${event.markerId}`
+        })
+        return [
+          `账本共 ${output.totalCount} 个事件${output.truncated ? `，仅返回前 ${output.events.length} 个` : ''}：`,
+          '',
+          lines.join('\n'),
+          '',
+          output.guidance,
+        ].join('\n')
+      },
+    },
+    TimelineRead: {
+      name: 'TimelineRead',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'TimelineRead',
+          description: '按事件标识读取一个事件的完整内容（标题、时间、参与者、情节、章节、因果前驱），并返回前后局部上下文（插入定位用）。同时返回事件版本令牌与账本基线哈希（TimelineUpdate 冲突判定用）。',
+          parameters: {
+            type: 'object',
+            properties: {
+              eventId: { type: 'string', description: '事件标识（EVT- 开头，来自 TimelineList）。' },
+              contextCount: { type: 'integer', minimum: 1, maximum: 30, description: '可选，锚点前后各取几条标记，默认 3。' },
+            },
+            required: ['eventId'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: timelineReadTool,
+      formatResult(output: TimelineReadOutput) {
+        if ('notFound' in output) {
+          return `事件 ${output.eventId} 不存在。请用 TimelineList 重新查询。`
+        }
+        const participants = output.event.participants.map((participant) => participant.name || participant.id).join('、')
+        const plots = output.event.plots.map((plot) => plot.name || plot.id).join('、')
+        const chapters = output.event.chapters.map((ref) => `第${ref.chapterNumber}章（${ref.mode}）`).join('、')
+        const neighbors = output.neighbors.map((neighbor) => `${neighbor.ordinal}. ${neighbor.kind === 'end' ? '↳区间结束' : `《${neighbor.title}》`}（${neighbor.markerId}）`).join('；')
+        return [
+          `事件 ${output.eventId}（${output.kind === 'span' ? '区间' : '点'}事件，《${output.event.title}》）：`,
+          `摘要：${output.event.summary || '（未填）'}`,
+          `明确时间：${output.event.storyTime ? JSON.stringify(output.event.storyTime) : '无'}`,
+          `相对时间：${output.event.relativeTime ? JSON.stringify(output.event.relativeTime) : '无'}${output.relativeAnchorTitle === null ? '（锚事件已删除，待改绑）' : output.relativeAnchorTitle !== undefined ? `（锚定《${output.relativeAnchorTitle}》）` : ''}`,
+          `参与者：${participants || '无'}`,
+          `关联情节：${plots || '无'}`,
+          `章节：${chapters || '无'}`,
+          `因果前驱：${output.event.causedBy.map((id, index) => `${id}${output.causedByTitles[index] ? `（《${output.causedByTitles[index]}》）` : '（已删除）'}`).join('、') || '无'}`,
+          `局部上下文：${neighbors}`,
+          `版本令牌 ${output.version}｜账本哈希 ${output.contentHash ?? '（账本尚未落盘）'}`,
+        ].join('\n')
+      },
+    },
+    TimelineCreatePoint: {
+      name: 'TimelineCreatePoint',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'TimelineCreatePoint',
+          description: '登记一个点事件（瞬间发生：遭遇、决定、死亡）。event.title 必填；时间三态可选（明确时间 / 相对时间 / 都不填=纯顺序）。position 缺省追加到末尾。',
+          parameters: {
+            type: 'object',
+            properties: {
+              event: {
+                type: 'object',
+                properties: timelineEventProperties(),
+                required: ['title'],
+                additionalProperties: false,
+                description: '事件详情。',
+              },
+              position: timelinePositionSchema('可选，插入位置；缺省追加到列表末尾。'),
+            },
+            required: ['event'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: timelineCreatePointTool,
+      formatResult(output: TimelineCreateOutput) {
+        const lines = [
+          `已登记点事件 ${output.eventId}：《${output.title}》`,
+          `账本：${output.sourcePath}${output.created ? '（本次新建）' : ''}｜标记 ${output.markerId}`,
+        ]
+        if (output.assignedElementIds.length > 0) {
+          lines.push(`已为 ${output.assignedElementIds.length} 个要素首次分配稳定标识：${output.assignedElementIds.map((item) => `${item.id} → ${item.sourcePath}`).join('、')}`)
+        }
+        return lines.join('\n')
+      },
+    },
+    TimelineCreateSpan: {
+      name: 'TimelineCreateSpan',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'TimelineCreateSpan',
+          description: '登记一个区间事件（持续一段故事时间：战争、旅途、修行）。结束位置必须在开始位置之后（可跨任意多事件，表达并行与嵌套）。event.title 必填。',
+          parameters: {
+            type: 'object',
+            properties: {
+              event: {
+                type: 'object',
+                properties: timelineEventProperties(),
+                required: ['title'],
+                additionalProperties: false,
+                description: '事件详情（挂在开始标记上）。',
+              },
+              startPosition: timelinePositionSchema('开始标记落点。'),
+              endPosition: timelinePositionSchema('结束标记落点，必须位于开始之后。'),
+            },
+            required: ['event', 'startPosition', 'endPosition'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: timelineCreateSpanTool,
+      formatResult(output: TimelineCreateOutput) {
+        const lines = [
+          `已登记区间事件 ${output.eventId}：《${output.title}》`,
+          `账本：${output.sourcePath}${output.created ? '（本次新建）' : ''}｜开始 ${output.markerId} → 结束 ${output.endMarkerId}`,
+        ]
+        if (output.assignedElementIds.length > 0) {
+          lines.push(`已为 ${output.assignedElementIds.length} 个要素首次分配稳定标识：${output.assignedElementIds.map((item) => `${item.id} → ${item.sourcePath}`).join('、')}`)
+        }
+        return lines.join('\n')
+      },
+    },
+    TimelineUpdate: {
+      name: 'TimelineUpdate',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'TimelineUpdate',
+          description: '按事件标识修改一个事件的详情字段。至少提供一项；可空时间字段传 null 清空。持有 TimelineRead 返回的 contentHash 时传入可做并发冲突检测。',
+          parameters: {
+            type: 'object',
+            properties: {
+              eventId: { type: 'string', description: '事件标识（EVT- 开头）。' },
+              expectedContentHash: { type: 'string', description: '可选，调用方持有的账本基线哈希（TimelineRead.contentHash）；不一致即冲突报错。' },
+              ...timelineEventProperties(),
+            },
+            required: ['eventId'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: timelineUpdateTool,
+      formatResult(output: TimelineUpdateOutput) {
+        return `已修改事件 ${output.eventId}：《${output.title}》\n更新时间：${output.event.updatedAt}`
+      },
+    },
+    TimelineDelete: {
+      name: 'TimelineDelete',
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'TimelineDelete',
+          description: '按事件标识删除一个事件（区间事件两端同删）。其他事件 causedBy 中指向它的引用自动级联清除；仍以它为相对时间锚的事件保留锚并提示改绑。只在登记错误或用户明确要求时使用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              eventId: { type: 'string', description: '事件标识（EVT- 开头）。' },
+            },
+            required: ['eventId'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: timelineDeleteTool,
+      formatResult(output: TimelineDeleteOutput) {
+        const lines = [
+          `已删除${output.kind === 'span' ? '区间' : '点'}事件 ${output.eventId}：《${output.title}》（移除 ${output.removedMarkers} 个标记）`,
+        ]
+        if (output.cascadedCausedBy > 0) {
+          lines.push(`已级联清除 ${output.cascadedCausedBy} 处因果前驱引用`)
+        }
+        if (output.anchoredEvents.length > 0) {
+          lines.push(`注意：${output.anchoredEvents.map((event) => `《${event.title}》（${event.eventId}）`).join('、')} 仍以该事件为相对时间锚，锚已失效，建议提醒作者改绑或用 TimelineUpdate 调整`)
+        }
+        return lines.join('\n')
+      },
+    },
     GetFileChangeHistory: {
       name: 'GetFileChangeHistory',
       isReadOnly: true,
@@ -2118,6 +2488,12 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'RelationDelete'
     || value === 'RelationQuery'
     || value === 'RelationCheck'
+    || value === 'TimelineList'
+    || value === 'TimelineRead'
+    || value === 'TimelineCreatePoint'
+    || value === 'TimelineCreateSpan'
+    || value === 'TimelineUpdate'
+    || value === 'TimelineDelete'
     || value === 'GetFileChangeHistory'
     || value === 'WebSearch'
     || value === 'WebFetch'

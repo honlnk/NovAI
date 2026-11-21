@@ -59,20 +59,25 @@ export type TimelineChapterRef = {
   mode: NarrativeMode
 }
 
-/** 事件详情对象：挂在 point / start 标记上，end 标记不携带（不复制详情）。 */
+/**
+ * 事件详情对象：挂在 point / start 标记上，end 标记不携带（不复制详情）。
+ * 数组与可空字段在账本序列化中恒存在：空数组 / null 即「未填」，不靠字段缺省表达。
+ */
 export type TimelineEvent = {
   /** 非空短文本 */
   title: string
-  /** 自然语言摘要，允许空串 */
-  summary?: string
-  storyTime?: StoryTime | null
-  relativeTime?: RelativeTime | null
-  participants?: TimelineParticipant[]
+  /** 自然语言摘要，空串 = 未填 */
+  summary: string
+  /** null = 无明确时间（纯顺序时间，合法且常见） */
+  storyTime: StoryTime | null
+  /** null = 无相对时间 */
+  relativeTime: RelativeTime | null
+  participants: TimelineParticipant[]
   /** 关联情节的 ELM- 标识列表；同一事件可关联多段情节，不强制唯一归属 */
-  plotIds?: string[]
-  chapters?: TimelineChapterRef[]
+  plotIds: string[]
+  chapters: TimelineChapterRef[]
   /** 因果前驱的事件标识列表（指逻辑事件） */
-  causedBy?: string[]
+  causedBy: string[]
   createdAt: string
   updatedAt: string
 }

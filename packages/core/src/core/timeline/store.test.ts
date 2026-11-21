@@ -1,17 +1,27 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  TimelineConflictError,
   TimelineCorruptError,
   TimelineError,
   assertWritable,
+  checkTimelineLedger,
+  createTimelinePoint,
+  createTimelineSpan,
+  deleteTimelineEvent,
   generateTimelineEventId,
   generateTimelineMarkerId,
   hasStructuralIssue,
   loadTimelineLedger,
+  moveTimelineMarker,
+  queryTimelineEvents,
+  removeTimelineReferences,
   serializeTimelineLedger,
+  timelineEventVersion,
+  updateTimelineEvent,
 } from './store'
 import { TIMELINE_LEDGER_PATH } from '../../types/timeline'
-import { writeProjectTextFile } from '../fs/project-fs'
+import { readProjectTextFile, writeProjectTextFile } from '../fs/project-fs'
 import type { ProjectSnapshot } from '../../types/project'
 
 /* ---------- 内存文件系统（与其他 core 测试同款内联实现） ---------- */
@@ -331,5 +341,395 @@ describe('标识生成', () => {
   it('事件标识与标记标识：前缀 + 10 位小写字母数字', () => {
     expect(generateTimelineEventId()).toMatch(/^EVT-[0-9a-z]{10}$/)
     expect(generateTimelineMarkerId()).toMatch(/^TM-[0-9a-z]{10}$/)
+  })
+})
+
+/* ---------- 增删改（阶段 2 契约测试第二档：配对约束 + 引用 + 级联） ---------- */
+
+function elementFile(options: { id?: string; type?: string; name: string }): string {
+  return [
+    '---',
+    `id: ${options.id ?? ''}`,
+    `type: ${options.type ?? 'character'}`,
+    `name: ${options.name}`,
+    'summary: ',
+    '---',
+    '',
+    `# ${options.name}`,
+  ].join('\n')
+}
+
+async function seedElement(path: string, options: { id?: string; type?: string; name: string }): Promise<void> {
+  await writeProjectTextFile(root, path, elementFile(options))
+}
+
+async function seedChapter(fileName: string): Promise<void> {
+  await writeProjectTextFile(root, `chapters/${fileName}`, '正文')
+}
+
+describe('createTimelinePoint', () => {
+  it('空账本首条：落盘合法结构，created 语义；锚定插入定位生效', async () => {
+    const first = await createTimelinePoint(project, {
+      event: { title: '小张出生' },
+      position: { at: 'last' },
+    })
+    expect(first.marker.kind).toBe('point')
+    expect(first.created).toBe(true)
+    expect(first.contentHash).toBeTruthy()
+
+    const second = await createTimelinePoint(project, {
+      event: { title: '旧桥决裂' },
+      position: { at: 'before', anchorMarkerId: first.marker.id },
+    })
+    expect(second.created).toBe(false)
+
+    const document = await loadTimelineLedger(project)
+    expect(document.markers.map((marker) => (marker.kind === 'end' ? null : marker.event.title)))
+      .toEqual(['旧桥决裂', '小张出生'])
+  })
+
+  it('参与者按名称定位：懒分配 ELM 标识并写回 frontmatter；情节引用限 plot 类型', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜' })
+    await seedElement('elements/plots/夺剑.md', { name: '夺剑', type: 'plot' })
+    await seedElement('elements/locations/旧桥.md', { name: '旧桥', type: 'location' })
+
+    const result = await createTimelinePoint(project, {
+      event: {
+        title: '旧桥伏击',
+        participants: [{ kind: 'element', type: 'character', name: '林澜', role: '主谋' }],
+        plots: [{ kind: 'element', type: 'plot', name: '夺剑' }],
+      },
+      position: { at: 'last' },
+    })
+    expect(result.assignedElementIds).toHaveLength(2)
+    expect(result.marker.kind === 'point' && result.marker.event.participants[0]).toMatchObject({ role: '主谋' })
+    // 懒分配已写回要素文件
+    const content = await readProjectTextFile(root, 'elements/characters/林澜.md')
+    expect(content).toMatch(/^id: ELM-[0-9a-z]{10}$/m)
+
+    // 参与者引用情节 → 类型不符拒绝
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x', participants: [{ kind: 'element', type: 'plot', name: '夺剑' }] },
+      position: { at: 'last' },
+    })).rejects.toThrow('不在允许范围')
+    // 情节槽位引用地点 → 同样拒绝
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x', plots: [{ kind: 'element', type: 'location', name: '旧桥' }] },
+      position: { at: 'last' },
+    })).rejects.toThrow('不在允许范围')
+  })
+
+  it('章节引用经章节目录解析：章号缺失拒绝；事件互引（causedBy / 相对锚）必须已存在', async () => {
+    await seedChapter('第001章-开端.txt')
+    await seedChapter('第002章-旧桥.txt')
+    const base = await createTimelinePoint(project, { event: { title: '旧桥伏击' }, position: { at: 'last' } })
+    const baseEventId = base.marker.eventId
+
+    // 章号存在 → 通过
+    await createTimelinePoint(project, {
+      event: { title: '复盘', chapters: [{ chapterNumber: 2, mode: 'recall' }] },
+      position: { at: 'last' },
+    })
+    // 章号缺失 → 拒绝
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x', chapters: [{ chapterNumber: 9, mode: 'current' }] },
+      position: { at: 'last' },
+    })).rejects.toThrow('无法解析')
+
+    await createTimelinePoint(project, {
+      event: {
+        title: '决战前夜',
+        causedBy: [baseEventId],
+        relativeTime: { anchorEventId: baseEventId, offset: 3, unit: 'day', direction: 'after' },
+      },
+      position: { at: 'last' },
+    })
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x', causedBy: ['EVT-0000000000'] },
+      position: { at: 'last' },
+    })).rejects.toThrow('不存在')
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x', relativeTime: { anchorEventId: 'EVT-0000000000', offset: 1, unit: 'day', direction: 'after' } },
+      position: { at: 'last' },
+    })).rejects.toThrow('锚事件')
+  })
+
+  it('锚标记不存在 → 教学式报错', async () => {
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x' },
+      position: { at: 'after', anchorMarkerId: 'TM-0000000000' },
+    })).rejects.toThrow('锚标记')
+  })
+})
+
+describe('createTimelineSpan', () => {
+  it('区间跨事件合法（并行/嵌套语义）：两端中间夹其他标记；end 与 start 相邻也合法', async () => {
+    const first = await createTimelinePoint(project, { event: { title: 'a' }, position: { at: 'last' } })
+    const span = await createTimelineSpan(project, {
+      event: { title: '三年修行' },
+      startPosition: { at: 'after', anchorMarkerId: first.marker.id },
+      endPosition: { at: 'last' },
+    })
+    const middle = await createTimelinePoint(project, {
+      event: { title: '山中奇遇' },
+      position: { at: 'after', anchorMarkerId: span.marker.id },
+    })
+
+    const document = await loadTimelineLedger(project)
+    expect(document.markers.map((marker) => marker.kind)).toEqual(['point', 'start', 'point', 'end'])
+    expect(document.issues).toEqual([])
+
+    // 相邻区间（start 与 end 之间无其他标记）
+    const tight = await createTimelineSpan(project, {
+      event: { title: '顿悟' },
+      startPosition: { at: 'after', anchorMarkerId: middle.marker.id },
+      endPosition: { at: 'after', anchorMarkerId: middle.marker.id },
+    })
+    const after = await loadTimelineLedger(project)
+    const tightIndex = after.markers.findIndex((marker) => marker.id === tight.marker.id)
+    expect(after.markers[tightIndex + 1]?.kind).toBe('end')
+    expect(after.issues).toEqual([])
+  })
+
+  it('结束位置先于开始位置 → 拒绝', async () => {
+    const first = await createTimelinePoint(project, { event: { title: 'a' }, position: { at: 'first' } })
+    await expect(createTimelineSpan(project, {
+      event: { title: '倒置' },
+      startPosition: { at: 'last' },
+      endPosition: { at: 'before', anchorMarkerId: first.marker.id },
+    })).rejects.toThrow('结束标记必须位于开始标记之后')
+  })
+})
+
+describe('updateTimelineEvent', () => {
+  async function seedTwo() {
+    const a = await createTimelinePoint(project, { event: { title: 'a', summary: '旧摘要' }, position: { at: 'last' } })
+    const b = await createTimelinePoint(project, { event: { title: 'b' }, position: { at: 'last' } })
+    return { a, b }
+  }
+
+  it('补丁合并：只改给定的字段，其余原样保留；null 清空可空时间', async () => {
+    const { a } = await seedTwo()
+    await createTimelinePoint(project, {
+      event: { title: 'c', storyTime: { year: 100 } },
+      position: { at: 'last' },
+    })
+    const document = await loadTimelineLedger(project)
+
+    const result = await updateTimelineEvent(project, {
+      eventId: a.marker.eventId,
+      patch: { title: 'a2', storyTime: null },
+    })
+    expect(result.marker.kind === 'point' && result.marker.event.title).toBe('a2')
+    expect(result.marker.kind === 'point' && result.marker.event.summary).toBe('旧摘要')
+    expect(result.marker.kind === 'point' && result.marker.event.storyTime).toBeNull()
+    expect(result.previous.title).toBe('a')
+    // 其他事件不受影响
+    const after = await loadTimelineLedger(project)
+    expect(after.contentHash).not.toBe(document.contentHash)
+    const other = after.markers.find((marker) => marker.kind !== 'end' && marker.event.title === 'c')!
+    expect(other.kind !== 'end' && other.event.storyTime).toMatchObject({ year: 100 })
+  })
+
+  it('整本哈希冲突：expectedContentHash 过期 → TimelineConflictError', async () => {
+    const { a, b } = await seedTwo()
+    const stale = (await loadTimelineLedger(project)).contentHash
+    await updateTimelineEvent(project, { eventId: b.marker.eventId, patch: { title: 'b2' } })
+
+    await expect(updateTimelineEvent(project, {
+      eventId: a.marker.eventId,
+      patch: { title: 'a3' },
+      expectedContentHash: stale!,
+    })).rejects.toThrow(TimelineConflictError)
+  })
+
+  it('单事件版本令牌：本事件被改过 → 冲突；只改过别的事件 → 放行', async () => {
+    const { a, b } = await seedTwo()
+    const versionA = timelineEventVersion(
+      (await loadTimelineLedger(project)).markers.find((marker) => marker.id === a.marker.id)!.kind === 'end'
+        ? null!
+        : ((await loadTimelineLedger(project)).markers.find((marker) => marker.id === a.marker.id) as { event: import('../../types/timeline').TimelineEvent }).event,
+    )
+
+    // 别的事件先被改：a 的版本令牌仍有效
+    await updateTimelineEvent(project, { eventId: b.marker.eventId, patch: { title: 'b2' } })
+    await updateTimelineEvent(project, {
+      eventId: a.marker.eventId,
+      patch: { title: 'a2' },
+      expectedEventVersion: versionA,
+    })
+
+    // a 自己被改后旧令牌失效
+    const versionA2 = timelineEventVersion(
+      ((await loadTimelineLedger(project)).markers.find((marker) => marker.id === a.marker.id) as { event: import('../../types/timeline').TimelineEvent }).event,
+    )
+    await updateTimelineEvent(project, { eventId: a.marker.eventId, patch: { title: 'a3' } })
+    await expect(updateTimelineEvent(project, {
+      eventId: a.marker.eventId,
+      patch: { title: 'a4' },
+      expectedEventVersion: versionA2,
+    })).rejects.toThrow(TimelineConflictError)
+  })
+
+  it('旧相对锚已失效时：不给 relativeTime 的编辑不被阻塞（失效提示交给检查层）', async () => {
+    const anchor = await createTimelinePoint(project, { event: { title: '锚' }, position: { at: 'last' } })
+    const dependent = await createTimelinePoint(project, {
+      event: {
+        title: '三天后',
+        relativeTime: { anchorEventId: anchor.marker.eventId, offset: 3, unit: 'day', direction: 'after' },
+      },
+      position: { at: 'last' },
+    })
+    await deleteTimelineEvent(project, { eventId: anchor.marker.eventId })
+
+    // 锚已删除，但只改标题应放行；relativeTime 原样保留
+    const result = await updateTimelineEvent(project, {
+      eventId: dependent.marker.eventId,
+      patch: { title: '三天后（改）' },
+    })
+    expect(result.marker.kind === 'point' && result.marker.event.relativeTime).toMatchObject({
+      anchorEventId: anchor.marker.eventId,
+    })
+  })
+
+  it('空补丁 → 拒绝', async () => {
+    const { a } = await seedTwo()
+    await expect(updateTimelineEvent(project, { eventId: a.marker.eventId, patch: {} }))
+      .rejects.toThrow('至少提供一项')
+  })
+})
+
+describe('moveTimelineMarker', () => {
+  it('移动后重校验配对：把开始移进自己区间内部 → 拒绝；移到区间外 → 成功', async () => {
+    const first = await createTimelinePoint(project, { event: { title: 'a' }, position: { at: 'last' } })
+    const span = await createTimelineSpan(project, {
+      event: { title: '修行' },
+      startPosition: { at: 'after', anchorMarkerId: first.marker.id },
+      endPosition: { at: 'last' },
+    })
+    const inner = await createTimelinePoint(project, {
+      event: { title: '山中奇遇' },
+      position: { at: 'after', anchorMarkerId: span.marker.id },
+    })
+
+    // 把区间结束移到开始之前 → 破坏配对，拒绝
+    await expect(moveTimelineMarker(project, {
+      markerId: span.endMarker!.id,
+      position: { at: 'before', anchorMarkerId: span.marker.id },
+    })).rejects.toThrow('区间配对')
+
+    // 把开始移到自己结束之后（区间倒置）→ 同样破坏，拒绝
+    await expect(moveTimelineMarker(project, {
+      markerId: span.marker.id,
+      position: { at: 'last' },
+    })).rejects.toThrow('区间配对')
+
+    // 以自己为锚 → 拒绝
+    await expect(moveTimelineMarker(project, {
+      markerId: span.marker.id,
+      position: { at: 'after', anchorMarkerId: span.marker.id },
+    })).rejects.toThrow('不能以它自己为锚点')
+
+    // 合法移动：把中间事件移到区间之前
+    const moved = await moveTimelineMarker(project, {
+      markerId: inner.marker.id,
+      position: { at: 'before', anchorMarkerId: span.marker.id },
+    })
+    expect(moved.markers.map((marker) => marker.kind)).toEqual(['point', 'point', 'start', 'end'])
+  })
+})
+
+describe('deleteTimelineEvent', () => {
+  it('区间事件两端同删；causedBy 级联清除；relativeTime 锚保留成失效引用', async () => {
+    const anchor = await createTimelinePoint(project, { event: { title: '锚事件' }, position: { at: 'last' } })
+    const span = await createTimelineSpan(project, {
+      event: {
+        title: '长战争',
+        causedBy: [anchor.marker.eventId],
+      },
+      startPosition: { at: 'last' },
+      endPosition: { at: 'last' },
+    })
+    const dependent = await createTimelinePoint(project, {
+      event: {
+        title: '战后重建',
+        causedBy: [span.marker.eventId],
+        relativeTime: { anchorEventId: span.marker.eventId, offset: 1, unit: 'year', direction: 'after' },
+      },
+      position: { at: 'last' },
+    })
+
+    const result = await deleteTimelineEvent(project, { eventId: span.marker.eventId })
+    expect(result.removed).toHaveLength(2)
+
+    const document = await loadTimelineLedger(project)
+    expect(document.issues).toEqual([])
+    // causedBy 已级联清除；relativeTime 锚保留（失效提示）
+    const survivor = document.markers.find((marker) => marker.id === dependent.marker.id)!
+    expect(survivor.kind !== 'end' && survivor.event.causedBy).toEqual([])
+    expect(survivor.kind !== 'end' && survivor.event.relativeTime).toMatchObject({ anchorEventId: span.marker.eventId })
+
+    // 锚失效可被检查层发现
+    const check = await checkTimelineLedger(project)
+    expect(check.issues.some((issue) => 'eventId' in issue && issue.eventId === dependent.marker.eventId && issue.kind === 'dangling-relative-anchor')).toBe(true)
+  })
+
+  it('删除不存在的事件 → 报错', async () => {
+    await expect(deleteTimelineEvent(project, { eventId: 'EVT-0000000000' })).rejects.toThrow('不存在')
+  })
+})
+
+describe('queryTimelineEvents', () => {
+  it('按参与者/章号/年份过滤；区间端随开始保留，开始被滤掉时端也移除', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedChapter('第001章-开端.txt')
+    await createTimelinePoint(project, {
+      event: {
+        title: '出生',
+        storyTime: { year: 100 },
+        participants: [{ kind: 'element', id: 'ELM-aaaaaaaaaa' }],
+        chapters: [{ chapterNumber: 1, mode: 'current' }],
+      },
+      position: { at: 'last' },
+    })
+    await createTimelineSpan(project, {
+      event: { title: '修行', storyTime: { year: 101 } },
+      startPosition: { at: 'last' },
+      endPosition: { at: 'last' },
+    })
+    await createTimelinePoint(project, { event: { title: '出山', storyTime: { year: 105 } }, position: { at: 'last' } })
+
+    const byParticipant = await queryTimelineEvents(project, { participantElementId: 'ELM-aaaaaaaaaa' })
+    expect(byParticipant.markers.filter((marker) => marker.kind !== 'end')).toHaveLength(1)
+
+    const byYear = await queryTimelineEvents(project, { yearFrom: 101, yearTo: 104 })
+    // 修行（start+end）命中；出生/出山被滤掉
+    expect(byYear.markers.map((marker) => marker.kind)).toEqual(['start', 'end'])
+
+    const byChapter = await queryTimelineEvents(project, { chapterNumber: 1 })
+    expect(byChapter.markers).toHaveLength(1)
+  })
+})
+
+describe('removeTimelineReferences', () => {
+  it('按要素标识剥离参与者与情节关联（要素删除级联链路）', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedElement('elements/plots/夺剑.md', { name: '夺剑', type: 'plot', id: 'ELM-bbbbbbbbbb' })
+    await createTimelinePoint(project, {
+      event: {
+        title: '旧桥伏击',
+        participants: [{ kind: 'element', id: 'ELM-aaaaaaaaaa' }],
+        plots: [{ kind: 'element', id: 'ELM-bbbbbbbbbb' }],
+      },
+      position: { at: 'last' },
+    })
+
+    const result = await removeTimelineReferences(project, 'ELM-aaaaaaaaaa')
+    expect(result).toEqual({ removedParticipants: 1, removedPlotLinks: 0 })
+
+    const document = await loadTimelineLedger(project)
+    const marker = document.markers[0]!
+    expect(marker.kind === 'point' && marker.event.participants).toEqual([])
+    expect(marker.kind === 'point' && marker.event.plotIds).toEqual(['ELM-bbbbbbbbbb'])
   })
 })

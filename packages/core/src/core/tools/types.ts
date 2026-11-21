@@ -50,6 +50,12 @@ export type CoreToolName =
   | 'RelationDelete'
   | 'RelationQuery'
   | 'RelationCheck'
+  | 'TimelineList'
+  | 'TimelineRead'
+  | 'TimelineCreatePoint'
+  | 'TimelineCreateSpan'
+  | 'TimelineUpdate'
+  | 'TimelineDelete'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
@@ -265,6 +271,10 @@ export type DeleteFileOutput = {
   removedRelationCount: number
   /** 级联清理失败原因（文件已删除但引用关系未清理）；成功或无需级联时为空串 */
   relationCascadeError: string
+  /** 删除要素文件时级联移除的时间线引用数（参与者 + 情节关联，非要素文件为 0） */
+  removedTimelineRefCount: number
+  /** 时间线级联清理失败原因（成功或无需级联时为空串） */
+  timelineCascadeError: string
 }
 
 export type ListDirectoryInput = {
@@ -1064,6 +1074,227 @@ export type RelationCheckOutput = {
   }>
   totalCount: number
   guidance: string
+}
+
+/* ---------- 时间线事件账本（时间线 JSON 化施工计划阶段 2：主 Agent 专属六工具） ---------- */
+
+/** 工具入参的要素定位：稳定标识或「类型 + 精确名称」二选一（参与者四类 + 情节）。 */
+export type TimelineElementRefInput = {
+  id?: string
+  type?: string
+  name?: string
+}
+
+export type TimelineParticipantEntryInput = TimelineElementRefInput & {
+  /** 该要素在本事件中的角色（如 主谋、目击者） */
+  role?: string
+}
+
+/** 明确时间：年必填；历法自由文本，季节/月/日可选（系统不换算历法语义）。 */
+export type TimelineStoryTimeInput = {
+  calendar?: string
+  year: number
+  season?: string
+  month?: number
+  day?: number
+}
+
+/** 相对时间：锚定另一事件 + 偏移量（系统不换算，open 单位短词）。 */
+export type TimelineRelativeTimeInput = {
+  anchorEventId: string
+  offset: number
+  unit: string
+  direction: 'before' | 'after'
+}
+
+export type TimelineChapterRefInput = {
+  chapterNumber: number
+  mode: 'current' | 'recall' | 'prophecy' | 'dream'
+}
+
+/** 事件详情写入（create / update 共用；update 语义下 undefined = 不改动、null = 清空可空字段）。 */
+export type TimelineEventPatchInput = {
+  title?: string
+  summary?: string
+  storyTime?: TimelineStoryTimeInput | null
+  relativeTime?: TimelineRelativeTimeInput | null
+  participants?: TimelineParticipantEntryInput[]
+  plots?: TimelineElementRefInput[]
+  chapters?: TimelineChapterRefInput[]
+  /** 因果前驱事件标识（EVT- 开头，来自 TimelineList/TimelineRead 返回） */
+  causedBy?: string[]
+}
+
+/** 插入定位：列表首/尾，或相对锚标记之前/之后（at 为 before/after 时 anchorMarkerId 必填）。 */
+export type TimelinePositionInput = {
+  at: 'first' | 'last' | 'before' | 'after'
+  anchorMarkerId?: string
+}
+
+export type TimelineListInput = {
+  /** 单个参与者要素稳定标识 */
+  participantElementId?: string
+  /** 一组参与者要素稳定标识（当前场景出场人物） */
+  participantElementIds?: string[]
+  /** 关联情节的要素稳定标识 */
+  plotId?: string
+  /** 按本章号过滤（事件关联的章节里含该章号） */
+  chapterNumber?: number
+  /** 明确时间年份范围（含两端；无明确时间的事件不命中） */
+  yearFrom?: number
+  yearTo?: number
+}
+
+/** 列表摘要条目：区间事件只出现一次（kind='span'，携带开始标记标识）。 */
+export type TimelineEventSummaryItem = {
+  eventId: string
+  /** point / span 的开始标记标识（定位插入位置用） */
+  markerId: string
+  kind: 'point' | 'span'
+  /** 列表顺序序号（展示用） */
+  ordinal: number
+  title: string
+  summary: string
+  /** 明确时间（原文字段直出）；null = 无明确时间 */
+  storyTime: TimelineStoryTimeInput | null
+  relativeTime: TimelineRelativeTimeInput | null
+  /** 参与者（名称解析失败时 name 为空串） */
+  participants: Array<{ id: string; name: string; type: string; role: string }>
+  /** 关联情节（名称解析失败时 name 为空串） */
+  plots: Array<{ id: string; name: string }>
+  chapters: TimelineChapterRefInput[]
+  /** 因果前驱的事件标识 */
+  causedBy: string[]
+}
+
+export type TimelineListOutput = {
+  events: TimelineEventSummaryItem[]
+  totalCount: number
+  truncated: boolean
+  guidance: string
+}
+
+export type TimelineReadInput = {
+  eventId: string
+  /** 同时返回锚点前后各 N 条标记的局部上下文（默认 3，上限 30；插入定位用） */
+  contextCount?: number
+}
+
+export type TimelineNeighborItem = {
+  markerId: string
+  eventId: string
+  kind: 'point' | 'start' | 'end'
+  /** end 标记无详情，title 为空串 */
+  title: string
+  ordinal: number
+}
+
+/** 事件详情视图（Read/Update 输出共用）：详情字段直出 + 引用解析为名称。 */
+export type TimelineEventDetailView = {
+  title: string
+  summary: string
+  storyTime: TimelineStoryTimeInput | null
+  relativeTime: TimelineRelativeTimeInput | null
+  participants: Array<{ id: string; name: string; type: string; role: string }>
+  plots: Array<{ id: string; name: string }>
+  chapters: TimelineChapterRefInput[]
+  causedBy: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type TimelineReadOutput =
+  | { notFound: true; eventId: string }
+  | {
+    eventId: string
+    markerId: string
+    kind: 'point' | 'span'
+    event: TimelineEventDetailView
+    /** 事件版本令牌（TimelineUpdate 冲突判定用，内容决定跨读取稳定） */
+    version: string
+    /** 因果前驱事件标题（锚事件缺失时对应项为 null） */
+    causedByTitles: Array<string | null>
+    /** 相对时间锚事件标题；undefined = 无相对时间；null = 锚事件已删除（失效） */
+    relativeAnchorTitle: string | null | undefined
+    /** 锚点前后局部上下文（含自身，按列表顺序） */
+    neighbors: TimelineNeighborItem[]
+    /** 账本基线内容哈希（TimelineUpdate 冲突判定用） */
+    contentHash: string | null
+  }
+
+export type TimelineCreatePointInput = {
+  event: TimelineEventPatchInput
+  /** 缺省 = 追加到列表末尾 */
+  position?: TimelinePositionInput
+}
+
+export type TimelineCreateSpanInput = {
+  event: TimelineEventPatchInput
+  startPosition: TimelinePositionInput
+  /** 必须位于开始位置之后（可跨任意多事件，表达并行与嵌套） */
+  endPosition: TimelinePositionInput
+}
+
+export type TimelineCreateOutput = {
+  eventId: string
+  markerId: string
+  /** 区间事件的结束标记标识 */
+  endMarkerId: string
+  kind: 'point' | 'span'
+  title: string
+  /** 账本文件是否为本次新建（变更账本 created/updated 区分用） */
+  created: boolean
+  sourcePath: string
+  contentHash: string
+  /** 本次为要素懒分配的标识（要素文件 frontmatter 已写入） */
+  assignedElementIds: Array<{ sourcePath: string; id: string }>
+  linesAdded: number
+  linesRemoved: number
+}
+
+export type TimelineUpdateInput = {
+  eventId: string
+  /** 调用方持有的账本基线内容哈希（TimelineRead.contentHash）；与磁盘不一致即冲突 */
+  expectedContentHash?: string
+  title?: string
+  summary?: string
+  storyTime?: TimelineStoryTimeInput | null
+  relativeTime?: TimelineRelativeTimeInput | null
+  participants?: TimelineParticipantEntryInput[]
+  plots?: TimelineElementRefInput[]
+  chapters?: TimelineChapterRefInput[]
+  causedBy?: string[]
+}
+
+export type TimelineUpdateOutput = {
+  eventId: string
+  title: string
+  /** 修改后的事件详情 */
+  event: TimelineEventDetailView
+  /** 修改前的事件详情（变更账本 oldText 用） */
+  previous: TimelineEventDetailView
+  contentHash: string
+  assignedElementIds: Array<{ sourcePath: string; id: string }>
+  linesAdded: number
+  linesRemoved: number
+}
+
+export type TimelineDeleteInput = {
+  eventId: string
+}
+
+export type TimelineDeleteOutput = {
+  eventId: string
+  title: string
+  kind: 'point' | 'span'
+  /** 删除的标记数（点事件 1，区间事件 2） */
+  removedMarkers: number
+  /** 其他事件 causedBy 中指向该事件的引用清除计数（已自动级联） */
+  cascadedCausedBy: number
+  /** 仍以该事件为相对时间锚的事件（锚保留、待作者改绑；空数组 = 无） */
+  anchoredEvents: Array<{ eventId: string; title: string }>
+  linesAdded: number
+  linesRemoved: number
 }
 
 export type GetFileChangeHistoryInput = {
