@@ -1,4 +1,5 @@
 export * as agentService from './agent-service'
+export * as chapterService from './chapter-service'
 export * as environmentService from './environment-service'
 export * as fileService from './file-service'
 export * as foreshadowingService from './foreshadowing-service'
