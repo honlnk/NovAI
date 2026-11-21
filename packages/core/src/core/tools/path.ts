@@ -80,12 +80,12 @@ export function isInternalPath(path: string): boolean {
 
 /**
  * 领域账本文件（受保护数据）：由领域服务统一维护的项目级结构化数据
- * （关系图谱的关系账本；后续时间线事件账成文时在此登记）。
+ * （关系图谱的关系账本、时间线的事件账本）。
  * 与内部路径分开判定：内部文件是「应用私有、模型无需知晓」，账本是「领域数据、
  * 有专用工具」——对通用文件工具同样全部禁止读写，但教学式出路指向专用工具。
  * 名单同样保持私有，消费方只消费「是不是」。
  */
-const PROTECTED_LEDGER_FILES = ['elements/relations.json'] as const
+const PROTECTED_LEDGER_FILES = ['elements/relations.json', 'elements/timeline.json'] as const
 
 /** 项目根相对路径是否受保护账本文件。 */
 export function isProtectedLedgerPath(path: string): boolean {
@@ -139,10 +139,18 @@ export function internalPathError(label: string): Error {
 }
 
 /**
- * 受保护账本的教学式报错：陈述边界 + 陈述出路（专用工具）。
- * 关系数据由关系图谱统一维护，画布与专用工具操作同一份事实来源。
+ * 受保护账本的教学式报错：陈述边界 + 陈述出路（按账本文件分支指路对应专用工具）。
+ * 账本数据由对应领域统一维护，专用工具与作者界面弹窗操作同一份事实来源。
  */
-export function protectedLedgerPathError(label: string): Error {
+export function protectedLedgerPathError(label: string, path: string): Error {
+  if (foldInternalPath(path) === 'elements/timeline.json') {
+    return new Error(
+      `${label} 不能指向时间线账本文件（elements/timeline.json）。时间线数据由事件账本统一维护：`
+      + '查询与浏览用 TimelineList / TimelineRead，登记事件用 TimelineCreatePoint / TimelineCreateSpan，'
+      + '修改与移动用 TimelineUpdate，删除用 TimelineDelete。作者界面中的时间轴弹窗与这些工具操作同一份数据。'
+      + '该文件不会出现在目录列表与搜索结果中，也不要引导作者手工编辑它。',
+    )
+  }
   return new Error(
     `${label} 不能指向关系账本文件（elements/relations.json）。关系数据由关系图谱统一维护：`
     + '查询用 RelationList / RelationQuery / RelationRead，登记与修改用 RelationCreate / RelationUpdate / RelationDelete，'

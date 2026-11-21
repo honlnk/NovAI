@@ -21,6 +21,8 @@ const emit = defineEmits<{
   rag: []
   /** 打开关系图谱弹窗（RelationModal） */
   relation: []
+  /** 打开时间轴弹窗（TimelineModal） */
+  timeline: []
 }>()
 
 /**
@@ -42,7 +44,7 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
  * enabled 标记是否已实现：已实现的正常态可点击，未实现的灰一档提示「即将推出」。
  * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理，管理要素与向量索引为后补。
  */
-const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag' | 'relation'; label: string; icon: string; enabled: boolean }[] = [
+const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag' | 'relation' | 'timeline'; label: string; icon: string; enabled: boolean }[] = [
   { key: 'proofread', label: '校对', icon: 'check', enabled: false },
   // 章节整理的机械改名工具已下线（2026-09-21）：它是未来 AI 整理模块的前置基建，
   // 待该模块立计划开发时再启用；命名规范的工具层强制不受影响。
@@ -54,13 +56,15 @@ const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manage
   { key: 'rag', label: '向量索引', icon: 'database', enabled: true },
   // 关系图谱：人物/势力/地点关系的可视化画布与登记入口（关系图谱施工计划 §六）
   { key: 'relation', label: '关系图谱', icon: 'network', enabled: true },
+  // 时间线：事件账本的时间轴弹窗入口（时间线 JSON 化改造施工计划 §9.4）
+  { key: 'timeline', label: '时间线', icon: 'timeline', enabled: true },
 ]
 
 /**
  * 模板里不能直接动态调 emit（联合类型无法匹配 emit 重载），
  * 在 script 里集中分发。
  */
-function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag' | 'relation') {
+function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag' | 'relation' | 'timeline') {
   switch (key) {
     case 'proofread': emit('proofread'); break
     case 'organize': emit('organize'); break
@@ -68,6 +72,7 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
     case 'element-manager': emit('element-manager'); break
     case 'rag': emit('rag'); break
     case 'relation': emit('relation'); break
+    case 'timeline': emit('timeline'); break
   }
 }
 </script>
@@ -143,7 +148,9 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           <!-- 向量索引（circle-stack） -->
           <AppIcon name="database" :size="20" class="h-5 w-5" v-else-if="item.icon === 'database'" />
           <!-- 关系图谱（节点连线网络） -->
-          <AppIcon name="network" :size="20" class="h-5 w-5" v-else />
+          <AppIcon name="network" :size="20" class="h-5 w-5" v-else-if="item.icon === 'network'" />
+          <!-- 时间线（时钟回溯——故事内时间轴） -->
+          <AppIcon name="timeline" :size="20" class="h-5 w-5" v-else />
         </button>
       </Tooltip>
 

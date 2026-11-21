@@ -152,13 +152,45 @@ describe('受保护账本判定（关系账本，单一来源，大小写折叠�
   })
 
   it('protectedLedgerPathError 教学式报错：边界 + 专用工具出路', () => {
-    const message = protectedLedgerPathError('ReadFile.path').message
+    const message = protectedLedgerPathError('ReadFile.path', 'elements/relations.json').message
 
     expect(message.startsWith('ReadFile.path 不能指向关系账本文件（elements/relations.json）。')).toBe(true)
     expect(message).toContain('查询用 RelationList / RelationQuery / RelationRead')
     expect(message).toContain('登记与修改用 RelationCreate / RelationUpdate / RelationDelete')
     expect(message).toContain('检查数据用 RelationCheck')
     expect(message).toContain('该文件不会出现在目录列表与搜索结果中')
+  })
+})
+
+describe('受保护账本判定（时间线账本，阶段 1 接入）', () => {
+  it.each([
+    ['elements/timeline.json'],
+    ['Elements/Timeline.JSON'],
+  ])('isProtectedLedgerPath("%s") 为 true', (path) => {
+    expect(isProtectedLedgerPath(path)).toBe(true)
+  })
+
+  it.each([
+    ['elements/timeline.json.bak'],
+    ['elements/timeline/第001章-开局.md'], // 旧时间线目录不受账本保护（阶段 4 退役）
+    ['timeline.json'],
+  ])('isProtectedLedgerPath("%s") 为 false', (path) => {
+    expect(isProtectedLedgerPath(path)).toBe(false)
+  })
+
+  it('遍历跳过，但不是内部路径', () => {
+    expect(isInternalPath('elements/timeline.json')).toBe(false)
+    expect(shouldSkipInWalk('elements/timeline.json')).toBe(true)
+  })
+
+  it('protectedLedgerPathError 按账本分支指路时间线六工具', () => {
+    const message = protectedLedgerPathError('ReadFile.path', 'elements/timeline.json').message
+
+    expect(message.startsWith('ReadFile.path 不能指向时间线账本文件（elements/timeline.json）。')).toBe(true)
+    expect(message).toContain('查询与浏览用 TimelineList / TimelineRead')
+    expect(message).toContain('登记事件用 TimelineCreatePoint / TimelineCreateSpan')
+    expect(message).toContain('修改与移动用 TimelineUpdate，删除用 TimelineDelete')
+    expect(message).toContain('时间轴弹窗与这些工具操作同一份数据')
   })
 })
 

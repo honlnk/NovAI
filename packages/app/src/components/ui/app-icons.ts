@@ -32,6 +32,7 @@ import {
   Network,
   Globe,
   House,
+  History,
   Info,
   Library,
   List,
@@ -120,6 +121,8 @@ export const APP_ICONS = {
   activity: Activity,
   // 关系图谱（节点连线网络）
   network: Network,
+  // 时间线（时钟回溯——故事内时间轴）
+  timeline: History,
 } as const satisfies Record<string, Component>
 
 export type AppIconName = keyof typeof APP_ICONS

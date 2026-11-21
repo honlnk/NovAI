@@ -33,7 +33,7 @@ export function readString(value: unknown, label: string) {
 
 function assertNotProtectedLedger(path: string, label: string) {
   if (isProtectedLedgerPath(path)) {
-    throw protectedLedgerPathError(label)
+    throw protectedLedgerPathError(label, path)
   }
 }
 
