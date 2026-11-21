@@ -8,8 +8,9 @@
  * 永远不写入章节文件本身。
  *
  * 状态即看板列（三列，不像伏笔那样折叠）：planned=规划中 / written=已写 /
- * deviated=偏差。written↔deviated 与偏差标记（deviationFlag/deviationNote）由
- * 系统在回写实际值时按阈值自动计算，不接受外部设置（见 rhythm/store）。
+ * deviated=偏差。默认自动判定：保存比较值（计划四项 / 实际四项）时按当时阈值
+ * 重算状态与偏差（见 rhythm/store）；作者可经显式操作校正结论或恢复自动
+ * （作者字段控制权计划 §五），AI 工具不提供校正参数。
  */
 
 import { CardBoardCard, CardBoardError } from './card-board'
@@ -115,6 +116,31 @@ export const RHYTHM_COLUMN_LABELS: Record<RhythmColumn, string> = {
   deviated: '偏差',
 }
 
+/**
+ * 判定来源（作者字段控制权计划 §五.1）：状态/偏差标记/说明的有效结论由谁给出。
+ * 不是全局模式开关，也不是第二套看板——三列、曲线、摘要读同一份有效结果。
+ */
+export type RhythmJudgmentSource = 'auto' | 'author'
+
+/** 全部合法判定来源。 */
+export const RHYTHM_JUDGMENT_SOURCES: readonly RhythmJudgmentSource[] = ['auto', 'author']
+
+export function isRhythmJudgmentSource(value: string): value is RhythmJudgmentSource {
+  return (RHYTHM_JUDGMENT_SOURCES as readonly string[]).includes(value)
+}
+
+/**
+ * 作者校正载荷（§五.2 校验表）：仅由作者详情中的明确操作触发（应用校正 / 看板跨列
+ * 暂存落点），AI 普通更新工具不接受。校验通过后 status/deviationFlag 直接采用，
+ * 说明进 authorDeviationNote（不碰系统 deviationNote——两份说明独立留存）。
+ */
+export type RhythmAuthorJudgment = {
+  status: RhythmStatus
+  deviationFlag: boolean
+  /** 有偏差时必填（trim 后非空）；无偏差时缺省/null = 清除旧作者说明。 */
+  deviationNote?: string | null
+}
+
 /** 节奏卡 = 通用看板卡片骨架 + 节奏领域字段（计划值 / 实际值 / 偏差标记）。 */
 export type RhythmCard = CardBoardCard<RhythmStatus> & {
   /** 节奏卡名（作者可改；名称变化时文件名同步）。 */
@@ -147,6 +173,12 @@ export type RhythmCard = CardBoardCard<RhythmStatus> & {
   deviationFlag: boolean
   /** 偏差说明（命中维度的拼接描述）；无偏差为 null。 */
   deviationNote: string | null
+  /** 判定来源（阶段 4 §五.1）：auto=按比较值与阈值计算；author=作者明确校正。旧文件缺省按 auto 解释。 */
+  judgmentSource: RhythmJudgmentSource
+  /** 作者校正的偏差说明（作者模式的有效说明；恢复自动后保留为历史，不再有效）。 */
+  authorDeviationNote: string | null
+  /** 最近一次判定（自动重算或作者校正保存）采用的冲突阈值；null 按默认阈值 3 解释（旧卡）。 */
+  lastJudgmentThreshold: number | null
 }
 
 export type RhythmCardView = RhythmCard & {

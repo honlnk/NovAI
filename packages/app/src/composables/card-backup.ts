@@ -42,6 +42,16 @@ export type PersistedCardDraftRecord = {
    * 已放弃卡的历史原因修订。未确认绝不自动写盘；旧记录无此字段按无操作态恢复。
    */
   reasonRevision?: { reason: string }
+  /**
+   * 待确认的作者校正操作态（作者字段控制权计划阶段 4，节奏域）：状态、偏差
+   * 结论与说明的表单输入。未应用绝不自动写盘；旧记录无此字段按无操作态恢复。
+   */
+  authorCorrection?: { status: string; deviationFlag: boolean; deviationNote: string }
+  /**
+   * 待确认的恢复自动判定操作态（阶段 4，节奏域）：仅存在性即待确认，
+   * 没有额外输入。未确认绝不自动写盘；旧记录无此字段按无操作态恢复。
+   */
+  restoreAutoPending?: true
   updatedAt: string
 }
 
@@ -166,11 +176,23 @@ async function writeLatestPending(key: string): Promise<void> {
   }
 }
 
-/** 记录一条卡片草稿备份（去抖）；会话每次输入、模式切换调用 */
+/**
+ * 记录一条卡片草稿备份（去抖）；会话每次输入、模式切换调用。快照外的待确认
+ * 操作态（放弃/原因修订/作者校正/恢复自动）一并入镜像——刷新后按待确认状态
+ * 恢复，绝不自动执行。
+ */
 export function scheduleCardBackup(
   projectId: string,
   cardId: string,
-  entry: { draft: PersistedCardDraft; baseContentHash?: string; mode: DetailMode; abandon?: PersistedCardDraftRecord['abandon'] },
+  entry: {
+    draft: PersistedCardDraft
+    baseContentHash?: string
+    mode: DetailMode
+    abandon?: PersistedCardDraftRecord['abandon']
+    reasonRevision?: PersistedCardDraftRecord['reasonRevision']
+    authorCorrection?: PersistedCardDraftRecord['authorCorrection']
+    restoreAutoPending?: PersistedCardDraftRecord['restoreAutoPending']
+  },
 ): void {
   const key = buildCardDraftKey(projectId, cardId)
   pendingWrites.set(key, {
@@ -181,6 +203,9 @@ export function scheduleCardBackup(
     ...(entry.baseContentHash !== undefined ? { baseContentHash: entry.baseContentHash } : {}),
     mode: entry.mode,
     ...(entry.abandon !== undefined ? { abandon: { ...entry.abandon } } : {}),
+    ...(entry.reasonRevision !== undefined ? { reasonRevision: { ...entry.reasonRevision } } : {}),
+    ...(entry.authorCorrection !== undefined ? { authorCorrection: { ...entry.authorCorrection } } : {}),
+    ...(entry.restoreAutoPending !== undefined ? { restoreAutoPending: true } : {}),
     updatedAt: new Date().toISOString(),
   })
   const existing = debounceTimers.get(key)

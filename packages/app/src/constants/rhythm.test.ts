@@ -27,6 +27,8 @@ function summary(partial: Partial<RhythmCardSummaryView>): RhythmCardSummaryView
     actualHook: null,
     actualPayoff: null,
     deviationFlag: false,
+    judgmentSource: 'auto',
+    thresholdPending: false,
     summary: '',
     sourcePath: 'rhythm/R-001-第083章节奏.md',
     ...partial,

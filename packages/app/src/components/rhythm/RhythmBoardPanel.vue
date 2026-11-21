@@ -123,6 +123,14 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
         <span v-if="card.plannedPayoff !== '无'" class="rounded bg-gray-100 px-1 py-px">{{ card.plannedPayoff }}</span>
       </p>
       <p v-if="card.summary" class="mt-1 line-clamp-2 text-xs text-gray-400">{{ card.summary }}</p>
+      <!-- 判定来源标记（阶段 4）：作者校正结论的卡带琥珀徽标 -->
+      <p v-if="card.judgmentSource === 'author'" class="mt-1">
+        <span
+          class="rounded bg-amber-100 px-1.5 py-px text-[10px] text-amber-700"
+          title="判定结论由作者校正设置（详情中可恢复自动判定）"
+          data-testid="rhythm-board-card-author-judgment"
+        >作者校正</span>
+      </p>
       <!-- 已回写：计划↔实际对比（一致绿勾 / 偏差红警） -->
       <p
         v-if="compareSummary(card)"
@@ -133,6 +141,10 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
         :title="card.deviationFlag ? '实际值与计划的偏差说明见详情' : '实际值与计划一致'"
       >
         {{ compareSummary(card)!.text }}
+      </p>
+      <!-- 阈值待复核（阶段 4 §五.3）：最近判定阈值与当前不一致的轻量提示 -->
+      <p v-if="card.thresholdPending" class="mt-1 text-[10px] text-amber-600" data-testid="rhythm-board-card-threshold-pending">
+        阈值已变化，可重新检查
       </p>
     </template>
   </BoardPanel>

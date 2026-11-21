@@ -15,6 +15,7 @@ import {
   RHYTHM_HOOKS,
   RHYTHM_MOODS,
   RHYTHM_PAYOFFS,
+  isRhythmJudgmentSource,
   isRhythmStatus,
   RhythmError,
 } from '../../types/rhythm'
@@ -25,7 +26,8 @@ import type { RhythmCard, RhythmCardView } from '../../types/rhythm'
  *
  * - frontmatter 行式解析；计划值四字段必填（无合理默认值）：缺失或非法即坏文件，
  *   parseRhythmFile 抛 RhythmError（reason 指明字段），扫描层收进 unreadable-file issue；
- *   actual_* 缺省 null、deviation_flag 缺省 false、planned_characters 缺省空数组。
+ *   actual_* 缺省 null、deviation_flag 缺省 false、planned_characters 缺省空数组；
+ *   判定来源元数据（阶段 4）缺省 auto / null / null——旧文件按自动判定解释，不重算。
  * - 非法 status 回退 planned（与伏笔 parser 的状态容错同口径）；时间/排序字段
  *   非法不丢正文（normalizeTime/normalizeOrder 兜底）。
  * - 正文固定三节：`## 节奏意图` / `## 上下文衔接` / `## 作者备注`。意图与衔接必须
@@ -105,6 +107,10 @@ export function parseRhythmFile(sourcePath: string, content: string): ParsedRhyt
       actualNote: parseNullableString(record.actual_note),
       deviationFlag: parseBoolean(record.deviation_flag, false),
       deviationNote: parseNullableString(record.deviation_note),
+      // 判定来源元数据（阶段 4 §八）：旧文件缺省按 auto/null/null 解释，不重算不重写
+      judgmentSource: parseJudgmentSource(record.judgment_source),
+      authorDeviationNote: parseNullableString(record.author_deviation_note),
+      lastJudgmentThreshold: parseNullableThreshold(record.last_judgment_threshold),
       body: bodyText,
     },
     body: bodyText,
@@ -139,6 +145,9 @@ export function serializeRhythmCard(card: Omit<RhythmCard, 'sourcePath'>): strin
     ['actual_note', card.actualNote],
     ['deviation_flag', card.deviationFlag ? 'true' : 'false'],
     ['deviation_note', card.deviationNote],
+    ['judgment_source', card.judgmentSource],
+    ['author_deviation_note', card.authorDeviationNote],
+    ['last_judgment_threshold', card.lastJudgmentThreshold === null ? null : String(card.lastJudgmentThreshold)],
     ['order', String(card.order)],
     ['created_at', card.createdAt],
     ['updated_at', card.updatedAt],
@@ -318,4 +327,28 @@ function parseNullableEnum<T extends string>(value: string | undefined, allowed:
   }
 
   return trimmed as T
+}
+
+/**
+ * 判定来源解析（阶段 4 §八.1）：旧文件缺失或非法值回退 auto（与 status 容错同口径，
+ * 不因新增元数据把旧卡判成坏文件）。
+ */
+function parseJudgmentSource(value: string | undefined): RhythmCard['judgmentSource'] {
+  const trimmed = (value ?? '').trim()
+  return isRhythmJudgmentSource(trimmed) ? trimmed : 'auto'
+}
+
+/**
+ * 最近判定阈值解析：缺失/'null' → null（按默认阈值 3 解释）；给出值须为 1~10 整数，
+ * 非法值容错回退 null（元数据不丢正文，与 order/time 兜底同款口径）。
+ */
+function parseNullableThreshold(value: string | undefined): number | null {
+  const trimmed = (value ?? '').trim()
+
+  if (!trimmed || trimmed === 'null') {
+    return null
+  }
+
+  const parsed = Number(trimmed)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 10 ? parsed : null
 }

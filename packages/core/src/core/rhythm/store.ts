@@ -13,10 +13,12 @@ import {
   RhythmError,
 } from '../../types/rhythm'
 import type {
+  RhythmAuthorJudgment,
   RhythmCard,
   RhythmHook,
   RhythmMood,
   RhythmPayoff,
+  RhythmStatus,
 } from '../../types/rhythm'
 
 /**
@@ -26,11 +28,11 @@ import type {
  * - 读取按 frontmatter.id 定位（文件名只是外部友好，改名不丢卡片）。
  * - 正文三节（节奏意图/上下文衔接/作者备注）分别可替换，未提供的节保持原样；
  *   更新正文任一节必须带 expectedContentHash（防覆盖），只改元数据不要求。
- * - status / deviation_flag / deviation_note 不接受外部设置：回写任一 actual_* 时
- *   系统按偏差判定规则自动计算（computeRhythmDeviation）并流转状态
- *   planned → written（阈值内）/ deviated（超阈）；actual_* 全部清空则回到 planned、
- *   偏差归零（支持作者撤销回写）。不写 actual_* 的更新不碰这三个字段
- *   （手动改计划值不改状态）。
+ * - 判定（作者字段控制权计划 §五）：默认自动——保存任一比较值（计划四项 / 实际四项，
+ *   自评 actualNote 不算）时按当时阈值以合并后的最新值重算 status / deviation_*，
+ *   并记录来源 auto 与所用阈值；非比较字段（卡名/章节/角色/备注/正文/自评）不触发。
+ *   作者可经 authorJudgment（§五.2 校验表）显式校正结论，或 restoreAutoJudgment
+ *   立即按最新值重算回到自动（作者说明保留为历史）。两个显式操作互斥。
  */
 
 export type CreateRhythmOptions = {
@@ -66,6 +68,11 @@ export type CreateRhythmOptions = {
   actualPayoff?: RhythmPayoff | null
   /** 本章自评；缺省 null。 */
   actualNote?: string | null
+  /**
+   * 作者校正（阶段 4 §五.2）：副本携带人工判定视角时使用。校验通过后以作者结论
+   * 覆盖自动判定（来源 author，记录当时阈值）；系统 deviationNote 不被触碰。
+   */
+  authorJudgment?: RhythmAuthorJudgment
   /** 冲突强度偏差阈值（|计划-实际| ≥ 阈值判偏差）；缺省 3。 */
   conflictThreshold?: number
   now?: Date
@@ -98,6 +105,16 @@ export type UpdateRhythmOptions = {
   actualPayoff?: RhythmPayoff | null
   /** 本章节奏自评；传 null 清除。 */
   actualNote?: string | null
+  /**
+   * 作者校正（阶段 4 §五.2 显式操作）：与应用时快照中的其余字段修改合并为一次保存；
+   * 校验通过后结论生效（来源 author）。与 restoreAutoJudgment 互斥。
+   */
+  authorJudgment?: RhythmAuthorJudgment
+  /**
+   * 恢复自动判定（阶段 4 §五.3 显式操作）：以合并后的最新比较值与当时阈值立即重算，
+   * 来源回到 auto；不清空实际值，作者说明保留为历史。与 authorJudgment 互斥。
+   */
+  restoreAutoJudgment?: boolean
   /** 移动到目标列某个卡片之后；null = 列末尾。 */
   afterId?: string | null
   /** 移动到目标列某个卡片之前（看板列首落点）；null = 列首。与 afterId 二选一。 */
@@ -137,21 +154,43 @@ export async function createRhythmCard(
   const id = createRhythmId(sequence)
   const path = createRhythmPath(id, name)
 
-  // 副本携带完整人工视角：提供任一 actual_* 即按偏差规则判出 written/deviated
+  // 副本携带完整人工视角：提供任一实际比较值即按偏差规则判出 written/deviated。
+  // 自评 actualNote 只是写后记录，不参与状态判定（§五.2：只填自评不构成已写）。
   const actualConflict = options.actualConflict ?? null
   const actualMood = options.actualMood ?? null
   const actualHook = options.actualHook ?? null
   const actualPayoff = options.actualPayoff ?? null
   const actualNote = normalizeNullableText(options.actualNote ?? null)
-  const hasAnyActual = actualConflict !== null || actualMood !== null || actualHook !== null
-    || actualPayoff !== null || actualNote !== null
-  const deviation = hasAnyActual
+  const threshold = options.conflictThreshold ?? 3
+  const hasComparisonActual = actualConflict !== null || actualMood !== null
+    || actualHook !== null || actualPayoff !== null
+  const autoDeviation = hasComparisonActual
     ? computeRhythmDeviation(
       { plannedConflict, plannedMood: options.plannedMood, plannedHook: options.plannedHook, plannedPayoff: options.plannedPayoff, actualConflict, actualMood, actualHook, actualPayoff },
-      options.conflictThreshold ?? 3,
+      threshold,
     )
     : { deviationFlag: false, deviationNote: null }
-  const status: RhythmCard['status'] = !hasAnyActual ? 'planned' : deviation.deviationFlag ? 'deviated' : 'written'
+
+  // 判定来源元数据（阶段 4 §五/§八.2）：作者校正覆盖自动结论；系统说明独立留存
+  let status: RhythmStatus = deriveAutoStatus(hasComparisonActual, autoDeviation.deviationFlag)
+  let deviationFlag = autoDeviation.deviationFlag
+  const deviationNote = autoDeviation.deviationNote
+  let judgmentSource: RhythmCard['judgmentSource'] = 'auto'
+  let authorDeviationNote: string | null = null
+  let lastJudgmentThreshold: number | null = null
+
+  if (options.authorJudgment) {
+    const corrected = normalizeAuthorJudgment(options.authorJudgment, actualConflict, actualMood, actualHook, actualPayoff)
+    status = corrected.status
+    deviationFlag = corrected.deviationFlag
+    authorDeviationNote = corrected.authorDeviationNote
+    judgmentSource = 'author'
+  }
+
+  // 有实际比较值（或作者校正）即发生了一次判定：记录所用阈值；纯规划形态不记录
+  if (hasComparisonActual || options.authorJudgment) {
+    lastJudgmentThreshold = threshold
+  }
 
   const card: Omit<RhythmCard, 'sourcePath'> = {
     id,
@@ -172,8 +211,11 @@ export async function createRhythmCard(
     actualHook,
     actualPayoff,
     actualNote,
-    deviationFlag: deviation.deviationFlag,
-    deviationNote: deviation.deviationNote,
+    deviationFlag,
+    deviationNote,
+    judgmentSource,
+    authorDeviationNote,
+    lastJudgmentThreshold,
     body: buildRhythmBody(options.intentBody ?? '', options.linkBody ?? '', options.authorNoteBody ?? ''),
   }
 
@@ -250,6 +292,8 @@ export async function updateRhythmCard(
     || options.actualHook !== undefined
     || options.actualPayoff !== undefined
     || options.actualNote !== undefined
+    || options.authorJudgment !== undefined
+    || options.restoreAutoJudgment !== undefined
     || options.afterId !== undefined
     || options.beforeId !== undefined
 
@@ -303,54 +347,80 @@ export async function updateRhythmCard(
     })
   }
 
-  // 实际值回写与偏差自动判定：不写 actual_* 的更新不碰 status / deviation_*。
-  // status / deviation_flag / deviation_note 不接受外部设置（类型上就不暴露）。
-  const hasActualUpdate = options.actualConflict !== undefined
-    || options.actualMood !== undefined
-    || options.actualHook !== undefined
-    || options.actualPayoff !== undefined
-    || options.actualNote !== undefined
-
+  // 实际值应用：actual_* 提供即覆盖（清除传 null）。自评只是写后记录，不参与判定
   let actualConflict = current.card.actualConflict
   let actualMood = current.card.actualMood
   let actualHook = current.card.actualHook
   let actualPayoff = current.card.actualPayoff
   let actualNote = current.card.actualNote
+
+  if (options.actualConflict !== undefined) {
+    actualConflict = options.actualConflict === null
+      ? null
+      : normalizeConflictIntensity(options.actualConflict, 'actual_conflict')
+  }
+  if (options.actualMood !== undefined) {
+    actualMood = options.actualMood
+  }
+  if (options.actualHook !== undefined) {
+    actualHook = options.actualHook
+  }
+  if (options.actualPayoff !== undefined) {
+    actualPayoff = options.actualPayoff
+  }
+  if (options.actualNote !== undefined) {
+    actualNote = normalizeNullableText(options.actualNote)
+  }
+
+  // 判定规则（阶段 4 §五.3）：比较值 = 计划四项 + 实际四项。改任一比较值即按当时
+  // 阈值以合并后的最新完整卡片重算并回到自动来源（含作者卡改比较值 → 恢复自动）；
+  // 非比较字段（卡名/章节/角色/备注/正文/自评）不触发重算，人工结论原样保留。
+  const threshold = options.conflictThreshold ?? 3
+  const hasComparisonUpdate = options.plannedConflict !== undefined
+    || options.plannedMood !== undefined
+    || options.plannedHook !== undefined
+    || options.plannedPayoff !== undefined
+    || options.actualConflict !== undefined
+    || options.actualMood !== undefined
+    || options.actualHook !== undefined
+    || options.actualPayoff !== undefined
+
   let status = current.card.status
   let deviationFlag = current.card.deviationFlag
   let deviationNote = current.card.deviationNote
+  let judgmentSource = current.card.judgmentSource
+  let authorDeviationNote = current.card.authorDeviationNote
+  let lastJudgmentThreshold = current.card.lastJudgmentThreshold
 
-  if (hasActualUpdate) {
-    actualConflict = options.actualConflict !== undefined ? options.actualConflict : actualConflict
-    if (actualConflict !== null) {
-      actualConflict = normalizeConflictIntensity(actualConflict, 'actual_conflict')
-    }
+  if (options.authorJudgment && options.restoreAutoJudgment) {
+    throw new RhythmError('「作者校正」与「恢复自动判定」是两个互斥的判定操作，一次保存只能提交其一')
+  }
 
-    actualMood = options.actualMood !== undefined ? options.actualMood : actualMood
-    actualHook = options.actualHook !== undefined ? options.actualHook : actualHook
-    actualPayoff = options.actualPayoff !== undefined ? options.actualPayoff : actualPayoff
-    actualNote = options.actualNote !== undefined ? normalizeNullableText(options.actualNote) : actualNote
-
-    const allCleared = actualConflict === null
-      && actualMood === null
-      && actualHook === null
-      && actualPayoff === null
-      && actualNote === null
-
-    if (allCleared) {
-      // 撤销回写：节奏卡回到纯规划形态
-      status = 'planned'
-      deviationFlag = false
-      deviationNote = null
-    } else {
-      const deviation = computeRhythmDeviation(
+  if (options.authorJudgment) {
+    // 作者校正（§五.2）：以合并后的实际比较值过校验表（同轮字段修改一并生效），
+    // 结论直接采用、来源 author；系统 deviationNote 独立留存不被触碰
+    const corrected = normalizeAuthorJudgment(options.authorJudgment, actualConflict, actualMood, actualHook, actualPayoff)
+    status = corrected.status
+    deviationFlag = corrected.deviationFlag
+    authorDeviationNote = corrected.authorDeviationNote
+    judgmentSource = 'author'
+    lastJudgmentThreshold = threshold
+  } else if (options.restoreAutoJudgment || hasComparisonUpdate) {
+    // 恢复自动（显式操作，不等计时）或保存比较值触发的自动重算：作者说明保留为
+    // 历史（§八.2），实际值不清空；全部实际比较值为空时回到规划中、无偏差、无说明
+    const hasComparisonActual = actualConflict !== null || actualMood !== null
+      || actualHook !== null || actualPayoff !== null
+    const deviation = hasComparisonActual
+      ? computeRhythmDeviation(
         { plannedConflict, plannedMood, plannedHook, plannedPayoff, actualConflict, actualMood, actualHook, actualPayoff },
-        options.conflictThreshold ?? 3,
+        threshold,
       )
-      deviationFlag = deviation.deviationFlag
-      deviationNote = deviation.deviationNote
-      status = deviation.deviationFlag ? 'deviated' : 'written'
-    }
+      : { deviationFlag: false, deviationNote: null }
+    status = deriveAutoStatus(hasComparisonActual, deviation.deviationFlag)
+    deviationFlag = deviation.deviationFlag
+    deviationNote = deviation.deviationNote
+    judgmentSource = 'auto'
+    lastJudgmentThreshold = threshold
   }
 
   // 列内位置
@@ -391,6 +461,9 @@ export async function updateRhythmCard(
     actualNote,
     deviationFlag,
     deviationNote,
+    judgmentSource,
+    authorDeviationNote,
+    lastJudgmentThreshold,
     body,
   }
 
@@ -474,6 +547,52 @@ export function computeRhythmDeviation(
   return notes.length > 0
     ? { deviationFlag: true, deviationNote: notes.join('；') }
     : { deviationFlag: false, deviationNote: null }
+}
+
+/** 自动判定的状态推导：无实际比较值 → planned；否则按偏差标记 written/deviated。 */
+function deriveAutoStatus(hasComparisonActual: boolean, deviationFlag: boolean): RhythmStatus {
+  if (!hasComparisonActual) {
+    return 'planned'
+  }
+  return deviationFlag ? 'deviated' : 'written'
+}
+
+/**
+ * 作者校正校验表（作者字段控制权计划 §五.2）：
+ * - 规划中：仅无偏差（允许保留已有实际值，校正分类不清空它们）；
+ * - 已写：无偏差或有偏差均可；偏差：仅有偏差——两者都要求四项实际比较值至少
+ *   一项已填写（本章自评不计入）；
+ * - 有偏差必须带说明；无偏差清除旧作者说明。
+ */
+function normalizeAuthorJudgment(
+  judgment: RhythmAuthorJudgment,
+  actualConflict: number | null,
+  actualMood: RhythmMood | null,
+  actualHook: RhythmHook | null,
+  actualPayoff: RhythmPayoff | null,
+): { status: RhythmStatus; deviationFlag: boolean; authorDeviationNote: string | null } {
+  const hasComparisonActual = actualConflict !== null || actualMood !== null
+    || actualHook !== null || actualPayoff !== null
+  const note = normalizeNullableText(judgment.deviationNote ?? null)
+
+  if (judgment.status === 'planned' && judgment.deviationFlag) {
+    throw new RhythmError('作者校正「规划中」只能搭配无偏差：规划中的卡没有偏差结论')
+  }
+  if (judgment.status === 'deviated' && !judgment.deviationFlag) {
+    throw new RhythmError('作者校正「偏差」必须搭配有偏差：写后无偏差的卡请选「已写」')
+  }
+  if (judgment.status !== 'planned' && !hasComparisonActual) {
+    throw new RhythmError('作者校正「已写 / 偏差」需要冲突、情绪、钩子、爽点四项实际比较值中至少一项已填写（本章自评不计入）')
+  }
+  if (judgment.deviationFlag && !note) {
+    throw new RhythmError('作者校正为有偏差时必须填写偏差说明')
+  }
+
+  return {
+    status: judgment.status,
+    deviationFlag: judgment.deviationFlag,
+    authorDeviationNote: judgment.deviationFlag ? note : null,
+  }
 }
 
 /** 可空文本规范化：trim 后非空才保留，空串/null 统一为 null（与序列化端对齐）。 */

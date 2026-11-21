@@ -196,7 +196,7 @@ describe('readRhythmCard', () => {
 })
 
 describe('updateRhythmCard：计划值与元数据', () => {
-  it('更新计划值不改状态（作者手动改计划不动 written/deviated）', async () => {
+  it('更新计划值（无实际值的卡）不改判定结果', async () => {
     const card = await createRhythmCard(project(), seedOptions())
     const updated = await updateRhythmCard(project(), {
       id: card.id,
@@ -396,12 +396,13 @@ describe('updateRhythmCard：实际值回写与偏差判定', () => {
     expect(hit2.deviationNote).toBe('情绪基调偏差：计划 温馨 实际 悲伤')
   })
 
-  it('仅回写自评（非偏差维度）→ written 且不判偏差', async () => {
+  it('仅回写自评（非比较值）→ 不触发判定、保持 planned（阶段 4：自评不计入实际比较值）', async () => {
     const card = await createRhythmCard(project(), seedOptions())
     const updated = await updateRhythmCard(project(), { id: card.id, actualNote: '节奏符合预期' })
 
-    expect(updated.status).toBe('written')
+    expect(updated.status).toBe('planned')
     expect(updated.deviationFlag).toBe(false)
+    expect(updated.actualNote).toBe('节奏符合预期')
   })
 
   it('conflictThreshold 可覆盖默认阈值 3', async () => {
@@ -649,5 +650,239 @@ describe('一章一卡守卫与完整视角副本（作者字段控制权计划�
     }))
     expect(deviated.status).toBe('deviated')
     expect(deviated.deviationNote).toContain('冲突强度偏差')
+  })
+})
+
+describe('判定来源与作者校正（阶段 4）', () => {
+  /** 已回写并判偏差的卡：计划冲突 3、实际 7（阈值 3 → deviated） */
+  async function createDeviated() {
+    const card = await createRhythmCard(project(), seedOptions())
+    return updateRhythmCard(project(), {
+      id: card.id,
+      actualConflict: 7,
+      actualMood: '温馨',
+      actualHook: '无',
+      actualPayoff: '收获',
+    })
+  }
+
+  it('旧文件无判定元数据：按 auto/null/null 解释，非判定保存不重算', async () => {
+    const legacy = [
+      '---',
+      'id: R-201',
+      'name: 旧卡',
+      'status: written',
+      'chapter_ref: 第020章',
+      'planned_conflict: 3',
+      'planned_mood: 温馨',
+      'planned_hook: 无',
+      'planned_payoff: 收获',
+      'actual_conflict: 4',
+      'actual_mood: null',
+      'actual_hook: null',
+      'actual_payoff: null',
+      'actual_note: null',
+      'deviation_flag: false',
+      'deviation_note: null',
+      '---',
+      '',
+      '## 节奏意图',
+      '',
+      '旧卡意图',
+    ].join('\n')
+    await writeProjectTextFile(root, 'rhythm/R-201-旧卡.md', legacy)
+
+    const updated = await updateRhythmCard(project(), { id: 'R-201', name: '旧卡改名' })
+    expect(updated.status).toBe('written')
+    expect(updated.judgmentSource).toBe('auto')
+    expect(updated.authorDeviationNote).toBeNull()
+    expect(updated.lastJudgmentThreshold).toBeNull()
+
+    // 保存后的文件补写判定来源元数据（按当前事实，auto/null），判定结果未被重算
+    const onDisk = collectFiles()['rhythm/R-201-旧卡改名.md']!
+    expect(onDisk).toContain('judgment_source: auto')
+    expect(parseRhythmFile('rhythm/R-201-旧卡改名.md', onDisk).card.status).toBe('written')
+  })
+
+  it('作者校正应用：结论生效（来源 author、阈值记录），系统说明独立保留', async () => {
+    const deviated = await createDeviated()
+    const corrected = await updateRhythmCard(project(), {
+      id: deviated.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+    })
+
+    expect(corrected.status).toBe('written')
+    expect(corrected.deviationFlag).toBe(false)
+    expect(corrected.judgmentSource).toBe('author')
+    expect(corrected.authorDeviationNote).toBeNull()
+    expect(corrected.lastJudgmentThreshold).toBe(3)
+    expect(corrected.deviationNote).toContain('冲突强度偏差')
+  })
+
+  it('有偏差必填说明并保存；无偏差清除旧作者说明', async () => {
+    const card = await createDeviated()
+    await expect(updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'deviated', deviationFlag: true },
+    })).rejects.toThrow('必须填写偏差说明')
+
+    const noted = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'deviated', deviationFlag: true, deviationNote: '  刻意升温，别动  ' },
+    })
+    expect(noted.authorDeviationNote).toBe('刻意升温，别动')
+
+    const cleared = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+    })
+    expect(cleared.authorDeviationNote).toBeNull()
+  })
+
+  it('校验表：规划中禁有偏差、偏差须有偏差结论；已写/偏差须至少一项实际比较值（自评不算）', async () => {
+    const card = await createDeviated()
+    await expect(updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'planned', deviationFlag: true, deviationNote: 'x' },
+    })).rejects.toThrow('「规划中」只能搭配无偏差')
+    await expect(updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'deviated', deviationFlag: false },
+    })).rejects.toThrow('「偏差」必须搭配有偏差')
+
+    // 清空全部实际值（仅留自评）后校正已写 → 被拦：自评不计入比较值
+    await expect(updateRhythmCard(project(), {
+      id: card.id,
+      actualConflict: null,
+      actualMood: null,
+      actualHook: null,
+      actualPayoff: null,
+      actualNote: '只有自评',
+      authorJudgment: { status: 'written', deviationFlag: false },
+    })).rejects.toThrow('至少一项已填写')
+
+    // 规划中允许保留已有实际值（校正分类不清空它们）
+    const planned = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'planned', deviationFlag: false },
+    })
+    expect(planned.status).toBe('planned')
+    expect(planned.actualConflict).toBe(7)
+  })
+
+  it('作者模式改非比较字段（名称/自评/正文）：人工结论原样保留', async () => {
+    const card = await createDeviated()
+    const corrected = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'deviated', deviationFlag: true, deviationNote: '刻意升温' },
+    })
+
+    const untouched = await updateRhythmCard(project(), {
+      id: corrected.id,
+      name: '改名后',
+      actualNote: '作者补自评',
+      intentBody: '新意图',
+      expectedContentHash: hashContent(collectFiles()[corrected.sourcePath]!),
+    })
+    expect(untouched.status).toBe('deviated')
+    expect(untouched.deviationFlag).toBe(true)
+    expect(untouched.judgmentSource).toBe('author')
+    expect(untouched.authorDeviationNote).toBe('刻意升温')
+  })
+
+  it('作者模式改比较值（实际或计划）：按新值重算并回到自动', async () => {
+    const card = await createDeviated()
+    const corrected = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+    })
+
+    // 改实际比较值 → 重算回自动
+    const backAuto = await updateRhythmCard(project(), { id: corrected.id, actualConflict: 4 })
+    expect(backAuto.status).toBe('written')
+    expect(backAuto.deviationFlag).toBe(false)
+    expect(backAuto.judgmentSource).toBe('auto')
+    expect(backAuto.lastJudgmentThreshold).toBe(3)
+
+    // 再校正后改计划比较值 → 同样重算回自动（修复「已有实际值改计划不重算」）
+    const corrected2 = await updateRhythmCard(project(), {
+      id: backAuto.id,
+      authorJudgment: { status: 'deviated', deviationFlag: true, deviationNote: '按作者口径' },
+    })
+    const plannedChanged = await updateRhythmCard(project(), { id: corrected2.id, plannedConflict: 5 })
+    expect(plannedChanged.judgmentSource).toBe('auto')
+    expect(plannedChanged.status).toBe('written')
+    expect(plannedChanged.deviationNote).toBeNull()
+  })
+
+  it('自动卡已有实际值时改计划比较值：按最新比较值重算', async () => {
+    const card = await createDeviated()
+    const updated = await updateRhythmCard(project(), { id: card.id, plannedConflict: 7 })
+    expect(updated.deviationFlag).toBe(false)
+    expect(updated.status).toBe('written')
+    expect(updated.lastJudgmentThreshold).toBe(3)
+  })
+
+  it('恢复自动判定：立即按最新值重算回 auto；作者说明保留为历史；与作者校正互斥', async () => {
+    const card = await createDeviated()
+    const corrected = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'deviated', deviationFlag: true, deviationNote: '作者口径' },
+    })
+
+    const restored = await updateRhythmCard(project(), { id: corrected.id, restoreAutoJudgment: true })
+    expect(restored.judgmentSource).toBe('auto')
+    expect(restored.status).toBe('deviated')
+    expect(restored.authorDeviationNote).toBe('作者口径')
+    expect(restored.lastJudgmentThreshold).toBe(3)
+
+    // 全部实际值清空后恢复 → 规划中、无偏差、无系统说明
+    const cleared = await updateRhythmCard(project(), {
+      id: restored.id,
+      actualConflict: null,
+      actualMood: null,
+      actualHook: null,
+      actualPayoff: null,
+      actualNote: null,
+    })
+    expect(cleared.status).toBe('planned')
+    expect(cleared.deviationFlag).toBe(false)
+    expect(cleared.deviationNote).toBeNull()
+
+    await expect(updateRhythmCard(project(), {
+      id: restored.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+      restoreAutoJudgment: true,
+    })).rejects.toThrow('互斥')
+  })
+
+  it('阈值记录：判定保存记录当时阈值；阈值变化不批量重写其他卡', async () => {
+    const card = await createDeviated()
+    expect(card.lastJudgmentThreshold).toBe(3)
+
+    const strict = await updateRhythmCard(project(), { id: card.id, plannedConflict: 5, conflictThreshold: 1 })
+    expect(strict.lastJudgmentThreshold).toBe(1)
+
+    // 另一张纯规划卡的非判定保存：不触发重算、不补记阈值（阈值变化不后台重写）
+    const other = await createRhythmCard(project(), seedOptions({ name: '另一张', chapterRef: '第二卷/第090章' }))
+    const otherTouched = await updateRhythmCard(project(), { id: other.id, name: '另一张改名', conflictThreshold: 1 })
+    expect(otherTouched.status).toBe('planned')
+    expect(otherTouched.judgmentSource).toBe('auto')
+    expect(otherTouched.lastJudgmentThreshold).toBeNull()
+  })
+
+  it('副本携带人工判定：创建时 authorJudgment 覆盖自动结论', async () => {
+    const copied = await createRhythmCard(project(), seedOptions({
+      name: '作者判定副本',
+      chapterRef: '第二卷/第084章',
+      actualConflict: 7,
+      authorJudgment: { status: 'written', deviationFlag: true, deviationNote: '作者认为可控' },
+    }))
+    expect(copied.status).toBe('written')
+    expect(copied.deviationFlag).toBe(true)
+    expect(copied.judgmentSource).toBe('author')
+    expect(copied.authorDeviationNote).toBe('作者认为可控')
+    expect(copied.deviationNote).toContain('冲突强度偏差')
+    expect(copied.lastJudgmentThreshold).toBe(3)
   })
 })

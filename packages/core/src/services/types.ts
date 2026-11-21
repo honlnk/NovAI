@@ -10,6 +10,7 @@ import type {
 } from '../types/foreshadowing'
 import type {
   RhythmHook,
+  RhythmJudgmentSource,
   RhythmMood,
   RhythmPayoff,
   RhythmScanIssue,
@@ -374,6 +375,10 @@ export type RhythmCardSummaryView = {
   actualHook: RhythmHook | null
   actualPayoff: RhythmPayoff | null
   deviationFlag: boolean
+  /** 判定来源（阶段 4 §五.1）：看板「作者校正」标记与阈值提示读同一份有效结果。 */
+  judgmentSource: RhythmJudgmentSource
+  /** 最近一次判定采用的冲突阈值与当前项目阈值不一致（轻量提示「阈值已变化，可重新检查」）。 */
+  thresholdPending: boolean
   /** 摘要（正文「节奏意图」节首个非空行）。 */
   summary: string
   sourcePath: string
@@ -385,6 +390,10 @@ export type RhythmCardView = RhythmCardSummaryView & {
   plannedNote: string | null
   actualNote: string | null
   deviationNote: string | null
+  /** 作者校正的偏差说明（作者模式的有效说明；恢复自动后为历史说明）。 */
+  authorDeviationNote: string | null
+  /** 最近一次判定采用的冲突阈值；null = 旧卡未记录（按默认 3 解释）。 */
+  lastJudgmentThreshold: number | null
   /** 节奏意图正文。 */
   intentBody: string
   /** 上下文衔接正文。 */

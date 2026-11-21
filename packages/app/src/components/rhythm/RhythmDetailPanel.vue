@@ -3,7 +3,8 @@ import { computed, ref } from 'vue'
 
 import type { ChapterCatalog } from '@novai/core/types/chapters'
 import type { RhythmCardView } from '@novai/core/services/types'
-import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_MOOD_DESCRIPTIONS, RHYTHM_PAYOFFS } from '@novai/core/types/rhythm'
+import type { RhythmJudgmentSource } from '@novai/core/types/rhythm'
+import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_MOOD_DESCRIPTIONS, RHYTHM_PAYOFFS, RHYTHM_STATUSES } from '@novai/core/types/rhythm'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import ChapterPicker from '../card-board/ChapterPicker.vue'
 import { describeChapterValue } from '../card-board/chapter-picker-state'
@@ -18,14 +19,34 @@ import PlainBodySurface from '../layout/PlainBodySurface.vue'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 /**
- * 节奏详情面板（作者字段控制权计划阶段 3，§四固定布局）：状态徽标 → 关联章节
- * 选择器 → 计划值编辑区 → 常驻「写后实际值」区（未回写也可补填；编辑时并列
- * 计划参照）→ 判定与说明（自动结果）→ 默认折叠「更多正文」（上下文衔接/
- * 作者备注）→ 节奏意图正文。状态徽标只读：状态由回写偏差自动判定（阶段 4
- * 增加作者校正入口）。
+ * 节奏详情面板（作者字段控制权计划阶段 3 §四固定布局 + 阶段 4 判定操作态）：
+ * 状态徽标（含判定来源徽标）→ 关联章节选择器 → 计划值编辑区 → 常驻「写后
+ * 实际值」区（未回写也可补填；编辑时并列计划参照）→ 判定与说明（有效结论 +
+ * 作者校正表单 + 恢复自动两步确认 + 阈值提示 + 历史人工说明）→ 默认折叠
+ * 「更多正文」→ 节奏意图正文。状态徽标只读：判定默认自动，作者经「作者校正 /
+ * 恢复自动判定」明确操作接管（应用是显式保存：与同轮未保存修改合并一次落盘）。
  */
 const props = defineProps<{
   activeCard: RhythmCardView
+  /** 判定来源（阶段 4）：徽标与恢复自动入口的展示依据 */
+  judgmentSource: RhythmJudgmentSource
+  /** 阈值待复核（§五.3）：最近判定阈值与当前项目阈值不一致的轻量提示 */
+  thresholdPending: boolean
+  /** 历史人工说明：恢复自动后保留的作者说明（默认折叠查看） */
+  historicalAuthorNote: string | null
+  /** 作者卡上正在修改比较值：保存前明确提示将恢复自动（§五.3） */
+  comparisonEditWarning: boolean
+  /** 恢复自动确认预演（磁盘卡 + 草稿合并值按当前阈值的自动结论） */
+  restoreAutoPreview: { status: RhythmCardView['status']; deviationFlag: boolean; deviationNote: string | null } | null
+  /** 待确认的作者校正表单（null = 不在操作态） */
+  authorCorrection: { status: string; deviationFlag: boolean; deviationNote: string } | null
+  /** 待确认的恢复自动判定（两步确认第二步） */
+  restoreAutoPending: boolean
+  /** 应用校正/确认恢复自动可点（无冲突守护，操作态中） */
+  canConfirmAuthorCorrection: boolean
+  canConfirmRestoreAuto: boolean
+  /** 显式判定保存进行中 */
+  isConfirmingJudgment: boolean
   draftName: string | null
   draftChapterRef: string | null
   draftPlannedConflict: number | null
@@ -101,6 +122,14 @@ const emit = defineEmits<{
   saveCopy: [name: string]
   restoreAsCopy: [name: string]
   discardGuard: []
+  /** 判定操作态（阶段 4）：进入/更新/取消/应用校正与恢复自动 */
+  startAuthorCorrection: []
+  updateAuthorCorrection: [patch: { status?: string; deviationFlag?: boolean; deviationNote?: string }]
+  cancelAuthorCorrection: []
+  confirmAuthorCorrection: []
+  startRestoreAuto: []
+  cancelRestoreAuto: []
+  confirmRestoreAuto: []
 }>()
 
 /** 头部名称输入展示值（草稿优先） */
@@ -175,6 +204,47 @@ const judgmentHint = computed(() => {
   }
   return null
 })
+
+/* ---------- 判定操作态（阶段 4 §五） ---------- */
+
+/** 有效偏差说明：作者卡用作者说明，自动卡用系统判定说明 */
+const effectiveDeviationNote = computed(() =>
+  props.judgmentSource === 'author' ? props.activeCard.authorDeviationNote : props.activeCard.deviationNote)
+
+/** 校正表单的门禁派生（§五.2 校验表的界面预检；最终校验在服务层） */
+const correctionStatus = computed(() => props.authorCorrection?.status ?? 'planned')
+const correctionDeviationFlag = computed(() => props.authorCorrection?.deviationFlag ?? false)
+const correctionNoteMissing = computed(() =>
+  correctionDeviationFlag.value && (props.authorCorrection?.deviationNote ?? '').trim() === '')
+/** 已写/偏差需要四项实际比较值至少一项（本章自评不计入；按合并后的草稿口径） */
+const correctionNeedsActual = computed(() => correctionStatus.value !== 'planned' && actualFilledCount.value === 0)
+const correctionKeepsActual = computed(() => correctionStatus.value === 'planned' && actualFilledCount.value > 0)
+const canApplyCorrection = computed(() => !correctionNoteMissing.value && !correctionNeedsActual.value)
+
+/** 当前作者结论与恢复后自动结论的展示标签（两步确认的对照） */
+const authorConclusionLabel = computed(() =>
+  `${RHYTHM_COLUMN_LABELS[props.activeCard.status]} · ${props.activeCard.deviationFlag ? '有偏差' : '无偏差'}`)
+const restorePreviewLabel = computed(() => {
+  const preview = props.restoreAutoPreview
+  if (!preview) {
+    return '—'
+  }
+  return `${RHYTHM_COLUMN_LABELS[preview.status]} · ${preview.deviationFlag ? '有偏差' : '无偏差'}`
+})
+
+function onCorrectionStatusChange(event: Event) {
+  const status = (event.target as HTMLSelectElement).value
+  emit('updateAuthorCorrection', {
+    status,
+    // 校验表联动：规划中只能无偏差、偏差状态必须有偏差（已写由作者自选）
+    ...(status === 'planned' ? { deviationFlag: false } : {}),
+    ...(status === 'deviated' ? { deviationFlag: true } : {}),
+  })
+}
+
+function onCorrectionFlagChange(event: Event) {
+  emit('updateAuthorCorrection', { deviationFlag: (event.target as HTMLSelectElement).value === 'deviation' })
+}
 
 function onTitleInput(event: Event) {
   emit('updateDraft', { name: (event.target as HTMLInputElement).value })
@@ -275,7 +345,7 @@ function fillActualConflict() {
          DetailLayout 固定底部路径/时间不参与滚动 -->
     <template #content>
       <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="rhythm-detail-scroll">
-      <!-- 1. 当前状态（只读：状态由回写偏差判定自动流转，阶段 4 增加作者校正入口） -->
+      <!-- 1. 当前状态（只读：判定默认自动，作者可经判定与说明区明确校正/恢复） -->
       <div class="mb-2 flex shrink-0 items-center gap-2">
         <span
           :class="[
@@ -288,7 +358,12 @@ function fillActualConflict() {
         >
           {{ RHYTHM_COLUMN_LABELS[activeCard.status] }}
         </span>
-        <span v-if="activeCard.status !== 'planned'" class="text-[11px] text-gray-400">判定：自动（回写时按阈值计算）</span>
+        <span
+          v-if="judgmentSource === 'author'"
+          class="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700"
+          data-testid="rhythm-detail-judgment-badge"
+        >作者校正</span>
+        <span v-else-if="activeCard.status !== 'planned'" class="text-[11px] text-gray-400">判定：自动（回写时按阈值计算）</span>
       </div>
 
       <!-- 2. 关联章节（编辑：可搜索选择器 + 真实新建；预览：统一位置语义描述） -->
@@ -528,16 +603,140 @@ function fillActualConflict() {
         </template>
       </div>
 
-      <!-- 5. 判定与说明（自动结果；作者校正入口属阶段 4） -->
-      <div class="mb-2 shrink-0 rounded-md border border-gray-200 px-3 py-2" data-testid="rhythm-detail-judgment">
-        <p class="mb-1 text-[11px] font-medium text-gray-500">判定与说明</p>
-        <p v-if="activeCard.deviationFlag" class="text-xs font-medium text-red-700">
-          偏差（自动判定）
-          <span class="ml-1 font-normal">{{ activeCard.deviationNote }}</span>
+      <!-- 5. 判定与说明（阶段 4：有效结论 + 作者校正表单 + 恢复自动两步确认 +
+           阈值提示 + 比较值警告 + 历史人工说明） -->
+      <div class="mb-2 shrink-0 rounded-md border px-3 py-2" :class="judgmentSource === 'author' ? 'border-amber-200' : 'border-gray-200'" data-testid="rhythm-detail-judgment">
+        <p class="mb-1 text-[11px] font-medium text-gray-500">
+          判定与说明
+          <span class="ml-1 font-normal text-gray-400">{{ judgmentSource === 'author' ? '当前为作者校正结论' : '按计划值、实际值与项目阈值自动判定' }}</span>
         </p>
-        <p v-else-if="activeCard.status === 'written'" class="text-xs text-emerald-700">已写：与计划一致（自动判定）</p>
+        <p v-if="activeCard.deviationFlag" class="text-xs font-medium text-red-700">
+          偏差（{{ judgmentSource === 'author' ? '作者校正' : '自动判定' }}）
+          <span class="ml-1 font-normal">{{ effectiveDeviationNote }}</span>
+        </p>
+        <p v-else-if="activeCard.status === 'written'" class="text-xs text-emerald-700">已写：与计划一致（{{ judgmentSource === 'author' ? '作者校正' : '自动判定' }}）</p>
         <p v-else class="text-xs text-gray-500">规划中：尚未回写实际值，不参与偏差判定</p>
+
         <p v-if="judgmentHint" class="mt-1 text-[11px] text-amber-600">{{ judgmentHint }}</p>
+        <p v-if="comparisonEditWarning" class="mt-1 text-[11px] text-amber-600" data-testid="rhythm-detail-comparison-warning">
+          正在修改计划/实际比较值：保存后将按新值重算并恢复自动判定。
+        </p>
+        <p v-if="thresholdPending" class="mt-1 text-[11px] text-amber-600" data-testid="rhythm-detail-threshold-pending">
+          阈值已变化，可重新检查{{ judgmentSource === 'author' ? '（人工结论保留，恢复自动后按新阈值重算）' : '' }}
+        </p>
+
+        <!-- 入口（无待确认操作态时） -->
+        <div v-if="!authorCorrection && !restoreAutoPending" class="mt-1.5 flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded border border-gray-200 px-2 py-0.5 text-[11px] text-gray-600 transition-colors hover:bg-gray-50"
+            data-testid="rhythm-detail-correct-button"
+            @click="emit('startAuthorCorrection')"
+          >作者校正</button>
+          <button
+            v-if="judgmentSource === 'author'"
+            type="button"
+            class="rounded border border-gray-200 px-2 py-0.5 text-[11px] text-gray-600 transition-colors hover:bg-gray-50"
+            data-testid="rhythm-detail-restore-auto-button"
+            @click="emit('startRestoreAuto')"
+          >恢复自动判定</button>
+        </div>
+
+        <!-- 作者校正表单（原位展开） -->
+        <div v-if="authorCorrection" class="mt-2 rounded-md border border-blue-200 bg-blue-50/50 px-2.5 py-2" data-testid="rhythm-detail-correction-form">
+          <p class="mb-1.5 text-[11px] font-medium text-blue-700">作者校正（明确操作：应用时与未保存修改合并为一次保存）</p>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex flex-col gap-1">
+              <span class="text-xs text-gray-600">状态</span>
+              <select
+                class="rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-800"
+                :value="correctionStatus"
+                data-testid="rhythm-detail-correction-status"
+                @change="onCorrectionStatusChange"
+              >
+                <option v-for="status in RHYTHM_STATUSES" :key="status" :value="status">{{ RHYTHM_COLUMN_LABELS[status] }}</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-xs text-gray-600">偏差结论</span>
+              <select
+                class="rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-800"
+                :value="correctionDeviationFlag ? 'deviation' : 'none'"
+                data-testid="rhythm-detail-correction-flag"
+                @change="onCorrectionFlagChange"
+              >
+                <option value="none" :disabled="correctionStatus === 'deviated'">无偏差</option>
+                <option value="deviation" :disabled="correctionStatus === 'planned'">有偏差</option>
+              </select>
+            </label>
+          </div>
+          <div class="mt-2 flex flex-col gap-1">
+            <span class="text-xs text-gray-600">偏差说明（有偏差时必填；无偏差时留空并清除旧说明）</span>
+            <textarea
+              class="min-h-14 w-full resize-none rounded-md border border-gray-200 px-2.5 py-2 text-xs leading-relaxed text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="作者口径的偏差说明（为何这章与计划不同、为何算/不算偏差）"
+              data-testid="rhythm-detail-correction-note"
+              :value="authorCorrection.deviationNote"
+              @input="emit('updateAuthorCorrection', { deviationNote: ($event.target as HTMLTextAreaElement).value })"
+            />
+          </div>
+          <p v-if="correctionNeedsActual" class="mt-1 text-[11px] text-amber-600" data-testid="rhythm-detail-correction-needs-actual">
+            「已写 / 偏差」需要冲突、情绪、钩子、爽点四项实际比较值中至少一项已填写（本章自评不计入）。
+          </p>
+          <p v-if="correctionKeepsActual" class="mt-1 text-[11px] text-gray-400" data-testid="rhythm-detail-correction-keeps-actual">
+            校正为「规划中」不清空已填实际值；它们保留，仅分类回到规划中。
+          </p>
+          <p v-if="correctionNoteMissing" class="mt-1 text-[11px] text-amber-600" data-testid="rhythm-detail-correction-note-missing">
+            有偏差时必须填写偏差说明。
+          </p>
+          <div class="mt-1.5 flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded bg-blue-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              data-testid="rhythm-detail-correction-apply"
+              :disabled="!canApplyCorrection || !canConfirmAuthorCorrection || isConfirmingJudgment"
+              @click="emit('confirmAuthorCorrection')"
+            >{{ isConfirmingJudgment ? '应用中…' : '应用校正' }}</button>
+            <button
+              type="button"
+              class="rounded border border-gray-200 px-2.5 py-1 text-[11px] text-gray-600 transition-colors hover:bg-gray-50"
+              data-testid="rhythm-detail-correction-cancel"
+              @click="emit('cancelAuthorCorrection')"
+            >取消</button>
+          </div>
+        </div>
+
+        <!-- 恢复自动判定（两步确认） -->
+        <div v-if="restoreAutoPending" class="mt-2 rounded-md border border-amber-200 bg-amber-50/60 px-2.5 py-2" data-testid="rhythm-detail-restore-auto">
+          <p class="mb-1.5 text-[11px] font-medium text-amber-700">恢复自动判定（明确操作：确认后立即按最新值与阈值重算保存）</p>
+          <p class="text-xs text-gray-700">当前作者结论：{{ authorConclusionLabel }}</p>
+          <p class="mt-0.5 text-xs text-gray-700" data-testid="rhythm-detail-restore-auto-preview">
+            恢复后自动结论：{{ restorePreviewLabel }}
+            <span v-if="restoreAutoPreview?.deviationNote" class="mt-0.5 block text-[11px] text-gray-500">{{ restoreAutoPreview.deviationNote }}</span>
+          </p>
+          <p class="mt-1 text-[11px] text-gray-400">不清空实际值；本说明保留为「历史人工说明」。</p>
+          <div class="mt-1.5 flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded bg-amber-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+              data-testid="rhythm-detail-restore-auto-confirm"
+              :disabled="!canConfirmRestoreAuto || isConfirmingJudgment"
+              @click="emit('confirmRestoreAuto')"
+            >{{ isConfirmingJudgment ? '恢复中…' : '确认恢复自动' }}</button>
+            <button
+              type="button"
+              class="rounded border border-gray-200 px-2.5 py-1 text-[11px] text-gray-600 transition-colors hover:bg-gray-50"
+              data-testid="rhythm-detail-restore-auto-cancel"
+              @click="emit('cancelRestoreAuto')"
+            >取消</button>
+          </div>
+        </div>
+
+        <!-- 历史人工说明（恢复自动后保留的作者说明，默认折叠） -->
+        <details v-if="historicalAuthorNote" class="mt-1.5" data-testid="rhythm-detail-historical-note">
+          <summary class="cursor-pointer text-[11px] text-gray-400">历史人工说明（恢复自动判定前的作者说明）</summary>
+          <p class="mt-1 rounded bg-gray-50 px-2 py-1 text-[11px] leading-relaxed text-gray-600">{{ historicalAuthorNote }}</p>
+        </details>
       </div>
 
       <!-- 6. 更多正文（默认折叠：上下文衔接 / 作者备注） -->

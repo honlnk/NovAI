@@ -33,6 +33,9 @@ function baseCard(overrides: Partial<Omit<RhythmCard, 'sourcePath'>> = {}): Omit
     actualNote: '写着写着打起来了',
     deviationFlag: true,
     deviationNote: '冲突强度偏差：计划 3 实际 7',
+    judgmentSource: 'auto',
+    authorDeviationNote: null,
+    lastJudgmentThreshold: 3,
     body: buildRhythmBody(
       '大高潮（第 82 章悲壮决战）之后必须让读者喘口气。',
       '- 上一章（第 82 章）：冲突 9、悲壮、情感爆发\n- 下一章（第 84 章）：计划冲突 4、轻松、悬念',
@@ -235,6 +238,70 @@ describe('serialize/parse 往返', () => {
 
     const once = serializeRhythmCard(card)
     expect(parseRhythmFile('rhythm/x.md', once).card).toEqual(card)
+  })
+})
+
+describe('判定来源元数据（阶段 4 §八）', () => {
+  /** 阶段 3 及之前的旧格式：没有 judgment_source / author_deviation_note / last_judgment_threshold */
+  function legacyFile(): string {
+    return [
+      '---',
+      'id: R-083',
+      'name: 第083章节奏',
+      'status: written',
+      'chapter_ref: 第二卷/第083章',
+      'planned_conflict: 3',
+      'planned_mood: 温馨',
+      'planned_hook: 无',
+      'planned_payoff: 收获',
+      'actual_conflict: 7',
+      'actual_mood: 悲壮',
+      'actual_hook: 悬念',
+      'actual_payoff: 收获',
+      'actual_note: null',
+      'deviation_flag: true',
+      'deviation_note: 冲突强度偏差：计划 3 实际 7',
+      '---',
+      '',
+      '## 节奏意图',
+      '',
+      '让读者喘口气。',
+    ].join('\n')
+  }
+
+  it('旧文件缺判定元数据：按 auto/null/null 解释，既有判定结果原样读取', () => {
+    const parsed = parseRhythmFile('rhythm/R-083-x.md', legacyFile())
+
+    expect(parsed.card.judgmentSource).toBe('auto')
+    expect(parsed.card.authorDeviationNote).toBeNull()
+    expect(parsed.card.lastJudgmentThreshold).toBeNull()
+    expect(parsed.card.status).toBe('written')
+    expect(parsed.card.deviationFlag).toBe(true)
+  })
+
+  it('作者校正元数据往返无损（judgment_source / author_deviation_note / last_judgment_threshold）', () => {
+    const card = baseCard({
+      judgmentSource: 'author',
+      authorDeviationNote: '刻意升温，别动',
+      lastJudgmentThreshold: 5,
+    })
+    const once = serializeRhythmCard(card)
+
+    expect(once).toContain('judgment_source: author')
+    expect(once).toContain('author_deviation_note: 刻意升温，别动')
+    expect(once).toContain('last_judgment_threshold: 5')
+    expect(parseRhythmFile('rhythm/x.md', once).card).toEqual(card)
+  })
+
+  it('非法判定来源回退 auto、非法阈值回退 null（元数据容错不判坏文件）', () => {
+    const tolerant = legacyFile().replace(
+      'deviation_note: 冲突强度偏差：计划 3 实际 7',
+      ['deviation_note: 冲突强度偏差：计划 3 实际 7', 'judgment_source: wizard', 'last_judgment_threshold: 42'].join('\n'),
+    )
+    const parsed = parseRhythmFile('rhythm/R-083-x.md', tolerant)
+
+    expect(parsed.card.judgmentSource).toBe('auto')
+    expect(parsed.card.lastJudgmentThreshold).toBeNull()
   })
 })
 

@@ -78,7 +78,35 @@ export type CardSaveSession<TDraft extends object, TCard> = SaveSessionBase & {
   reasonRevision?: { reason: string }
   /** 取消修订操作态时暂存的原因文本（仅内存，不进镜像；再次进入时回填）。 */
   lastReasonRevision?: string
+  /**
+   * 待确认的作者校正操作态（作者字段控制权计划阶段 4，节奏域）：状态、偏差
+   * 结论与说明的表单输入——不进草稿快照、不触发自动保存；应用是明确操作：
+   * 点击时固定当时完整快照，把表单结论与同轮未落盘草稿合并为一次整体保存
+   * （§五.2.2，区别于放弃操作态的「先收口再确认」）。
+   */
+  authorCorrection?: CardAuthorCorrectionIntent
+  /** 取消校正操作态时暂存的表单（仅内存，不进镜像；再次进入时回填）。 */
+  lastAuthorCorrection?: CardAuthorCorrectionIntent
+  /** 待确认的恢复自动判定操作态（阶段 4，节奏域）：仅存在性即待确认。 */
+  restoreAutoPending?: true
+  /**
+   * 显式判定保存的待提交载荷（仅内存瞬态，绝不进镜像）：确认动作写入、保存
+   * 适配层首次尝试即消费删除——自动补试与后续普通保存都不会再携带。
+   */
+  pendingJudgmentSave?: CardJudgmentOp
 }
+
+/** 作者校正表单（通用层形状不透明：status 由领域解释与校验）。 */
+export type CardAuthorCorrectionIntent = {
+  status: string
+  deviationFlag: boolean
+  deviationNote: string
+}
+
+/** 显式判定保存载荷：作者校正或恢复自动（领域经 saveCard 的 judgmentOp 落盘）。 */
+export type CardJudgmentOp =
+  | { kind: 'authorCorrection'; status: string; deviationFlag: boolean; deviationNote: string }
+  | { kind: 'restoreAuto' }
 
 /** 放弃操作态载荷：原因文本 + 看板拖入已放弃列时的暂存落点（列内定位） */
 export type CardAbandonIntent = {
@@ -115,8 +143,15 @@ export interface CardBoardConfig<
   /**
    * 保存草稿；需要携带 card.contentHash 做外部修改校验的组合在这里完成。
    * overwrite = 冲突出口「采用我的当前内容」的整份覆盖写入：不携带版本校验。
+   * judgmentOp = 显式判定保存载荷（阶段 4 作者校正/恢复自动）：领域把它与
+   * 草稿增量合并成一次 updateRhythm 提交（一次保存同时落字段与判定结论）。
    */
-  saveCard(projectId: string, card: TCard, draft: TDraft, options?: { overwrite?: boolean }): Promise<TCard>
+  saveCard(
+    projectId: string,
+    card: TCard,
+    draft: TDraft,
+    options?: { overwrite?: boolean; judgmentOp?: CardJudgmentOp },
+  ): Promise<TCard>
   moveCard(projectId: string, id: string, status: TStatus, afterId: string | null, beforeId?: string | null): Promise<TCard>
   deleteCard(projectId: string, id: string): Promise<unknown>
   /** 新建面板提交：草稿到创建入参的组合在这里完成 */
@@ -135,6 +170,15 @@ export interface CardBoardConfig<
    * 磁盘基线一次性提交修订后的原因，携带读取时 hash；不提供则该域不开放修订。
    */
   confirmReasonRevisionCard?(projectId: string, card: TCard, intent: { reason: string }): Promise<TCard>
+  /**
+   * 判定操作态（作者字段控制权计划阶段 4，可选——节奏域注入）：作者校正与
+   * 恢复自动的入口门槛与表单默认值（按卡片当前有效结论回填）；不提供则该域
+   * 不开放判定操作态。应用/确认的落盘不走这里——由 saveCard 的 judgmentOp
+   * 与显式保存（requestExplicitSave）合并提交。
+   */
+  judgment?: {
+    defaultCorrection(card: TCard): CardAuthorCorrectionIntent
+  }
   /**
    * 冲突字段比较（阶段 3）：mine = 人工视角完整卡、disk = 磁盘最新卡，返回
    * 领域字段的展示文本（枚举映射中文标签）。无差异字段的过滤在视图层。
@@ -278,6 +322,8 @@ export function createCardBoardCore<
       mode: session.mode,
       ...(session.abandon !== undefined ? { abandon: { ...session.abandon } } : {}),
       ...(session.reasonRevision !== undefined ? { reasonRevision: { ...session.reasonRevision } } : {}),
+      ...(session.authorCorrection !== undefined ? { authorCorrection: { ...session.authorCorrection } } : {}),
+      ...(session.restoreAutoPending !== undefined ? { restoreAutoPending: true } : {}),
     })
   }
 
@@ -324,12 +370,21 @@ export function createCardBoardCore<
       if (!card) {
         return { ok: false, conflict: false, message: '卡片会话缺少磁盘基线，请重新打开卡片' }
       }
+      // 显式判定载荷一次性消费：只在首次尝试的保存里携带，自动补试与后续
+      // 普通保存不再带（避免无载荷落盘字段造成「只改字段不落判定」的语义漂移）
+      const judgmentOp = ctx.session.pendingJudgmentSave
+      if (judgmentOp) {
+        delete ctx.session.pendingJudgmentSave
+      }
       try {
         const saved = await config.saveCard(
           ctx.session.projectId,
           card,
           snapshot,
-          ctx.force ? { overwrite: true } : {},
+          {
+            ...(ctx.force ? { overwrite: true } : {}),
+            ...(judgmentOp ? { judgmentOp } : {}),
+          },
         )
         // 写盘成功即更新会话的磁盘基线（写盘期间继续输入的保存按新基线校验）
         ctx.session.diskCard = saved
@@ -359,18 +414,22 @@ export function createCardBoardCore<
       scheduleSessionMirror(session)
     },
     removeMirror: (projectId, cardId) => {
-      // 引擎在会话 clean 时清镜像；待确认的放弃操作态必须跨刷新保留，
-      // 有槽时改写为「保留槽的记录」而不是删除（阶段 4）
+      // 引擎在会话 clean 时清镜像；待确认的操作态（放弃/原因修订/作者校正/
+      // 恢复自动）必须跨刷新保留，有槽时改写为「保留槽的记录」而不是删除
       const session = cardRealm.getSession(projectId, cardId)
-      if (session?.abandon || session?.reasonRevision) {
+      if (session?.abandon || session?.reasonRevision || session?.authorCorrection || session?.restoreAutoPending) {
         scheduleSessionMirror(session)
         return
       }
       removeCardBackup(projectId, cardId)
     },
-    // 待确认的放弃操作态 = 快照外的待处理人工状态：外部写盘作废其提交基线，
-    // 干净会话也建冲突（不是静默重读），用户先处理版本关系再确认（阶段 4）
-    hasPendingState: (session) => session.abandon !== undefined || session.reasonRevision !== undefined,
+    // 待确认的操作态（放弃/原因修订/作者校正/恢复自动）= 快照外的待处理人工
+    // 状态：外部写盘作废其提交基线，干净会话也建冲突（不是静默重读），用户
+    // 先处理版本关系再确认（阶段 4；作者字段控制权计划 §五.2.4）
+    hasPendingState: (session) => session.abandon !== undefined
+      || session.reasonRevision !== undefined
+      || session.authorCorrection !== undefined
+      || session.restoreAutoPending !== undefined,
     onSettled: (projectId, cardId, result) => handleSaveSettled(projectId, cardId, result),
   })
 
@@ -920,10 +979,13 @@ export function createCardBoardCore<
     if (!card || currentProjectId !== projectId) {
       return false
     }
-    // 待确认的放弃操作态跨「采用磁盘」保留（计划 §四：任何采用磁盘都不能顺带
-    // 清除原因）；引擎成功路径会清除会话，由下方重开回填
+    // 待确认的操作态（放弃/原因修订/作者校正/恢复自动）跨「采用磁盘」保留
+    // （计划 §四：任何采用磁盘都不能顺带清除人工输入）；引擎成功路径会清除
+    // 会话，由下方重开回填
     const preservedAbandon = cardRealm.getSession(projectId, card.id)?.abandon
     const preservedReasonRevision = cardRealm.getSession(projectId, card.id)?.reasonRevision
+    const preservedAuthorCorrection = cardRealm.getSession(projectId, card.id)?.authorCorrection
+    const preservedRestoreAutoPending = cardRealm.getSession(projectId, card.id)?.restoreAutoPending
     const result = await cardRealm.adoptDisk(projectId, card.id)
     if (result !== 'resolved') {
       return false
@@ -934,7 +996,7 @@ export function createCardBoardCore<
     if (activeCard.value?.id === card.id) {
       await openCard(projectId, card.id)
     }
-    if (preservedAbandon || preservedReasonRevision) {
+    if (preservedAbandon || preservedReasonRevision || preservedAuthorCorrection || preservedRestoreAutoPending) {
       const session = cardRealm.getSession(projectId, card.id)
       if (session) {
         if (preservedAbandon) {
@@ -942,6 +1004,12 @@ export function createCardBoardCore<
         }
         if (preservedReasonRevision) {
           session.reasonRevision = { ...preservedReasonRevision }
+        }
+        if (preservedAuthorCorrection) {
+          session.authorCorrection = { ...preservedAuthorCorrection }
+        }
+        if (preservedRestoreAutoPending) {
+          session.restoreAutoPending = true
         }
         session.updatedAt = new Date().toISOString()
         scheduleSessionMirror(session)
@@ -1229,8 +1297,9 @@ export function createCardBoardCore<
     session.lastAbandonReason = session.abandon.reason
     delete session.abandon
     session.updatedAt = new Date().toISOString()
-    if (config.isEmptyDraft(session.draft)) {
-      // 草稿也干净：操作态取消后不再需要恢复镜像
+    if (config.isEmptyDraft(session.draft) && session.reasonRevision === undefined
+      && session.authorCorrection === undefined && session.restoreAutoPending === undefined) {
+      // 草稿与其他操作态也都干净：取消后不再需要恢复镜像
       removeCardBackup(projectId, card.id)
     } else {
       scheduleSessionMirror(session)
@@ -1369,7 +1438,8 @@ export function createCardBoardCore<
     session.lastReasonRevision = session.reasonRevision.reason
     delete session.reasonRevision
     session.updatedAt = new Date().toISOString()
-    if (config.isEmptyDraft(session.draft) && session.abandon === undefined) {
+    if (config.isEmptyDraft(session.draft) && session.abandon === undefined
+      && session.authorCorrection === undefined && session.restoreAutoPending === undefined) {
       removeCardBackup(projectId, card.id)
     } else {
       scheduleSessionMirror(session)
@@ -1430,6 +1500,256 @@ export function createCardBoardCore<
     }
   }
 
+  /* ---------- 判定操作态（作者字段控制权计划阶段 4：节奏域） ---------- */
+
+  /** 当前打开卡片的待确认作者校正操作态（null = 不在操作态） */
+  const authorCorrectionIntent = computed<CardAuthorCorrectionIntent | null>(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return null
+    }
+    const intent = cardRealm.getSession(currentProjectId, card.id)?.authorCorrection
+    return intent ? { ...intent } : null
+  })
+
+  /** 当前打开卡片是否处于待确认的恢复自动判定（两步确认的第二步） */
+  const isRestoreAutoPending = computed(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return false
+    }
+    return cardRealm.getSession(currentProjectId, card.id)?.restoreAutoPending === true
+  })
+
+  /**
+   * 应用/确认的统一门槛：操作态所在会话无未决冲突与守护。与放弃操作态不同，
+   * 不要求 clean——§五.2.2 应用时把同轮未落盘草稿与判定结论合并为一次整体
+   * 保存（显式保存固定当时快照，不等两秒计时）；冲突/守护仍要先解决版本关系。
+   */
+  const judgmentBlocked = computed(() => {
+    const card = activeCard.value
+    if (!card || currentProjectId == null) {
+      return true
+    }
+    const session = cardRealm.getSession(currentProjectId, card.id)
+    return session === undefined || session.conflict !== undefined || session.guard !== undefined
+  })
+
+  /** 应用校正/确认恢复自动可点：操作态中、领域判定钩子已注入、无冲突守护 */
+  const canConfirmAuthorCorrection = computed(() =>
+    authorCorrectionIntent.value !== null && config.judgment !== undefined && !judgmentBlocked.value)
+  const canConfirmRestoreAuto = computed(() =>
+    isRestoreAutoPending.value && config.judgment !== undefined && !judgmentBlocked.value)
+
+  /** 显式判定保存进行中（按钮禁用与重复提交防护；两个操作态互斥，共用一把锁） */
+  const isConfirmingJudgment = ref(false)
+
+  /**
+   * 进入作者校正操作态：表单回填上次取消的暂存或卡片当前有效结论（领域注入
+   * 默认值）；与恢复自动互斥。不请求收口——应用时与未落盘草稿合并保存。
+   * seed.status 供看板拖动入口（阶段 5）指定目标状态。
+   */
+  function startAuthorCorrection(projectId: string, seed?: { status?: string }): boolean {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId || config.judgment === undefined) {
+      return false
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session) {
+      return false
+    }
+    if (!session.authorCorrection) {
+      const base = session.lastAuthorCorrection ?? config.judgment.defaultCorrection(card)
+      session.authorCorrection = {
+        ...base,
+        ...(seed?.status !== undefined ? { status: seed.status } : {}),
+      }
+      delete session.restoreAutoPending
+      session.updatedAt = new Date().toISOString()
+      scheduleSessionMirror(session)
+    }
+    return true
+  }
+
+  /** 校正表单输入（只更新操作态，不触发自动保存） */
+  function updateAuthorCorrection(projectId: string, patch: Partial<CardAuthorCorrectionIntent>): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session?.authorCorrection) {
+      return
+    }
+    session.authorCorrection = { ...session.authorCorrection, ...patch }
+    session.updatedAt = new Date().toISOString()
+    scheduleSessionMirror(session)
+  }
+
+  /** 取消校正：退出表单态，回到先前编辑现场；已填表单暂存（再次进入回填） */
+  function cancelAuthorCorrection(projectId: string): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session?.authorCorrection) {
+      return
+    }
+    session.lastAuthorCorrection = { ...session.authorCorrection }
+    delete session.authorCorrection
+    session.updatedAt = new Date().toISOString()
+    if (config.isEmptyDraft(session.draft) && session.abandon === undefined
+      && session.reasonRevision === undefined && session.restoreAutoPending === undefined) {
+      removeCardBackup(projectId, card.id)
+    } else {
+      scheduleSessionMirror(session)
+    }
+  }
+
+  /**
+   * 应用校正（明确操作，§五.2.2）：点击时固定当时完整快照——表单结论与同轮
+   * 未落盘草稿合并为一次整体保存（引擎显式保存：请求时固定快照、同键串行、
+   * 版本校验、失败不自动补试）。成功后有效结论立即更新（引擎回执同步看板与
+   * 详情）；失败保留全部输入（表单与草稿都在）并就地呈现原因；冲突进入冲突
+   * 处理（外部修改已冻结确认）。领域校验（如「有偏差必须填写说明」）同样
+   * 保留输入。
+   */
+  async function confirmAuthorCorrection(projectId: string): Promise<boolean> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId || config.judgment === undefined || isConfirmingJudgment.value) {
+      return false
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    const intent = session?.authorCorrection
+    if (!session || !intent || !session.diskCard || judgmentBlocked.value) {
+      return false
+    }
+    const deviationNote = intent.deviationNote.trim()
+    if (intent.deviationFlag && !deviationNote) {
+      actionError.value = '作者校正为有偏差时必须填写偏差说明'
+      return false
+    }
+    session.pendingJudgmentSave = {
+      kind: 'authorCorrection',
+      status: intent.status,
+      deviationFlag: intent.deviationFlag,
+      deviationNote,
+    }
+    isConfirmingJudgment.value = true
+    actionError.value = ''
+    try {
+      const result = await cardRealm.requestExplicitSave(projectId, card.id)
+      if (result.status === 'skipped') {
+        // 会话被清除/守护到达：操作未执行，瞬态载荷作废（表单保留）
+        delete session.pendingJudgmentSave
+        return false
+      }
+      if (result.status === 'saved') {
+        delete session.authorCorrection
+        delete session.lastAuthorCorrection
+        settleMirrorAfterExplicitOp(projectId, session)
+        return true
+      }
+      // failed / conflict：引擎已登记失败与冲突并同步现场；表单、草稿与操作态
+      // 全部保留，用户处理后再试
+      return false
+    } finally {
+      isConfirmingJudgment.value = false
+    }
+  }
+
+  /**
+   * 进入恢复自动确认态（两步确认第一步，§五.3）：界面展示「当前作者结论 →
+   * 按最新值与阈值预演的自动结论」，确认才落盘。与作者校正操作态互斥：进入时
+   * 未应用的校正表单按取消暂存（不丢输入）。
+   */
+  function startRestoreAuto(projectId: string): boolean {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId || config.judgment === undefined) {
+      return false
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session) {
+      return false
+    }
+    if (!session.restoreAutoPending) {
+      if (session.authorCorrection) {
+        session.lastAuthorCorrection = { ...session.authorCorrection }
+        delete session.authorCorrection
+      }
+      session.restoreAutoPending = true
+      session.updatedAt = new Date().toISOString()
+      scheduleSessionMirror(session)
+    }
+    return true
+  }
+
+  /** 取消恢复自动：退出确认态，回到先前编辑现场（人工结论与输入都不动） */
+  function cancelRestoreAuto(projectId: string): void {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId) {
+      return
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session || session.restoreAutoPending !== true) {
+      return
+    }
+    delete session.restoreAutoPending
+    session.updatedAt = new Date().toISOString()
+    if (config.isEmptyDraft(session.draft) && session.abandon === undefined
+      && session.reasonRevision === undefined && session.authorCorrection === undefined) {
+      removeCardBackup(projectId, card.id)
+    } else {
+      scheduleSessionMirror(session)
+    }
+  }
+
+  /**
+   * 确认恢复自动（§五.3）：固定当时完整快照，按最新计划值、实际值与阈值一次
+   * 保存（同轮未落盘草稿合并提交）；不清空实际值，作者历史说明保留。成功后
+   * 有效来源切回自动；失败或冲突时人工结论与输入保留。
+   */
+  async function confirmRestoreAuto(projectId: string): Promise<boolean> {
+    const card = activeCard.value
+    if (!card || currentProjectId !== projectId || config.judgment === undefined || isConfirmingJudgment.value) {
+      return false
+    }
+    const session = cardRealm.getSession(projectId, card.id)
+    if (!session || session.restoreAutoPending !== true || !session.diskCard || judgmentBlocked.value) {
+      return false
+    }
+    session.pendingJudgmentSave = { kind: 'restoreAuto' }
+    isConfirmingJudgment.value = true
+    actionError.value = ''
+    try {
+      const result = await cardRealm.requestExplicitSave(projectId, card.id)
+      if (result.status === 'skipped') {
+        delete session.pendingJudgmentSave
+        return false
+      }
+      if (result.status === 'saved') {
+        delete session.restoreAutoPending
+        settleMirrorAfterExplicitOp(projectId, session)
+        return true
+      }
+      return false
+    } finally {
+      isConfirmingJudgment.value = false
+    }
+  }
+
+  /** 显式判定保存成功后的镜像收口：草稿与其余操作态都干净时清镜像，否则保留 */
+  function settleMirrorAfterExplicitOp(projectId: string, session: CardSaveSession<TDraft, TCard>): void {
+    if (config.isEmptyDraft(session.draft)
+      && session.abandon === undefined && session.reasonRevision === undefined
+      && session.authorCorrection === undefined && session.restoreAutoPending === undefined) {
+      removeCardBackup(projectId, session.cardId)
+    } else {
+      scheduleSessionMirror(session)
+    }
+  }
+
   /**
    * 重新进入项目时从浏览器恢复镜像回填卡片会话（不写盘；核对规则见
    * save-session：内容已一致清冗余；基线一致回填待续存；磁盘已变建立冲突；
@@ -1444,14 +1764,16 @@ export function createCardBoardCore<
         snapshot: record.draft as unknown as TDraft,
         baseSnapshot: config.emptyDraft(),
         ...(record.baseContentHash !== undefined ? { baseVersion: record.baseContentHash } : {}),
-        // 带放弃操作态的记录：草稿内容即使已全部落盘也不做冗余清理，
-        // 保留会话让下方回填操作态（阶段 4）
-        ...(record.abandon !== undefined || record.reasonRevision !== undefined ? { keepAlive: true } : {}),
+        // 带操作态（放弃/原因修订/作者校正/恢复自动）的记录：草稿内容即使已
+        // 全部落盘也不做冗余清理，保留会话让下方回填操作态（阶段 4）
+        ...(record.abandon !== undefined || record.reasonRevision !== undefined
+          || record.authorCorrection !== undefined || record.restoreAutoPending !== undefined
+          ? { keepAlive: true } : {}),
         updatedAt: record.updatedAt,
       })),
     )
-    // 记录里携带的编辑模式与待确认放弃操作态回填到会话（重开时恢复视图态；
-    // 放弃操作态恢复后仍待用户再次明确确认，绝不自动放弃——阶段 4）
+    // 记录里携带的编辑模式与待确认操作态回填到会话（重开时恢复视图态；
+    // 操作态恢复后仍待用户再次明确确认，绝不自动执行——阶段 4）
     for (const record of records) {
       const session = cardRealm.getSession(projectId, record.cardId)
       if (session) {
@@ -1461,6 +1783,12 @@ export function createCardBoardCore<
         }
         if (record.reasonRevision !== undefined) {
           session.reasonRevision = { ...record.reasonRevision }
+        }
+        if (record.authorCorrection !== undefined) {
+          session.authorCorrection = { ...record.authorCorrection }
+        }
+        if (record.restoreAutoPending !== undefined) {
+          session.restoreAutoPending = true
         }
       }
     }
@@ -1710,6 +2038,8 @@ export function createCardBoardCore<
     board,
     isLoading,
     errorMessage,
+    /** 当前项目 id（非响应式读取；领域做项目级派生计算用） */
+    getActiveProjectId: () => currentProjectId,
     boardSyncSource,
     manualRefreshedCount,
     activeCard,
@@ -1764,6 +2094,18 @@ export function createCardBoardCore<
     updateReasonRevision,
     cancelReasonRevision,
     confirmReasonRevision,
+    authorCorrectionIntent,
+    isRestoreAutoPending,
+    canConfirmAuthorCorrection,
+    canConfirmRestoreAuto,
+    isConfirmingJudgment,
+    startAuthorCorrection,
+    updateAuthorCorrection,
+    cancelAuthorCorrection,
+    confirmAuthorCorrection,
+    startRestoreAuto,
+    cancelRestoreAuto,
+    confirmRestoreAuto,
     freezeForExternalChange,
     hasCardDraft,
     setCardGuard,
