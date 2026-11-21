@@ -130,6 +130,14 @@ const segments = computed<TextHighlightSegment[] | null>(() => {
   if (c.kind === 'create') {
     return c.content === '' ? [] : [{ kind: 'green' as const, text: c.content }]
   }
+  if (isAppendLedger.value) {
+    // 关系账本的更新确认：oldText 是展示用占位符，磁盘里定位不到也不该定位——
+    // 直接展示要改的字段（绿），否则会落到「目标文件不可读」兜底文案误导作者
+    return [
+      { kind: 'plain' as const, text: '将修改这条关系的以下字段（实际差异以执行结果为准）：\n' },
+      { kind: 'green' as const, text: c.newText },
+    ]
+  }
   if (diskFile.value === null) return null
   return buildPendingReplaceSegments(
     diskFile.value.content,

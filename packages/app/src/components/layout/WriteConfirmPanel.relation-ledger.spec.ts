@@ -149,4 +149,29 @@ describe('WriteConfirmPanel 关系账本追加确认', () => {
     expect(probeFile).toHaveBeenCalledTimes(2)
     expect(wrapper.emitted('confirm')).toHaveLength(1)
   })
+
+  it('更新确认预览：账本可读时展示要改的字段，不落到「目标文件不可读」兜底文案', async () => {
+    const wrapper = mount(WriteConfirmPanel, {
+      props: {
+        confirmation: {
+          id: 'cf-rel-edit-preview',
+          toolName: 'RelationUpdate',
+          title: '修改文件：elements/relations.json',
+          summary: '将修改 elements/relations.json',
+          confirmation: {
+            kind: 'edit',
+            path: 'elements/relations.json',
+            oldText: '（关系字段更新，差异以执行结果为准）',
+            newText: '类型 → 叛离\n描述 → 赵四已叛出青云宗',
+          },
+        } as unknown as FileChangeConfirmationView,
+        totalCount: 1,
+      },
+    })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('类型 → 叛离'))
+
+    expect(wrapper.text()).toContain('描述 → 赵四已叛出青云宗')
+    expect(wrapper.text()).not.toContain('目标文件当前不可读')
+    expect(wrapper.find('.confirm-hl-green').text()).toContain('类型 → 叛离')
+  })
 })
