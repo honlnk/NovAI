@@ -5,14 +5,16 @@ import type { RhythmCardSummaryView, RhythmStatusView } from '@novai/core/servic
 import BoardPanel from '../card-board/BoardPanel.vue'
 import {
   conflictIntensityClass,
+  isRhythmDropAllowed,
   isRhythmReorderOnly,
   rhythmDisplayColumns,
 } from '../../constants/rhythm'
 
 /**
- * 节奏看板主面板：通用看板骨架的节奏领域装配（§七）。固定三列（规划中/已写/
- * 偏差）；状态不由 UI 手改——拖拽只放行同列重排（偏差列不可拖出，规划中/已写
- * 之间也不可互拖），跨列流转全由 actual_* 回写的偏差判定驱动。
+ * 节奏看板主面板：通用看板骨架的节奏领域装配（§七 + 作者字段控制权阶段 5 §六）。
+ * 固定三列（规划中/已写/偏差）。拖拽分流：同列松手即时重排（不改判定）；跨列
+ * 松手上抛 crossMove——打开该卡详情的作者校正操作态（目标状态已选、落点暂存），
+ * 「应用校正」一次保存判定与落点后看板才移动，取消/切卡不动原位。
  *
  * 卡片展示：章节名 + 计划冲突强度（1~3 绿/4~6 黄/7~10 红）+ 情绪/钩子标签；
  * 已回写时给计划↔实际对比（一致绿勾、偏差红警）。
@@ -33,6 +35,7 @@ const emit = defineEmits<{
   openCreate: []
   openCard: [id: string]
   moveCard: [id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null]
+  crossMove: [id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null]
   retryLoad: []
   toggleSidebar: []
   toggleMobileSidebar: []
@@ -51,14 +54,20 @@ const totalCards = computed(() => allCards.value.length)
 
 const columns = computed(() => rhythmDisplayColumns(props.board))
 
-/** 落点放行：同列重排才显示占位并上抛（跨列拖拽静默忽略——状态只由回写驱动） */
-function isRhythmDropAllowed(id: string, columnKey: string) {
-  return isRhythmReorderOnly(props.board, id, columnKey)
+/** 落点放行（§六）：三列都显示合法落点——同列即时重排，跨列进作者校正操作态 */
+function dropAllowed(id: string, columnKey: string) {
+  return isRhythmDropAllowed(props.board, id, columnKey)
 }
 
+/**
+ * 松手分流：同列 = 即时重排（moveCard）；跨列 = 作者校正操作态（crossMove：
+ * 打开详情、目标状态已选、落点暂存，应用前看板不动）。
+ */
 function onBoardMoveCard(id: string, columnKey: string, afterId: string | null, beforeId?: string | null) {
   if (isRhythmReorderOnly(props.board, id, columnKey)) {
     emit('moveCard', id, columnKey as RhythmStatusView, afterId, beforeId)
+  } else if (isRhythmDropAllowed(props.board, id, columnKey)) {
+    emit('crossMove', id, columnKey as RhythmStatusView, afterId, beforeId)
   }
 }
 
@@ -89,7 +98,7 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
     empty-create-label="规划一张节奏卡"
     testid-prefix="rhythm"
     empty-column-text="暂无节奏卡"
-    :can-drop-card="isRhythmDropAllowed"
+    :can-drop-card="dropAllowed"
     @open-create="emit('openCreate')"
     @open-card="emit('openCard', $event)"
     @move-card="onBoardMoveCard"
@@ -103,7 +112,7 @@ function compareSummary(card: RhythmCardSummaryView): { ok: boolean; text: strin
         class="flex shrink-0 items-center gap-1.5 border-b border-gray-100 bg-gray-50/60 px-4 py-1.5 text-[11px] leading-relaxed text-gray-500"
         data-testid="rhythm-board-hint"
       >
-        三列状态不是手动归档：写完章节后回写实际值，系统自动判定（与计划一致 → 已写，走样 → 偏差）。跨列拖拽不可用，拖动仅调整列内顺序。
+        三列状态默认由回写实际值自动判定（与计划一致 → 已写，走样 → 偏差）。同列拖动即时重排；跨列拖动会打开该卡的作者校正操作态——应用后一次保存判定与落点，看板才会移动。
       </div>
     </template>
 

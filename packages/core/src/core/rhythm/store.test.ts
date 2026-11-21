@@ -886,3 +886,79 @@ describe('判定来源与作者校正（阶段 4）', () => {
     expect(copied.lastJudgmentThreshold).toBe(3)
   })
 })
+
+describe('跨列校正与落点（阶段 5）', () => {
+  /** 已回写并判偏差的卡：计划冲突 3、实际 7（阈值 3 → deviated） */
+  async function createDeviated() {
+    const card = await createRhythmCard(project(), seedOptions())
+    return updateRhythmCard(project(), {
+      id: card.id,
+      actualConflict: 7,
+      actualMood: '温馨',
+      actualHook: '无',
+      actualPayoff: '收获',
+    })
+  }
+
+  it('跨列校正 + 落点一次保存：状态、结论与目标列位置同轮落盘', async () => {
+    // 已写列两张锚卡（创建 order 按 planned 列起点算，先同列重排拉开为 0 与 100）
+    const anchorA = await createRhythmCard(project(), seedOptions({
+      name: '锚A', chapterRef: '第二卷/第090章', actualConflict: 3, now: new Date('2026-11-01T00:00:00Z'),
+    }))
+    const anchorB = await createRhythmCard(project(), seedOptions({
+      name: '锚B', chapterRef: '第二卷/第091章', actualConflict: 3, now: new Date('2026-11-02T00:00:00Z'),
+    }))
+    const anchored = await updateRhythmCard(project(), { id: anchorB.id, afterId: anchorA.id })
+    expect(anchorA.status).toBe('written')
+    expect(anchored.status).toBe('written')
+    expect(anchorA.order).toBe(0)
+    expect(anchored.order).toBe(100)
+
+    const deviated = await createDeviated()
+    const corrected = await updateRhythmCard(project(), {
+      id: deviated.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+      afterId: anchorA.id,
+    })
+
+    expect(corrected.status).toBe('written')
+    expect(corrected.judgmentSource).toBe('author')
+    // 落点在锚A（order 0）与锚B（order 100）之间
+    expect(corrected.order).toBe(50)
+  })
+
+  it('拖到规划中列首：只校正分类，实际值保留，order 落列首', async () => {
+    const plannedAnchor = await createRhythmCard(project(), seedOptions({
+      name: '规划锚', chapterRef: '第二卷/第090章', now: new Date('2026-11-01T00:00:00Z'),
+    }))
+    expect(plannedAnchor.order).toBe(0)
+
+    const deviated = await createDeviated()
+    const corrected = await updateRhythmCard(project(), {
+      id: deviated.id,
+      authorJudgment: { status: 'planned', deviationFlag: false },
+      beforeId: null,
+    })
+
+    expect(corrected.status).toBe('planned')
+    expect(corrected.actualConflict).toBe(7)
+    expect(corrected.order).toBeLessThan(plannedAnchor.order)
+  })
+
+  it('无实际比较值时跨列校正已写/偏差被拦（自评不计入），规划中放行', async () => {
+    const card = await createRhythmCard(project(), seedOptions({ actualNote: '只有自评' }))
+    await expect(updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+      afterId: null,
+    })).rejects.toThrow('至少一项已填写')
+
+    const planned = await updateRhythmCard(project(), {
+      id: card.id,
+      authorJudgment: { status: 'planned', deviationFlag: false },
+      afterId: null,
+    })
+    expect(planned.status).toBe('planned')
+    expect(planned.order).toBe(0)
+  })
+})

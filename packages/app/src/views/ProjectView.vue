@@ -1473,7 +1473,7 @@ async function handleRhythmSubmitCreate() {
   }
 }
 
-/** 看板列内重排（跨列拖拽在 constants/rhythm.ts 落点放行处已被忽略） */
+/** 看板列内重排（即时生效，不改判定） */
 async function handleRhythmMove(id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null) {
   if (!projectStore.currentProject) {
     return
@@ -1484,6 +1484,14 @@ async function handleRhythmMove(id: string, status: RhythmStatusView, afterId: s
   if (!ok) {
     toast.error(rhythmStore.actionError || '移动节奏卡失败')
   }
+}
+
+/** 跨列拖拽松手（阶段 5 §六）：打开详情进作者校正操作态，应用前看板不动 */
+async function handleRhythmCrossMove(id: string, status: RhythmStatusView, afterId: string | null, beforeId?: string | null) {
+  if (!projectStore.currentProject) {
+    return
+  }
+  await rhythmStore.crossMoveCard(projectId.value, id, status, afterId, beforeId)
 }
 
 /** 状态条「重试」（阶段 2 无保存心智）：手动重开当前节奏卡的失败保存 */
@@ -1665,6 +1673,7 @@ function handleGoToSettings() {
         @open-create="handleOpenRhythmCreate"
         @open-card="handleOpenRhythmCard"
         @move-card="handleRhythmMove"
+        @cross-move="handleRhythmCrossMove"
         @retry-load="handleRhythmRefresh"
         @toggle-sidebar="toggleSidebar"
         @toggle-mobile-sidebar="toggleMobileSidebar"
@@ -1894,6 +1903,7 @@ function handleGoToSettings() {
           :comparison-edit-warning="rhythmStore.comparisonEditWarning"
           :restore-auto-preview="rhythmStore.restoreAutoPreview"
           :author-correction="rhythmStore.authorCorrectionIntent"
+          :correction-placement="rhythmStore.correctionPlacementLabel"
           :restore-auto-pending="rhythmStore.isRestoreAutoPending"
           :can-confirm-author-correction="rhythmStore.canConfirmAuthorCorrection"
           :can-confirm-restore-auto="rhythmStore.canConfirmRestoreAuto"

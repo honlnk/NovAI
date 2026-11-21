@@ -52,6 +52,12 @@ export type PersistedCardDraftRecord = {
    * 没有额外输入。未确认绝不自动写盘；旧记录无此字段按无操作态恢复。
    */
   restoreAutoPending?: true
+  /**
+   * 跨列拖拽的暂存落点（作者字段控制权计划阶段 5 §六，节奏域）：目标列与
+   * 列内锚点。「应用校正」一次保存才落盘；未应用绝不移动。旧记录无此字段
+   * 按无待确认落点恢复。
+   */
+  pendingPlacement?: { status: string; afterId: string | null; beforeId?: string | null }
   updatedAt: string
 }
 
@@ -178,8 +184,8 @@ async function writeLatestPending(key: string): Promise<void> {
 
 /**
  * 记录一条卡片草稿备份（去抖）；会话每次输入、模式切换调用。快照外的待确认
- * 操作态（放弃/原因修订/作者校正/恢复自动）一并入镜像——刷新后按待确认状态
- * 恢复，绝不自动执行。
+ * 操作态（放弃/原因修订/作者校正/恢复自动/跨列落点）一并入镜像——刷新后按
+ * 待确认状态恢复，绝不自动执行。
  */
 export function scheduleCardBackup(
   projectId: string,
@@ -192,6 +198,7 @@ export function scheduleCardBackup(
     reasonRevision?: PersistedCardDraftRecord['reasonRevision']
     authorCorrection?: PersistedCardDraftRecord['authorCorrection']
     restoreAutoPending?: PersistedCardDraftRecord['restoreAutoPending']
+    pendingPlacement?: PersistedCardDraftRecord['pendingPlacement']
   },
 ): void {
   const key = buildCardDraftKey(projectId, cardId)
@@ -206,6 +213,7 @@ export function scheduleCardBackup(
     ...(entry.reasonRevision !== undefined ? { reasonRevision: { ...entry.reasonRevision } } : {}),
     ...(entry.authorCorrection !== undefined ? { authorCorrection: { ...entry.authorCorrection } } : {}),
     ...(entry.restoreAutoPending !== undefined ? { restoreAutoPending: true } : {}),
+    ...(entry.pendingPlacement !== undefined ? { pendingPlacement: { ...entry.pendingPlacement } } : {}),
     updatedAt: new Date().toISOString(),
   })
   const existing = debounceTimers.get(key)

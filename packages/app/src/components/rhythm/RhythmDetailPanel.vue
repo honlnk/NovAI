@@ -40,6 +40,8 @@ const props = defineProps<{
   restoreAutoPreview: { status: RhythmCardView['status']; deviationFlag: boolean; deviationNote: string | null } | null
   /** 待确认的作者校正表单（null = 不在操作态） */
   authorCorrection: { status: string; deviationFlag: boolean; deviationNote: string } | null
+  /** 跨列拖拽的待确认落点描述（阶段 5 §六；null = 无暂存移动） */
+  correctionPlacement: string | null
   /** 待确认的恢复自动判定（两步确认第二步） */
   restoreAutoPending: boolean
   /** 应用校正/确认恢复自动可点（无冲突守护，操作态中） */
@@ -645,6 +647,9 @@ function fillActualConflict() {
         <!-- 作者校正表单（原位展开） -->
         <div v-if="authorCorrection" class="mt-2 rounded-md border border-blue-200 bg-blue-50/50 px-2.5 py-2" data-testid="rhythm-detail-correction-form">
           <p class="mb-1.5 text-[11px] font-medium text-blue-700">作者校正（明确操作：应用时与未保存修改合并为一次保存）</p>
+          <p v-if="correctionPlacement" class="mb-1.5 text-[11px] text-blue-700" data-testid="rhythm-detail-correction-placement">
+            {{ correctionPlacement }}
+          </p>
           <div class="grid grid-cols-2 gap-2">
             <label class="flex flex-col gap-1">
               <span class="text-xs text-gray-600">状态</span>

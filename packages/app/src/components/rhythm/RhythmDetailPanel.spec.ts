@@ -94,6 +94,7 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       comparisonEditWarning: false,
       restoreAutoPreview: null,
       authorCorrection: null,
+      correctionPlacement: null,
       restoreAutoPending: false,
       canConfirmAuthorCorrection: true,
       canConfirmRestoreAuto: true,
@@ -406,6 +407,21 @@ describe('节奏详情：判定操作态（阶段 4 §五）', () => {
     expect(wrapper.emitted('confirmRestoreAuto')).toHaveLength(1)
     await block.find('[data-testid="rhythm-detail-restore-auto-cancel"]').trigger('click')
     expect(wrapper.emitted('cancelRestoreAuto')).toHaveLength(1)
+  })
+
+  it('跨列拖拽落点提示（阶段 5）：校正表单上方展示应用后的落点说明，无落点时不渲染', () => {
+    const placement = '应用后将移动到「已写」列（「第082章 节奏」之后）；取消或离开不动原位'
+    const wrapper = mountPanel({
+      authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' },
+      correctionPlacement: placement,
+    })
+    const hint = wrapper.find('[data-testid="rhythm-detail-correction-placement"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toBe(placement)
+
+    // 非拖拽进入的校正（无落点）不渲染该提示
+    const plain = mountPanel({ authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' } })
+    expect(plain.find('[data-testid="rhythm-detail-correction-placement"]').exists()).toBe(false)
   })
 
   it('历史人工说明：恢复自动后默认折叠展示作者历史说明', () => {

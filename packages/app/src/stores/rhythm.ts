@@ -17,7 +17,7 @@ import type {
   RhythmCardView,
   RhythmStatusView,
 } from '@novai/core/services/types'
-import { RHYTHM_STATUSES, RhythmConflictError } from '@novai/core/types/rhythm'
+import { RHYTHM_COLUMN_LABELS, RHYTHM_STATUSES, RhythmConflictError } from '@novai/core/types/rhythm'
 import type { RhythmStatus } from '@novai/core/types/rhythm'
 import { createCardBoardCore } from './card-board'
 import type { CardAuthorCorrectionIntent, CardConflictField, CardJudgmentOp } from './card-board'
@@ -294,7 +294,8 @@ export const useRhythmStore = defineStore('rhythm', () => {
     // 正文三节一轮保存不拆请求（作者字段控制权计划阶段 3）；计划值或实际值改动会
     // 触发偏差重判定，状态由服务层自动流转；overwrite（「采用我的当前内容」）
     // 为整份覆盖写入，不携带版本校验；judgmentOp（阶段 4 显式判定保存）与草稿
-    // 增量合并为同一轮提交——一次保存同时落字段与判定结论
+    // 增量合并为同一轮提交——一次保存同时落字段与判定结论；placement（阶段 5
+    // 跨列落点）只在显式判定保存里随 judgmentOp 携带，落点列由提交的校正状态决定
     saveCard: (projectId, card, draft, options) => {
       const changes = rhythmChanges(card, draft)
       if (changes.actualConflictInvalid) {
@@ -307,6 +308,10 @@ export const useRhythmStore = defineStore('rhythm', () => {
         id: card.id,
         ...changes.payload,
         ...judgmentOpExtras(options?.judgmentOp),
+        ...(options?.placement ? {
+          afterId: options.placement.afterId,
+          ...(options.placement.beforeId !== undefined ? { beforeId: options.placement.beforeId } : {}),
+        } : {}),
         ...(options?.overwrite ? {} : { expectedContentHash: card.contentHash }),
       })
     },
@@ -375,8 +380,8 @@ export const useRhythmStore = defineStore('rhythm', () => {
       { key: 'linkBody', label: '上下文衔接', mine: mine.linkBody, disk: disk.linkBody, kind: 'long' },
       { key: 'authorNoteBody', label: '作者备注', mine: mine.authorNoteBody, disk: disk.authorNoteBody, kind: 'long' },
     ],
-    // 列内重排 only：跨列流转由 actual_* 回写驱动，status 形参只是工厂签名对齐
-    // （调用方只会在同列重排时触达这里，见 constants/rhythm.ts 的落点放行）
+    // 列内重排 only（阶段 5 §六）：跨列拖拽不走这里——RhythmBoardPanel 分流到
+    // crossMove（作者校正操作态 + 暂存落点），「应用校正」一次保存才移动看板
     moveCard: (projectId, id, _status, afterId, beforeId) => updateRhythm(projectId, { id, afterId, beforeId }),
     deleteCard: (projectId, id) => deleteRhythm(projectId, id),
     submitCreate: (projectId, draft) => createRhythm(projectId, {
@@ -490,6 +495,51 @@ export const useRhythmStore = defineStore('rhythm', () => {
     }, readRhythmDeviationThreshold(projectId))
   })
 
+  /* ----- 跨列拖拽（阶段 5 §六）：落点暂存 + 应用校正一次保存 ----- */
+
+  /** 校正表单里的待确认落点描述（null = 无跨列暂存）：应用后将移动到目标列的位置 */
+  const correctionPlacementLabel = computed(() => {
+    const placement = core.pendingPlacement.value
+    if (!placement) {
+      return null
+    }
+    const columnLabel = RHYTHM_COLUMN_LABELS[placement.status as RhythmStatus] ?? placement.status
+    const board = core.board.value
+    const anchorName = (id: string): string => {
+      const summary = board
+        ? (Object.values(board.columns) as RhythmCardSummaryView[][])
+            .flat().find((card) => card.id === id)
+        : undefined
+      return summary?.name ?? id
+    }
+    const anchor = placement.beforeId != null
+      ? `「${anchorName(placement.beforeId)}」之前`
+      : placement.afterId != null
+        ? `「${anchorName(placement.afterId)}」之后`
+        : '列尾'
+    return `应用后将移动到「${columnLabel}」列（${anchor}）；取消或离开不动原位`
+  })
+
+  /**
+   * 跨列拖拽松手（阶段 5 §六）：打开该卡详情并进入作者校正操作态——目标状态
+   * 已选中、落点暂存待确认；应用前看板保持原位。不先修改真实看板，也不直接
+   * 改状态。
+   */
+  async function crossMoveCard(
+    projectId: string,
+    id: string,
+    status: RhythmStatusView,
+    afterId: string | null,
+    beforeId?: string | null,
+  ): Promise<void> {
+    await core.openCard(projectId, id)
+    core.startAuthorCorrection(
+      projectId,
+      { status },
+      { status, afterId, ...(beforeId !== undefined ? { beforeId } : {}) },
+    )
+  }
+
   /** 节奏卡名草稿（详情头部输入框）；null = 无未保存修改 */
   const draftName = computed(() => core.draft.value?.name ?? null)
   const draftChapterRef = computed(() => core.draft.value?.chapterRef ?? null)
@@ -536,6 +586,8 @@ export const useRhythmStore = defineStore('rhythm', () => {
     historicalAuthorNote,
     comparisonEditWarning,
     restoreAutoPreview,
+    correctionPlacementLabel,
+    crossMoveCard,
     draftName,
     draftChapterRef,
     draftPlannedConflict,

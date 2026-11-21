@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import type { RhythmBoardView, RhythmCardView } from '@novai/core/services/types'
+import type { RhythmBoardView, RhythmCardSummaryView, RhythmCardView } from '@novai/core/services/types'
 import { RhythmError } from '@novai/core/types/rhythm'
 
 import { useRhythmStore } from './rhythm'
@@ -401,5 +401,189 @@ describe('待确认操作态的镜像与冻结（阶段 4 §五.2.4）', () => {
     expect(store.canConfirmAuthorCorrection).toBe(false)
     // 操作态保留（冲突解决后继续处理）
     expect(store.authorCorrectionIntent).not.toBeNull()
+  })
+})
+
+describe('跨列拖拽校正（阶段 5 §六）', () => {
+  /** 带锚卡的看板（落点描述要引用锚卡名称） */
+  function anchorBoard(): RhythmBoardView {
+    const summary = (id: string, name: string): RhythmCardSummaryView => ({
+      id,
+      name,
+      status: 'written',
+      order: 100,
+      createdAt: '',
+      updatedAt: '',
+      chapterRef: '第082章',
+      plannedConflict: 5,
+      plannedMood: '紧张',
+      plannedHook: '悬念',
+      plannedPayoff: '揭秘',
+      actualConflict: 5,
+      actualMood: '紧张',
+      actualHook: '悬念',
+      actualPayoff: '揭秘',
+      deviationFlag: false,
+      judgmentSource: 'auto',
+      thresholdPending: false,
+      summary: '',
+      sourcePath: `rhythm/${id}.md`,
+    })
+    return {
+      columns: { planned: [], written: [summary('r2', '第082章节奏')], deviated: [summary('r9', '第081章节奏')] },
+      issues: [],
+    }
+  }
+
+  it('跨列松手：打开详情进校正操作态——目标状态预选并联动偏差结论，落点暂存进镜像；应用前不写盘', async () => {
+    const card = view({
+      status: 'deviated',
+      deviationFlag: true,
+      actualConflict: 7,
+      actualMood: '温馨',
+      actualHook: '无',
+      actualPayoff: '收获',
+      deviationNote: '冲突强度偏高',
+    })
+    const store = await openCard(card)
+    getRhythmBoard.mockResolvedValue(anchorBoard())
+    await store.loadBoard(PROJECT)
+
+    await store.crossMoveCard(PROJECT, 'r1', 'written', 'r2')
+    // 拖到「已写」= 目标状态预选 + 偏差结论联动为无偏差（与表单状态选择器同一联动）
+    expect(store.authorCorrectionIntent).toEqual({ status: 'written', deviationFlag: false, deviationNote: '' })
+    expect(store.correctionPlacementLabel).toBe('应用后将移动到「已写」列（「第082章节奏」之后）；取消或离开不动原位')
+
+    await settleMirror()
+    const record = memoryStore.records.get(JSON.stringify([PROJECT, 'r1']))
+    expect(record?.authorCorrection).toEqual({ status: 'written', deviationFlag: false, deviationNote: '' })
+    expect(record?.pendingPlacement).toEqual({ status: 'written', afterId: 'r2' })
+    // 应用前看板不动：不发起任何写盘
+    expect(updateRhythm).not.toHaveBeenCalled()
+  })
+
+  it('应用校正：判定与落点一次保存（同一载荷携带 authorJudgment 与 afterId/beforeId）；成功后落点收口、看板刷新', async () => {
+    const store = await openCard(authorCard({ status: 'deviated', deviationFlag: true }))
+
+    // 列首落点：BoardPanel 对列首发出 afterId=null + beforeId=目标列首卡
+    await store.crossMoveCard(PROJECT, 'r1', 'written', null, 'r2')
+    updateRhythm.mockResolvedValue(authorCard({ status: 'written', contentHash: 'hash-r2' }))
+    await expect(store.confirmAuthorCorrection(PROJECT)).resolves.toBe(true)
+
+    expect(updateRhythm).toHaveBeenCalledTimes(1)
+    const payload = updateRhythm.mock.calls[0]![1] as Record<string, unknown>
+    expect(payload.authorJudgment).toEqual({ status: 'written', deviationFlag: false })
+    expect(payload.afterId).toBeNull()
+    expect(payload.beforeId).toBe('r2')
+
+    // 成功收口：操作态与落点一并清除、看板刷新、镜像清除
+    expect(store.authorCorrectionIntent).toBeNull()
+    expect(store.correctionPlacementLabel).toBeNull()
+    expect(getRhythmBoard).toHaveBeenCalledTimes(1)
+    await settleMirror()
+    expect(memoryStore.records.get(JSON.stringify([PROJECT, 'r1']))).toBeUndefined()
+  })
+
+  it('取消校正：落点一并丢弃（要移动重新拖），不写盘；再次进入回填表单但无落点', async () => {
+    const store = await openCard(authorCard())
+
+    await store.crossMoveCard(PROJECT, 'r1', 'deviated', 'r2')
+    store.cancelAuthorCorrection(PROJECT)
+    expect(store.authorCorrectionIntent).toBeNull()
+    expect(store.correctionPlacementLabel).toBeNull()
+    expect(updateRhythm).not.toHaveBeenCalled()
+    await settleMirror()
+    expect(memoryStore.records.get(JSON.stringify([PROJECT, 'r1']))).toBeUndefined()
+
+    // 表单暂存回填（取消保留输入），落点不暂存
+    store.startAuthorCorrection(PROJECT)
+    expect(store.authorCorrectionIntent).not.toBeNull()
+    expect(store.correctionPlacementLabel).toBeNull()
+  })
+
+  it('应用失败：落点与表单保留；重试成功后一并收口', async () => {
+    const store = await openCard(authorCard())
+    updateRhythm.mockResolvedValue(authorCard({ contentHash: 'hash-r2' }))
+
+    await store.crossMoveCard(PROJECT, 'r1', 'written', 'r2')
+    updateRhythm.mockRejectedValueOnce(new RhythmError('网络写入失败'))
+    await expect(store.confirmAuthorCorrection(PROJECT)).resolves.toBe(false)
+    expect(store.authorCorrectionIntent).not.toBeNull()
+    expect(store.correctionPlacementLabel).not.toBeNull()
+
+    await expect(store.confirmAuthorCorrection(PROJECT)).resolves.toBe(true)
+    const calls = updateRhythm.mock.calls.map(call => call[1] as Record<string, unknown>)
+    expect(calls.every(payload => payload.afterId === 'r2' && payload.authorJudgment !== undefined)).toBe(true)
+    expect(store.correctionPlacementLabel).toBeNull()
+  })
+
+  it('普通自动保存不携带落点：落点只在显式判定保存随行，自动保存后仍待确认', async () => {
+    const store = await openCard(authorCard())
+    updateRhythm.mockResolvedValue(authorCard({ contentHash: 'hash-r2' }))
+
+    await store.crossMoveCard(PROJECT, 'r1', 'written', 'r2')
+    store.updateDraft({ intentBody: '同轮改的正文意图。' })
+
+    // 两秒自动保存照常进行，但落点不随行（看板位置只由「应用校正」决定）
+    await vi.advanceTimersByTimeAsync(6000)
+    const autosave = updateRhythm.mock.calls[0]![1] as Record<string, unknown>
+    expect(autosave.intentBody).toBe('同轮改的正文意图。')
+    expect(autosave.afterId).toBeUndefined()
+    expect(autosave.authorJudgment).toBeUndefined()
+    // 落点仍在会话里待确认
+    expect(store.correctionPlacementLabel).not.toBeNull()
+    expect(store.authorCorrectionIntent).not.toBeNull()
+  })
+
+  it('与恢复自动互斥：进入恢复自动时落点丢弃（移动属于校正操作的一部分）', async () => {
+    const store = await openCard(authorCard())
+
+    await store.crossMoveCard(PROJECT, 'r1', 'written', 'r2')
+    expect(store.startRestoreAuto(PROJECT)).toBe(true)
+    expect(store.isRestoreAutoPending).toBe(true)
+    expect(store.correctionPlacementLabel).toBeNull()
+  })
+
+  it('刷新恢复：落点与操作态一并回填仍待确认，不自动执行；确认后落点随显式保存生效', async () => {
+    const card = authorCard({ status: 'deviated', deviationFlag: true })
+    const store = await openCard(card)
+    await store.crossMoveCard(PROJECT, 'r1', 'written', 'r2')
+    await settleMirror()
+    expect(memoryStore.records.size).toBe(1)
+
+    // 模拟刷新：全新 pinia + store，按生产路径恢复镜像
+    setActivePinia(createPinia())
+    const store2 = useRhythmStore()
+    store2.setCardAutosaveEnabled(true)
+    readRhythm.mockResolvedValue(card)
+    getRhythmBoard.mockResolvedValue(emptyBoard())
+    await store2.restoreCardDrafts(PROJECT)
+    await store2.openCard(PROJECT, 'r1')
+
+    expect(store2.authorCorrectionIntent).toEqual({ status: 'written', deviationFlag: false, deviationNote: '' })
+    expect(store2.correctionPlacementLabel).toContain('「已写」列')
+    // 恢复只回填待确认状态，不写盘
+    expect(updateRhythm).not.toHaveBeenCalled()
+
+    // 确认从恢复的落点继续：显式保存携带 afterId
+    updateRhythm.mockResolvedValue(authorCard({ status: 'written', contentHash: 'hash-r2' }))
+    await expect(store2.confirmAuthorCorrection(PROJECT)).resolves.toBe(true)
+    const payload = updateRhythm.mock.calls[0]![1] as Record<string, unknown>
+    expect(payload.authorJudgment).toBeDefined()
+    expect(payload.afterId).toBe('r2')
+  })
+
+  it('外部修改到达：跨列暂存中的确认随之冻结（落点保留，冲突解决后继续处理）', async () => {
+    const store = await openCard(authorCard())
+
+    await store.crossMoveCard(PROJECT, 'r1', 'written', 'r2')
+    expect(store.canConfirmAuthorCorrection).toBe(true)
+
+    readRhythm.mockResolvedValue(authorCard({ contentHash: 'hash-external' }))
+    await store.freezeForExternalChange(PROJECT, 'r1')
+
+    expect(store.savePhase).toBe('conflict')
+    expect(store.canConfirmAuthorCorrection).toBe(false)
+    expect(store.correctionPlacementLabel).not.toBeNull()
   })
 })
