@@ -56,6 +56,18 @@ export type CreateRhythmOptions = {
   linkBody?: string
   /** 作者备注正文；缺省空串。 */
   authorNoteBody?: string
+  /**
+   * 写后实际值（作者字段控制权计划阶段 3：副本携带完整人工视角用）。
+   * 全部缺省 = 纯规划形态创建；提供任一项即按偏差规则判出 written/deviated。
+   */
+  actualConflict?: number | null
+  actualMood?: RhythmMood | null
+  actualHook?: RhythmHook | null
+  actualPayoff?: RhythmPayoff | null
+  /** 本章自评；缺省 null。 */
+  actualNote?: string | null
+  /** 冲突强度偏差阈值（|计划-实际| ≥ 阈值判偏差）；缺省 3。 */
+  conflictThreshold?: number
   now?: Date
 }
 
@@ -116,14 +128,35 @@ export async function createRhythmCard(
   const plannedConflict = normalizeConflictIntensity(options.plannedConflict, 'planned_conflict')
   const now = options.now ?? new Date()
   const existing = await scanRhythmCards(project)
+
+  // 一章一卡（作者字段控制权计划阶段 3）：目标章号已被其他卡占用时明确拒绝
+  assertChapterAvailable(chapterRef, existing.cards, null)
+
   const order = nextOrderInColumn(existing.cards, 'planned')
   const sequence = nextCardSequence(existing.cards.map((card) => card.sourcePath), extractRhythmSequence)
   const id = createRhythmId(sequence)
   const path = createRhythmPath(id, name)
+
+  // 副本携带完整人工视角：提供任一 actual_* 即按偏差规则判出 written/deviated
+  const actualConflict = options.actualConflict ?? null
+  const actualMood = options.actualMood ?? null
+  const actualHook = options.actualHook ?? null
+  const actualPayoff = options.actualPayoff ?? null
+  const actualNote = normalizeNullableText(options.actualNote ?? null)
+  const hasAnyActual = actualConflict !== null || actualMood !== null || actualHook !== null
+    || actualPayoff !== null || actualNote !== null
+  const deviation = hasAnyActual
+    ? computeRhythmDeviation(
+      { plannedConflict, plannedMood: options.plannedMood, plannedHook: options.plannedHook, plannedPayoff: options.plannedPayoff, actualConflict, actualMood, actualHook, actualPayoff },
+      options.conflictThreshold ?? 3,
+    )
+    : { deviationFlag: false, deviationNote: null }
+  const status: RhythmCard['status'] = !hasAnyActual ? 'planned' : deviation.deviationFlag ? 'deviated' : 'written'
+
   const card: Omit<RhythmCard, 'sourcePath'> = {
     id,
     name,
-    status: 'planned',
+    status,
     order,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -134,13 +167,13 @@ export async function createRhythmCard(
     plannedPayoff: options.plannedPayoff,
     plannedCharacters: options.plannedCharacters ? [...options.plannedCharacters] : [],
     plannedNote: options.plannedNote?.trim() ?? '',
-    actualConflict: null,
-    actualMood: null,
-    actualHook: null,
-    actualPayoff: null,
-    actualNote: null,
-    deviationFlag: false,
-    deviationNote: null,
+    actualConflict,
+    actualMood,
+    actualHook,
+    actualPayoff,
+    actualNote,
+    deviationFlag: deviation.deviationFlag,
+    deviationNote: deviation.deviationNote,
     body: buildRhythmBody(options.intentBody ?? '', options.linkBody ?? '', options.authorNoteBody ?? ''),
   }
 
@@ -243,6 +276,9 @@ export async function updateRhythmCard(
     if (!chapterRef) {
       throw new RhythmError('关联章节不能为空')
     }
+
+    // 一章一卡（阶段 3）：换章时目标章号不能已被其他卡占用（保持原章不改不触发）
+    assertChapterAvailable(chapterRef, allCards, options.id)
   }
 
   // 计划值
@@ -444,6 +480,45 @@ export function computeRhythmDeviation(
 function normalizeNullableText(value: string | null): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed : null
+}
+
+/**
+ * 关联引用中的章号（如「第二卷/第083章-夜行」→ 83）；无法解析返回 null。
+ * 与伏笔的全本章号语义同口径：`第083章`≡`第83章`，不比较卷名与标题。
+ */
+function rhythmChapterNumber(ref: string): number | null {
+  const match = /第(\d+)章/.exec(ref)
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * 两个关联引用是否指同一章：都能解析出章号时按章号相等判定；
+ * 至少一方无法解析（自由文本）时退回精确字符串比较。
+ */
+function isSameRhythmChapter(a: string, b: string): boolean {
+  const numberA = rhythmChapterNumber(a)
+  const numberB = rhythmChapterNumber(b)
+  if (numberA !== null && numberB !== null) {
+    return numberA === numberB
+  }
+  return a === b
+}
+
+/**
+ * 一章一卡守卫（作者字段控制权计划阶段 3）：目标章号已被其他卡占用时抛
+ * RhythmError 并指明已有卡片（selfId 用于换章场景排除自己；保持原章不触发）。
+ */
+function assertChapterAvailable(
+  chapterRef: string,
+  cards: ReadonlyArray<{ id: string; name: string; chapterRef: string }>,
+  selfId: string | null,
+): void {
+  const occupied = cards.find((card) => card.id !== selfId && isSameRhythmChapter(card.chapterRef, chapterRef))
+  if (occupied) {
+    const number = rhythmChapterNumber(chapterRef)
+    const chapterText = number !== null ? `第${number}章` : chapterRef
+    throw new RhythmError(`${chapterText} 已有节奏卡「${occupied.name}」（${occupied.id}）：节奏卡一章一卡，请先处理已有卡片或换一个章节`)
+  }
 }
 
 /** 节奏卡领域落盘错误文案（占用/回滚）。 */

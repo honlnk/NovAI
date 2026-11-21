@@ -1231,15 +1231,15 @@ const chapterCatalog = useChapterCatalog()
 /** 「章节已创建，卡片引用尚未保存」提示：切卡/保存收口后清除 */
 const chapterCreateNotice = ref<string | null>(null)
 watch(
-  () => [projectId.value, foreshadowingStore.activeCard?.id] as const,
+  () => [projectId.value, foreshadowingStore.activeCard?.id, rhythmStore.activeCard?.id] as const,
   () => {
     chapterCreateNotice.value = null
   },
 )
 watch(
-  () => foreshadowingStore.savePhase,
-  (phase) => {
-    if (phase === 'clean') {
+  () => [foreshadowingStore.savePhase, rhythmStore.savePhase] as const,
+  ([foreshadowingPhase, rhythmPhase]) => {
+    if (foreshadowingPhase === 'clean' || rhythmPhase === 'clean') {
       chapterCreateNotice.value = null
     }
   },
@@ -1275,6 +1275,29 @@ const foreshadowingCreatePicker = computed(() => ({
   suggestedNumber: chapterCatalog.suggestedNumber.value,
   createHandler: handlePickerChapterCreate,
   sessionKey: `${projectId.value}:create`,
+  latestChapterNumber: latestChapterNumber.value,
+}))
+
+/** 节奏详情/新建面板的选择器接线（阶段 3：关联章节同走目录选择器） */
+const rhythmPicker = computed(() => ({
+  catalog: chapterCatalog.catalog.value,
+  catalogReady: chapterCatalog.catalogReady.value,
+  loading: false,
+  loadError: null,
+  suggestedNumber: chapterCatalog.suggestedNumber.value,
+  createHandler: handlePickerChapterCreate,
+  sessionKey: `${projectId.value}:rhythm:${rhythmStore.activeCard?.id ?? 'none'}`,
+  latestChapterNumber: latestChapterNumber.value,
+}))
+
+const rhythmCreatePicker = computed(() => ({
+  catalog: chapterCatalog.catalog.value,
+  catalogReady: chapterCatalog.catalogReady.value,
+  loading: false,
+  loadError: null,
+  suggestedNumber: chapterCatalog.suggestedNumber.value,
+  createHandler: handlePickerChapterCreate,
+  sessionKey: `${projectId.value}:rhythm:create`,
   latestChapterNumber: latestChapterNumber.value,
 }))
 
@@ -1840,6 +1863,7 @@ function handleGoToSettings() {
           v-if="workspacePanel.kind === 'rhythm-detail' && rhythmStore.activeCard"
           :active-card="rhythmStore.activeCard"
           :draft-name="rhythmStore.draftName"
+          :draft-chapter-ref="rhythmStore.draftChapterRef"
           :draft-planned-conflict="rhythmStore.draftPlannedConflict"
           :draft-planned-mood="rhythmStore.draftPlannedMood"
           :draft-planned-hook="rhythmStore.draftPlannedHook"
@@ -1847,6 +1871,15 @@ function handleGoToSettings() {
           :draft-planned-characters="rhythmStore.draftPlannedCharacters"
           :draft-planned-note="rhythmStore.draftPlannedNote"
           :draft-intent-body="rhythmStore.draftIntentBody"
+          :draft-actual-conflict="rhythmStore.draftActualConflict"
+          :draft-actual-mood="rhythmStore.draftActualMood"
+          :draft-actual-hook="rhythmStore.draftActualHook"
+          :draft-actual-payoff="rhythmStore.draftActualPayoff"
+          :draft-actual-note="rhythmStore.draftActualNote"
+          :draft-link-body="rhythmStore.draftLinkBody"
+          :draft-author-note-body="rhythmStore.draftAuthorNoteBody"
+          :picker="rhythmPicker"
+          :chapter-create-notice="chapterCreateNotice"
           :detail-mode="rhythmStore.detailMode"
           :save-phase="rhythmStore.savePhase"
           :conflict="rhythmStore.conflictView"
@@ -1859,6 +1892,7 @@ function handleGoToSettings() {
           @update-draft="rhythmStore.updateDraft"
           @set-detail-mode="rhythmStore.setDetailMode"
           @retry-save="handleRhythmRetrySave"
+          @retry-chapter-load="() => chapterCatalog.retryLoad()"
           @expand-conflict="rhythmConflictHandlers.expandConflict"
           @collapse-conflict="rhythmConflictHandlers.collapseConflict"
           @adopt-disk="rhythmConflictHandlers.adoptDisk"
@@ -1866,7 +1900,7 @@ function handleGoToSettings() {
           @save-copy="rhythmConflictHandlers.saveCopy"
           @restore-as-copy="rhythmConflictHandlers.restoreAsCopy"
           @discard-guard="rhythmConflictHandlers.discardGuard"
-          />
+        />
         <!-- 规划节奏卡 -->
         <RhythmCreatePanel
           v-if="workspacePanel.kind === 'rhythm-create'"
@@ -1878,12 +1912,14 @@ function handleGoToSettings() {
           :new-planned-payoff="rhythmStore.newCardPlannedPayoff"
           :new-planned-characters="rhythmStore.newCardPlannedCharacters"
           :new-intent-body="rhythmStore.newCardIntentBody"
+          :picker="rhythmCreatePicker"
           :can-submit="rhythmStore.hasRequiredCreateInput"
           :is-creating="rhythmStore.isCreating"
           :action-error="rhythmStore.actionError"
           @close="handleCloseContentPanel"
           @update-create-draft="rhythmStore.updateCreateDraft"
           @submit-create="handleRhythmSubmitCreate"
+          @retry-chapter-load="() => chapterCatalog.retryLoad()"
           @cancel="rhythmStore.closeCreate(false)"
         />
       </ContentPanel>

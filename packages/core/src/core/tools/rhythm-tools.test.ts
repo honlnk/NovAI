@@ -350,11 +350,20 @@ describe('RhythmCheck / RhythmSync / RhythmCurve', () => {
     )
     expect(defaultOutcome.deviationFlag).toBe(false)
 
-    // 收紧到 1：|3-4|=1 ≥ 1 判偏差
+    // 收紧到 1：|3-4|=1 ≥ 1 判偏差（一章一卡：第二张样本用另一章）
     const strictRuntime = (): ToolRuntime => ({
       project: { handle: root, config: { settings: { rhythmDeviationThreshold: 1 } } } as never,
     })
-    await createSample()
+    await rhythmCreateTool.run(
+      rhythmCreateTool.validateInput({
+        chapterRef: '第二卷/第084章',
+        plannedConflict: 3,
+        plannedMood: '温馨',
+        plannedHook: '无',
+        plannedPayoff: '收获',
+      }),
+      runtime(),
+    )
     const strict = await rhythmUpdateTool.run(
       rhythmUpdateTool.validateInput({ id: 'R-002', actualConflict: 4 }),
       strictRuntime(),

@@ -563,3 +563,91 @@ describe('scanRhythmCards', () => {
     ])
   })
 })
+
+describe('一章一卡守卫与完整视角副本（作者字段控制权计划阶段 3）', () => {
+  it('创建撞已有章号被拒并指明已有卡片；全本章号语义（第083章 ≡ 第二卷/第083章-夜行）', async () => {
+    await createRhythmCard(project(), seedOptions({ chapterRef: '第二卷/第083章-夜行' }))
+
+    await expect(createRhythmCard(project(), seedOptions({ name: '撞章', chapterRef: '第083章' })))
+      .rejects.toThrow('第83章 已有节奏卡「第083章节奏」（R-001）')
+    await expect(createRhythmCard(project(), seedOptions({ name: '撞章', chapterRef: '第一卷/第83章-别的卷' })))
+      .rejects.toThrow(RhythmError)
+
+    // 不同章号照常创建
+    const other = await createRhythmCard(project(), seedOptions({ name: '下一章', chapterRef: '第二卷/第084章' }))
+    expect(other.id).toBe('R-002')
+  })
+
+  it('换章撞占用被拒且原文件无损；换到空闲章正常；保持原章改其他字段不触发', async () => {
+    const a = await createRhythmCard(project(), seedOptions({ name: 'A', chapterRef: '第二卷/第081章' }))
+    await createRhythmCard(project(), seedOptions({ name: 'B', chapterRef: '第二卷/第082章' }))
+
+    await expect(updateRhythmCard(project(), { id: a.id, chapterRef: '第082章' }))
+      .rejects.toThrow('第82章 已有节奏卡「B」（R-002）')
+    expect(collectFiles()[a.sourcePath]).toBeTruthy()
+
+    const moved = await updateRhythmCard(project(), { id: a.id, chapterRef: '第二卷/第090章' })
+    expect(moved.chapterRef).toBe('第二卷/第090章')
+
+    // 同章等价写法（带标题）视为保持原章，不判占用
+    const renamed = await updateRhythmCard(project(), {
+      id: a.id,
+      chapterRef: '第二卷/第090章-新标题',
+      plannedNote: '顺带改计划补充',
+    })
+    expect(renamed.chapterRef).toBe('第二卷/第090章-新标题')
+    expect(renamed.plannedNote).toBe('顺带改计划补充')
+  })
+
+  it('历史同章重复数据（守卫之前的项目）不阻塞其他字段编辑，只在换章时拦', async () => {
+    const content = (id: string, name: string) => [
+      '---',
+      `id: ${id}`,
+      `name: ${name}`,
+      'planned_conflict: 3',
+      'planned_mood: 温馨',
+      'planned_hook: 无',
+      'planned_payoff: 收获',
+      'chapter_ref: 第010章',
+      '---',
+      '',
+      '## 节奏意图',
+      '',
+      '内容',
+    ].join('\n')
+    await writeProjectTextFile(root, 'rhythm/R-101-甲.md', content('R-101', '甲'))
+    await writeProjectTextFile(root, 'rhythm/R-102-乙.md', content('R-102', '乙'))
+
+    const updated = await updateRhythmCard(project(), { id: 'R-101', plannedConflict: 7 })
+    expect(updated.plannedConflict).toBe(7)
+
+    await expect(updateRhythmCard(project(), { id: 'R-101', chapterRef: '第010章-改名' }))
+      .rejects.toThrow('第10章 已有节奏卡「乙」（R-102）')
+  })
+
+  it('完整视角副本：创建时携带实际值即判出 written/deviated；缺省为纯规划', async () => {
+    const planned = await createRhythmCard(project(), seedOptions({ actualConflict: null }))
+    expect(planned.status).toBe('planned')
+
+    const written = await createRhythmCard(project(), seedOptions({
+      name: '回写副本',
+      chapterRef: '第二卷/第084章',
+      actualConflict: 4,
+      actualMood: '温馨',
+      actualHook: '无',
+      actualPayoff: '收获',
+      actualNote: '按计划落地，读者反馈平稳',
+    }))
+    expect(written.status).toBe('written')
+    expect(written.deviationFlag).toBe(false)
+    expect(written.actualNote).toBe('按计划落地，读者反馈平稳')
+
+    const deviated = await createRhythmCard(project(), seedOptions({
+      name: '偏差副本',
+      chapterRef: '第二卷/第085章',
+      actualConflict: 9,
+    }))
+    expect(deviated.status).toBe('deviated')
+    expect(deviated.deviationNote).toContain('冲突强度偏差')
+  })
+})
