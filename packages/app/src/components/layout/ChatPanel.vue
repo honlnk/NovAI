@@ -848,7 +848,7 @@ onBeforeUnmount(() => {
       <!-- 回到底部浮钮：退出跟随后出现；未跟随期间来过新内容时换文案提示 -->
       <button
         v-if="!isFollowing && chatStore.messages.length > 0"
-        class="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
+        class="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
         @click="followAndScrollToBottom"
       >
         <AppIcon name="arrow-down" :size="14" class="h-3.5 w-3.5" />
