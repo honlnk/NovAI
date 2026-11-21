@@ -48,6 +48,7 @@ import RhythmDetailPanel from '../components/rhythm/RhythmDetailPanel.vue'
 import RhythmCreatePanel from '../components/rhythm/RhythmCreatePanel.vue'
 import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
+import RelationModal from '../components/relation/RelationModal.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
@@ -92,6 +93,8 @@ const isConfirmPanelOpen = ref(false)
 const showGuide = ref(false)
 const isSettingsOpen = ref(false)
 const isRagOpen = ref(false)
+/** 关系图谱弹窗（独立入口，与向量索引同款按需挂载） */
+const isRelationOpen = ref(false)
 /** 内容面板选中的引用，透传给 ChatPanel 显示 chip；切文件时清空 */
 const selectionQuote = ref<{ path: string; name: string; text: string } | null>(null)
 /** 内容面板空态提示（AI 删除了正打开的文件时置入，指向回收站去向；打开新文件时清空） */
@@ -1459,6 +1462,7 @@ function handleGoToSettings() {
         @version="handleNotImplemented('版本管理')"
         @elementManager="handleElementManagerNewSession"
         @rag="isRagOpen = true"
+        @relation="isRelationOpen = true"
       />
 
       <!-- 分类面板（随 Activity Bar 切换） -->
@@ -1790,6 +1794,13 @@ function handleGoToSettings() {
       v-if="isRagOpen"
       :project-id="projectId"
       @close="isRagOpen = false"
+    />
+
+    <!-- 关系图谱弹窗（独立入口；画布/详情/保存会话状态在 relationStore） -->
+    <RelationModal
+      v-if="isRelationOpen"
+      :project-id="projectId"
+      @close="isRelationOpen = false"
     />
 
     <!-- Toast 提示：容器统一定位，多条并存纵向堆叠不遮挡（交互优化计划 §3） -->

@@ -29,6 +29,7 @@ import {
   FolderOpen,
   FoldVertical,
   GitBranch,
+  Network,
   Globe,
   House,
   Info,
@@ -117,6 +118,8 @@ export const APP_ICONS = {
   home: House,
   // 节奏卡（心律波纹——全本节奏曲线）
   activity: Activity,
+  // 关系图谱（节点连线网络）
+  network: Network,
 } as const satisfies Record<string, Component>
 
 export type AppIconName = keyof typeof APP_ICONS

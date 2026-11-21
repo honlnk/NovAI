@@ -14,6 +14,7 @@
     "@lexical/plain-text": "^0.49.0",
     "@lexical/text": "^0.49.0",
     "@novai/core": "workspace:*",
+    "@vue-flow/core": "1.48.2",
     "diff": "^9.0.0",
     "lexical": "^0.49.0",
     "lucide-vue-next": "^1.0.0",
