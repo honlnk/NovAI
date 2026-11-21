@@ -28,6 +28,8 @@ export type DraftProbeInput = {
   draftEntry: { content: string; baseContent: string } | null
   /** create 候选的目标已存在时视为 missing（新建语义被占用） */
   isCreate: boolean
+  /** 追加式账本确认（关系账本）：create 目标存在是常态，不算占用 */
+  createAppendLedger?: boolean
 }
 
 export function resolveConfirmDraftBranch(input: DraftProbeInput): ConfirmDraftBranch {
@@ -39,10 +41,17 @@ export function resolveConfirmDraftBranch(input: DraftProbeInput): ConfirmDraftB
   if (probe.kind === 'missing') {
     return 'missing'
   }
-  if (isCreate) {
+  if (isCreate && !input.createAppendLedger) {
     // create 探测到内容即目标被占用（probe ok + create = 占用，由调用方以 missing 传入
     // 更清晰——此处防御：ok 且 create 视作 missing 语义）
     return 'missing'
+  }
+  if (isCreate) {
+    // 追加式账本（关系账本）：目标存在不算占用，与 edit 同样按草稿基线比对
+    if (!draftEntry) {
+      return 'none'
+    }
+    return draftEntry.baseContent === probe.content ? 'draft-clean' : 'draft-diverged'
   }
   if (!draftEntry) {
     return 'none'

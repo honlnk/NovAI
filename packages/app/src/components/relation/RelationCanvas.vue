@@ -7,7 +7,7 @@
  * - 交互：节点可拖（拖停回传坐标去抖保存）、点击节点聚焦、点击边开详情；
  * - 样式在组件内引入（不动全局 CSS 入口）。
  */
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { Handle, MarkerType, Position, VueFlow, useVueFlow } from '@vue-flow/core'
 import type { Edge, Node } from '@vue-flow/core'
 
@@ -117,7 +117,20 @@ const flowEdges = computed<Edge[]>(() =>
   })),
 )
 
-const { onNodeDragStop, onNodeClick, onEdgeClick, onPaneClick } = useVueFlow()
+const { onNodeDragStop, onNodeClick, onEdgeClick, onPaneClick, fitView } = useVueFlow()
+
+// 首批节点就绪后补一次 fitView：fit-view-on-init 在图谱数据加载完成前就跑，
+// 空画布上算出的视口不随节点更新；弹窗重开时节点在挂载前就绪，init 也不再触发。
+// 两种场景都兜住：挂载时已有节点（immediate 首调）或挂载后异步到达（0→N 跳变）
+const fittedOnData = ref(false)
+watch(() => flowNodes.value.length, (count, previous) => {
+  if (!fittedOnData.value && count > 0 && (previous === 0 || previous === undefined)) {
+    fittedOnData.value = true
+    void nextTick(() => {
+      fitView({ padding: 0.15, duration: 0 })
+    })
+  }
+}, { immediate: true })
 
 onNodeDragStop(({ nodes }) => {
   for (const node of nodes) {

@@ -497,8 +497,10 @@ export const useRelationStore = defineStore('relation', () => {
     }
     const outcome = await detailRealm.adoptDisk(projectId.value, key)
     if (outcome === 'resolved') {
+      // 先重载再重开详情：openDetail 用当前 graph 播种草稿与基线哈希，
+      // 顺序反了会把「采用磁盘」播种成改盘前的旧基线，下次编辑保存必然再冲突
+      await reloadGraph({ preserveViewport: true })
       await openDetail(key)
-      await reloadGraph()
     }
     return outcome
   }
@@ -765,6 +767,10 @@ export const useRelationStore = defineStore('relation', () => {
       const layout: RelationLayoutMap = { ...(graph.value?.layout ?? {}), ...layoutOverride.value }
       await saveLayout(pid, layout, 'ui')
       layoutOverride.value = {}
+      // 保存成功后把新坐标并入图快照：否则覆盖层清空而快照无新坐标，节点视觉回跳
+      if (graph.value && graph.value.status === 'ok') {
+        graph.value = { ...graph.value, layout }
+      }
     } catch (error) {
       // 坐标保存失败不打断画布（重基合并会重试一次；失败提示挂在状态行）
       actionError.value = toMessage(error, '保存画布坐标失败')

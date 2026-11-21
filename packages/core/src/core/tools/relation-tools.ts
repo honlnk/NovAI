@@ -454,7 +454,7 @@ export const relationCreateTool: ToolDefinition<'RelationCreate', RelationCreate
   buildConfirmation(input) {
     return {
       kind: 'create' as const,
-      path: `${RELATION_LEDGER_PATH}（关系账本）`,
+      path: RELATION_LEDGER_PATH,
       content: [
         `新增关系：${describeSelectorNode(input.from)} → ${describeSelectorNode(input.to)}`,
         `类型：${input.type}`,
@@ -550,7 +550,7 @@ export const relationUpdateTool: ToolDefinition<'RelationUpdate', RelationUpdate
     ].filter(Boolean)
     return {
       kind: 'edit' as const,
-      path: `${RELATION_LEDGER_PATH}（关系 ${input.id}）`,
+      path: RELATION_LEDGER_PATH,
       oldText: '（关系字段更新，差异以执行结果为准）',
       newText: parts.join('\n'),
     }
@@ -610,7 +610,7 @@ export const relationDeleteTool: ToolDefinition<'RelationDelete', RelationDelete
   buildConfirmation(input) {
     return {
       kind: 'delete' as const,
-      path: `${RELATION_LEDGER_PATH}（关系 ${input.id}）`,
+      path: RELATION_LEDGER_PATH,
     }
   },
 }

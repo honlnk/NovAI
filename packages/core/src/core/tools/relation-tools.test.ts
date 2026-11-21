@@ -173,6 +173,8 @@ describe('RelationCreate', () => {
 
     const confirmation = relationCreateTool.buildConfirmation(input)!
     expect(confirmation.kind).toBe('create')
+    // path 必须是真实账本路径（不带展示后缀）：写确认面板按它探测磁盘
+    expect(confirmation.path).toBe(RELATION_LEDGER_PATH)
     expect(confirmation.content).toContain('林澜（character） → 老周（character）')
     expect(confirmation.content).toContain('师徒')
 

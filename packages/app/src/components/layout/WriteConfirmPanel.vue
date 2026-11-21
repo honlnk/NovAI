@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 
 import type { FileChangeConfirmationView } from '@novai/core/services/types'
+import { RELATION_LEDGER_PATH } from '@novai/core/types/relation'
 import { hashContent } from '@novai/core'
 
 import { useProjectStore } from '../../stores/project'
@@ -64,6 +65,13 @@ const candidate = computed(() => {
   return c.kind === 'create' || c.kind === 'edit' ? c : null
 })
 const isCreate = computed(() => candidate.value?.kind === 'create')
+
+/**
+ * 关系账本追加确认（create 候选指向 relations.json）：账本是读改写的追加式
+ * JSON，目标存在是常态而非占用冲突——工具执行走 relationService 的版本校验，
+ * 不会覆盖既有条目，面板不按「新建不覆盖」规则阻止。
+ */
+const isAppendLedger = computed(() => candidate.value?.path.startsWith(RELATION_LEDGER_PATH) ?? false)
 
 /** 目标文件当前磁盘内容（create 时探测占用；读不到为 null） */
 const diskFile = ref<{ content: string; hash: string } | null>(null)
@@ -177,20 +185,29 @@ async function loadDisk() {
         diskUnreadableMessage.value = probe.message
       }
     }
+    // create 候选的草稿分支按「目标为空」判定：文件不存在，或关系账本追加
+    // 确认（账本存在是常态，不算被占用；磁盘真实内容仍进上方预览）
+    const createAsEmpty = isCreate.value && (probe.kind === 'missing' || (probe.kind === 'ok' && isAppendLedger.value))
     draftBranch.value = resolveConfirmDraftBranch({
-      probe: probe.kind === 'ok'
+      probe: probe.kind === 'ok' && !createAsEmpty
         ? { kind: 'ok', content: probe.file.content }
-        : probe.kind === 'missing'
-          ? (isCreate.value ? { kind: 'ok', content: '' } : { kind: 'missing' })
-          : { kind: 'unreadable' },
+        : probe.kind === 'missing' && !isCreate.value
+          ? { kind: 'missing' }
+          : probe.kind === 'unreadable'
+            ? { kind: 'unreadable' }
+            : { kind: 'ok', content: '' },
       draftEntry: draftEntry.value,
       isCreate: isCreate.value,
+      createAppendLedger: isAppendLedger.value,
     })
     // 版本失配（审阅期间外部修改/候选原文消失）：与草稿维度并列判断
     if (probe.kind === 'ok' && c.kind === 'edit') {
-      staleState.value = probe.file.content.includes(c.oldText) ? 'idle' : 'missing'
+      // 关系账本的更新/删除确认：候选原文是展示用占位符，磁盘包含性检查不适用
+      // （版本一致性由工具执行期的账本内容哈希校验兜底）
+      staleState.value = isAppendLedger.value || probe.file.content.includes(c.oldText) ? 'idle' : 'missing'
     } else if (probe.kind === 'ok' && c.kind === 'create') {
-      staleState.value = 'missing' // create 探测到内容 = 目标被占用
+      // create 探测到内容 = 目标被占用；关系账本追加确认除外（目标存在是常态）
+      staleState.value = isAppendLedger.value ? 'idle' : 'missing'
     } else {
       staleState.value = 'idle' // missing/unreadable 由草稿分支横幅独立提示
     }
@@ -368,6 +385,11 @@ async function handleConfirm() {
       return
     }
     if (fresh.kind === 'missing') {
+      if (c.kind === 'create' && isAppendLedger.value) {
+        // 关系账本追加确认：账本尚不存在 = 首条关系落账（工具负责建账本），正常放行
+        emit('confirm')
+        return
+      }
       if (c.kind === 'create' && draftBranch.value === 'missing' && diskFile.value !== null && !freshDraftEntry) {
         // 此前因目标被占用而暂停；复检时已释放，可回到正常新建确认。
         draftBranch.value = freshDraftEntry ? 'draft-clean' : 'none'
@@ -390,6 +412,11 @@ async function handleConfirm() {
     }
     if (c.kind === 'create') {
       diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
+      if (isAppendLedger.value) {
+        // 关系账本追加确认：复检只刷新磁盘预览，目标存在不构成「新建被占用」
+        emit('confirm')
+        return
+      }
       staleState.value = 'missing'
       draftBranch.value = 'missing'
       return
@@ -398,17 +425,24 @@ async function handleConfirm() {
       // 无论初次审阅还是「仍要同意」，最新人工草稿都必须先处理。
       draftBranch.value = freshDraftEntry.baseContent === fresh.file.content ? 'draft-clean' : 'draft-diverged'
       diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
-      staleState.value = fresh.file.content.includes(c.oldText) ? 'idle' : 'missing'
+      staleState.value = isAppendLedger.value || fresh.file.content.includes(c.oldText) ? 'idle' : 'missing'
       return
     }
     if (draftBranch.value === 'missing' && diskFile.value === null) {
       // 已明确点击「文件不存在→仍要同意」，但复检时文件已恢复：按最新版本重新审阅。
       diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
       draftBranch.value = 'none'
-      staleState.value = fresh.file.content.includes(c.oldText) ? 'idle' : 'missing'
+      staleState.value = isAppendLedger.value || fresh.file.content.includes(c.oldText) ? 'idle' : 'missing'
       return
     }
     if (c.kind === 'edit') {
+      if (isAppendLedger.value) {
+        // 关系账本更新/删除确认：候选原文是展示用占位符，包含性/中途变更检查不适用——
+        // 复检磁盘可读即放行，版本一致性由工具执行期的账本内容哈希校验兜底
+        diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
+        emit('confirm')
+        return
+      }
       if (!fresh.file.content.includes(c.oldText)) {
         staleState.value = 'missing'
         return

@@ -122,7 +122,7 @@ function onSearchBlur() {
     height-class="h-[min(90vh,48rem)]"
     :loading="store.isLoading"
     :error="store.loadState === 'error' ? store.actionError || '加载关系图谱失败' : null"
-    :empty="store.isReady && store.relationCount === 0 && store.canvasNodes.length === 0"
+    :empty="store.isReady && store.relationCount === 0 && store.canvasNodes.length === 0 && !store.createOpen"
     empty-text="还没有任何关系。用右上「新建关系」或让 AI 在写作时登记人物、势力、地点之间的关系。"
     @close="handleClose"
   >

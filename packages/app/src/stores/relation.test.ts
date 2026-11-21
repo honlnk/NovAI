@@ -305,6 +305,47 @@ describe('详情编辑会话（save-session）', () => {
     expect(store.detailSession?.conflict?.expanded).toBe(false)
   })
 
+  it('采用磁盘版本：草稿与基线哈希改用重载后的新图（旧基线会让下次保存必再冲突）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const store = useRelationStore()
+    await store.open('proj-1')
+    await store.openDetail('REL-1111111111')
+    expect(store.detailSession?.baseContentHash).toBe('hash-1')
+
+    vi.mocked(updateRelationEntry).mockRejectedValueOnce(new RelationConflictError('hash-disk'))
+    store.setDetailDraft('REL-1111111111', { type: '决裂' })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(store.detailSession?.conflict).toBeTruthy())
+
+    // 外部改盘后的磁盘最新图：描述与内容哈希都已更新
+    vi.mocked(getGraph).mockResolvedValue(graphView({
+      contentHash: 'hash-disk',
+      edges: [graphView().edges[0], graphView().edges[1]].map((edge, i) =>
+        i === 0
+          ? { ...edge, relation: relation('REL-1111111111', { description: '外部改盘后的描述' }) }
+          : edge,
+      ),
+    }))
+
+    const outcome = await store.adoptDiskVersion()
+    expect(outcome).toBe('resolved')
+    expect(store.detailSession?.conflict).toBeFalsy()
+    // 草稿采用磁盘版描述；基线哈希换成磁盘最新——而不是改盘前的 hash-1
+    expect(store.detailSession?.draft.description).toBe('外部改盘后的描述')
+    expect(store.detailSession?.baseContentHash).toBe('hash-disk')
+
+    // 后续编辑保存带上新基线，正常落盘不再冲突
+    store.setDetailDraft('REL-1111111111', { description: '采用磁盘后的新编辑' })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(updateRelationEntry).toHaveBeenCalledTimes(2))
+    expect(updateRelationEntry).toHaveBeenLastCalledWith(
+      'proj-1',
+      expect.objectContaining({ id: 'REL-1111111111', description: '采用磁盘后的新编辑', expectedContentHash: 'hash-disk' }),
+      'ui',
+    )
+    expect(store.detailSession?.conflict).toBeFalsy()
+  })
+
   it('外部修改命中干净会话：跟随磁盘（不建冲突）；命中待写会话：冻结', async () => {
     const store = useRelationStore()
     await store.open('proj-1')
