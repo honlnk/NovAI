@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, toRef, watch } from 'vue'
 
 import type { ForeshadowingCardView, ForeshadowingStatusView } from '@novai/core/services/types'
 import { FORESHADOWING_STATUSES, FORESHADOWING_STATUS_LABELS } from '@novai/core/types/foreshadowing'
+import { useTransientEdit } from '../../composables/useTransientEdit'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import CardConflictBar from '../card-board/CardConflictBar.vue'
 import CardConflictResolution from '../card-board/CardConflictResolution.vue'
@@ -12,7 +13,6 @@ import CardStatusTools from '../card-board/CardStatusTools.vue'
 import type { DetailMode } from '../layout/detail-mode'
 import DetailLayout from '../layout/DetailLayout.vue'
 import PlainBodySurface from '../layout/PlainBodySurface.vue'
-import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 /**
  * 伏笔详情面板：统一详情布局（components/layout/DetailLayout.vue）的伏笔领域
@@ -85,6 +85,19 @@ const readerValue = computed(() => props.draftReaderView ?? props.activeCard.rea
 /** 作者真相展示值：有草稿显示草稿 */
 const truthValue = computed(() => props.draftAuthorTruth ?? props.activeCard.authorTruth)
 
+/* ---------- 临时编辑（双击快改即走）：静置无改动亮「等待保存」并同窗收口回预览，有改动自动保存完成回预览 ---------- */
+const { markTransient, displaySavePhase } = useTransientEdit({
+  savePhase: toRef(props, 'savePhase'),
+  detailMode: toRef(props, 'detailMode'),
+  onReturnToPreview: () => emit('setDetailMode', 'preview'),
+})
+/** 预览态双击正文（读者视角/作者真相任一区）进入临时编辑；点「编辑」按钮进入的常规编辑不受影响 */
+function onBodyDblClick() {
+  if (props.guard) return
+  markTransient()
+  emit('setDetailMode', 'edit')
+}
+
 const payoffWindowText = computed(() =>
   props.activeCard.payoffWindow
     ? `${props.activeCard.payoffWindow[0]} ~ ${props.activeCard.payoffWindow[1]}`
@@ -135,7 +148,7 @@ function onAbandonReasonInput(event: Event) {
   <DetailLayout
     :mode="detailMode"
     :has-content="true"
-    :save-phase="savePhase"
+    :save-phase="displaySavePhase"
     :path="activeCard.sourcePath"
     :updated-at="activeCard.updatedAt"
     noun="正文"
@@ -263,9 +276,13 @@ function onAbandonReasonInput(event: Event) {
           variant="preview"
           class="flex-1"
           data-testid="foreshadowing-detail-reader"
-          @dblclick="guard ? undefined : emit('setDetailMode', 'edit')"
+          @dblclick="onBodyDblClick"
         >
-          <MarkdownRenderer v-if="readerValue" :content="readerValue" />
+          <!-- 纯文本预览：正文两节是 textarea 自由文本而非 markdown 源（同节奏意图修复） -->
+          <div
+            v-if="readerValue"
+            class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
+          >{{ readerValue }}</div>
           <p v-else class="text-sm text-gray-400">双击或点击「编辑」补写读者当时看到的事实。</p>
         </PlainBodySurface>
         <PlainBodySurface v-else variant="edit" class="flex-1">
@@ -291,9 +308,12 @@ function onAbandonReasonInput(event: Event) {
           tone="warning"
           class="flex-1"
           data-testid="foreshadowing-detail-truth"
-          @dblclick="guard ? undefined : emit('setDetailMode', 'edit')"
+          @dblclick="onBodyDblClick"
         >
-          <MarkdownRenderer v-if="truthValue" :content="truthValue" />
+          <div
+            v-if="truthValue"
+            class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
+          >{{ truthValue }}</div>
           <p v-else class="text-sm text-amber-500">这条伏笔还没登记真相（可后补）。</p>
         </PlainBodySurface>
         <PlainBodySurface v-else variant="edit" tone="warning" class="flex-1">

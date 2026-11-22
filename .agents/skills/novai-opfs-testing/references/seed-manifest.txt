@@ -10,4 +10,8 @@ novel.config.json
 prompts/*
 elements/*
 chapters/*
+skills/*
+rhythm/*
+foreshadowing/*
+plans/*
 .novai/*

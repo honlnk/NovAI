@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
 
 import type { RhythmCardView } from '@novai/core/services/types'
 import { RHYTHM_COLUMN_LABELS, RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_MOOD_DESCRIPTIONS, RHYTHM_PAYOFFS } from '@novai/core/types/rhythm'
+import { useTransientEdit } from '../../composables/useTransientEdit'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import CardConflictBar from '../card-board/CardConflictBar.vue'
 import CardConflictResolution from '../card-board/CardConflictResolution.vue'
@@ -11,7 +12,6 @@ import CardSaveFailure from '../card-board/CardSaveFailure.vue'
 import type { DetailMode } from '../layout/detail-mode'
 import DetailLayout from '../layout/DetailLayout.vue'
 import PlainBodySurface from '../layout/PlainBodySurface.vue'
-import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 /**
  * 节奏详情面板（§七）：统一详情布局（components/layout/DetailLayout.vue）的节奏
@@ -71,6 +71,19 @@ const emit = defineEmits<{
 /** 头部名称输入展示值（草稿优先） */
 const titleValue = computed(() => props.draftName ?? props.activeCard.name)
 
+/* ---------- 临时编辑（双击快改即走）：静置无改动亮「等待保存」并同窗收口回预览，有改动自动保存完成回预览 ---------- */
+const { markTransient, displaySavePhase } = useTransientEdit({
+  savePhase: toRef(props, 'savePhase'),
+  detailMode: toRef(props, 'detailMode'),
+  onReturnToPreview: () => emit('setDetailMode', 'preview'),
+})
+/** 预览态双击正文进入临时编辑；点「编辑」按钮进入的常规编辑不受影响 */
+function onIntentDblClick() {
+  if (props.guard) return
+  markTransient()
+  emit('setDetailMode', 'edit')
+}
+
 /* ---------- 展示值：有草稿显示草稿（预览态也跟随未保存修改） ---------- */
 
 const plannedConflictValue = computed(() => props.draftPlannedConflict ?? props.activeCard.plannedConflict)
@@ -118,7 +131,7 @@ function onCharactersInput(event: Event) {
   <DetailLayout
     :mode="detailMode"
     :has-content="true"
-    :save-phase="savePhase"
+    :save-phase="displaySavePhase"
     :path="activeCard.sourcePath"
     :updated-at="activeCard.updatedAt"
     noun="正文"
@@ -302,9 +315,15 @@ function onCharactersInput(event: Event) {
           v-if="detailMode === 'preview'"
           variant="preview"
           data-testid="rhythm-detail-intent"
-          @dblclick="guard ? undefined : emit('setDetailMode', 'edit')"
+          @dblclick="onIntentDblClick"
         >
-          <MarkdownRenderer v-if="intentBodyValue" :content="intentBodyValue" />
+          <!-- 纯文本预览（whitespace-pre-wrap）：intentBody 是 textarea 自由文本而非
+               markdown 源——markdown 渲染会把段落内单换行折叠成空格（真机缺陷），且
+               行首 #/列表标记/引号弯化都是意外变形；与 txt 文件预览同语义 -->
+          <div
+            v-if="intentBodyValue"
+            class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
+          >{{ intentBodyValue }}</div>
           <p v-else class="text-sm text-gray-400">双击或点击「编辑」补写本章的节奏意图。</p>
         </PlainBodySurface>
         <PlainBodySurface v-else variant="edit">

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
 
 import type { PlanStatusView } from '@novai/core/services/types'
 import { PLAN_COLUMN_LABELS } from '../../constants/plans'
+import { useTransientEdit } from '../../composables/useTransientEdit'
 import type { CardConflictField, CardSessionGuard } from '../../stores/card-board'
 import CardConflictBar from '../card-board/CardConflictBar.vue'
 import CardConflictResolution from '../card-board/CardConflictResolution.vue'
@@ -12,7 +13,6 @@ import CardStatusTools from '../card-board/CardStatusTools.vue'
 import type { DetailMode } from '../layout/detail-mode'
 import DetailLayout from '../layout/DetailLayout.vue'
 import PlainBodySurface from '../layout/PlainBodySurface.vue'
-import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 
 /**
  * 计划详情面板：统一详情布局（components/layout/DetailLayout.vue）的计划领域
@@ -78,6 +78,19 @@ const titleValue = computed(() => props.draftTitle ?? props.activeCard.title)
 /** 正文展示值：有草稿显示草稿（预览可见未保存内容） */
 const draftValue = computed(() => props.draftBody ?? props.activeCard.body)
 
+/* ---------- 临时编辑（双击快改即走）：静置无改动亮「等待保存」并同窗收口回预览，有改动自动保存完成回预览 ---------- */
+const { markTransient, displaySavePhase } = useTransientEdit({
+  savePhase: toRef(props, 'savePhase'),
+  detailMode: toRef(props, 'detailMode'),
+  onReturnToPreview: () => emit('setDetailMode', 'preview'),
+})
+/** 预览态双击正文进入临时编辑；点「编辑」按钮进入的常规编辑不受影响 */
+function onBodyDblClick() {
+  if (props.guard) return
+  markTransient()
+  emit('setDetailMode', 'edit')
+}
+
 function onDraftInput(event: Event) {
   emit('updateDraft', (event.target as HTMLTextAreaElement).value)
 }
@@ -91,7 +104,7 @@ function onTitleInput(event: Event) {
   <DetailLayout
     :mode="detailMode"
     :has-content="true"
-    :save-phase="savePhase"
+    :save-phase="displaySavePhase"
     :path="activeCard.sourcePath"
     :updated-at="activeCard.updatedAt"
     noun="正文"
@@ -150,14 +163,18 @@ function onTitleInput(event: Event) {
 
     <!-- 主内容：单正文预览/编辑（统一正文表面） -->
     <template #content>
-      <!-- 预览态：渲染 Markdown（显示当前草稿），双击进入编辑 -->
+      <!-- 预览态：纯文本渲染（显示当前草稿），双击进入编辑。正文是 textarea 自由文本，
+           不走 markdown（单换行折叠与意外标记变形，见节奏意图同款修复） -->
       <PlainBodySurface
         v-if="detailMode === 'preview'"
         variant="preview"
         data-testid="plan-detail-preview"
-        @dblclick="guard ? undefined : emit('setDetailMode', 'edit')"
+        @dblclick="onBodyDblClick"
       >
-        <MarkdownRenderer v-if="draftValue" :content="draftValue" />
+        <div
+          v-if="draftValue"
+          class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
+        >{{ draftValue }}</div>
         <p v-else class="text-sm text-gray-400">双击或点击「编辑」开始书写正文。</p>
       </PlainBodySurface>
 
@@ -167,7 +184,7 @@ function onTitleInput(event: Event) {
           :value="draftBody ?? activeCard.body"
           :readonly="guard !== null"
           class="min-h-0 w-full flex-1 resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-relaxed text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          placeholder="自由记录正文；支持 Markdown。"
+          placeholder="自由记录正文（纯文本，回车即换行）。"
           data-testid="plan-detail-body"
           @input="onDraftInput"
         />
