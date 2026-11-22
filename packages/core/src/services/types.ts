@@ -253,6 +253,74 @@ export type FileContentView = {
   updatedAt: string
 }
 
+/* ---------- 技能（技能包 UI/UX 施工计划 §3.1 视图类型） ---------- */
+
+/** 技能包内附属文件分类（与核心域 SkillFileKind 同值域）。 */
+export type SkillFileKindView = 'text' | 'script' | 'unsupported'
+
+export type SkillFileEntryView = {
+  /** 相对技能文件夹的路径（不含 SKILL.md）。 */
+  path: string
+  size: number
+  kind: SkillFileKindView
+}
+
+/** 技能行上的 warning 级诊断（名字不一致、文件过多等；技能仍对 AI 可见）。 */
+export type SkillWarningView = {
+  code: string
+  message: string
+}
+
+/** 合格技能（AI 可见）：列表行、展开清单与 #技能 弹层用它。 */
+export type SkillView = {
+  /** 技能身份：文件夹名。 */
+  name: string
+  /** frontmatter name（与文件夹名不同时保留作展示参考）。 */
+  displayName?: string
+  description: string
+  whenToUse?: string
+  directory: string
+  skillFilePath: string
+  files: SkillFileEntryView[]
+  filesOmitted?: number
+  warnings: SkillWarningView[]
+}
+
+/** 被跳过的技能（error 级诊断，AI 看不见）：列表末尾灰显，行内给人话原因。 */
+export type BrokenSkillView = {
+  name: string
+  directory: string
+  /** 人话原因 + 修复提示（如「缺少描述……补上 description 即可」）。 */
+  reason: string
+  code: string
+  /** SKILL.md 路径（存在时可点开修复）。 */
+  skillFilePath?: string
+}
+
+export type SkillListView = {
+  skills: SkillView[]
+  broken: BrokenSkillView[]
+}
+
+/** 导入候选：所选文件夹（单技能）或其一级子文件夹（合集）中含 SKILL.md 的技能。 */
+export type SkillImportCandidateView = {
+  folderName: string
+  /** 目标 skills/<folderName> 已存在（UI 标「同名已存在」不可勾选）。 */
+  hasConflict: boolean
+}
+
+/** 导入来源形态：根下有 SKILL.md 为单技能，否则扫描一级子文件夹。 */
+export type SkillImportScanView = {
+  mode: 'single' | 'collection'
+  candidates: SkillImportCandidateView[]
+}
+
+/** 导入结果：逐个成功/跳过（同名已存在，不覆盖）。 */
+export type SkillImportOutcomeView = {
+  imported: string[]
+  skipped: Array<{ folderName: string; reason: 'exists' }>
+}
+
 /** 计划卡片状态（与核心域 PlanStatus 同值域；View 层显式声明避免 app 导入核心内部实现）。 */
 export type PlanStatusView = 'inbox' | 'planned' | 'in-progress' | 'done' | 'on-hold'
 
