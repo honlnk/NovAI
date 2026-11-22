@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { FileContentView } from '@novai/core/services/types'
 import { countContentChars } from '@novai/core'
+import FrontmatterCard from '../ui/FrontmatterCard.vue'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailLayout from './DetailLayout.vue'
 import PlainBodySurface from './PlainBodySurface.vue'
@@ -21,6 +22,7 @@ import {
 import {
   adoptDiskInEditor,
   collapseEditorConflict,
+  EDITOR_AUTOSAVE_DEBOUNCE_MS,
   editorSessionPhase,
   expandEditorConflict,
   flushEditorSession,
@@ -40,7 +42,9 @@ import {
 } from '../../composables/useChangeHighlights'
 import { buildConflictDiff } from '../../utils/conflict-diff'
 import { suggestCopyPath } from '../../utils/file-tree'
+import { splitFrontmatter } from '../../utils/frontmatter-display'
 import { parseMarkdownBlocks } from '../../utils/markdown-blocks'
+import { useTransientEdit } from '../../composables/useTransientEdit'
 import AppIcon from '../ui/AppIcon.vue'
 
 /**
@@ -132,12 +136,29 @@ const isDirty = computed(() =>
   session.value !== null && session.value.content !== session.value.baseContent,
 )
 
-/** 稿件字数（§6）：统计当前阅读版本，编辑模式含未保存草稿；JSON 非稿件不统计 */
+// 临时编辑（2026-11-23 交互增补）：预览态双击正文进入的编辑标记为「临时」，
+// 自动保存完成（pending/saving → clean）即回预览；静置无改动同样亮「等待保存」
+// 并在去抖同窗（2 秒）后直接回预览；冲突/失败升级为常规编辑。
+// 置于 savePhase/isDirty 之后：watch 初始化求值会立即读 savePhase，提前引用会踩 TDZ
+const { markTransient, displaySavePhase } = useTransientEdit({
+  savePhase,
+  detailMode: viewMode,
+  onReturnToPreview: () => setViewMode('preview'),
+  idleTimeoutMs: EDITOR_AUTOSAVE_DEBOUNCE_MS,
+})
+
+/** 稿件字数（§6）：统计当前阅读版本，编辑模式含未保存草稿；JSON 非稿件不统计。
+ * frontmatter 卡片化（2026-11-23）：md 文件开头围栏已是独立卡片，「正文 N 字」排除元数据 */
 const wordCount = computed(() => {
   if (!props.file || props.file.format === 'json') {
     return null
   }
-  const text = viewMode.value === 'edit' ? editDraft.value : props.file.content
+  const raw = viewMode.value === 'edit' ? editDraft.value : props.file.content
+  const split =
+    props.file.format === 'markdown' && viewMode.value === 'preview'
+      ? splitFrontmatter(raw)
+      : null
+  const text = split?.hasFrontmatter ? split.body : raw
   return countContentChars(text, props.file.format, { isChapter: props.file.path.startsWith('chapters/') })
 })
 
@@ -229,7 +250,11 @@ const textSegments = computed(() => {
 /** Markdown 高亮激活：整块绿显（同版本源码→块映射，不伪造块内精度） */
 const mdJobActive = computed(() => Boolean(activeJob.value && props.file && props.file.format === 'markdown'))
 const mdCursorRange = computed(() => activeJob.value?.ranges[activeJob.value?.cursor ?? 0] ?? null)
-const mdBlocks = computed(() => (mdJobActive.value && props.file ? parseMarkdownBlocks(props.file.content) : []))
+const mdBlocks = computed(() =>
+  mdJobActive.value && props.file
+    ? parseMarkdownBlocks(props.file.content, { detectFrontmatter: true })
+    : [],
+)
 const mdStartLines = computed(() => mdBlocks.value.map((block) => block.key))
 const mdTotalLines = computed(() => props.file?.content.split('\n').length ?? 0)
 /** 绿块：与该处修改的新内容行范围相交的渲染块 */
@@ -584,9 +609,11 @@ defineExpose({
  * 预览模式下捕获用户选中的文本，生成引用 chip。
  * 仅预览模式触发（编辑模式选中是编辑操作）。
  * 单段上限 500 字符，超出截断（避免整篇复制）。
+ * 双击选词不算引用：双击已是「进入临时编辑」的入口（临时编辑 2026-11-23）。
  */
-function handleContentMouseup() {
+function handleContentMouseup(event: MouseEvent) {
   if (!props.file || viewMode.value !== 'preview') return
+  if (event.detail > 1) return
 
   const selection = window.getSelection()
   const text = selection?.toString().trim() ?? ''
@@ -599,13 +626,27 @@ function handleContentMouseup() {
     text: trimmed,
   })
 }
+
+/**
+ * 预览态双击正文 → 临时编辑（快改即走）：自动保存完成后回预览。
+ * 高亮回放中不响应（正在呈现 AI 本轮差异，正文是临时回放块）；
+ * frontmatter 卡片有自己的点按语义（展开/收起），双击卡片不进入正文编辑；
+ * 不可编辑类型（rhythm/foreshadowing/plans 等，由卡片详情负责编辑）不响应。
+ */
+function handlePreviewDblClick(event: MouseEvent) {
+  const target = event.target instanceof Element ? event.target : null
+  if (target?.closest('[data-testid="frontmatter-card"]')) return
+  if (!canEdit.value || activeJob.value) return
+  markTransient()
+  setViewMode('edit')
+}
 </script>
 
 <template>
   <DetailLayout
     :mode="viewMode"
     :has-content="file !== null"
-    :save-phase="savePhase"
+    :save-phase="displaySavePhase"
     :path="file?.path ?? null"
     :updated-at="file?.updatedAt ?? null"
     :can-edit="canEdit"
@@ -889,34 +930,54 @@ function handleContentMouseup() {
             </button>
           </div>
 
-          <!-- Markdown：高亮激活时整块绿显 + 原码红条（块级映射，不伪造块内精度）；
-               无高亮走渲染组件（流式块渲染路径不变） -->
-          <template v-if="shouldRenderMarkdown(file.format)">
-            <div v-if="mdRedText" class="mb-3">
-              <p class="mb-1 text-[10px] text-gray-400">被替换的原文（仅用于比较）</p>
-              <pre class="change-hl-static-red whitespace-pre-wrap rounded-md p-2 text-xs text-red-800">{{ mdRedText }}</pre>
-            </div>
-            <MarkdownRenderer v-if="!mdJobActive" :content="file.content" />
-            <div v-else class="markdown-body">
-              <div
-                v-for="(block, index) in mdBlocks"
-                :key="block.key"
-                class="markdown-block"
-                :class="{
-                  'change-hl-green': mdGreenSet.has(index),
-                  'change-hl-target': mdGreenSet.size === 0 && mdTargetIndex === index,
-                }"
-                v-html="block.html"
+          <!-- 正文区（双击进入临时编辑；上方的定位反馈条不属于正文，双击不响应） -->
+          <div data-testid="file-preview-body" @dblclick="handlePreviewDblClick">
+            <!-- Markdown：高亮激活时整块绿显 + 原码红条（块级映射，不伪造块内精度）；
+                 无高亮走渲染组件（流式块渲染路径不变） -->
+            <template v-if="shouldRenderMarkdown(file.format)">
+              <div v-if="mdRedText" class="mb-3">
+                <p class="mb-1 text-[10px] text-gray-400">被替换的原文（仅用于比较）</p>
+                <pre class="change-hl-static-red whitespace-pre-wrap rounded-md p-2 text-xs text-red-800">{{ mdRedText }}</pre>
+              </div>
+              <MarkdownRenderer
+                v-if="!mdJobActive"
+                :content="file.content"
+                :path="file.path"
+                frontmatter
               />
-            </div>
-          </template>
-          <!-- 纯文本：高亮激活时按当前处切分渲染（绿=新内容行，红=被替换原文） -->
-          <pre v-else-if="textSegments" class="whitespace-pre-wrap text-sm text-gray-800"><span
-            v-for="(seg, index) in textSegments"
-            :key="index"
-            :class="seg.kind === 'green' ? 'change-hl-green' : seg.kind === 'red' ? 'change-hl-red' : ''"
-          >{{ seg.text }}</span></pre>
-          <pre v-else class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
+              <div v-else class="markdown-body">
+                <template v-for="(block, index) in mdBlocks" :key="block.key">
+                  <!-- frontmatter 特殊块：卡片渲染；绿显类挂包装层（卡片透明底，整块绿显） -->
+                  <div
+                    v-if="block.kind === 'frontmatter'"
+                    class="markdown-block"
+                    :class="{
+                      'change-hl-green': mdGreenSet.has(index),
+                      'change-hl-target': mdGreenSet.size === 0 && mdTargetIndex === index,
+                    }"
+                  >
+                    <FrontmatterCard :raw="block.raw ?? ''" :path="file.path" />
+                  </div>
+                  <div
+                    v-else
+                    class="markdown-block"
+                    :class="{
+                      'change-hl-green': mdGreenSet.has(index),
+                      'change-hl-target': mdGreenSet.size === 0 && mdTargetIndex === index,
+                    }"
+                    v-html="block.html"
+                  />
+                </template>
+              </div>
+            </template>
+            <!-- 纯文本：高亮激活时按当前处切分渲染（绿=新内容行，红=被替换原文） -->
+            <pre v-else-if="textSegments" class="whitespace-pre-wrap text-sm text-gray-800"><span
+              v-for="(seg, index) in textSegments"
+              :key="index"
+              :class="seg.kind === 'green' ? 'change-hl-green' : seg.kind === 'red' ? 'change-hl-red' : ''"
+            >{{ seg.text }}</span></pre>
+            <pre v-else class="whitespace-pre-wrap text-sm text-gray-800">{{ file.content }}</pre>
+          </div>
         </PlainBodySurface>
 
         <!-- 编辑模式：统一正文表面（外框不滚动，textarea 自身滚动） -->
