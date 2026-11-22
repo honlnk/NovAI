@@ -3,17 +3,18 @@ import { reactive } from 'vue'
 import type { FileChangeRange } from '@novai/core'
 
 /**
- * 定位高亮反馈队列（交互优化计划 §7）：AI 写盘成功后，在内容面板中定位真实修改、
- * 以绿（新内容）/红（被替换的原文，仅用于比较、不写盘）呈现，多处修改逐处切换，
- * 不同文件形成通知队列不互相覆盖。
+ * 定位高亮任务（交互优化计划 §7）：AI 写盘成功后，在内容面板中定位真实修改、
+ * 以绿（新内容）/红（被替换的原文，仅用于比较、不写盘）呈现，多处修改逐处切换。
  *
  * 结构（照抄 useFileDrafts 的模块级状态模式）：
  * - 状态按项目隔离存模块级 Map（ProjectView 与 FilePanelBody 共享同一份响应式状态）；
- * - 通知（ChangeNotice）：不抢现场时的可点击反馈位（正在编辑/有草稿/在看别的文件/
- *   后台会话改动），点击后由 ProjectView 打开文件并重播稳定差异；
  * - 任务（ChangeHighlightJob）：当前正在面板中呈现的一次高亮，同一时刻至多一个
  *   （面板一次只显示一个文件）；timed 模式 2.5 秒稳定后 1.2 秒淡出，settled 后保留
  *   「重新查看本轮差异」入口；stable 模式（重播）不自动淡出，由用户关闭。
+ *
+ * 变更通知队列（可堆叠的蓝色「AI 新建/修改了」卡片）已于 2026-11-23 按用户决策移除：
+ * 不抢现场（正在编辑/看别的文件/后台会话改动）时不再入队通知，AI 改动信息由聊天流
+ * 工具行摘要与变更账本承载。
  *
  * 减少动态效果（prefers-reduced-motion）：取消平滑滚动与淡出——timed 任务保持稳定
  * 显示直到被替换或关闭，滚动由调用方改用即时跳转。
@@ -23,36 +24,6 @@ import type { FileChangeRange } from '@novai/core'
 export const HIGHLIGHT_STABLE_MS = 2500
 /** 淡出时长（ms，§7「约 1.2 秒」） */
 export const HIGHLIGHT_FADE_MS = 1200
-/** 通知队列上限：长任务防堆积，最老的先出 */
-export const MAX_CHANGE_NOTICES = 20
-
-/** 通知里携带的可定位信息（点击「查看差异」时重播用）；无坐标的旧记录缺省 */
-export type NoticeLocatePayload = {
-  ranges: FileChangeRange[]
-  oldText: string
-  /** 写盘后版本的内容哈希；重播前校验面板内容仍是该版本，失配降级不伪造高亮 */
-  afterHash?: string
-}
-
-/** 不抢现场时的可点击变更通知（反馈队列的一条） */
-export type ChangeNotice = {
-  recordId: string
-  path: string
-  fileName: string
-  status: 'created' | 'updated'
-  /** 修改处数（coords.ranges 数；无坐标时 1） */
-  count: number
-  /** 有定位坐标才可「查看差异」；否则只能「查看文件」 */
-  canLocate: boolean
-  /** 重播所需的定位载荷（canLocate 时存在） */
-  locate?: NoticeLocatePayload
-  /**
-   * 来源会话归属（F10）：后台会话的改动标注会话标题，让用户知道是谁改的；
-   * 当前激活会话的改动不标（上下文自明）。创建时的快照，不随后续切换更新。
-   */
-  sessionId?: string
-  sessionTitle?: string
-}
 
 export type ChangeHighlightJob = {
   recordId: string
@@ -68,7 +39,6 @@ export type ChangeHighlightJob = {
 }
 
 type ProjectHighlightState = {
-  notices: ChangeNotice[]
   job: ChangeHighlightJob | null
 }
 
@@ -78,7 +48,7 @@ const timersByProject = new Map<string, { stable?: ReturnType<typeof setTimeout>
 function getState(projectId: string): ProjectHighlightState {
   let state = statesByProject.get(projectId)
   if (!state) {
-    state = reactive<ProjectHighlightState>({ notices: [], job: null })
+    state = reactive<ProjectHighlightState>({ job: null })
     statesByProject.set(projectId, state)
   }
   return state
@@ -116,13 +86,12 @@ export type StartJobParams = {
 
 /**
  * 开始呈现一次高亮（自动播放或重播共用）。同一时刻至多一个任务：
- * 新任务替换旧任务（旧任务的通知仍留在队列里等用户处理）；同名通知视为已查看出队。
+ * 新任务替换旧任务。
  */
 export function startHighlightJob(projectId: string, params: StartJobParams): void {
   const state = getState(projectId)
   clearTimers(projectId)
   state.job = { ...params, cursor: 0, phase: 'show' }
-  dismissChangeNotice(projectId, params.recordId)
 
   if (params.mode !== 'timed') {
     return
@@ -166,69 +135,28 @@ export function replayHighlightJob(projectId: string): void {
   })
 }
 
-/** 关闭当前任务（同时消费对应通知） */
+/** 关闭当前任务 */
 export function dismissHighlightJob(projectId: string): void {
-  const state = getState(projectId)
   clearTimers(projectId)
-  if (state.job) {
-    dismissChangeNotice(projectId, state.job.recordId)
-  }
-  state.job = null
-}
-
-/** 入队一条变更通知（按记录 id 去重；超限丢最老的） */
-export function pushChangeNotice(projectId: string, notice: ChangeNotice): void {
-  const state = getState(projectId)
-  if (state.notices.some((item) => item.recordId === notice.recordId)) return
-  state.notices.push(notice)
-  if (state.notices.length > MAX_CHANGE_NOTICES) {
-    state.notices.splice(0, state.notices.length - MAX_CHANGE_NOTICES)
-  }
-}
-
-/** 移除一条通知（已查看或用户手动关闭） */
-export function dismissChangeNotice(projectId: string, recordId: string): void {
-  const state = getState(projectId)
-  const index = state.notices.findIndex((item) => item.recordId === recordId)
-  if (index >= 0) {
-    state.notices.splice(index, 1)
-  }
-}
-
-/**
- * 收起某路径的全部通知（修复批 2026-11-20）：该文件进入正文版本冲突后，
- * 黄色冲突条成为这一冲突的唯一反馈，既有同类蓝色通知不再叠加显示。
- * 只清 UI 通知队列，不动 chatStore 的变更账本（recentFileChanges）。
- */
-export function dismissChangeNoticesForPath(projectId: string, path: string): void {
-  const state = getState(projectId)
-  for (let i = state.notices.length - 1; i >= 0; i -= 1) {
-    if (state.notices[i]!.path === path) {
-      state.notices.splice(i, 1)
-    }
-  }
+  getState(projectId).job = null
 }
 
 /** 清空某项目的全部高亮状态（切项目时调用，跨项目不串扰） */
 export function clearChangeHighlights(projectId: string): void {
   clearTimers(projectId)
-  const state = getState(projectId)
-  state.notices.splice(0)
-  state.job = null
+  getState(projectId).job = null
 }
 
 /** 组件侧入口：拿本项目状态的只读引用 + 动作集合 */
 export function useChangeHighlights(projectId: string) {
   const state = getState(projectId)
   return {
-    /** 响应式状态：notices（通知队列）与 job（当前高亮任务） */
+    /** 响应式状态：job（当前高亮任务） */
     state,
     startJob: (params: StartJobParams) => startHighlightJob(projectId, params),
     advanceCursor: (delta: number) => advanceHighlightCursor(projectId, delta),
     replayJob: () => replayHighlightJob(projectId),
     dismissJob: () => dismissHighlightJob(projectId),
-    dismissNotice: (recordId: string) => dismissChangeNotice(projectId, recordId),
-    dismissNoticesForPath: (path: string) => dismissChangeNoticesForPath(projectId, path),
   }
 }
 

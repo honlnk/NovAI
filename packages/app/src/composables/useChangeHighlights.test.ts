@@ -6,11 +6,8 @@ import {
   buildTextHighlightSegments,
   clearChangeHighlights,
   dismissHighlightJob,
-  dismissChangeNotice,
   _getHighlightState,
   markdownBlockIndicesInRange,
-  MAX_CHANGE_NOTICES,
-  pushChangeNotice,
   replayHighlightJob,
   _setReducedMotionProbe,
   startHighlightJob,
@@ -26,38 +23,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
-})
-
-describe('通知队列', () => {
-  it('入队按序保留、按记录 id 去重、超限丢最老的', () => {
-    for (let i = 0; i < MAX_CHANGE_NOTICES + 3; i += 1) {
-      pushChangeNotice(P, {
-        recordId: `r${i}`,
-        path: `chapters/第001章-${i}.txt`,
-        fileName: `第001章-${i}.txt`,
-        status: 'updated',
-        count: 1,
-        canLocate: true,
-      })
-    }
-
-    const state = _getHighlightState(P)
-    expect(state.notices).toHaveLength(MAX_CHANGE_NOTICES)
-    // 最老的 3 条被挤出
-    expect(state.notices[0]?.recordId).toBe('r3')
-    expect(state.notices[state.notices.length - 1]?.recordId).toBe(`r${MAX_CHANGE_NOTICES + 2}`)
-
-    // 去重：同 id 再入队不增加
-    pushChangeNotice(P, { recordId: 'r3', path: 'x', fileName: 'x', status: 'updated', count: 1, canLocate: true })
-    expect(state.notices).toHaveLength(MAX_CHANGE_NOTICES)
-  })
-
-  it('dismissNotice 只移除指定通知', () => {
-    pushChangeNotice(P, { recordId: 'a', path: 'a', fileName: 'a', status: 'updated', count: 1, canLocate: true })
-    pushChangeNotice(P, { recordId: 'b', path: 'b', fileName: 'b', status: 'created', count: 1, canLocate: true })
-    dismissChangeNotice(P, 'a')
-    expect(_getHighlightState(P).notices.map((n) => n.recordId)).toEqual(['b'])
-  })
 })
 
 describe('高亮任务状态机', () => {
@@ -111,19 +76,10 @@ describe('高亮任务状态机', () => {
     expect(state.job?.phase).toBe('settled')
   })
 
-  it('任务开始时同名通知出队（视为已查看）', () => {
-    pushChangeNotice(P, { recordId: 'rec1', path: params.path, fileName: 'x', status: 'updated', count: 1, canLocate: true })
-    startHighlightJob(P, params)
-    expect(_getHighlightState(P).notices).toHaveLength(0)
-  })
-
-  it('dismissJob 清任务与对应通知', () => {
-    pushChangeNotice(P, { recordId: 'rec1', path: params.path, fileName: 'x', status: 'updated', count: 1, canLocate: true })
+  it('dismissJob 清任务', () => {
     startHighlightJob(P, params)
     dismissHighlightJob(P)
-    const state = _getHighlightState(P)
-    expect(state.job).toBeNull()
-    expect(state.notices).toHaveLength(0)
+    expect(_getHighlightState(P).job).toBeNull()
   })
 
   it('replayJob 以 stable 模式重播当前任务参数', () => {

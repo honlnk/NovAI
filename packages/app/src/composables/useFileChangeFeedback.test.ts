@@ -5,12 +5,12 @@
  * watch 消费 → freezeEditorSessionForExternal / useChangeHighlights / useToast
  * 模块态全部真实，仅 stores/project 打桩（openFile/probeFile 等服务面）。
  *
- * 断言口径（修复批目标）：
+ * 断言口径（修复批目标；变更通知队列已于 2026-11-23 按用户决策移除）：
  * - 人工正编辑同一文件（dirty）时 AI 连续多次修改（每次新 recordId）：黄色冲突条
  *   唯一（会话单 conflict、generation 递增、磁盘快照跟随最后一次 AI 版本）、
- *   冲突 toast 为零、冲突蓝色通知为零；变更账本不被清理；
+ *   冲突 toast 为零；变更账本不被清理；
  * - 非当前文件的首次冲突：仅一次 toast 指路，后续修改静默；
- * - 无冲突的普通 AI 修改：蓝色通知能力原样保留；进入冲突时既有同类通知被收起。
+ * - 无冲突的普通 AI 修改：静默（不建冲突、不打 toast）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -114,7 +114,7 @@ describe('useFileChangeFeedback 冲突反馈分层（真实事件链）', () => 
     await flushAsync()
   }
 
-  it('人工编辑中 AI 连续三次修改同一文件：黄色冲突唯一、冲突 toast/蓝色通知为零、磁盘快照跟随最新', async () => {
+  it('人工编辑中 AI 连续三次修改同一文件：黄色冲突唯一、冲突 toast 为零、磁盘快照跟随最新', async () => {
     aiDiskVersion = 'AI 第一版'
     await deliver(aiUpdateRecord(A_PATH))
     aiDiskVersion = 'AI 第二版'
@@ -131,40 +131,36 @@ describe('useFileChangeFeedback 冲突反馈分层（真实事件链）', () => 
     // 人工内容未被清掉
     expect(session.content).toBe('人工未落盘内容')
 
-    // 冲突 toast 为零、冲突蓝色通知为零
+    // 冲突 toast 为零
     const toasts = useToast().toasts.value
     expect(toasts.filter((t) => t.message.includes('已被 AI 修改'))).toHaveLength(0)
-    expect(_getHighlightState('p1').notices).toHaveLength(0)
 
     // 底层变更账本不动（三条全在，反馈收起不删数据）
     expect(chatStore.recentFileChanges).toHaveLength(3)
   })
 
-  it('无冲突的普通 AI 修改：蓝色通知能力保留', async () => {
-    // 用户在编辑 B、B 无未落盘内容（干净）：对 B 的普通修改仍入蓝色通知
+  it('无冲突的普通 AI 修改：静默（不建冲突、不打 toast）', async () => {
+    // 用户在编辑 B、B 无未落盘内容（干净）：对 B 的普通修改不抢现场也不给通知
     panelState = { path: B_PATH, viewMode: 'edit', dirty: false }
     await deliver(aiUpdateRecord(B_PATH))
 
-    expect(_getHighlightState('p1').notices).toHaveLength(1)
-    expect(_getHighlightState('p1').notices[0]!.path).toBe(B_PATH)
     expect(useToast().toasts.value.filter((t) => t.message.includes('已被 AI 修改'))).toHaveLength(0)
     expect(getEditorSession('p1', B_PATH)?.conflict).toBeUndefined()
   })
 
-  it('进入冲突时收起该文件既有的同类蓝色通知（账本保留）', async () => {
-    // 第一拍：用户在编辑 A 但内容已落盘（clean）→ 普通修改入蓝色通知
+  it('clean 编辑态普通修改不建冲突，同一文件随后变 dirty 再被修改即进入冲突', async () => {
+    // 第一拍：用户在编辑 A 但内容已落盘（clean）→ 普通修改不建冲突
     panelState = { path: A_PATH, viewMode: 'edit', dirty: false }
     aiDiskVersion = 'AI 第一版'
     await deliver(aiUpdateRecord(A_PATH))
-    expect(_getHighlightState('p1').notices).toHaveLength(1)
+    expect(getEditorSession('p1', A_PATH)?.conflict).toBeUndefined()
 
     // 第二拍：用户输入未落盘内容 → 同一文件再被 AI 修改 → 进入冲突
     panelState = { path: A_PATH, viewMode: 'edit', dirty: true }
     aiDiskVersion = 'AI 第二版'
     await deliver(aiUpdateRecord(A_PATH))
 
-    // 既有蓝色通知被收起（黄色冲突条接管），账本仍在
-    expect(_getHighlightState('p1').notices).toHaveLength(0)
+    // 黄色冲突条接管（唯一反馈），账本仍在
     expect(chatStore.recentFileChanges).toHaveLength(2)
     expect(getEditorSession('p1', A_PATH)?.conflict?.disk?.content).toBe('AI 第二版')
   })
@@ -176,25 +172,13 @@ describe('useFileChangeFeedback 冲突反馈分层（真实事件链）', () => 
     aiDiskVersion = 'AI 第一版'
     await deliver(aiUpdateRecord(A_PATH))
     expect(useToast().toasts.value.filter((t) => t.message.includes('已被 AI 修改'))).toHaveLength(1)
-    expect(_getHighlightState('p1').notices).toHaveLength(0)
     expect(getEditorSession('p1', A_PATH)?.conflict?.disk?.content).toBe('AI 第一版')
 
-    // 同一冲突内 AI 再改：不新增 toast、不新增通知，磁盘快照跟随最新
+    // 同一冲突内 AI 再改：不新增 toast，磁盘快照跟随最新
     aiDiskVersion = 'AI 第二版'
     await deliver(aiUpdateRecord(A_PATH))
     expect(useToast().toasts.value.filter((t) => t.message.includes('已被 AI 修改'))).toHaveLength(1)
-    expect(_getHighlightState('p1').notices).toHaveLength(0)
     expect(getEditorSession('p1', A_PATH)?.conflict?.disk?.content).toBe('AI 第二版')
     expect(getEditorSession('p1', A_PATH)?.conflict?.expanded).toBe(false)
-  })
-
-  it('后台会话的普通修改进入通知时带归属标注（链路不回归）', async () => {
-    panelState = { path: B_PATH, viewMode: 'edit', dirty: false }
-    await deliver(aiUpdateRecord(B_PATH), 's2')
-    await deliver(aiUpdateRecord(B_PATH), 's2')
-
-    const notices = _getHighlightState('p1').notices
-    expect(notices).toHaveLength(2)
-    expect(notices.every((n) => n.sessionTitle === '后台会话乙')).toBe(true)
   })
 })

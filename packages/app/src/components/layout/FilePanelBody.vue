@@ -38,7 +38,6 @@ import {
   buildTextHighlightSegments,
   markdownBlockIndicesInRange,
   useChangeHighlights,
-  type ChangeNotice,
 } from '../../composables/useChangeHighlights'
 import { buildConflictDiff } from '../../utils/conflict-diff'
 import { suggestCopyPath } from '../../utils/file-tree'
@@ -67,7 +66,7 @@ import AppIcon from '../ui/AppIcon.vue'
  *
  * 定位高亮（交互优化计划 §7）：AI 写盘后按账本坐标在预览中定位——新内容绿显、
  * 被替换原文以相邻红段呈现（比较用，不写盘）；多处修改逐处切换，淡出后保留
- * 「重新查看本轮差异」；不抢现场时以变更通知队列呈现（可点击查看）。
+ * 「重新查看本轮差异」。
  */
 const props = defineProps<{
   file: FileContentView | null
@@ -75,8 +74,6 @@ const props = defineProps<{
   projectId: string
   /** 空态提示（AI 删除了正打开的文件时由 ProjectView 置入，指向回收站去向） */
   notice?: { name: string; trashPath?: string } | null
-  /** 变更通知「查看差异」请求令牌：ProjectView 每次处理通知点击时递增（路径未变时也要切回预览） */
-  locateToken?: number
   /** 草稿恢复令牌：ProjectView 从 IndexedDB 恢复草稿后递增（面板重读当前路径草稿） */
   draftRestoreToken?: number
 }>()
@@ -84,8 +81,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   selectQuote: [payload: { path: string; name: string; text: string }]
-  /** 点击变更通知：ProjectView 打开对应文件并（可定位时）重播稳定差异 */
-  locateChange: [notice: ChangeNotice]
   /** 草稿守护「放弃草稿」：ProjectView 清草稿并按守护类型收尾（清面板/开新文件） */
   'guard-discard': []
   /** 草稿守护（重命名）「把草稿迁移到新文件」：ProjectView 迁移草稿并打开新路径 */
@@ -378,17 +373,6 @@ watch(viewMode, (mode, previous) => {
     void flushEditorSession(props.projectId, file.path)
   }
 })
-
-// 「查看差异」通知点击（§7）：当前文件正在编辑时路径不变，file.path watch 不触发，
-// 由令牌 watch 强制切回预览呈现重播差异（草稿保留在会话，以「未保存」标记呈现）
-watch(
-  () => props.locateToken,
-  () => {
-    if (props.locateToken !== undefined && props.file) {
-      viewMode.value = 'preview'
-    }
-  },
-)
 
 // 草稿恢复令牌（§3-2）：IndexedDB 恢复完成后重读当前路径草稿（恢复晚于面板初始化时）
 watch(
@@ -778,36 +762,6 @@ function handlePreviewDblClick(event: MouseEvent) {
         >
           ×
         </button>
-      </div>
-
-      <!-- 变更通知队列（§7 不抢现场）：用户在编辑/有草稿/看别的文件/后台会话改动时，
-           只给可点击通知不强行跳转；点击交 ProjectView 打开文件并重播稳定差异 -->
-      <div v-if="hl.state.notices.length > 0" class="mb-3 flex shrink-0 flex-col gap-1.5">
-        <div
-          v-for="n in hl.state.notices"
-          :key="n.recordId"
-          class="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-1.5 text-xs"
-        >
-          <AppIcon name="square-pen" :size="14" class="h-3.5 w-3.5 shrink-0 text-blue-500" />
-          <span class="min-w-0 flex-1 truncate text-gray-700">
-            AI {{ n.status === 'created' ? '新建' : '修改' }}了「{{ n.fileName }}」<span v-if="n.count > 1" class="text-gray-400">（{{ n.count }} 处）</span><span v-if="n.sessionTitle" class="text-gray-400">（来自会话「{{ n.sessionTitle }}」）</span>
-          </span>
-          <button
-            type="button"
-            class="shrink-0 rounded-md border border-blue-200 bg-white px-2 py-0.5 font-medium text-blue-600 transition-colors hover:bg-blue-50"
-            @click="emit('locateChange', n)"
-          >
-            {{ n.canLocate ? '查看差异' : '查看文件' }}
-          </button>
-          <button
-            type="button"
-            class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:text-gray-600"
-            aria-label="关闭通知"
-            @click="hl.dismissNotice(n.recordId)"
-          >
-            ×
-          </button>
-        </div>
       </div>
 
       <!-- 冲突紧凑状态条（§五.2 非阻塞——AI 先落盘冻结/用户收起比较后的再入口） -->

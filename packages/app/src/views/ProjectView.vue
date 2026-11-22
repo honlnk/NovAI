@@ -493,11 +493,11 @@ watch(
 
 // ===== 文件变更反馈链（交互优化计划 §7 + 正文自动保存计划 §五.2）=====
 // file-changed 逐条到达（recentFileChanges 不吞并发改动）：命中当前打开文件且现场
-// 无干扰时重读并自动播放差异；编辑/有草稿/看别的文件/后台会话改动 → 只入通知队列。
-// AI 先落盘且人工有未落盘内容 → 冻结会话建立冲突；冲突反馈分层（同一冲突只留一个
-// 黄色冲突条，不逐次 toast / 蓝色通知）见 useFileChangeFeedback（修复批 2026-11-20
-// 从本视图抽出，调用链不变，便于真实事件链测试）。
-const { locateToken, handleLocateChange } = useFileChangeFeedback({
+// 无干扰时重读并自动播放差异；编辑/看别的文件时不抢现场（变更通知队列已按用户
+// 决策于 2026-11-23 移除）。AI 先落盘且人工有未落盘内容 → 冻结会话建立冲突；
+// 冲突反馈分层（同一冲突只留一个黄色冲突条，不逐次 toast）见 useFileChangeFeedback
+// （修复批 2026-11-20 从本视图抽出，便于真实事件链测试）。
+useFileChangeFeedback({
   projectId: () => projectId.value,
   getPanelState: () => filePanelRef.value?.getAutoPlayState?.() ?? null,
   openContentPanel: () => {
@@ -1714,11 +1714,9 @@ function handleGoToSettings() {
           :file="projectStore.activeFile"
           :project-id="projectId"
           :notice="panelNotice"
-          :locate-token="locateToken"
           :draft-restore-token="draftRestoreToken"
           @close="handleCloseContentPanel"
           @select-quote="handleSelectQuote"
-          @locate-change="handleLocateChange"
           @guard-discard="handleGuardDiscard"
           @guard-migrate="handleGuardMigrate"
           @guard-resolved="handleGuardResolved"
