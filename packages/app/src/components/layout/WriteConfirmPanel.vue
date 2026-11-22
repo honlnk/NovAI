@@ -196,17 +196,12 @@ async function loadDisk() {
         diskUnreadableMessage.value = probe.message
       }
     }
-    // create 候选的草稿分支按「目标为空」判定：文件不存在，或追加式账本
-    // 确认（账本存在是常态，不算被占用；磁盘真实内容仍进上方预览）
-    const createAsEmpty = isCreate.value && (probe.kind === 'missing' || (probe.kind === 'ok' && isAppendLedger.value))
+    // 原样传探测结果，create 语义统一在 resolveConfirmDraftBranch 判定：目标不存在 =
+    // 正常空目标；目标存在 = 被占用（追加式账本除外，磁盘真实内容仍进上方预览）。
+    // 旧实现把 create+missing 映射成 { ok, '' }，又被判定为「ok + create = 占用」，
+    // 新建不存在的文件时同意按钮死锁。
     draftBranch.value = resolveConfirmDraftBranch({
-      probe: probe.kind === 'ok' && !createAsEmpty
-        ? { kind: 'ok', content: probe.file.content }
-        : probe.kind === 'missing' && !isCreate.value
-          ? { kind: 'missing' }
-          : probe.kind === 'unreadable'
-            ? { kind: 'unreadable' }
-            : { kind: 'ok', content: '' },
+      probe: probe.kind === 'ok' ? { kind: 'ok', content: probe.file.content } : { kind: probe.kind },
       draftEntry: draftEntry.value,
       isCreate: isCreate.value,
       createAppendLedger: isAppendLedger.value,
@@ -401,11 +396,22 @@ async function handleConfirm() {
         emit('confirm')
         return
       }
-      if (c.kind === 'create' && draftBranch.value === 'missing' && diskFile.value !== null && !freshDraftEntry) {
-        // 此前因目标被占用而暂停；复检时已释放，可回到正常新建确认。
-        draftBranch.value = freshDraftEntry ? 'draft-clean' : 'none'
-        diskFile.value = null
-        staleState.value = 'idle'
+      if (c.kind === 'create') {
+        // 新建目标不存在是正常前提。有人工草稿仍先处理草稿；此前因目标被占用
+        // 而暂停、复检时已释放的，回到正常新建确认重审，不直接写入。
+        if (freshDraftEntry) {
+          draftBranch.value = resolveConfirmDraftBranch({ probe: { kind: 'missing' }, draftEntry: freshDraftEntry, isCreate: true })
+          diskFile.value = null
+          staleState.value = 'idle'
+          return
+        }
+        if (draftBranch.value === 'missing' || diskFile.value !== null) {
+          draftBranch.value = 'none'
+          diskFile.value = null
+          staleState.value = 'idle'
+          return
+        }
+        emit('confirm')
         return
       }
       if (draftBranch.value === 'missing' && diskFile.value === null && !freshDraftEntry) {

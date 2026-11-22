@@ -61,6 +61,35 @@ describe('resolveConfirmDraftBranch 确认面板分支判定', () => {
       isCreate: true,
     })).toBe('missing')
   })
+
+  it('create 目标不存在是正常空目标：none，可直接同意（不误报占用）', () => {
+    expect(resolveConfirmDraftBranch({
+      probe: { kind: 'missing' },
+      draftEntry: null,
+      isCreate: true,
+    })).toBe('none')
+  })
+
+  it('create 目标不存在但有人工草稿：仍按草稿分支阻止直接同意', () => {
+    expect(resolveConfirmDraftBranch({
+      probe: { kind: 'missing' },
+      draftEntry: { content: '草稿', baseContent: '' },
+      isCreate: true,
+    })).toBe('draft-clean')
+    expect(resolveConfirmDraftBranch({
+      probe: { kind: 'missing' },
+      draftEntry: draft,
+      isCreate: true,
+    })).toBe('draft-diverged')
+  })
+
+  it('create 目标不可读：unreadable（不当作不存在放行）', () => {
+    expect(resolveConfirmDraftBranch({
+      probe: { kind: 'unreadable' },
+      draftEntry: null,
+      isCreate: true,
+    })).toBe('unreadable')
+  })
 })
 
 describe('applyEditCandidate 候选写盘结果合成', () => {

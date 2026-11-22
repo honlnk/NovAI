@@ -26,7 +26,7 @@ export type DraftProbeInput = {
     | { kind: 'unreadable' }
   /** 目标路径的人工草稿条目（无草稿 null） */
   draftEntry: { content: string; baseContent: string } | null
-  /** create 候选的目标已存在时视为 missing（新建语义被占用） */
+  /** create 候选：目标已存在视为 missing（新建语义被占用）；目标不存在是正常空目标 */
   isCreate: boolean
   /** 追加式账本确认（关系账本）：create 目标存在是常态，不算占用 */
   createAppendLedger?: boolean
@@ -38,20 +38,21 @@ export function resolveConfirmDraftBranch(input: DraftProbeInput): ConfirmDraftB
   if (probe.kind === 'unreadable') {
     return 'unreadable'
   }
-  if (probe.kind === 'missing') {
-    return 'missing'
-  }
-  if (isCreate && !input.createAppendLedger) {
-    // create 探测到内容即目标被占用（probe ok + create = 占用，由调用方以 missing 传入
-    // 更清晰——此处防御：ok 且 create 视作 missing 语义）
-    return 'missing'
-  }
   if (isCreate) {
-    // 追加式账本（关系账本）：目标存在不算占用，与 edit 同样按草稿基线比对
+    // create 探测到内容即目标被占用（新建不覆盖）；追加式账本（关系/时间线）除外——
+    // 目标存在是常态，与 edit 同样按草稿基线比对
+    if (probe.kind === 'ok' && !input.createAppendLedger) {
+      return 'missing'
+    }
+    // 目标不存在是新建的正常前提（空目标），不是「文件不存在」失配
+    const diskContent = probe.kind === 'ok' ? probe.content : ''
     if (!draftEntry) {
       return 'none'
     }
-    return draftEntry.baseContent === probe.content ? 'draft-clean' : 'draft-diverged'
+    return draftEntry.baseContent === diskContent ? 'draft-clean' : 'draft-diverged'
+  }
+  if (probe.kind === 'missing') {
+    return 'missing'
   }
   if (!draftEntry) {
     return 'none'
