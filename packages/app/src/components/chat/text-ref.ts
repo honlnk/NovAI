@@ -11,19 +11,20 @@ import {
 import { registerLexicalTextEntity } from '@lexical/text'
 
 /**
- * 命令/大纲 token 高亮（输入框富文本化 W3，方案照 dsh text-ref.ts）。
+ * 命令/大纲/技能 token 高亮（输入框富文本化 W3，方案照 dsh text-ref.ts；
+ * 技能 `#` 触发符为技能包 UI/UX 施工计划 §3.3 新增）。
  *
  * TextRefNode extends TextNode：着色靠 createDOM 加 class（保持普通文本语义、
  * 可继续编辑），编辑后不再匹配识别规则时由 registerLexicalTextEntity 自动降回
  * 普通 TextNode。非 chip（原子节点）方案——计划 D3 拍板。
  *
  * 识别规则（纯函数 scanTextRefs，与 dsh decorations.ts 同构，中文名适配）：
- * 触发符 / 或 @ 必须在行首或空白后；name 为连续非空白段（[^\s@/]+）；
- * `/名字` 整体精确命中 lexicon 且其后紧跟空白或结尾才高亮——
- * `/管理要素。`、`x/管理要素`、`/整理` 都不高亮。
+ * 触发符 / @ # 必须在行首或空白后；name 为连续非空白段（[^\s@/#]+）；
+ * `触发符+名字` 整体精确命中 lexicon 且其后紧跟空白或结尾才高亮——
+ * `/管理要素。`、`x/管理要素`、`/整理`、`# 标题`（# 后紧跟空格）都不高亮。
  */
 
-export type TextRefKind = 'slash' | 'outline'
+export type TextRefKind = 'slash' | 'outline' | 'skill'
 
 export class TextRefNode extends TextNode {
   readonly __kind: TextRefKind
@@ -58,7 +59,10 @@ export class TextRefNode extends TextNode {
     serializedNode: SerializedLexicalNode & Record<string, unknown>,
   ): TextRefNode {
     const data = serializedNode as unknown as SerializedTextRefNode
-    const node = new TextRefNode(data.text, data.kind === 'outline' ? 'outline' : 'slash')
+    const node = new TextRefNode(
+      data.text,
+      data.kind === 'outline' ? 'outline' : data.kind === 'skill' ? 'skill' : 'slash',
+    )
     node.setFormat(data.format)
     node.setDetail(data.detail)
     node.setMode(data.mode)
@@ -80,6 +84,8 @@ export interface TextRefLexicon {
   slash: readonly string[]
   /** 大纲引用集（含 @ 前缀，如 '@主线'） */
   outline: readonly string[]
+  /** 技能点名集（含 # 前缀，如 '#去AI味'；技能包 UI/UX 施工计划 §3.3） */
+  skill: readonly string[]
 }
 
 export interface TextRefMatch {
@@ -90,15 +96,18 @@ export interface TextRefMatch {
   kind: TextRefKind
 }
 
-const TOKEN_RE = /(^|\s)([/@])([^\s@/]+)/g
+const TOKEN_RE = /(^|\s)([/@#])([^\s@/#]+)/g
 
 /**
- * 扫描文本中所有可高亮的命令/大纲 token。
- * 纯函数、不跨行（[^\s@/]+ 天然不含 \n）；token 后必须紧跟空白或结尾。
+ * 扫描文本中所有可高亮的命令/大纲/技能 token。
+ * 纯函数、不跨行（[^\s@/#]+ 天然不含 \n）；token 后必须紧跟空白或结尾。
  */
 export function scanTextRefs(text: string, lexicon: TextRefLexicon): TextRefMatch[] {
-  const slashSet = new Set(lexicon.slash)
-  const outlineSet = new Set(lexicon.outline)
+  const sets: Record<Exclude<TextRefKind, never>, Set<string>> = {
+    slash: new Set(lexicon.slash),
+    outline: new Set(lexicon.outline),
+    skill: new Set(lexicon.skill),
+  }
   const matches: TextRefMatch[] = []
   TOKEN_RE.lastIndex = 0
   let match: RegExpExecArray | null
@@ -106,9 +115,8 @@ export function scanTextRefs(text: string, lexicon: TextRefLexicon): TextRefMatc
     const trigger = match[2]!
     const name = match[3]!
     const label = `${trigger}${name}`
-    const kind: TextRefKind = trigger === '/' ? 'slash' : 'outline'
-    const set = kind === 'slash' ? slashSet : outlineSet
-    if (!set.has(label)) continue
+    const kind: TextRefKind = trigger === '/' ? 'slash' : trigger === '@' ? 'outline' : 'skill'
+    if (!sets[kind].has(label)) continue
     const end = match.index + match[0].length
     if (!/^(?:\s|$)/.test(text.slice(end))) continue
     matches.push({ start: end - label.length, end, kind })
@@ -133,7 +141,10 @@ export function registerTextRefs(
       TextRefNode,
       (textNode) => {
         const text = textNode.getTextContent()
-        return new TextRefNode(text, text.startsWith('@') ? 'outline' : 'slash')
+        return new TextRefNode(
+          text,
+          text.startsWith('@') ? 'outline' : text.startsWith('#') ? 'skill' : 'slash',
+        )
       },
     ),
   )

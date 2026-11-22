@@ -7,8 +7,15 @@ import type {
 } from '@novai/core/services/types'
 import type { RecentProject } from '@novai/core/types/project'
 
-import { updateRecentProjectCounts } from '@novai/core/services/project-service'
+import {
+  createProject,
+  openProject,
+  restoreLastProject,
+  restoreRecentProject,
+  updateRecentProjectCounts,
+} from '@novai/core/services/project-service'
 import { refreshFiles } from '@novai/core/services/file-service'
+import { ProjectPermissionRequiredError } from '@novai/core/types/project'
 import { useProjectStore } from './project'
 
 vi.mock('@novai/core/services/project-service', () => ({
@@ -63,6 +70,8 @@ function createProjectView(files: ProjectView['files']): ProjectView {
         embeddingTextVersion: 1,
         enableDebugLogging: false,
         activeOutlinePath: null,
+        foreshadowingStatusMode: 'default',
+        rhythmDeviationThreshold: 3,
       },
     },
   }
@@ -204,5 +213,98 @@ describe('project store 计数回写', () => {
 
     expect(store.errorMessage).toBe('句柄失效')
     expect(mockedUpdateRecentProjectCounts).not.toHaveBeenCalled()
+  })
+})
+
+describe('project store 取消与授权分级反馈', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('打开项目取消目录选择：轻提醒而非红色错误，项目现场不变', async () => {
+    const store = useProjectStore()
+    vi.mocked(openProject).mockRejectedValue(
+      new DOMException('The user aborted a request.', 'AbortError'),
+    )
+
+    const result = await store.openExistingProject()
+
+    expect(result).toBeNull()
+    expect(store.notice).toMatchObject({ kind: 'cancelled', message: '未选择目录，项目未打开' })
+    expect(store.errorMessage).toBe('')
+    expect(store.currentProject).toBeNull()
+  })
+
+  it('新建项目取消目录选择：提示「未创建」', async () => {
+    const store = useProjectStore()
+    vi.mocked(createProject).mockRejectedValue(
+      new DOMException('The user aborted a request.', 'AbortError'),
+    )
+
+    await store.createNewProject('新书')
+
+    expect(store.notice).toMatchObject({ kind: 'cancelled', message: '未选择目录，项目未创建' })
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('恢复上次项目权限拒绝：黄色授权提醒并携带重新授权目标', async () => {
+    const store = useProjectStore()
+    vi.mocked(restoreLastProject).mockRejectedValue(
+      new ProjectPermissionRequiredError('项目「测试书」尚未获得目录访问权限，需要重新授权后才能打开。', '测试书'),
+    )
+
+    const result = await store.restoreLastOpenedProject()
+
+    expect(result).toBeNull()
+    expect(store.notice).toMatchObject({ kind: 'permission', retryTarget: 'last' })
+    expect(store.notice?.message).toContain('测试书')
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('打开最近项目权限拒绝：重新授权目标指向该项目 id', async () => {
+    const store = useProjectStore()
+    vi.mocked(restoreRecentProject).mockRejectedValue(
+      new ProjectPermissionRequiredError('项目「测试书」尚未获得目录访问权限，需要重新授权后才能打开。', '测试书'),
+    )
+
+    await store.openRecentProject('p-1')
+
+    expect(store.notice).toMatchObject({ kind: 'permission', retryTarget: 'p-1' })
+  })
+
+  it('恢复上次项目但没有记录：中性轻提醒，不报错', async () => {
+    const store = useProjectStore()
+    vi.mocked(restoreLastProject).mockResolvedValue(null)
+
+    await store.restoreLastOpenedProject()
+
+    expect(store.notice).toMatchObject({ kind: 'info' })
+    expect(store.errorMessage).toBe('')
+  })
+
+  it('真实故障仍进红色错误区，不产生轻提醒', async () => {
+    const store = useProjectStore()
+    vi.mocked(openProject).mockRejectedValue(new Error('目录无法读取'))
+
+    await store.openExistingProject()
+
+    expect(store.errorMessage).toBe('目录无法读取')
+    expect(store.notice).toBeNull()
+  })
+
+  it('重新执行操作先清掉旧轻提醒，成功后不残留', async () => {
+    const store = useProjectStore()
+    vi.mocked(openProject).mockRejectedValueOnce(
+      new DOMException('The user aborted a request.', 'AbortError'),
+    )
+    await store.openExistingProject()
+    expect(store.notice).not.toBeNull()
+
+    vi.mocked(openProject).mockResolvedValue(createProjectView([]))
+    const result = await store.openExistingProject()
+
+    expect(result).not.toBeNull()
+    expect(store.notice).toBeNull()
   })
 })

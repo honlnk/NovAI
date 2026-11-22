@@ -1,0 +1,243 @@
+import { computed } from 'vue'
+import { defineStore } from 'pinia'
+
+import {
+  createForeshadowing,
+  deleteForeshadowing,
+  getForeshadowingBoard,
+  readForeshadowing,
+  updateForeshadowing,
+} from '@novai/core/services/foreshadowing-service'
+import type {
+  ForeshadowingBoardView,
+  ForeshadowingCardSummaryView,
+  ForeshadowingCardView,
+  ForeshadowingStatusView,
+} from '@novai/core/services/types'
+import { ForeshadowingConflictError, FORESHADOWING_STATUS_LABELS } from '@novai/core/types/foreshadowing'
+import { createCardBoardCore } from './card-board'
+
+/**
+ * 伏笔账本 store：与计划板同一套看板机件（stores/card-board.ts），只声明伏笔
+ * 领域差异——「伏笔名 + 读者视角 + 作者真相」三字段草稿（保存时携带读取时
+ * hash，改伏笔名同步重命名文件在 core 层完成）与新建面板的伏笔字段输入。
+ *
+ * UI 是作者本人的界面，作者真相直接可读可编辑（创作心智模块施工计划 §七）；
+ * truth-hidden 防线只在 AI 工具链路（ReadForeshadowing 永不含真相）。
+ */
+
+/** 伏笔编辑草稿：null 字段 = 该字段未修改 */
+export type ForeshadowingDraft = {
+  name: string | null
+  readerView: string | null
+  authorTruth: string | null
+  /** 待保存的普通状态（阶段 2：点击状态按钮只登记，两秒后随本卡整体保存；「已放弃」走原因确认流程，阶段 4 接入） */
+  status: ForeshadowingStatusView | null
+}
+
+/** 新建面板输入：伏笔名/读者视角/埋设章节必填，作者真相与回收窗口可选 */
+export type ForeshadowingCreateDraft = {
+  name: string
+  readerView: string
+  authorTruth: string
+  plantedAt: string
+  payoffStart: string
+  payoffEnd: string
+}
+
+const EMPTY_DRAFT: ForeshadowingDraft = { name: null, readerView: null, authorTruth: null, status: null }
+
+/**
+ * 草稿与卡片是否有实际差异（null = 未修改）。status 判定用宽松 null（!= null）：
+ * 阶段 1 之前的镜像记录没有该字段，恢复路径读到 undefined 不算差异，避免旧记录
+ * 恢复后被误判有修改而立即写盘。
+ */
+function draftDiffers(card: ForeshadowingCardView, draft: ForeshadowingDraft): boolean {
+  return (draft.name !== null && draft.name.trim() !== card.name)
+    || (draft.readerView !== null && draft.readerView !== card.readerBody)
+    || (draft.authorTruth !== null && draft.authorTruth !== card.authorTruth)
+    || (draft.status != null && draft.status !== card.status)
+}
+
+function hasCreateInput(draft: ForeshadowingCreateDraft): boolean {
+  return draft.name.trim() !== '' && draft.readerView.trim() !== '' && draft.plantedAt.trim() !== ''
+}
+
+export const useForeshadowingStore = defineStore('foreshadowing', () => {
+  const core = createCardBoardCore<
+    ForeshadowingStatusView,
+    ForeshadowingCardSummaryView,
+    ForeshadowingBoardView,
+    ForeshadowingCardView,
+    ForeshadowingDraft,
+    ForeshadowingCreateDraft
+  >({
+    loadBoard: (projectId) => getForeshadowingBoard(projectId),
+    readCard: (projectId, id) => readForeshadowing(projectId, id),
+    // 保存组合：只提交有实际变化的字段，普通状态与内容同一次写入（阶段 2），
+    // 携带读取时 hash（core 层校验外部修改）；overwrite（阶段 3「采用我的当前
+    // 内容」）为整份覆盖写入，不携带版本校验
+    saveCard: (projectId, card, draft, options) => {
+      const name = draft.name?.trim()
+      const nameChanged = draft.name !== null && name !== card.name
+      const readerChanged = draft.readerView !== null && draft.readerView !== card.readerBody
+      const truthChanged = draft.authorTruth !== null && draft.authorTruth !== card.authorTruth
+      const statusChanged = draft.status != null && draft.status !== card.status
+      return updateForeshadowing(projectId, {
+        id: card.id,
+        ...(nameChanged ? { name: name ?? '' } : {}),
+        ...(readerChanged ? { readerView: draft.readerView ?? '' } : {}),
+        ...(truthChanged ? { authorTruth: draft.authorTruth ?? '' } : {}),
+        ...(statusChanged ? { status: draft.status as ForeshadowingStatusView } : {}),
+        ...(options?.overwrite ? {} : { expectedContentHash: card.contentHash }),
+      })
+    },
+    // 人工视角完整卡（磁盘基线 + 草稿覆盖），与 saveCard 同一比较口径；冲突字段
+    // 比较与另存副本共用
+    buildSnapshotCard: (card, draft) => {
+      const name = draft.name !== null && draft.name.trim() !== card.name ? draft.name.trim() : null
+      const reader = draft.readerView !== null && draft.readerView !== card.readerBody ? draft.readerView : null
+      const truth = draft.authorTruth !== null && draft.authorTruth !== card.authorTruth ? draft.authorTruth : null
+      return {
+        ...card,
+        ...(name !== null ? { name } : {}),
+        ...(reader !== null ? { readerBody: reader } : {}),
+        ...(truth !== null ? { authorTruth: truth } : {}),
+        ...(draft.status != null && draft.status !== card.status ? { status: draft.status } : {}),
+      }
+    },
+    // 另存副本：完整卡按副本名新建（不覆盖原卡、不解冲突）；窗口起止俱全才构成区间
+    saveCopy: (projectId, card, name) => createForeshadowing(projectId, {
+      name,
+      readerView: card.readerBody,
+      plantedAt: card.plantedAt,
+      ...(card.authorTruth !== '' ? { authorTruth: card.authorTruth } : {}),
+      ...(card.payoffWindow ? { payoffWindow: [card.payoffWindow[0], card.payoffWindow[1]] } : {}),
+    }),
+    // 冲突字段比较：状态映射精确状态标签，两段正文按段落差异块展示
+    conflictFields: (mine, disk) => [
+      { key: 'name', label: '伏笔名', mine: mine.name, disk: disk.name, kind: 'short' },
+      { key: 'status', label: '状态', mine: FORESHADOWING_STATUS_LABELS[mine.status], disk: FORESHADOWING_STATUS_LABELS[disk.status], kind: 'short' },
+      { key: 'readerBody', label: '读者视角', mine: mine.readerBody, disk: disk.readerBody, kind: 'long' },
+      { key: 'authorTruth', label: '作者真相', mine: mine.authorTruth, disk: disk.authorTruth, kind: 'long' },
+    ],
+    moveCard: (projectId, id, status, afterId, beforeId) => updateForeshadowing(projectId, { id, status, afterId, beforeId }),
+    // 确认放弃（阶段 4）：以最新基线一次性提交「放弃状态 + 本次原因 + 拖入落点」；
+    // 落点只在有意拖入时携带（详情内进入操作态不传，服务层按列尾落位），
+    // 携带读取时 hash（外部修改冲突时确认冻结）
+    confirmAbandonCard: (projectId, card, intent) => updateForeshadowing(projectId, {
+      id: card.id,
+      status: 'abandoned',
+      abandonedReason: intent.reason,
+      ...(intent.afterId !== null ? { afterId: intent.afterId } : {}),
+      ...(intent.beforeId !== null ? { beforeId: intent.beforeId } : {}),
+      expectedContentHash: card.contentHash,
+    }),
+    deleteCard: (projectId, id) => deleteForeshadowing(projectId, id),
+    // 新建提交：可选字段只在有值时提交（回收窗口要求起止俱全才构成区间）
+    submitCreate: (projectId, draft) => {
+      const payoffStart = draft.payoffStart.trim()
+      const payoffEnd = draft.payoffEnd.trim()
+      return createForeshadowing(projectId, {
+        name: draft.name.trim(),
+        readerView: draft.readerView.trim(),
+        plantedAt: draft.plantedAt.trim(),
+        ...(draft.authorTruth.trim() !== '' ? { authorTruth: draft.authorTruth.trim() } : {}),
+        ...(payoffStart !== '' && payoffEnd !== '' ? { payoffWindow: [payoffStart, payoffEnd] } : {}),
+      })
+    },
+    extractConflict: (error, card) =>
+      error instanceof ForeshadowingConflictError
+        ? { ...card, readerBody: error.currentCard.body, authorTruth: card.authorTruth }
+        : null,
+    draftDiffers,
+    isEmptyDraft: (draft) =>
+      draft.name === null && draft.readerView === null && draft.authorTruth === null && draft.status == null,
+    emptyDraft: () => ({ ...EMPTY_DRAFT }),
+    cardTitle: (card) => card.name,
+    hasCreateInput,
+    // 只清与提交时一致的输入，保留创建期间继续键入的内容
+    clearCreateDraft: (current, submitted) => ({
+      name: current.name.trim() === submitted.name.trim() ? '' : current.name,
+      readerView: current.readerView.trim() === submitted.readerView.trim() ? '' : current.readerView,
+      authorTruth: current.authorTruth.trim() === submitted.authorTruth.trim() ? '' : current.authorTruth,
+      plantedAt: current.plantedAt.trim() === submitted.plantedAt.trim() ? '' : current.plantedAt,
+      payoffStart: current.payoffStart.trim() === submitted.payoffStart.trim() ? '' : current.payoffStart,
+      payoffEnd: current.payoffEnd.trim() === submitted.payoffEnd.trim() ? '' : current.payoffEnd,
+    }),
+    emptyCreateDraft: () => ({
+      name: '', readerView: '', authorTruth: '', plantedAt: '', payoffStart: '', payoffEnd: '',
+    }),
+    messages: {
+      loadBoard: '读取伏笔账本失败',
+      readCard: '读取伏笔失败',
+      saveCard: '保存伏笔失败',
+      create: '新建伏笔失败',
+      move: '移动伏笔失败',
+      delete: '删除伏笔失败',
+    },
+  })
+
+  /* ---------- 伏笔领域派生与动作（草稿分字段更新） ---------- */
+
+  /** 伏笔名草稿（详情头部输入框）；null = 无未保存修改 */
+  const draftName = computed(() => core.draft.value?.name ?? null)
+  /** 读者视角草稿；null = 无未保存修改 */
+  const draftReaderView = computed(() => core.draft.value?.readerView ?? null)
+  /** 作者真相草稿；null = 无未保存修改 */
+  const draftAuthorTruth = computed(() => core.draft.value?.authorTruth ?? null)
+  /** 待保存的普通状态（详情状态按钮的等待标记）；null = 无状态修改 */
+  const draftStatus = computed(() => core.draft.value?.status ?? null)
+  /** 新建面板各输入 */
+  const newCardName = computed(() => core.createDraft.value.name)
+  const newCardReaderView = computed(() => core.createDraft.value.readerView)
+  const newCardAuthorTruth = computed(() => core.createDraft.value.authorTruth)
+  const newCardPlantedAt = computed(() => core.createDraft.value.plantedAt)
+  const newCardPayoffStart = computed(() => core.createDraft.value.payoffStart)
+  const newCardPayoffEnd = computed(() => core.createDraft.value.payoffEnd)
+
+  /** 新建面板是否满足三个必填项（提交按钮可用口径） */
+  const hasRequiredCreateInput = computed(() => hasCreateInput(core.createDraft.value))
+
+  function updateDraftName(name: string) {
+    core.updateDraft({ name })
+  }
+
+  function updateDraftReaderView(readerView: string) {
+    core.updateDraft({ readerView })
+  }
+
+  function updateDraftAuthorTruth(authorTruth: string) {
+    core.updateDraft({ authorTruth })
+  }
+
+  /** 普通状态选择（阶段 2）：只登记待保存状态，不立即移动；连续点击以最后一次为准 */
+  function updateDraftStatus(status: ForeshadowingStatusView) {
+    core.updateDraft({ status })
+  }
+
+  /** 新建面板草稿输入（按字段更新） */
+  function updateCreateDraft(partial: Partial<ForeshadowingCreateDraft>) {
+    core.updateCreateDraft(partial)
+  }
+
+  return {
+    ...core,
+    draftName,
+    draftReaderView,
+    draftAuthorTruth,
+    draftStatus,
+    newCardName,
+    newCardReaderView,
+    newCardAuthorTruth,
+    newCardPlantedAt,
+    newCardPayoffStart,
+    newCardPayoffEnd,
+    hasRequiredCreateInput,
+    updateDraftName,
+    updateDraftReaderView,
+    updateDraftAuthorTruth,
+    updateDraftStatus,
+    updateCreateDraft,
+  }
+})

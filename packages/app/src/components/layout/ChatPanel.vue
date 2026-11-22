@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ProjectFileNodeView } from '@novai/core/services/types'
+import type { ProjectFileNodeView, SkillView } from '@novai/core/services/types'
 import { checkElementReminder, markElementReminderShown } from '@novai/core/services/element-reminder-service'
 import { useChatStore } from '../../stores/chat'
-import { resolveSubmitMode } from '../../composables/keyboard'
+import { resolveSubmitMode, shouldBlockImeDefault } from '../../composables/keyboard'
 import { useInlineCompletion } from '../../composables/useInlineCompletion'
 import { useComposerBridge } from '../../composables/useComposerBridge'
+import { useToast } from '../../composables/useToast'
 import { useProjectStore } from '../../stores/project'
+import AppIcon from '../ui/AppIcon.vue'
 import MessageItem from '../chat/MessageItem.vue'
 import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
+import SkillCommandPopover from '../chat/SkillCommandPopover.vue'
 import {
   registerTextRefs,
   rescanTextRefs,
@@ -21,15 +24,19 @@ import {
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
-import WriteConfirmationCard from '../chat/WriteConfirmationCard.vue'
+import WriteActionTakeover from '../chat/WriteActionTakeover.vue'
+import QuestionTakeover from '../chat/QuestionTakeover.vue'
 import SlashCommandMenu from '../chat/SlashCommandMenu.vue'
 import {
   bareSlashCommandHint,
   expandSlashCommand,
+  matchLocalSlashCommand,
+  matchLocalSlashCommandWithArgs,
   SLASH_COMMANDS,
   slashCommandDraftText,
   type SlashCommandId,
 } from '../../constants/slash-commands'
+import { expandSkillMentions } from '../../constants/skill-mention'
 import type { ChatRenderItem } from '../../stores/chat-render'
 import { AGENT_ROLE_META } from '../../constants/agent-roles'
 import { REPO_URL } from '../../constants/repo'
@@ -55,18 +62,22 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
+  /** 合格技能列表（#点名弹层与发送展开用，broken 不参与；技能包 §3.3） */
+  skills: SkillView[]
 }>()
 
 const emit = defineEmits<{
   toggleSidebar: []
   toggleContentPanel: []
-  toggleMobileSidebar: []
   clearQuote: []
   /** 切换激活大纲，path 为 null 表示关闭 **/
   changeOutline: [path: string | null]
+  /** 打开右侧内容面板的写入确认审阅（§8：聊天区只留标记与返回入口） */
+  openConfirmReview: []
 }>()
 
 const chatStore = useChatStore()
+const toast = useToast()
 const projectStore = useProjectStore()
 const messagesContainer = ref<HTMLDivElement | null>(null)
 
@@ -91,10 +102,12 @@ const composer = useComposerBridge({
 })
 const { draft } = composer
 
-// token 高亮词表（W3）：斜杠命令取 labels（含 '/' 前缀），大纲取 '@' + 展示名（与弹层查询口径一致）
+// token 高亮词表（W3）：斜杠命令取 labels（含 '/' 前缀），大纲取 '@' + 展示名（与弹层查询口径一致），
+// 技能取 '#' + 文件夹名（#点名，技能包 §3.3）
 const textRefLexicon = computed<TextRefLexicon>(() => ({
   slash: SLASH_COMMANDS.map((entry) => entry.label),
   outline: props.outlines.map((node) => `@${node.name.replace(/\.md$/i, '')}`),
+  skill: skillNames.value.map((name) => `#${name}`),
 }))
 /** registerTextRefs 注销句柄（onMounted 注册，onBeforeUnmount 注销） */
 let unregisterTextRefs: (() => void) | null = null
@@ -142,8 +155,77 @@ const lastChangeSummaryId = computed(() => {
 async function steerAllQueued() {
   for (const message of chatStore.queue) {
     if (message.placement === 'queued') {
-      await chatStore.steerQueuedMessage(message.id)
+      try {
+        await chatStore.steerQueuedMessage(message.id)
+      } catch (error) {
+        // 首条失败即停：剩余排队项原样保留（§5 失败保留原文），原因就地报出
+        toast.error(`插话失败：${error instanceof Error ? error.message : '未知错误'}`)
+        return
+      }
     }
+  }
+}
+
+/* ---------- 本地命令反馈（§3.2）：压缩防重复 + 行内提示（草稿保留在输入框） ---------- */
+
+/** 压缩在途标记（本地命令独立防重复）：在途再发不重复执行，仅提示 */
+const compactInFlight = ref(false)
+/** 输入区附近的行内提示（非法命令/参数、压缩在途等）；草稿不动 */
+const localCommandNotice = ref<string | null>(null)
+let localCommandNoticeTimer: ReturnType<typeof setTimeout> | null = null
+
+/* ---------- 写入确认分流（§8） ---------- */
+// 队首为 create/edit → 右侧内容面板审阅，聊天区只留等待标记与返回入口；
+// 队首为 rename/delete → 原输入卡片位置紧凑接管（编辑器隐藏但挂载，草稿保留）
+const structureConfirmation = computed(() => {
+  const head = chatStore.pendingConfirmation
+  if (!head) return null
+  return head.confirmation.kind === 'rename' || head.confirmation.kind === 'delete' ? head : null
+})
+const confirmFileName = computed(() => {
+  const head = chatStore.activeWriteConfirmation
+  const kind = head?.confirmation.kind
+  if (!head || (kind !== 'create' && kind !== 'edit')) return ''
+  const path = head.confirmation.path
+  return path.split('/').pop() ?? path
+})
+const confirmKindLabel = computed(() => {
+  const kind = chatStore.activeWriteConfirmation?.confirmation.kind
+  return kind === 'create' ? '新建' : '编辑'
+})
+
+function showLocalCommandNotice(message: string) {
+  localCommandNotice.value = message
+  if (localCommandNoticeTimer) {
+    clearTimeout(localCommandNoticeTimer)
+  }
+  // 提示 5 秒后自动淡出（草稿仍保留在输入框，用户可直接修改重发）
+  localCommandNoticeTimer = setTimeout(() => {
+    localCommandNotice.value = null
+    localCommandNoticeTimer = null
+  }, 5000)
+}
+
+/* ---------- QueueDock 操作失败反馈（§5：队列行就地区分失败，原文保留） ---------- */async function handleQueueEdit(id: string, text: string, displayLabel?: string) {  try {
+    await chatStore.editQueuedMessage(id, text, displayLabel)
+  } catch (error) {
+    toast.error(`排队消息编辑失败：${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+async function handleQueueRemove(id: string) {
+  try {
+    await chatStore.removeQueuedMessage(id)
+  } catch (error) {
+    toast.error(`排队消息撤回失败：${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+async function handleQueueSteer(id: string) {
+  try {
+    await chatStore.steerQueuedMessage(id)
+  } catch (error) {
+    toast.error(`升级插话失败：${error instanceof Error ? error.message : '未知错误'}`)
   }
 }
 
@@ -286,13 +368,51 @@ watch(
  * 'steer' = Ctrl/Cmd+Enter 插话。失败时草稿填回输入框。
  */
 async function handleSend(mode: 'queue' | 'steer' = 'queue') {
-  const draftText = draft.value.trim()
+  // 组字期（含 Safari 尾窗）不抢键：此刻清空编辑器会与未提交的组字 DOM 文本竞态，
+  // 产生残行/丢字；组字提交后用户再次发送即可（键盘路径已在 handleKeydown 拦截）
+  if (composer.isCompositionActive()) return
+
+  // 失败回填用未 trim 的原文（§3.1：失败保留用户原文）；发送内容仍取 trim 后文本
+  const rawDraft = draft.value
+  const draftText = rawDraft.trim()
   if (!draftText) return
 
   clearSuggestion()
+  // 本地斜杠命令拦截（最优先，先于提问改道）：/压缩上下文 等客户端动作是显式操作，
+  // 不会是对提问卡的自由文本回答；不发送消息，失败时草稿填回供稍后重试
+  const localAction = matchLocalSlashCommand(draftText)
+  if (localAction === 'compact-context') {
+    // 本地命令独立防重复（§3.2）：压缩在途时不重复执行，草稿保留供重试
+    if (compactInFlight.value) {
+      showLocalCommandNotice('正在压缩上下文，请等当前压缩完成')
+      return
+    }
+    composer.setDraft('')
+    compactInFlight.value = true
+    try {
+      await chatStore.compactActiveSession()
+    } finally {
+      compactInFlight.value = false
+    }
+    return
+  }
+  // 本地命令带参数（§3.2「非法命令或参数」）：不静默退化为普通长提示——
+  // 在输入区附近说明原因并保留草稿
+  const localCommandWithArgs = matchLocalSlashCommandWithArgs(draftText)
+  if (localCommandWithArgs) {
+    showLocalCommandNotice(`${localCommandWithArgs.label} 不接受参数，请去掉命令后的文字后直接发送`)
+    return
+  }
+  // 等待提问期间输入区已整体被提问接管（§8），普通发送路径不可达：
+  // 回答只在提问接管面板里显式提交，普通输入不再隐式把发送当成答案
   // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
-  // 其后参数原样保留；不在行首的命令文本视作正文，不替换
-  const message = expandSlashCommand(draftText)
+  // 其后参数原样保留；不在行首的命令文本视作正文，不替换。
+  // #技能 点名（技能包 §3.3）：命中的 #技能名 汇总为一句追加在斜杠展开结果之后，
+  // 要求模型先 LoadSkill 再完成请求——提示式，core 不改。
+  // 显示/指令分离（§3.2）：实际发生任一展开时把用户原草稿作为 displayLabel 随消息
+  // 入队——气泡、队列与自动标题显示原草稿，内部 prompt 与点名句不外露。
+  const message = expandSkillMentions(expandSlashCommand(draftText), skillNames.value)
+  const displayLabel = message === draftText ? undefined : draftText
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
   // 清空走桥（onTextChange 会顺带重置高度与指令状态）
@@ -300,14 +420,14 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
 
   // 自己发消息恒吸底：发送即「要看最新输出」的显式意图
   followAndScrollToBottom()
-  const ok = await chatStore.sendMessage(message, quoteText, mode)
+  const ok = await chatStore.sendMessage(message, quoteText, mode, displayLabel)
   if (ok) {
     // 发送成功后清除引用 chip
     emit('clearQuote')
   } else {
-    // 发送失败草稿恢复：把原草稿文本填回输入框（dsh restoreFailedDrafts 简化版；
+    // 发送失败草稿恢复：填回未 trim 的用户原草稿（dsh restoreFailedDrafts 简化版；
     // 填回的是用户输入的草稿而非替换后的 prompt 全文）
-    composer.setDraft(draftText)
+    composer.setDraft(rawDraft)
   }
 }
 
@@ -317,8 +437,15 @@ function handleStop() {
 
 function handleKeydown(event: KeyboardEvent) {
   // IME 组字期（含 Safari compositionend 后 10ms 尾窗，dsh keymap 三条件）一切按键
-  // 放行给输入法/浏览器——补全采纳、菜单导航、发送均不抢键
-  if (composer.isComposing(event)) return
+  // 放行给输入法/浏览器——补全采纳、菜单导航、发送均不抢键；但 Enter 的
+  // contenteditable 默认行为（插入新段落）必须吞掉，否则组字期/尾窗的 Enter 会在
+  // 编辑器里留下游离空段（「发送残行」根因，交互优化计划 §3.1）
+  if (composer.isComposing(event)) {
+    if (shouldBlockImeDefault(event)) {
+      event.preventDefault()
+    }
+    return
+  }
   // 输入框 AI 补全交互（最高优先级，贴近光标）：
   // - Tab 接受建议的首个分词单位；Esc 丢弃剩余建议
   // - 仅当 ghost text 可见时拦截，避免吞掉其他场景的 Tab/Esc
@@ -380,6 +507,29 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
+  // #技能 弹层打开时：拦截导航键交给弹层
+  if (isSkillCommandOpen.value && skillPopoverRef.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      skillPopoverRef.value.moveDown()
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      skillPopoverRef.value.moveUp()
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      skillPopoverRef.value.confirm()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleCloseSkillCommand()
+      return
+    }
+  }
   // 发送模式（dsh resolveSubmitMode）：Enter = 发送/排队，Ctrl/Cmd+Enter = 插话，
   // Shift+Enter 换行（contenteditable 的默认行为是产生段落，交给 Lexical）；
   // 空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
@@ -405,10 +555,10 @@ function autoResizeEditor() {
 }
 
 /**
- * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
+ * 调度输入补全。命令菜单 / @大纲 / #技能弹层打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isSkillCommandOpen.value) {
     clearSuggestion()
     return
   }
@@ -462,6 +612,40 @@ function handleCloseOutlineCommand() {
   isOutlineCommandOpen.value = false
 }
 
+// ===== #技能 点名弹层（技能包 UI/UX 施工计划 §3.3） =====
+
+/** #技能 弹层是否打开（无技能时也弹——弹层内显示「还没有技能」引导去左侧获取） */
+const isSkillCommandOpen = ref(false)
+/** # 后的筛选词 */
+const skillQuery = ref('')
+/** 弹层组件引用（键盘导航用） */
+const skillPopoverRef = ref<InstanceType<typeof SkillCommandPopover> | null>(null)
+
+/** 技能名单（发送展开、QueueDock 重推导与词表共用同一投影） */
+const skillNames = computed(() => props.skills.map((skill) => skill.name))
+
+/**
+ * 匹配光标前最近的 # 点名前缀。规则与 @大纲/斜杠同构：# 前是行首或空白，
+ * # 后到光标间不含空格/换行/#（`##` Markdown 标题因 # 紧跟 # 不误触；
+ * `# 标题` 因 # 后紧跟空格天然不匹配）。
+ */
+const SKILL_COMMAND_RE = /(?:^|\s)#([^\s#]*)$/
+
+/**
+ * 选中技能后（§3.3）：把光标前的 `#筛选词` 替换为 `#技能名 `（尾随空格收口
+ * token，弹层随之关闭），用户可继续补需求；发送链路的 expandSkillMentions
+ * 负责 #标签 的点名句展开。
+ */
+function handleSelectSkill(name: string) {
+  composer.replaceTokenBeforeCaret(SKILL_COMMAND_RE, `#${name} `)
+  isSkillCommandOpen.value = false
+  skillQuery.value = ''
+}
+
+function handleCloseSkillCommand() {
+  isSkillCommandOpen.value = false
+}
+
 // ===== 斜杠命令菜单 =====
 
 /** 斜杠命令菜单是否打开（输入 / 后弹出命令列表） */
@@ -483,26 +667,37 @@ function detectCommands() {
   if (!composer.isMounted()) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
+    isSkillCommandOpen.value = false
     return
   }
   const cursor = composer.caretOffset() ?? draft.value.length
   const beforeCursor = draft.value.slice(0, cursor)
 
-  // @大纲、/ 命令两层互斥，同一时刻只开一个
+  // @大纲、/ 命令、#技能 三层互斥（触发符不同天然不重叠），同一时刻只开一个
   const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
   const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
+  const skillMatch = SKILL_COMMAND_RE.exec(beforeCursor)
 
   if (slashMatch) {
     slashQuery.value = slashMatch[1]
     isSlashMenuOpen.value = true
     isOutlineCommandOpen.value = false
+    isSkillCommandOpen.value = false
   } else if (outlineMatch) {
     outlineQuery.value = outlineMatch[1]
     isOutlineCommandOpen.value = props.outlines.length > 0
     isSlashMenuOpen.value = false
+    isSkillCommandOpen.value = false
+  } else if (skillMatch) {
+    // 技能弹层恒开（含空技能引导），空态由弹层自身区分展示
+    skillQuery.value = skillMatch[1]
+    isSkillCommandOpen.value = true
+    isSlashMenuOpen.value = false
+    isOutlineCommandOpen.value = false
   } else {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
+    isSkillCommandOpen.value = false
   }
 }
 
@@ -602,6 +797,14 @@ watch(
   },
 )
 
+// 技能列表变化（新建/导入/删除后 store 刷新）时同样重扫 #token
+watch(
+  () => props.skills,
+  () => {
+    if (composer.isMounted()) rescanTextRefs(composer.editor)
+  },
+)
+
 onBeforeUnmount(() => {
   if (reminderCheckTimer) {
     clearTimeout(reminderCheckTimer)
@@ -611,6 +814,17 @@ onBeforeUnmount(() => {
   unregisterTextRefs = null
   composer.unmount()
 })
+
+/**
+ * 预填草稿（「让 AI 写技能」等外部入口，§3.5）：插入当前光标处并聚焦，
+ * 不自动发送——作者补充需求后自行 Enter。
+ */
+function prefillDraft(text: string) {
+  composer.insertAtCaret(text)
+  composer.focus()
+}
+
+defineExpose({ prefillDraft })
 </script>
 
 <template>
@@ -619,27 +833,14 @@ onBeforeUnmount(() => {
     <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
       <div class="flex items-center gap-2">
         <button
-          aria-label="打开分类面板"
-          class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:hidden"
-          @click="emit('toggleMobileSidebar')"
-        >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-        <button
           :aria-label="isSidebarOpen ? '收起侧边栏' : '展开侧边栏'"
           class="hidden rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100 lg:block"
           @click="emit('toggleSidebar')"
         >
           <!-- 收起状态：显示汉堡菜单（暗示可以展开侧边栏） -->
-          <svg v-if="!isSidebarOpen" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <AppIcon name="menu" :size="20" class="h-5 w-5" v-if="!isSidebarOpen" />
           <!-- 展开状态：显示侧边栏收起图标 -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-          </svg>
+          <AppIcon name="chevrons-left" :size="20" class="h-5 w-5" v-else />
         </button>
         <h1 class="text-base font-semibold text-gray-800">AI 对话</h1>
       </div>
@@ -661,13 +862,7 @@ onBeforeUnmount(() => {
           class="rounded-lg p-1.5 text-gray-600 transition-colors hover:bg-gray-100"
           @click="emit('toggleContentPanel')"
         >
-          <svg
-            class="h-5 w-5 transition-transform duration-200"
-            :class="isContentPanelOpen ? '' : 'rotate-180'"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
+          <AppIcon name="chevron-right" :size="20" class="h-5 w-5 transition-transform duration-200" :class="isContentPanelOpen ? '' : 'rotate-180'" />
         </button>
       </div>
     </header>
@@ -677,9 +872,7 @@ onBeforeUnmount(() => {
       v-if="roleMeta"
       class="flex items-center justify-center gap-1.5 border-b border-amber-200/60 bg-amber-50 px-4 py-1 text-xs text-amber-700"
     >
-      <svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
-      </svg>
+      <AppIcon name="library" :size="14" class="h-3.5 w-3.5 shrink-0" />
       <span>正在与{{ roleMeta.label }}对话{{ roleMeta.scopeNote ? ` · ${roleMeta.scopeNote}` : '' }}</span>
     </div>
 
@@ -699,9 +892,7 @@ onBeforeUnmount(() => {
             v-if="chatStore.messages.length === 0"
             class="flex flex-col items-center justify-center py-16"
           >
-            <svg class="mb-4 h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-            </svg>
+            <AppIcon name="message-circle-more" :size="48" class="mb-4 h-12 w-12 text-gray-300" />
             <p class="mb-1 text-lg font-medium text-gray-400">开始创作</p>
             <p class="text-sm text-gray-400">输入你的创作指令，AI 会帮你完成</p>
           </div>
@@ -713,10 +904,7 @@ onBeforeUnmount(() => {
               v-if="chatStore.loadingOlder"
               class="flex items-center justify-center gap-2 py-1 text-xs text-gray-400"
             >
-              <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
+              <AppIcon name="loader-circle" :size="14" class="h-3.5 w-3.5 animate-spin" />
               正在加载更早消息…
             </div>
             <template v-for="item in chatStore.renderItems" :key="renderItemKey(item)">
@@ -755,38 +943,50 @@ onBeforeUnmount(() => {
       <!-- 回到底部浮钮：退出跟随后出现；未跟随期间来过新内容时换文案提示 -->
       <button
         v-if="!isFollowing && chatStore.messages.length > 0"
-        class="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
+        class="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md transition-colors hover:bg-gray-50"
         @click="followAndScrollToBottom"
       >
-        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-        </svg>
+        <AppIcon name="arrow-down" :size="14" class="h-3.5 w-3.5" />
         {{ hasNewBelow ? '有新内容' : '回到底部' }}
       </button>
     </div>
 
-    <!-- 写工具确认卡片（Agent Step 2/3） -->
-    <WriteConfirmationCard
-      v-if="chatStore.pendingConfirmation"
-      :confirmation="chatStore.pendingConfirmation.confirmation"
-      :tool-name="chatStore.pendingConfirmation.toolName"
-      :title="chatStore.pendingConfirmation.title"
-      :summary="chatStore.pendingConfirmation.summary"
-      :agent-label="chatStore.pendingConfirmation.agentLabel"
-      @confirm="chatStore.confirmWriteTool()"
-      @reject="chatStore.rejectWriteTool()"
-    />
+    <!-- 写入确认分流（§8）：create/edit 确认迁入右侧内容面板，聊天区只留「等待审阅」标记与返回入口 -->
+    <div
+      v-if="chatStore.activeWriteConfirmation"
+      class="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600"
+    >
+      <AppIcon name="file-text" :size="14" class="h-3.5 w-3.5 shrink-0 text-gray-400" />
+      <span class="min-w-0 flex-1 truncate">
+        等待你审阅「{{ confirmFileName }}」的{{ confirmKindLabel }}请求（待确认 {{ chatStore.pendingConfirmationCount }} 项）
+      </span>
+      <button
+        type="button"
+        class="shrink-0 rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-700"
+        @click="emit('openConfirmReview')"
+      >去审阅</button>
+    </div>
 
     <!-- 输入区域 -->
     <div class="border-t border-gray-200 bg-white px-4 py-3">
       <div class="mx-auto max-w-3xl">
+        <!-- 本地命令行内提示（§3.2）：输入区附近说明原因，草稿保留在输入框不动 -->
+        <div
+          v-if="localCommandNotice"
+          class="mb-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800"
+          role="status"
+        >
+          <AppIcon name="triangle-alert" :size="14" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <span>{{ localCommandNotice }}</span>
+        </div>
         <!-- QueueDock：输入框正上方，渲染排队/插话队列（空队列不渲染） -->
         <QueueDock
           :queue="chatStore.queue"
           :running="chatStore.isRunning"
-          @edit="chatStore.editQueuedMessage"
-          @remove="chatStore.removeQueuedMessage"
-          @steer="chatStore.steerQueuedMessage"
+          :skill-names="skillNames"
+          @edit="handleQueueEdit"
+          @remove="handleQueueRemove"
+          @steer="handleQueueSteer"
         />
         <!-- chip 区：引用 chip（大纲 chip 已移至底部状态栏） -->
         <div v-if="quote" class="mb-2 flex flex-wrap items-center gap-2">
@@ -808,6 +1008,15 @@ onBeforeUnmount(() => {
             @select="handleSelectOutline"
             @close="handleCloseOutlineCommand"
           />
+          <!-- #技能 点名弹层（技能包 §3.3） -->
+          <SkillCommandPopover
+            v-if="isSkillCommandOpen"
+            ref="skillPopoverRef"
+            :skills="skills"
+            :query="skillQuery"
+            @select="handleSelectSkill"
+            @close="handleCloseSkillCommand"
+          />
           <!-- 斜杠命令菜单（R6） -->
           <SlashCommandMenu
             v-if="isSlashMenuOpen"
@@ -816,8 +1025,20 @@ onBeforeUnmount(() => {
             @select="handleSlashCommandSelect"
             @close="isSlashMenuOpen = false"
           />
+          <!-- 输入区接管（§8，互斥链）：Agent 提问优先于结构写操作，二者都不在时才是普通编辑器。
+               编辑器隐藏但保持挂载（草稿保留），队列/停止/会话切换不受影响 -->
+          <QuestionTakeover
+            v-if="chatStore.pendingQuestion"
+            :question="chatStore.pendingQuestion"
+          />
+          <WriteActionTakeover
+            v-else-if="structureConfirmation"
+            :confirmation="structureConfirmation"
+            @confirm="chatStore.confirmWriteTool()"
+            @reject="chatStore.rejectWriteTool()"
+          />
           <!-- 卡片式输入框：Lexical 编辑器 + ghost text 覆盖层 + 工具行（发送按钮） -->
-          <div class="chat-input-card">
+          <div v-show="!chatStore.pendingQuestion && !structureConfirmation" class="chat-input-card">
             <!-- 编辑器 + ghost text 覆盖层（斜杠裸发提示或 FIM 补全建议，二者合流） -->
             <div class="relative">
               <GhostTextOverlay
@@ -870,16 +1091,14 @@ onBeforeUnmount(() => {
                     title="距上次整理已新增多章；点击把整理任务模板落入输入框，可编辑后发送"
                     @click="handleReminderApply"
                   >
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                    </svg>
+                    <AppIcon name="bell" :size="14" class="h-3.5 w-3.5" />
                     <span>整理提醒</span>
                     <span
                       role="button"
                       aria-label="忽略本次提醒"
                       class="ml-0.5 cursor-pointer rounded p-0.5 text-amber-400 transition-colors hover:bg-amber-200 hover:text-amber-700"
                       @click.stop="dismissReminder"
-                    >×</span>
+                    ><AppIcon name="x" :size="12" /></span>
                   </button>
                 </Transition>
               </div>
@@ -890,10 +1109,7 @@ onBeforeUnmount(() => {
                   title="正在停止…"
                   disabled
                 >
-                  <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
+                  <AppIcon name="loader-circle" :size="20" class="h-5 w-5 animate-spin" />
                 </button>
                 <button
                   v-else-if="chatStore.isRunning"
@@ -905,9 +1121,10 @@ onBeforeUnmount(() => {
                     <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
                   </svg>
                 </button>
-                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示 -->
+                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示；
+                     等待提问期间输入区整体被提问接管，本就不可见 -->
                 <button
-                  v-if="chatStore.isRunning"
+                  v-if="chatStore.isRunning && !chatStore.pendingQuestion"
                   class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
                   :disabled="!draft.trim()"
                   title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
@@ -924,7 +1141,9 @@ onBeforeUnmount(() => {
                 <button
                   class="shrink-0 cursor-pointer rounded-lg bg-black px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-30"
                   :disabled="!draft.trim()"
-                  :title="chatStore.isRunning ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）' : '发送'"
+                  :title="chatStore.isRunning
+                    ? '排队发送：当前任务跑完后作为新一轮执行（Ctrl/Cmd+Enter 插话）'
+                    : '发送'"
                   @click="handleSend('queue')"
                 >
                   {{ chatStore.isRunning ? '排队发送' : '发送' }}

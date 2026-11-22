@@ -1,4 +1,7 @@
-import { isNotFoundError, normalizeProjectDirectoryPath } from './path'
+import { isAgentHiddenEntry, isNotFoundError, isProtectedLedgerPath, normalizeProjectDirectoryPath, shouldSkipInWalk } from './path'
+import { assertReadableDirectoryPath } from './file-tools/common'
+import { createSpillFileId, SPILL_DIR } from '../agent/spill'
+import { writeProjectTextFile } from '../fs/project-fs'
 import type {
   FindFilesInput,
   FindFilesOutput,
@@ -6,6 +9,7 @@ import type {
   ListDirectoryInput,
   ListDirectoryOutput,
   ToolDefinition,
+  ToolRuntime,
 } from './types'
 
 const DEFAULT_GLOB_LIMIT = 100
@@ -17,10 +21,11 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
   validateInput(input) {
     const value = asRecord(input)
     const path = normalizeProjectDirectoryPath(readOptionalString(value.path, 'ListDirectory.path'))
+    // 内部目录对模型不可见（D2）：显式列内部目录直接报教学文案，与 SearchFiles 同一边界
+    assertReadableDirectoryPath(path, 'ListDirectory.path')
 
     return {
       path: path || undefined,
-      showHidden: typeof value.showHidden === 'boolean' ? value.showHidden : false,
     }
   },
   async run(input, runtime) {
@@ -40,17 +45,17 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
     const entries: ListDirectoryEntry[] = []
 
     for await (const entry of directoryHandle.values()) {
-      const hidden = entry.name.startsWith('.')
-
-      if (hidden && !input.showHidden) {
+      const entryPath = directoryPath ? `${directoryPath}/${entry.name}` : entry.name
+      // 点开头、内部条目与受保护账本对模型永远隐藏（D2，无开关）：判定单一来源在 path.ts
+      if (isAgentHiddenEntry(entry.name) || isProtectedLedgerPath(entryPath)) {
         continue
       }
 
       entries.push({
         name: entry.name,
-        path: directoryPath ? `${directoryPath}/${entry.name}` : entry.name,
+        path: entryPath,
         kind: entry.kind,
-        hidden,
+        hidden: false,
       })
     }
 
@@ -61,9 +66,7 @@ export const listDirectoryTool: ToolDefinition<'ListDirectory', ListDirectoryInp
   },
   summarizeInput(input) {
     const target = input.path || '项目根目录'
-    return input.showHidden
-      ? `查看 ${target} 的目录结构，包括隐藏项`
-      : `查看 ${target} 的目录结构`
+    return `查看 ${target} 的目录结构`
   },
   summarizeOutput(output) {
     const target = output.path || '项目根目录'
@@ -98,11 +101,12 @@ export const findFilesTool: ToolDefinition<'FindFiles', FindFilesInput, FindFile
     }
 
     validateGlobPattern(pattern)
+    // 内部目录对模型不可见（D2）：显式在内部目录下查找直接报教学文案（spill 例外照旧）
+    assertReadableDirectoryPath(path, 'FindFiles.path')
 
     return {
       pattern,
       path: path || undefined,
-      includeHidden: typeof value.includeHidden === 'boolean' ? value.includeHidden : false,
       limit: readLimit(value.limit),
     }
   },
@@ -111,30 +115,50 @@ export const findFilesTool: ToolDefinition<'FindFiles', FindFilesInput, FindFile
     const directoryHandle = await resolveDirectoryHandle(runtime.project.handle, searchPath)
     const matcher = createGlobMatcher(input.pattern)
     const limit = input.limit ?? DEFAULT_GLOB_LIMIT
-    const filenames: string[] = []
-    let truncated = false
 
-    for await (const filePath of walkFiles(directoryHandle, searchPath, Boolean(input.includeHidden))) {
-      const relativeToSearchPath = searchPath ? filePath.slice(searchPath.length + 1) : filePath
+    // 遍历时一并收集 mtime，结果按修改时间降序（D3）；同 mtime 按路径字典序兜底保证确定性
+    const matches: Array<{ path: string; lastModified: number }> = []
 
-      if (!matcher(filePath) && !matcher(relativeToSearchPath)) {
+    for await (const entry of walkFiles(directoryHandle, searchPath)) {
+      const relativeToSearchPath = searchPath ? entry.path.slice(searchPath.length + 1) : entry.path
+
+      if (!matcher(entry.path, relativeToSearchPath)) {
         continue
       }
 
-      if (filenames.length >= limit) {
-        truncated = true
-        break
-      }
-
-      filenames.push(filePath)
+      matches.push(entry)
     }
+
+    matches.sort((left, right) =>
+      right.lastModified - left.lastModified || left.path.localeCompare(right.path, 'zh-Hans-CN'),
+    )
+
+    const filenames = matches.map((match) => match.path)
+
+    if (filenames.length <= limit) {
+      return {
+        pattern: input.pattern,
+        path: searchPath,
+        filenames,
+        numFiles: filenames.length,
+        truncated: false,
+      }
+    }
+
+    // 超限：跨顶层目录轮转采样（D4）+ 完整结果落 spill（D5）
+    const sample = sampleAcrossTopLevel(filenames, limit, searchPath)
+    const spillPath = await writeFindFilesSpill(runtime, input.pattern, searchPath, filenames)
 
     return {
       pattern: input.pattern,
       path: searchPath,
-      filenames: filenames.sort((left, right) => left.localeCompare(right, 'zh-Hans-CN')),
-      numFiles: filenames.length,
-      truncated,
+      filenames: sample.items,
+      numFiles: sample.items.length,
+      truncated: true,
+      totalMatches: filenames.length,
+      sampledTopLevelDirs: sample.shown,
+      totalTopLevelDirs: sample.total,
+      ...(spillPath ? { spillPath } : {}),
     }
   },
   summarizeInput(input) {
@@ -143,10 +167,96 @@ export const findFilesTool: ToolDefinition<'FindFiles', FindFilesInput, FindFile
   },
   summarizeOutput(output) {
     const target = output.path || '项目根目录'
-    return output.truncated
-      ? `已在 ${target} 找到 ${output.numFiles} 个文件，结果已截断`
-      : `已在 ${target} 找到 ${output.numFiles} 个文件`
+
+    if (output.truncated) {
+      return `已在 ${target} 找到 ${output.totalMatches} 个文件，采样展示 ${output.numFiles} 个`
+    }
+
+    return `已在 ${target} 找到 ${output.numFiles} 个文件`
   },
+}
+
+/**
+ * 超限采样（D4，参照 dsh glob 的 sampleAcrossTopLevel）：按搜索根下的顶层目录分组轮转取样，
+ * 保证每个子目录都有代表，而不是只取 mtime 序头部。组内保持传入顺序（mtime 降序）。
+ */
+export function sampleAcrossTopLevel(
+  paths: string[],
+  maxItems: number,
+  searchPath: string,
+): { items: string[]; shown: number; total: number } {
+  const prefix = searchPath ? `${searchPath}/` : ''
+  const groups = new Map<string, string[]>()
+
+  for (const path of paths) {
+    const relative = prefix && path.startsWith(prefix) ? path.slice(prefix.length) : path
+    const cut = relative.indexOf('/')
+    const key = cut === -1 ? relative : relative.slice(0, cut)
+    const group = groups.get(key)
+
+    if (group) {
+      group.push(path)
+    } else {
+      groups.set(key, [path])
+    }
+  }
+
+  const taken = new Map<string, string[]>()
+  let active = [...groups.entries()].map(([key, items]) => ({ key, items, index: 0 }))
+  let count = 0
+
+  while (active.length > 0 && count < maxItems) {
+    const nextActive: Array<{ key: string; items: string[]; index: number }> = []
+
+    for (const group of active) {
+      if (count >= maxItems) {
+        break
+      }
+
+      count += 1
+      const bucket = taken.get(group.key)
+
+      if (bucket) {
+        bucket.push(group.items[group.index])
+      } else {
+        taken.set(group.key, [group.items[group.index]])
+      }
+
+      const nextIndex = group.index + 1
+
+      if (nextIndex < group.items.length) {
+        nextActive.push({ key: group.key, items: group.items, index: nextIndex })
+      }
+    }
+
+    active = nextActive
+  }
+
+  return { items: [...taken.values()].flat(), shown: taken.size, total: groups.size }
+}
+
+/** 超限完整结果落 spill（D5）：失败时返回 undefined，调用方降级为无指引的截断提示。 */
+async function writeFindFilesSpill(
+  runtime: ToolRuntime,
+  pattern: string,
+  searchPath: string,
+  filenames: string[],
+): Promise<string | undefined> {
+  const path = `${SPILL_DIR}/find-files-${createSpillFileId()}.txt`
+  const content = [
+    `pattern: ${pattern}`,
+    `path: ${searchPath || '(项目根目录)'}`,
+    `共 ${filenames.length} 个匹配（按修改时间降序）：`,
+    '',
+    ...filenames,
+  ].join('\n')
+
+  try {
+    await writeProjectTextFile(runtime.project.handle, path, content)
+    return path
+  } catch {
+    return undefined
+  }
 }
 
 function asRecord(input: unknown) {
@@ -218,15 +328,21 @@ function sortEntries<TEntry extends { name: string; kind: 'file' | 'directory' }
   })
 }
 
-async function* walkFiles(
+/**
+ * 遍历产出文件路径 + 修改时间（mtime 排序与采样都依赖它）；SearchFiles 复用遍历、忽略 mtime。
+ * 内部路径与点开头条目在遍历层整体跳过（D3，目录命中即整棵子树跳过，novel.config.json 内容侧漏由此堵死）；
+ * 判定单一来源在 path.ts 的 shouldSkipInWalk，spill 子树豁免。
+ */
+export async function* walkFiles(
   directoryHandle: FileSystemDirectoryHandle,
   directoryPath: string,
-  includeHidden: boolean,
-): AsyncGenerator<string> {
+): AsyncGenerator<{ path: string; lastModified: number }> {
   const entries: FileSystemHandle[] = []
 
   for await (const entry of directoryHandle.values()) {
-    if (!includeHidden && entry.name.startsWith('.')) {
+    const entryPath = directoryPath ? `${directoryPath}/${entry.name}` : entry.name
+
+    if (shouldSkipInWalk(entryPath)) {
       continue
     }
 
@@ -245,11 +361,12 @@ async function* walkFiles(
     const entryPath = directoryPath ? `${directoryPath}/${entry.name}` : entry.name
 
     if (entry.kind === 'file') {
-      yield entryPath
+      const file = await (entry as FileSystemFileHandle).getFile()
+      yield { path: entryPath, lastModified: file.lastModified }
       continue
     }
 
-    yield* walkFiles(entry as FileSystemDirectoryHandle, entryPath, includeHidden)
+    yield* walkFiles(entry as FileSystemDirectoryHandle, entryPath)
   }
 }
 
@@ -265,11 +382,26 @@ function validateGlobPattern(pattern: string) {
   }
 }
 
-function createGlobMatcher(pattern: string) {
+/**
+ * 模式匹配器（D6 对齐 dsh glob）：不含 `/` 的模式匹配任意深度的 basename
+ * （`*.txt` 搜全树文件名）；含 `/` 的模式锚定路径深度（匹配项目全路径或相对搜索根的路径）。
+ */
+/** 统一双参签名：path = 项目根相对全路径，relativeToSearchPath = 相对搜索根的路径。 */
+type GlobMatcher = (path: string, relativeToSearchPath: string) => boolean
+
+/** SearchFiles 的 include 过滤复用同一套 glob 语义（无 `/` 匹配任意深度 basename）。 */
+export function createGlobMatcher(pattern: string): GlobMatcher {
   const normalizedPattern = pattern.startsWith('./') ? pattern.slice(2) : pattern
   const regex = new RegExp(`^${globToRegexSource(normalizedPattern)}$`)
 
-  return (path: string) => regex.test(path)
+  if (normalizedPattern.includes('/')) {
+    return (path, relativeToSearchPath) => regex.test(path) || regex.test(relativeToSearchPath)
+  }
+
+  return (path) => {
+    const cut = path.lastIndexOf('/')
+    return regex.test(cut === -1 ? path : path.slice(cut + 1))
+  }
 }
 
 function globToRegexSource(pattern: string) {

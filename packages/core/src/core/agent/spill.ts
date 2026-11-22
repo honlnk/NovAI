@@ -30,9 +30,10 @@ export const SPILL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 /**
  * 适用 spill 的工具：RagSearch（无分页能力，结果可能一次回一大坨）。
  * ReadFile 已退出——三道闸保证其单次返回 ≤ 50KB 字节，天然不需要 spill（对齐 dsh read 豁免）。
- * 目录/找文件类工具的结果是路径清单，截断反而不可用，从不 spill。
+ * FindFiles/SearchFiles 的超限已由工具层做「跨目录采样 + 计数触发 spill」（dsh glob/grep 同款），
+ * 此处白名单是字符阈值兜底：采样页/预览页本身仍超长时再拦一道（罕见，但指针在尾部可恢复）。
  */
-export const SPILLABLE_TOOLS = ['RagSearch'] as const
+export const SPILLABLE_TOOLS = ['RagSearch', 'FindFiles', 'SearchFiles'] as const
 
 export function createSpillFileId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`

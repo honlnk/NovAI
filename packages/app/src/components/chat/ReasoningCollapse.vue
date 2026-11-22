@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick } from 'vue'
 
 import { createReasoningCollapseState } from './reasoning-collapse'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   /** 思考流文本（纯文本渲染，不走 markdown） */
@@ -45,20 +46,7 @@ watch(
       :aria-expanded="expanded"
       @click="toggle"
     >
-      <svg
-        class="h-3 w-3 shrink-0 transition-transform"
-        :class="expanded ? 'rotate-90' : ''"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M9 5l7 7-7 7"
-        />
-      </svg>
+      <AppIcon name="chevron-right" :size="12" class="h-3 w-3 shrink-0 transition-transform" :class="expanded ? 'rotate-90' : ''" />
       <span :class="thinking ? 'animate-pulse' : ''">{{
         thinking ? '思考中…' : `已深度思考（${reasoning.length} 字）`
       }}</span>

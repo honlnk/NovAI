@@ -3,18 +3,22 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import type {
   AgentUiEvent,
+  AskUserQuestionRequestView,
   ChatSessionView,
   FileChangeConfirmationView,
   RunAgentTurnResult,
 } from '@novai/core/services/types'
 
 import {
+  archiveAgentSession,
   createSession,
   enqueueMessage,
   getSession,
   isAgentRunActive,
   listSessions,
   loadOlderMessages,
+  respondQuestion,
+  skipQuestion,
   stopAgentRun,
   subscribeAgentEvents,
 } from '@novai/core/services/agent-service'
@@ -27,6 +31,7 @@ vi.mock('@novai/core/services/agent-service', () => ({
   listSessions: vi.fn(),
   renameSession: vi.fn(),
   deleteSession: vi.fn(),
+  archiveAgentSession: vi.fn(),
   enqueueMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
   loadOlderMessages: vi.fn(),
@@ -34,16 +39,21 @@ vi.mock('@novai/core/services/agent-service', () => ({
   isAgentRunActive: vi.fn(() => false),
   subscribeAgentEvents: vi.fn(() => () => {}),
   respondConfirmation: vi.fn(),
+  respondQuestion: vi.fn(),
+  skipQuestion: vi.fn(),
 }))
 
 const mockedCreateSession = vi.mocked(createSession)
 const mockedGetSession = vi.mocked(getSession)
 const mockedListSessions = vi.mocked(listSessions)
+const mockedArchiveAgentSession = vi.mocked(archiveAgentSession)
 const mockedEnqueueMessage = vi.mocked(enqueueMessage)
 const mockedLoadOlderMessages = vi.mocked(loadOlderMessages)
 const mockedStopAgentRun = vi.mocked(stopAgentRun)
 const mockedIsAgentRunActive = vi.mocked(isAgentRunActive)
 const mockedSubscribeAgentEvents = vi.mocked(subscribeAgentEvents)
+const mockedRespondQuestion = vi.mocked(respondQuestion)
+const mockedSkipQuestion = vi.mocked(skipQuestion)
 
 function createSessionView(sessionId: string): ChatSessionView {
   return {
@@ -66,6 +76,20 @@ function createTextMessageView(index: number): ChatSessionView['messages'][numbe
     kind: 'text',
     text: `第 ${index} 条`,
     createdAt: new Date(1700000000000 + index * 1000).toISOString(),
+  }
+}
+
+/** 会话摘要夹具（含新必填 status 字段） */
+function makeSummary(sessionId: string, updatedAt: string, overrides: { archivedAt?: string } = {}) {
+  return {
+    sessionId,
+    projectId: 'project-1',
+    status: 'idle' as const,
+    title: `会话 ${sessionId}`,
+    createdAt: '2026-11-07T00:00:00.000Z',
+    updatedAt,
+    messageCount: 0,
+    ...overrides,
   }
 }
 
@@ -106,6 +130,7 @@ function captureListener(): (event: AgentUiEvent) => void {
 describe('chat store（W4 事件总线版）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'project-1', name: '项目一', files: [] } as never
     vi.clearAllMocks()
     vi.unstubAllGlobals()
     mockedListSessions.mockResolvedValue([])
@@ -200,6 +225,7 @@ describe('chat store（W4 事件总线版）', () => {
     }
     emit({
       type: 'run-finish',
+      runId: 'run-1',
       sessionId: 'session-current',
       result: createRunResult(finishedView, { sessionChangedFileCount: 1 }),
     })
@@ -227,6 +253,7 @@ describe('chat store（W4 事件总线版）', () => {
     mockedIsAgentRunActive.mockReturnValue(true)
     emit({
       type: 'run-finish',
+      runId: 'run-old',
       sessionId: 'session-current',
       result: createRunResult(view),
     })
@@ -235,6 +262,7 @@ describe('chat store（W4 事件总线版）', () => {
     // run-error 同病同治：旧 driver 的 run-error 晚到也不打掉新 run
     emit({
       type: 'run-error',
+      runId: 'run-old',
       sessionId: 'session-current',
       error: { code: 'UNKNOWN_ERROR', message: '旧 run 的错误', recoverable: true },
     })
@@ -244,6 +272,7 @@ describe('chat store（W4 事件总线版）', () => {
     mockedIsAgentRunActive.mockReturnValue(false)
     emit({
       type: 'run-finish',
+      runId: 'run-new',
       sessionId: 'session-current',
       result: createRunResult(view),
     })
@@ -286,10 +315,10 @@ describe('chat store（W4 事件总线版）', () => {
       at: '2026-09-19T00:00:00.000Z',
       change: { type: 'updated' as const, path },
     })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-1', 'a.md') })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-2', 'b.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-1', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-2', 'b.md') })
     // 同文件再改一次：不重复占位
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-3', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-3', 'a.md') })
     expect(store.changedFiles).toEqual([
       { type: 'updated', path: 'b.md' },
       { type: 'updated', path: 'a.md' },
@@ -309,14 +338,14 @@ describe('chat store（W4 事件总线版）', () => {
       at: '2026-09-19T00:00:00.000Z',
       change: { type: 'updated' as const, path },
     })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-1', 'a.md') })
-    emit({ type: 'file-changed', sessionId: 'session-current', file: record('c-2', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-1', 'a.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-current', file: record('c-2', 'a.md') })
     // 清单层去重后 a.md 只占一位；lastFileChange 仍逐条前进（内容面板每次都要重读）
     expect(store.changedFiles).toHaveLength(1)
     expect(store.lastFileChange).toMatchObject({ id: 'c-2' })
 
     // 别的会话的事件不串扰
-    emit({ type: 'file-changed', sessionId: 'session-stale', file: record('c-x', 'x.md') })
+    emit({ type: 'file-changed', projectId: 'project-1', sessionId: 'session-stale', file: record('c-x', 'x.md') })
     expect(store.lastFileChange).toMatchObject({ id: 'c-2' })
 
     // 切换会话重置，避免旧会话残留触发误重读
@@ -407,6 +436,7 @@ describe('chat store（W4 事件总线版）', () => {
 
     emit({
       type: 'run-error',
+      runId: 'run-1',
       sessionId: 'session-current',
       error: { code: 'UNKNOWN_ERROR', message: '炸了', recoverable: true },
     })
@@ -506,6 +536,27 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.loadingOlder).toBe(false)
   })
 
+  it('翻页等待期间新消息到达：旧页只 prepend，不回退当前消息与标题', async () => {
+    const store = useChatStore()
+    const { windowedView, allMessages, start } = createWindowedSession()
+    mockedGetSession.mockResolvedValue(windowedView)
+    await store.selectSession('project-1', 'session-current')
+    const emit = captureListener()
+    let resolvePage!: (page: { messages: ChatSessionView['messages']; start: number }) => void
+    mockedLoadOlderMessages.mockImplementation(() => new Promise((resolve) => { resolvePage = resolve }))
+    const loading = store.loadOlderHistory()
+    emit({
+      type: 'message', sessionId: 'session-current',
+      message: { id: 'new-live', role: 'assistant', kind: 'text', text: '等待翻页时的新消息', createdAt: '2026-11-08T12:00:00.000Z' },
+    })
+    store.sessionView = { ...store.sessionView!, title: '最新标题' }
+    resolvePage({ messages: allMessages.slice(start - HISTORY_PAGE_SIZE, start), start: start - HISTORY_PAGE_SIZE })
+    await loading
+    expect(store.sessionView?.title).toBe('最新标题')
+    expect(store.messages.some((message) => message.id === 'new-live')).toBe(true)
+    expect(store.messages).toHaveLength(201)
+  })
+
   it('loadOlderHistory 翻到顶：空页落地后 hasMoreHistory 归 false', async () => {
     const store = useChatStore()
     const { windowedView, start } = createWindowedSession()
@@ -546,8 +597,10 @@ describe('chat store（W4 事件总线版）', () => {
     await store.loadOlderHistory()
     expect(store.messages).toHaveLength(200)
 
+    emit({ type: 'run-start', runId: 'run-a', sessionId: 'session-current' })
     emit({
       type: 'run-finish',
+      runId: 'run-a',
       sessionId: 'session-current',
       // 全量比 select 时多一条（本轮新产生的 assistant 回答）
       result: createRunResult({ ...fullView, messages: [...allMessages, createTextMessageView(250)] }),
@@ -605,6 +658,231 @@ describe('chat store（W4 事件总线版）', () => {
     expect(store.sessionsWithPendingConfirmations.has('session-delegation')).toBe(false)
   })
 
+  it('提问按会话路由（主动提问 W2）：非激活会话只点亮徽标，激活会话进提问位并重置草稿', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const question: AskUserQuestionRequestView = {
+      questionId: 'q-1',
+      question: '第三章的冲突往哪个方向推进？',
+      header: '剧情方向',
+      options: [
+        { label: '正面对峙', description: '节奏更快' },
+        { label: '暗流涌动', description: '铺垫更足' },
+      ],
+      createdAt: '2026-11-03T00:00:00.000Z',
+    }
+
+    // 非激活会话的提问：不占当前提问位，但点亮徽标集合（切回该会话可继续回答）
+    emit({ type: 'question-required', sessionId: 'session-other', request: question })
+    expect(store.pendingQuestion).toBeNull()
+    expect(store.sessionsWithPendingQuestions.has('session-other')).toBe(true)
+
+    // 激活会话自己的提问：进提问位，旧作答草稿被重置，状态栏提示等待回答
+    store.questionText = '上一次没提交的草稿'
+    emit({ type: 'question-required', sessionId: 'session-current', request: { ...question, questionId: 'q-2' } })
+    expect(store.pendingQuestion?.questionId).toBe('q-2')
+    expect(store.questionText).toBe('')
+    expect(store.questionSelection).toEqual([])
+    expect(store.runStatus).toBe('Agent 正在等待你的回答…')
+
+    // 快照广播整体替换：作答收敛后清空 → 徽标熄灭、提问位腾空
+    emit({ type: 'questions-updated', sessionId: 'session-current', questions: [] })
+    expect(store.pendingQuestion).toBeNull()
+    expect(store.sessionsWithPendingQuestions.has('session-current')).toBe(false)
+  })
+
+  it('内容类确认分流（§8 批1）：create/edit 进 activeWriteConfirmation，rename/delete 不进；计数按激活会话', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    const editCard: FileChangeConfirmationView = {
+      id: 'conf-edit-1',
+      toolName: 'EditFile',
+      title: '编辑文件：chapters/第012章-旧约.txt',
+      summary: '将替换 1 处正文',
+      confirmation: {
+        kind: 'edit',
+        path: 'chapters/第012章-旧约.txt',
+        oldText: '蹙眉不语',
+        newText: '低头叹息',
+        replaceAll: true,
+      },
+    }
+
+    // 无待确认：分流为空、计数为 0
+    expect(store.activeWriteConfirmation).toBeNull()
+    expect(store.pendingConfirmationCount).toBe(0)
+
+    // 激活会话的 create/edit：进内容面板审阅位（§8），计数 1
+    emit({ type: 'confirmation-required', sessionId: 'session-current', request: editCard })
+    expect(store.activeWriteConfirmation?.id).toBe('conf-edit-1')
+    expect(store.pendingConfirmationCount).toBe(1)
+
+    // 追加一张（多项请求逐项审阅）：队首不变，计数累加
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-current',
+      request: {
+        ...editCard,
+        id: 'conf-edit-2',
+        confirmation: { kind: 'edit', path: 'chapters/第012章-旧约.txt', oldText: '蹙眉不语', newText: '抬头望灯' },
+      },
+    })
+    expect(store.activeWriteConfirmation?.id).toBe('conf-edit-1')
+    expect(store.pendingConfirmationCount).toBe(2)
+
+    // rename/delete 是结构类：不进 activeWriteConfirmation（走输入区接管），但计数照常
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-current',
+      request: {
+        id: 'conf-del-1',
+        toolName: 'DeleteFile',
+        title: '删除文件：notes/草稿.md',
+        summary: '将删除 notes/草稿.md',
+        confirmation: { kind: 'delete', path: 'notes/草稿.md' },
+      },
+    })
+    expect(store.activeWriteConfirmation?.id).toBe('conf-edit-1')
+    expect(store.pendingConfirmationCount).toBe(3)
+
+    // 非激活会话的确认不进激活会话的计数与审阅位
+    emit({
+      type: 'confirmation-required',
+      sessionId: 'session-other',
+      request: { ...editCard, id: 'conf-other' },
+    })
+    expect(store.pendingConfirmationCount).toBe(3)
+    expect(store.sessionsWithPendingConfirmations.has('session-other')).toBe(true)
+
+    // 快照整体替换清空激活会话 → 审阅位与计数归零
+    emit({ type: 'confirmations-updated', sessionId: 'session-current', confirmations: [] })
+    expect(store.activeWriteConfirmation).toBeNull()
+    expect(store.pendingConfirmationCount).toBe(0)
+    // 非激活会话的徽标不受影响
+    expect(store.sessionsWithPendingConfirmations.has('session-other')).toBe(true)
+  })
+
+  it('候选项选择：单选替换、多选按候选项顺序保持完整集合', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    // 多选：乱序点选后按候选项原始顺序稳定排序
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-multi',
+        question: '哪些角色要进第三章？',
+        multiSelect: true,
+        options: [{ label: '沈砚' }, { label: '林晚照' }, { label: '阿禾' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('阿禾')
+    store.toggleQuestionOption('沈砚')
+    expect(store.questionSelection).toEqual(['沈砚', '阿禾'])
+    store.toggleQuestionOption('沈砚')
+    expect(store.questionSelection).toEqual(['阿禾'])
+
+    // 真实 service 在问题收敛时会广播快照；mock 下手动补发以腾出提问位
+    emit({ type: 'questions-updated', sessionId: 'session-current', questions: [] })
+
+    // 单选：再次点同项取消；点不同项整体替换
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-single',
+        question: '开篇视角用谁？',
+        options: [{ label: '第一人称' }, { label: '第三人称' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('第三人称')
+    expect(store.questionSelection).toEqual(['第三人称'])
+    store.toggleQuestionOption('第一人称')
+    expect(store.questionSelection).toEqual(['第一人称'])
+    store.toggleQuestionOption('第一人称')
+    expect(store.questionSelection).toEqual([])
+  })
+
+  it('提交回答：卡片所选与输入框文本合并提交；校验失败不改等待态', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-3',
+        question: '结尾停在哪一拍？',
+        options: [{ label: '留白' }, { label: '点题' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('留白')
+
+    // 成功路径：输入框改道文本与卡片所选合并（ChatPanel 的普通输入作答链路）
+    mockedRespondQuestion.mockImplementationOnce(() => {})
+    const ok = store.submitQuestionAnswer({ text: ' 留白但埋一句伏笔 ' })
+    expect(ok).toBe(true)
+    expect(mockedRespondQuestion).toHaveBeenCalledWith({
+      questionId: 'q-3',
+      selectedLabels: ['留白'],
+      text: '留白但埋一句伏笔',
+    })
+    expect(store.questionSelection).toEqual([])
+    expect(store.questionText).toBe('')
+
+    // 成功后 service 广播空快照腾出提问位（mock 下手动补发），再注入下一个问题
+    emit({ type: 'questions-updated', sessionId: 'session-current', questions: [] })
+
+    // 失败路径（service 抛错，如候选项外标签）：返回 false，等待态保持，错误进状态栏
+    emit({ type: 'question-required', sessionId: 'session-current', request: { questionId: 'q-4', question: '再问一个？', createdAt: '2026-11-03T00:00:00.000Z' } })
+    store.questionText = '自由文本回答'
+    mockedRespondQuestion.mockImplementationOnce(() => {
+      throw new Error('回答包含问题候选项之外的标签')
+    })
+    const failed = store.submitQuestionAnswer()
+    expect(failed).toBe(false)
+    expect(store.pendingQuestion?.questionId).toBe('q-4')
+    expect(store.runStatus).toBe('回答包含问题候选项之外的标签')
+    expect(store.runStatusType).toBe('error')
+  })
+
+  it('跳过问题：按当前 questionId 调 skipQuestion 并清空草稿', async () => {
+    const store = useChatStore()
+    mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
+    await store.createNewSession('project-1', { skipReload: true })
+    const emit = captureListener()
+
+    emit({
+      type: 'question-required',
+      sessionId: 'session-current',
+      request: {
+        questionId: 'q-skip',
+        question: '这个问题不重要',
+        options: [{ label: '甲' }],
+        createdAt: '2026-11-03T00:00:00.000Z',
+      },
+    })
+    store.toggleQuestionOption('甲')
+
+    store.skipCurrentQuestion()
+    expect(mockedSkipQuestion).toHaveBeenCalledWith('q-skip')
+    expect(store.questionSelection).toEqual([])
+  })
+
   it('session-created（委派会话落盘，W3/W4）：项目匹配时把事件自带的摘要 upsert 进列表', async () => {
     const store = useChatStore()
     mockedCreateSession.mockResolvedValue(createSessionView('session-current'))
@@ -616,6 +894,7 @@ describe('chat store（W4 事件总线版）', () => {
       sessionId: 'session-em',
       projectId: 'project-1',
       agent: 'element-manager',
+      status: 'idle',
       title: '在 elements/ 下新建回归测试',
       createdAt: '2026-10-22T12:00:00.000Z',
       updatedAt: '2026-10-22T12:00:01.000Z',
@@ -623,6 +902,7 @@ describe('chat store（W4 事件总线版）', () => {
     } as const
 
     // 未打开项目（currentProject 为空）：不进列表
+    useProjectStore().currentProject = null
     emit({ type: 'session-created', sessionId: 'session-em', projectId: 'project-1', summary })
     expect(store.sessions.some((s) => s.sessionId === 'session-em')).toBe(false)
     expect(mockedListSessions).not.toHaveBeenCalled()
@@ -650,5 +930,189 @@ describe('chat store（W4 事件总线版）', () => {
       summary: { ...summary, sessionId: 'session-other', projectId: 'project-2' },
     })
     expect(store.sessions.some((s) => s.sessionId === 'session-other')).toBe(false)
+  })
+})
+
+describe('initSessions 首选会话恢复（工作区现场恢复 §3.4）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'project-1', name: '项目一', files: [] } as never
+    vi.clearAllMocks()
+    mockedIsAgentRunActive.mockReturnValue(false)
+    mockedSubscribeAgentEvents.mockReturnValue(() => {})
+    mockedEnqueueMessage.mockResolvedValue({ sessionId: 'session-current' })
+  })
+
+  it('记录的会话存在时优先激活（不再取最近一条）', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-recorded', '2026-11-07T09:00:00.000Z'),
+    ])
+    mockedGetSession.mockResolvedValue(createSessionView('session-recorded'))
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1', 'session-recorded')
+
+    expect(view.sessionId).toBe('session-recorded')
+    expect(store.activeSessionId).toBe('session-recorded')
+    expect(mockedGetSession).toHaveBeenCalledWith('project-1', 'session-recorded', { tailMessages: HISTORY_PAGE_SIZE })
+  })
+
+  it('记录的会话已不存在（失效）时回退最近一条', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+    ])
+    mockedGetSession.mockResolvedValue(createSessionView('session-latest'))
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1', 'session-gone')
+
+    expect(view.sessionId).toBe('session-latest')
+    expect(store.activeSessionId).toBe('session-latest')
+  })
+
+  it('记录的会话读取失败（getSession 返回 null）时同样回退最近一条', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-recorded', '2026-11-07T09:00:00.000Z'),
+    ])
+    // 首选会话读盘失败（文件损坏），最近一条正常
+    mockedGetSession.mockImplementation((_projectId, sessionId) =>
+      Promise.resolve(sessionId === 'session-recorded' ? null : createSessionView(sessionId ?? '')),
+    )
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1', 'session-recorded')
+
+    expect(view.sessionId).toBe('session-latest')
+    expect(store.activeSessionId).toBe('session-latest')
+  })
+
+  it('无恢复记录（undefined）时保持现有默认：激活最近一条', async () => {
+    mockedListSessions.mockResolvedValue([
+      makeSummary('session-latest', '2026-11-07T10:00:00.000Z'),
+    ])
+    mockedGetSession.mockResolvedValue(createSessionView('session-latest'))
+
+    const store = useChatStore()
+    const view = await store.initSessions('project-1')
+
+    expect(view.sessionId).toBe('session-latest')
+  })
+})
+
+describe('会话归档（交互优化计划 §3）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    useProjectStore().currentProject = { id: 'project-1', name: '项目一', files: [] } as never
+    vi.clearAllMocks()
+    mockedIsAgentRunActive.mockReturnValue(false)
+    mockedSubscribeAgentEvents.mockReturnValue(() => {})
+    mockedListSessions.mockResolvedValue([])
+  })
+
+  /** 建一个含若干会话的 store：全部激活为第一条 */
+  async function setupStore(summaries: ReturnType<typeof makeSummary>[]) {
+    const store = useChatStore()
+    mockedListSessions.mockResolvedValue(summaries)
+    mockedGetSession.mockImplementation((_projectId, sessionId) =>
+      Promise.resolve(createSessionView(sessionId ?? '')),
+    )
+    await store.initSessions('project-1')
+    return store
+  }
+
+  it('归档非激活会话：列表项带上 archivedAt，不改激活现场，fallbackTo 为 null', async () => {
+    const store = await setupStore([
+      makeSummary('session-a', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-b', '2026-11-07T09:00:00.000Z'),
+    ])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(
+      { ...makeSummary('session-b', '2026-11-07T09:00:00.000Z'), archivedAt: '2026-11-07T11:00:00.000Z' },
+    )
+    const { fallbackTo } = await store.archiveSession('project-1', 'session-b')
+
+    expect(fallbackTo).toBeNull()
+    expect(store.activeSessionId).toBe('session-a') // 归档其他会话不改现场
+    expect(store.sessions.find((s) => s.sessionId === 'session-b')?.archivedAt).toBe('2026-11-07T11:00:00.000Z')
+  })
+
+  it('归档激活会话：自动切到最近的未归档会话并返回 fallbackTo', async () => {
+    const store = await setupStore([
+      makeSummary('session-a', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-b', '2026-11-07T09:00:00.000Z'),
+    ])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(
+      { ...makeSummary('session-a', '2026-11-07T10:00:00.000Z'), archivedAt: '2026-11-07T11:00:00.000Z' },
+    )
+    const { fallbackTo } = await store.archiveSession('project-1', 'session-a')
+
+    expect(fallbackTo).toBe('session-b') // 列表已按 updatedAt 降序，第一条未归档即最近
+    expect(store.activeSessionId).toBe('session-b')
+  })
+
+  it('归档唯一的会话（全部已归档）：新建空会话兜底', async () => {
+    const store = await setupStore([makeSummary('session-a', '2026-11-07T10:00:00.000Z')])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(
+      { ...makeSummary('session-a', '2026-11-07T10:00:00.000Z'), archivedAt: '2026-11-07T11:00:00.000Z' },
+    )
+    mockedCreateSession.mockResolvedValue(createSessionView('session-new'))
+
+    const { fallbackTo } = await store.archiveSession('project-1', 'session-a')
+
+    expect(fallbackTo).toBe('session-new')
+    expect(store.activeSessionId).toBe('session-new')
+  })
+
+  it('恢复归档：只清 archivedAt，不改激活会话', async () => {
+    const store = await setupStore([
+      makeSummary('session-a', '2026-11-07T10:00:00.000Z'),
+      makeSummary('session-b', '2026-11-07T09:00:00.000Z', { archivedAt: '2026-11-07T08:00:00.000Z' }),
+    ])
+    expect(store.activeSessionId).toBe('session-a')
+
+    mockedArchiveAgentSession.mockResolvedValue(makeSummary('session-b', '2026-11-07T09:00:00.000Z'))
+    await store.unarchiveSession('project-1', 'session-b')
+
+    const restored = store.sessions.find((s) => s.sessionId === 'session-b')
+    expect(restored?.archivedAt).toBeUndefined()
+    expect(store.activeSessionId).toBe('session-a') // 长期恢复不抢占现场
+  })
+
+  it('运行态集合：run-start 记入（含后台会话），run-finish 按注册表收敛', async () => {
+    const store = useChatStore()
+    await store.initSessions('project-1')
+    const emit = captureListener()
+
+    // 后台委派会话运行：不在激活会话也要点亮
+    emit({ type: 'run-start', runId: 'run-em', sessionId: 'session-em' } as AgentUiEvent)
+    expect(store.runningSessionIds.has('session-em')).toBe(true)
+
+    // 收尾时注册表已无该 driver：移除
+    mockedIsAgentRunActive.mockReturnValue(false)
+    emit({
+      type: 'run-finish',
+      runId: 'run-em',
+      sessionId: 'session-em',
+      result: { projectId: 'project-1', sessionId: 'session-em', turnChanges: [], sessionChangedFileCount: 0, session: createSessionView('session-em') },
+    } as unknown as AgentUiEvent)
+    expect(store.runningSessionIds.has('session-em')).toBe(false)
+
+    // 新 run 的 run-start 先于旧 driver 收尾到达时：注册表仍有 driver，不误清
+    emit({ type: 'run-start', runId: 'run-x', sessionId: 'session-x' } as AgentUiEvent)
+    mockedIsAgentRunActive.mockReturnValue(true)
+    emit({
+      type: 'run-error',
+      runId: 'run-x-old',
+      sessionId: 'session-x',
+      error: new Error('旧 driver 的迟到报错'),
+    } as unknown as AgentUiEvent)
+    expect(store.runningSessionIds.has('session-x')).toBe(true)
   })
 })

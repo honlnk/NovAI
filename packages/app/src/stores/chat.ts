@@ -4,6 +4,8 @@ import { defineStore } from 'pinia'
 import {
   createSession as createAgentSession,
   respondConfirmation as respondAgentConfirmation,
+  respondQuestion as respondAgentQuestion,
+  skipQuestion as skipAgentQuestion,
   enqueueMessage as enqueueAgentMessage,
   updateQueuedMessage as updateAgentQueuedMessage,
   loadOlderMessages as loadOlderAgentMessages,
@@ -14,11 +16,14 @@ import {
   listSessions as listAgentSessions,
   renameSession as renameAgentSession,
   deleteSession as deleteAgentSession,
+  archiveAgentSession,
+  compactSession as compactAgentSession,
 } from '@novai/core/services/agent-service'
 
 import type {
   AgentRoleId,
   AgentUiEvent,
+  AskUserQuestionRequestView,
   ChangedFileView,
   ChatMessageView,
   ChatSessionSummaryView,
@@ -31,9 +36,17 @@ import type {
 import { buildRenderItems, type ChatRenderItem } from './chat-render'
 import { useProjectStore } from './project'
 import { getOrCreateClientId } from '../utils/client-id'
+import { useToast } from '../composables/useToast'
 
 /** runStatus 的语义类型，供状态栏按类型上色，避免 UI 靠字符串猜测 */
 export type RunStatusType = 'idle' | 'running' | 'error'
+
+/** 实时文件改动 + 产生它的会话（定位高亮据此判定「是否当前会话的改动」） */
+export type RecentFileChange = {
+  projectId: string
+  sessionId: string
+  record: FileChangeRecordView
+}
 
 /**
  * 历史窗口页大小（借鉴 dsh 分页防线）：首屏只装尾部一页，滚动到顶向前翻页。
@@ -52,6 +65,13 @@ export const useChatStore = defineStore('chat', () => {
    * 也逐条触发，不因去重漏掉重读时机）。
    */
   const lastFileChange = ref<FileChangeRecordView | null>(null)
+  /**
+   * 实时到达的文件改动队列（file-changed 事件按到达序逐条保留，含会话归属）：
+   * 定位高亮反馈队列（交互优化计划 §7）的数据源。与 lastFileChange 的分工：那份只留
+   * 最新一条（内容面板重读触发），这份逐条保留——同文件连续多次修改不互相吞掉。
+   * 上限 30 条，最老的先出；切项目时由 ProjectView 清空（跨项目不串扰）。
+   */
+  const recentFileChanges = ref<RecentFileChange[]>([])
   /** 收件箱队列快照（QueueDock 渲染用），由 queue-updated 事件同步、切换会话时从 view 重建 */
   const queue = ref<QueuedMessageView[]>([])
   const runStatus = ref('还没有开始执行。')
@@ -75,6 +95,44 @@ export const useChatStore = defineStore('chat', () => {
     }
     return pendingConfirmationsBySession.value.get(active)?.[0] ?? null
   })
+  /** 激活会话待确认队首是否为内容类（create/edit）：走右侧内容面板审阅（§8）；rename/delete 走输入区接管 */
+  const activeWriteConfirmation = computed<FileChangeConfirmationView | null>(() => {
+    const head = pendingConfirmation.value
+    if (!head || (head.confirmation.kind !== 'create' && head.confirmation.kind !== 'edit')) {
+      return null
+    }
+    return head
+  })
+  /** 激活会话待确认总数（内容面板审阅区「第 x / 共 n 项」用） */
+  const pendingConfirmationCount = computed<number>(() => {
+    const active = activeSessionId.value
+    if (!active) {
+      return 0
+    }
+    return pendingConfirmationsBySession.value.get(active)?.length ?? 0
+  })
+  /**
+   * 各会话的待回答提问快照（question-required / questions-updated 事件同步，仿确认链）：
+   * Agent 任务中途的 AskUserQuestion 挂起在这里。切换会话后回来仍能恢复等待态；
+   * 刷新后为空（core 不重放事件），无 answer 的卡片据此标记「等待已中断」。
+   */
+  const pendingQuestionsBySession = ref(new Map<string, AskUserQuestionRequestView[]>())
+  // 当前激活会话的待回答提问（一次只处理一个，取最早到达的那条）
+  const pendingQuestion = computed<AskUserQuestionRequestView | null>(() => {
+    const active = activeSessionId.value
+    if (!active) {
+      return null
+    }
+    return pendingQuestionsBySession.value.get(active)?.[0] ?? null
+  })
+  /**
+   * 当前提问的作答草稿（卡片与输入框改道共用）：候选项选择集合 + 补充文本。
+   * pendingQuestion 变化（新问题到达 / 已作答清空）时重置。
+   */
+  const questionSelection = ref<string[]>([])
+  const questionText = ref('')
+  /** 提问作答在途（提交按钮防重复点击；respondQuestion 同步收敛，通常只闪一瞬） */
+  const isSubmittingAnswer = ref(false)
   // 当前正在流式输出的消息 id（供消息气泡显示「生成中」光标）；无流式消息时为 null
   const streamingMessageId = ref<string | null>(null)
 
@@ -83,6 +141,30 @@ export const useChatStore = defineStore('chat', () => {
   // 当前激活会话 id（高亮 + 事件路由用）
   const activeSessionId = ref<string | null>(null)
   const isLoadingSessions = ref(false)
+  /** 列表读取按项目与发起序隔离；项目切换也会使旧选择失效。 */
+  let sessionListGeneration = 0
+  let activeProjectId: string | null = null
+  /**
+   * 各会话的运行中标记（事件驱动，会话列表「进行中」筛选与状态徽标的实时来源）：
+   * run-start 记入、run-finish/run-error 以 driver 注册表真实状态收敛。
+   * 不受激活会话过滤影响——后台委派会话运行时列表同样要点亮；
+   * 刷新后为空（core 的 driver 注册表在内存），快照 status='running' 不作为运行依据。
+   */
+  const runningSessionIds = ref(new Set<string>())
+
+  /**
+   * 各会话最新运行 id（数据安全计划 F8 运行身份）：run-start 记入、当前运行收尾时
+   * 清除。run-finish/run-error 的 runId 与之不符 = 旧 driver 晚到收尾，其整份
+   * 快照不被接受（新运行的流式视图/队列/状态不被覆盖）。内存态，刷新后重建。
+   */
+  const latestRunIdBySession = new Map<string, string>()
+
+  /**
+   * 已删除会话的墓碑（数据安全计划 F12 删除不复活）：core 侧收尾已静默，但删除与
+   * 在途唤醒/广播并发时仍可能有晚到事件（典型 run-start）到达——据此直接丢弃，
+   * 已删会话不得在运行标记、待确认或最近变更里复活。initSessions（进入新项目）清空。
+   */
+  const deletedSessionIds = new Set<string>()
 
   /**
    * 历史窗口起点：sessionView.messages[0] 在全量历史中的下标（append-only 数组下标游标）。
@@ -106,6 +188,51 @@ export const useChatStore = defineStore('chat', () => {
     ),
   )
 
+  /** 有待回答提问的会话 id 集（会话列表「待回答」徽标）。 */
+  const sessionsWithPendingQuestions = computed<Set<string>>(() =>
+    new Set(
+      [...pendingQuestionsBySession.value.entries()]
+        .filter(([, list]) => list.length > 0)
+        .map(([sessionId]) => sessionId),
+    ),
+  )
+
+  /**
+   * 会话后台保存失败记录（数据安全计划 §3-4 会话保存失败可见）：
+   * 前台保存（用户在等）由调用方 await 直接呈现；后台落盘（归档收尾、提问卡等）
+   * 失败时 core 广播 session-save-failed，这里按会话去重登记（最新一次覆盖）。
+   * 列表常驻供错误条持续展示（F11），用户处理后 dismiss。
+   */
+  const sessionSaveFailures = ref(new Map<string, { sessionId: string; reason: string; message: string; at: string }>())
+
+  /** 登记一条后台保存失败（同会话最新一次覆盖） */
+  function recordSessionSaveFailure(event: {
+    sessionId: string
+    projectId: string
+    reason: string
+    message: string
+  }) {
+    if (useProjectStore().currentProject?.id !== event.projectId) {
+      return
+    }
+    sessionSaveFailures.value = new Map(sessionSaveFailures.value).set(event.sessionId, {
+      sessionId: event.sessionId,
+      reason: event.reason,
+      message: event.message,
+      at: new Date().toISOString(),
+    })
+  }
+
+  /** 用户已处理（重试成功/知悉）后移除该会话的失败记录 */
+  function dismissSessionSaveFailure(sessionId: string) {
+    if (!sessionSaveFailures.value.has(sessionId)) {
+      return
+    }
+    const next = new Map(sessionSaveFailures.value)
+    next.delete(sessionId)
+    sessionSaveFailures.value = next
+  }
+
   /**
    * 任务组折叠态：组 id（= 组首 user 消息 id）→ 显式展开/收起，优先级高于默认
    * （默认：历史轮收起，运行中的最后一轮展开）。切换会话不清。
@@ -127,11 +254,37 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 项目打开时的会话初始化入口：
-   * 拉取历史会话列表，有历史则激活最近一条，无历史则新建。
+   * 拉取历史会话列表；有恢复记录时优先激活记录的会话（工作区现场恢复，§3.4），
+   * 记录缺失/失效回退最近一条，无历史则新建。
    * 取代旧的 ensureSessionView（后者只支持单会话）。
    */
-  async function initSessions(projectId: string): Promise<ChatSessionView> {
+  /** 测试与独立列表场景建立项目归属，不创建或切换会话。 */
+  function setSessionProjectForTest(projectId: string): void {
+    activeProjectId = projectId
+  }
+
+  async function initSessions(projectId: string, preferredSessionId?: string | null): Promise<ChatSessionView> {
+    // 进入新项目：上一项目的后台保存失败记录、运行身份与删除墓碑不再有意义（§3-4/F8/F12）
+    activeProjectId = projectId
+    sessionSelectionGeneration += 1
+    sessionSaveFailures.value = new Map()
+    latestRunIdBySession.clear()
+    deletedSessionIds.clear()
+    // 恢复中手动切换（F6 验收2）：列表加载期间用户已发起别的选择（代次前进）时，
+    // 初始化不再自动接管会话位——用户的最新意图优先，不被初始化拉回
+    const entryGeneration = sessionSelectionGeneration
     await loadSessions(projectId)
+    if (sessionSelectionGeneration !== entryGeneration && activeSessionId.value) {
+      return sessionView.value!
+    }
+
+    if (preferredSessionId && sessions.value.some((s) => s.sessionId === preferredSessionId)) {
+      const restored = await selectSession(projectId, preferredSessionId)
+      if (restored) {
+        return restored
+      }
+      // 记录的会话读取失败（文件损坏等）：回退最近一条，不让打开流程失败
+    }
 
     if (sessions.value.length > 0) {
       await selectSession(projectId, sessions.value[0].sessionId)
@@ -149,11 +302,20 @@ export const useChatStore = defineStore('chat', () => {
    * （如 deleteSession）自行处理，避免列表刷新与激活态维护耦合产生的竞态误清。
    */
   async function loadSessions(projectId: string) {
+    const generation = ++sessionListGeneration
+    const initialProjectId = activeProjectId
+    const hasCurrentProject = useProjectStore().currentProject !== null
     isLoadingSessions.value = true
     try {
-      sessions.value = await listAgentSessions(projectId)
+      const loaded = await listAgentSessions(projectId)
+      const currentProjectId = useProjectStore().currentProject?.id
+      if (generation === sessionListGeneration && activeProjectId === projectId && initialProjectId === projectId && (!hasCurrentProject || currentProjectId === projectId)) {
+        sessions.value = loaded
+      }
     } finally {
-      isLoadingSessions.value = false
+      if (generation === sessionListGeneration) {
+        isLoadingSessions.value = false
+      }
     }
   }
 
@@ -168,10 +330,25 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = rest
   }
 
+  /**
+   * 会话选择代次（数据安全计划 F6）：每次发起新的选择/新建递增。会话甲读取慢、
+   * 用户已切到乙时，甲的读取结果属于过期代次——直接丢弃，不得覆盖当前现场
+   * （activeSessionId/视图/队列/运行态全部不动）。
+   */
+  let sessionSelectionGeneration = 0
+
   /** 切换到指定历史会话：只装尾部一页消息窗口（长会话分页防线）并设为激活。 */
   async function selectSession(projectId: string, sessionId: string): Promise<ChatSessionView | null> {
+    if (activeProjectId === null) {
+      activeProjectId = projectId
+    }
+    const generation = ++sessionSelectionGeneration
     const view = await getAgentSession(projectId, sessionId, { tailMessages: HISTORY_PAGE_SIZE })
     if (!view) {
+      return null
+    }
+    // 读取期间已有更新的选择意图或已切项目：过期结果不改变当前现场
+    if (generation !== sessionSelectionGeneration || activeProjectId !== projectId) {
       return null
     }
 
@@ -187,6 +364,9 @@ export const useChatStore = defineStore('chat', () => {
     loadingOlder.value = false
     isRunning.value = isAgentRunActive(sessionId)
     isStopping.value = false
+    // 进入现场（F11 错误持续性的出口之一）：该会话的保存失败记录随进入清除，
+    // 用户已在现场处理，不再保留全局提醒来源
+    dismissSessionSaveFailure(sessionId)
     return view
   }
 
@@ -215,8 +395,8 @@ export const useChatStore = defineStore('chat', () => {
         return false
       }
       sessionView.value = {
-        ...view,
-        messages: [...page.messages, ...view.messages],
+        ...sessionView.value,
+        messages: [...page.messages, ...sessionView.value.messages],
       }
       historyStart.value = page.start
       return true
@@ -238,31 +418,40 @@ export const useChatStore = defineStore('chat', () => {
     projectId: string,
     options: { skipReload?: boolean; agent?: AgentRoleId } = {},
   ): Promise<ChatSessionView> {
+    if (activeProjectId === null) {
+      activeProjectId = projectId
+    }
+    const generation = ++sessionSelectionGeneration
     const view = await createAgentSession(
       projectId,
       options.agent !== undefined ? { agent: options.agent } : undefined,
     )
-    sessionView.value = view
-    activeSessionId.value = view.sessionId
-    changedFiles.value = []
-    lastFileChange.value = null
-    queue.value = []
-    historyStart.value = 0
-    loadingOlder.value = false
-    isRunning.value = false
-    isStopping.value = false
+    // 连续新建（无会话时快速点两次）：后发起的创建是最新意图，先完成的旧结果不抢占
+    // 激活现场；会话本身已落盘，列表仍要如实反映
+    if (generation === sessionSelectionGeneration && activeProjectId === projectId) {
+      sessionView.value = view
+      activeSessionId.value = view.sessionId
+      changedFiles.value = []
+      lastFileChange.value = null
+      queue.value = []
+      historyStart.value = 0
+      loadingOlder.value = false
+      isRunning.value = false
+      isStopping.value = false
+    }
 
-    if (options.skipReload) {
+    if (options.skipReload && activeProjectId === projectId) {
       sessions.value = [{
         sessionId: view.sessionId,
         projectId,
         ...(view.agent ? { agent: view.agent } : {}),
+        status: view.status,
         title: view.title ?? '新对话',
         createdAt: view.createdAt ?? new Date().toISOString(),
         updatedAt: view.updatedAt ?? new Date().toISOString(),
         messageCount: 0,
       }, ...sessions.value]
-    } else {
+    } else if (!options.skipReload && activeProjectId === projectId) {
       await loadSessions(projectId)
     }
     return view
@@ -292,6 +481,34 @@ export const useChatStore = defineStore('chat', () => {
     // 先从本地列表移除，避免 await 期间 UI 闪烁残留项
     sessions.value = sessions.value.filter((s) => s.sessionId !== sessionId)
 
+    // 残留标记一并清理（F12 删除不复活）：运行标记、运行身份、待确认/待回答、
+    // 保存失败与最近变更都不能把已删会话留在界面上；墓碑拦住删除后仍在途的晚到事件
+    deletedSessionIds.add(sessionId)
+    if (runningSessionIds.value.has(sessionId)) {
+      const nextRunning = new Set(runningSessionIds.value)
+      nextRunning.delete(sessionId)
+      runningSessionIds.value = nextRunning
+    }
+    latestRunIdBySession.delete(sessionId)
+    if (pendingConfirmationsBySession.value.has(sessionId)) {
+      const nextConfirmations = new Map(pendingConfirmationsBySession.value)
+      nextConfirmations.delete(sessionId)
+      pendingConfirmationsBySession.value = nextConfirmations
+    }
+    if (pendingQuestionsBySession.value.has(sessionId)) {
+      const nextQuestions = new Map(pendingQuestionsBySession.value)
+      nextQuestions.delete(sessionId)
+      pendingQuestionsBySession.value = nextQuestions
+    }
+    if (sessionSaveFailures.value.has(sessionId)) {
+      dismissSessionSaveFailure(sessionId)
+    }
+    if (recentFileChanges.value.some((entry) => entry.sessionId === sessionId)) {
+      recentFileChanges.value = recentFileChanges.value.filter(
+        (entry) => entry.sessionId !== sessionId,
+      )
+    }
+
     if (!wasActive) {
       return
     }
@@ -307,6 +524,44 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * 归档会话（交互优化计划 §3）：不弹确认、不停止运行中的 driver，只改列表可见性。
+   * 归档的是激活会话时自动切到最近的未归档会话（没有则新建空会话）；
+   * 归档其他会话不改变当前现场。
+   * 返回 fallbackTo = 归档激活会话时自动切到的会话 id——撤销动作据此判断能否
+   * 切回原会话（用户后来手动切走则不抢占）。
+   */
+  async function archiveSession(
+    projectId: string,
+    sessionId: string,
+  ): Promise<{ fallbackTo: string | null }> {
+    const summary = await archiveAgentSession(projectId, sessionId, true)
+    upsertSessionSummary(summary)
+
+    if (activeSessionId.value !== sessionId) {
+      return { fallbackTo: null }
+    }
+
+    const next = sessions.value.find((s) => !s.archivedAt)
+    if (next) {
+      await selectSession(projectId, next.sessionId)
+      return { fallbackTo: next.sessionId }
+    }
+
+    // 全部已归档：新建空会话兜底（否则 UI 进入无活跃会话态，发消息会报错）
+    await createNewSession(projectId)
+    return { fallbackTo: activeSessionId.value }
+  }
+
+  /**
+   * 恢复归档（撤销与归档区「恢复」共用）：只清归档标记，不动活动时间、不改激活会话
+   * ——是否切回原会话由撤销方按 fallbackTo 上下文决定，长期恢复不抢占现场。
+   */
+  async function unarchiveSession(projectId: string, sessionId: string): Promise<void> {
+    const summary = await archiveAgentSession(projectId, sessionId, false)
+    upsertSessionSummary(summary)
+  }
+
+  /**
    * 发送入口：入队先于唤醒，立即返回（driver 在后台跑，进展经事件总线回流）。
    * - mode 'queue'：next-turn 排队（空闲时效果等同直接发送）；
    * - mode 'steer'：next-step 插话，下一 step 边界生效（仅运行中有意义）。
@@ -316,6 +571,7 @@ export const useChatStore = defineStore('chat', () => {
     text: string,
     quote?: string,
     mode: 'queue' | 'steer' = 'queue',
+    displayLabel?: string,
   ): Promise<boolean> {
     if (!sessionView.value) {
       setRunStatus('没有活跃的会话', 'error')
@@ -331,6 +587,8 @@ export const useChatStore = defineStore('chat', () => {
         text,
         quote,
         mode,
+        // 显示/指令分离：斜杠命令时传用户原草稿（气泡、队列、自动标题用它，不暴露内部 prompt）
+        ...(displayLabel !== undefined ? { displayLabel } : {}),
         activeFilePath: projectStore.activeFile?.path ?? null,
         // 匿名联网配额身份：随消息注入，沿 ChatTurnInput → ToolRuntime 到达 WebSearch/WebFetch
         webClientId: getOrCreateClientId(),
@@ -342,14 +600,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** QueueDock 行内编辑排队消息；失败抛错由 UI toast。 */
-  async function editQueuedMessage(id: string, text: string): Promise<void> {
+  /** QueueDock 行内编辑排队消息；displayLabel = 编辑后的显示草稿（缺省清除命令标记）；失败抛错由 UI toast。 */
+  async function editQueuedMessage(id: string, text: string, displayLabel?: string): Promise<void> {
     if (!sessionView.value) return
     await updateAgentQueuedMessage({
       projectId: sessionView.value.projectId,
       sessionId: sessionView.value.sessionId,
       id,
-      action: { kind: 'edit', text },
+      action: { kind: 'edit', text, ...(displayLabel !== undefined ? { displayLabel } : {}) },
     })
   }
 
@@ -387,6 +645,37 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
+   * 手动压缩当前会话上下文（/压缩上下文）：摘要调用走一次真实 LLM 请求，
+   * 期间状态栏显示进行中；结果写状态栏（context-summary 消息经事件总线回流渲染）。
+   * 返回是否成功执行——noop（无可压缩/摘要被拒）也算执行完毕，失败时 UI 恢复草稿。
+   */
+  async function compactActiveSession(): Promise<boolean> {
+    if (!sessionView.value) {
+      setRunStatus('没有活跃的会话', 'error')
+      return false
+    }
+    setRunStatus('正在压缩上下文…', 'running')
+    try {
+      const outcome = await compactAgentSession({
+        projectId: sessionView.value.projectId,
+        sessionId: sessionView.value.sessionId,
+      })
+      if (outcome.kind === 'compacted') {
+        setRunStatus(`已压缩 ${outcome.compactedMessageCount} 条早期消息（约 ${outcome.originalTokens} → ${outcome.summaryTokens} token）`)
+      } else if (outcome.reason === 'nothing-to-compact') {
+        // 与消息流里的本地命令状态行同文案：主动取消或无变化不是错误
+        setRunStatus('没有可压缩的早期历史，未做修改')
+      } else {
+        setRunStatus('压缩摘要未通过校验，上下文未改动', 'error')
+      }
+      return true
+    } catch (error) {
+      setRunStatus(error instanceof Error ? error.message : '压缩失败', 'error')
+      return false
+    }
+  }
+
+  /**
    * 统一的 runStatus 写入入口：同时设置文案与语义类型，
    * UI（状态栏）按 type 上色，无需靠字符串匹配。
    */
@@ -409,6 +698,39 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function handleAgentEvent(event: AgentUiEvent) {
+    // 已删会话的晚到事件（F12 不复活）：core 侧收尾已静默，这里兜住删除与在途
+    // 唤醒/广播并发的残余——运行标记、待确认、最近变更都不得被已删会话的事件重建
+    if (deletedSessionIds.has(event.sessionId)) {
+      return
+    }
+
+    // 运行态集合全局维护（先于激活会话过滤）：后台委派会话运行时列表同样要点亮「进行中」。
+    // run-finish/run-error 以注册表真实状态收敛——停止后立刻再发送时，新 run 的
+    // run-start 可能先于旧 driver 的收尾事件到达，无条件删除会误清新 run。
+    if (event.type === 'run-start') {
+      runningSessionIds.value = new Set(runningSessionIds.value).add(event.sessionId)
+      // 运行身份（F8）：该会话最新运行。旧 driver 的收尾晚于新 run-start 到达时，
+      // 其 runId 与此不符 = 过期收尾，整份快照不被接受
+      latestRunIdBySession.set(event.sessionId, event.runId)
+    } else if ((event.type === 'run-finish' || event.type === 'run-error')
+      && !isAgentRunActive(event.sessionId)) {
+      const next = new Set(runningSessionIds.value)
+      next.delete(event.sessionId)
+      runningSessionIds.value = next
+    }
+
+    // 文件变更的反馈队列全局保留（F9/F10）：后台会话的改动也带归属进通知（不抢现场）；
+    // 会话级清单与 lastFileChange 仍只跟随激活会话
+    if (event.type === 'file-changed') {
+      if (useProjectStore().currentProject?.id !== event.projectId) {
+        return
+      }
+      recentFileChanges.value = [
+        ...recentFileChanges.value.slice(-29),
+        { projectId: event.projectId, sessionId: event.sessionId, record: event.file },
+      ]
+    }
+
     // 全局事件（与会话激活态无关，先于激活会话过滤处理）：
     // 待确认快照按会话路由，非激活会话（委派中的要素管理员会话）也要记录徽标；
     // session-created（服务端新建的委派会话落盘）刷新当前项目的会话列表。
@@ -428,6 +750,23 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    if (event.type === 'question-required') {
+      const list = pendingQuestionsBySession.value.get(event.sessionId) ?? []
+      pendingQuestionsBySession.value = new Map(pendingQuestionsBySession.value)
+        .set(event.sessionId, [...list, event.request])
+      if (event.sessionId === activeSessionId.value) {
+        resetQuestionDraft()
+        setRunStatus('Agent 正在等待你的回答…')
+      }
+      return
+    }
+
+    if (event.type === 'questions-updated') {
+      pendingQuestionsBySession.value = new Map(pendingQuestionsBySession.value)
+        .set(event.sessionId, event.questions)
+      return
+    }
+
     if (event.type === 'session-created') {
       const projectStore = useProjectStore()
       if (projectStore.currentProject?.id === event.projectId) {
@@ -438,10 +777,50 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    // 后台保存失败（§3-4）：登记供持续展示，任何会话（含后台委派）都记；
+    // 切项目时由 initSessions 清空重置
+    if (event.type === 'session-save-failed') {
+      recordSessionSaveFailure(event)
+      return
+    }
+
+    // 后台会话的完成与失败（F11 列表摘要）：只做摘要级反馈，不动当前现场——
+    // 完成刷新列表（标题/updatedAt 重排），失败给持续错误 toast（用户不在该现场，
+    // 失败不能静默）。激活会话的完整收尾处理在下方激活过滤之后。
+    if (event.type === 'run-finish' || event.type === 'run-error') {
+      const isForeground = activeSessionId.value === event.sessionId
+      if (!isForeground) {
+        // 事件可能来自已切走的项目（后台 driver 收尾晚于项目切换）：只消费当前项目
+        const projectStore = useProjectStore()
+        if (event.type === 'run-finish') {
+          if (projectStore.currentProject?.id !== event.result.projectId) {
+            return
+          }
+          void loadSessions(event.result.projectId)
+          return
+        }
+        // run-error 不带 projectId：以当前项目的会话列表识别归属，列表无此会话
+        // （已切项目）则静默丢弃，不向别的项目现场弹错误
+        const entry = sessions.value.find((s) => s.sessionId === event.sessionId)
+        if (!entry) {
+          return
+        }
+        useToast().error(`后台会话「${entry.title}」运行失败：${event.error.message}`)
+        return
+      }
+    }
+
     // 其余事件只消费当前激活会话的（后台会话的 driver 仍在跑，UI 不跟随）
     if (!activeSessionId.value || event.sessionId !== activeSessionId.value) {
       return
     }
+
+    // 运行身份判别（F8）：收尾事件的 runId 与该会话最新运行不符 = 旧 driver 晚到收尾。
+    // 运行态集合已在上方按注册表收敛；此处再跳过对视图/队列/状态栏的整份覆盖——
+    // 新 run 的流式视图与状态不得被旧快照打掉。列表标题刷新照旧（历史事实仍有效）。
+    const staleRun = event.type === 'run-finish' || event.type === 'run-error'
+      ? latestRunIdBySession.get(event.sessionId) !== event.runId
+      : false
 
     if (event.type === 'run-start') {
       isRunning.value = true
@@ -523,8 +902,9 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (event.type === 'file-changed') {
-      // 实时合并（文件树自动刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖。
+      // 实时合并（文件树刷新的 watch 源）；会话级权威清单在 run-finish 时整体覆盖。
       // lastFileChange 逐条记录原文，供内容面板判断是否重读当前打开的文件。
+      // （反馈队列已在全局段带归属记录，此处只跟随激活会话的会话级状态）
       applyFileChangeRecord(event.file)
       lastFileChange.value = event.file
       return
@@ -539,6 +919,10 @@ export const useChatStore = defineStore('chat', () => {
       // 以 driver 注册表真实状态为准：停止后立刻再发送时，pendingWake 再唤醒的新 run 的
       // run-start 可能先于旧 driver 的 run-error 到达，无条件置 false 会把新 run 的运行态打掉
       isRunning.value = isAgentRunActive(event.sessionId)
+      if (staleRun) {
+        // 旧运行晚到的失败：不打断新运行的流式态与状态栏，注册表收敛已在上面完成
+        return
+      }
       isStopping.value = false
       streamingMessageId.value = null
       setRunStatus(event.error.message, 'error')
@@ -548,6 +932,15 @@ export const useChatStore = defineStore('chat', () => {
     if (event.type === 'run-finish') {
       // 同上：旧 driver 收尾事件晚到时，新 driver 可能已在注册表中（isRunning 保持 true）
       isRunning.value = isAgentRunActive(event.sessionId)
+      if (staleRun) {
+        // 旧运行晚到的完成快照：视图/队列/状态栏保持新运行现场；列表标题仍如实刷新
+        const entry = sessions.value.find((s) => s.sessionId === event.sessionId)
+        if (entry && event.result.session.title && entry.title !== event.result.session.title) {
+          void loadSessions(event.result.projectId)
+        }
+        return
+      }
+      latestRunIdBySession.delete(event.sessionId)
       isStopping.value = false
       streamingMessageId.value = null
       // 历史窗口兼容：run-finish 携带全量视图，按当前窗口起点切片，翻页成果不被冲掉
@@ -577,27 +970,110 @@ export const useChatStore = defineStore('chat', () => {
   /** 用户确认当前待确认的写操作，唤醒 Agent Loop 继续执行。 */
   function confirmWriteTool() {
     const confirmation = pendingConfirmation.value
+    const active = activeSessionId.value
     if (!confirmation) {
       return
     }
-    // respondConfirmation 内同步广播 confirmations-updated（含本次 resolve），map 随之更新
-    respondAgentConfirmation(confirmation.id, true)
+    // respondConfirmation 内同步广播 confirmations-updated（含本次 resolve），map 随之更新；
+    // expectedSessionId 自证会话归属（§8 按会话路由不串答），服务层校验不符则忽略
+    respondAgentConfirmation(confirmation.id, true, active ?? undefined)
     setRunStatus('Agent 正在执行...', 'running')
   }
 
   /** 用户拒绝当前待确认的写操作，Agent 收到拒绝结果后可调整。 */
   function rejectWriteTool() {
     const confirmation = pendingConfirmation.value
+    const active = activeSessionId.value
     if (!confirmation) {
       return
     }
-    respondAgentConfirmation(confirmation.id, false)
+    respondAgentConfirmation(confirmation.id, false, active ?? undefined)
     setRunStatus('Agent 正在执行...', 'running')
+  }
+
+  // ---------- 主动提问作答（卡片与输入框改道共用） ----------
+
+  /** 重置当前提问的作答草稿（新问题到达 / 已作答时调用）。 */
+  function resetQuestionDraft() {
+    questionSelection.value = []
+    questionText.value = ''
+  }
+
+  /**
+   * 卡片候选项选择：单选替换、多选切换（保持候选项顺序，与提交校验一致）。
+   * 未知标签静默忽略（候选项由问题定义，UI 不产生越界值）。
+   */
+  function toggleQuestionOption(label: string) {
+    const question = pendingQuestion.value
+    if (!question) {
+      return
+    }
+    if (!question.multiSelect) {
+      questionSelection.value = questionSelection.value.includes(label) ? [] : [label]
+      return
+    }
+    const exists = questionSelection.value.includes(label)
+    const next = exists
+      ? questionSelection.value.filter((item) => item !== label)
+      : [...questionSelection.value, label]
+    // 按候选项原始顺序排序：多选完整集合的展示与提交顺序稳定
+    const order = new Map((question.options ?? []).map((option, index) => [option.label, index]))
+    questionSelection.value = next.sort(
+      (left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0),
+    )
+  }
+
+  /**
+   * 提交当前提问的回答（卡片提交 / 输入框改道共用）。
+   * 校验失败（空回答等）不改等待态，错误文案进状态栏由用户补填。
+   * respondQuestion 内同步广播 questions-updated 与补全 answer 的卡片消息。
+   */
+  function submitQuestionAnswer(input?: { text?: string }): boolean {
+    const question = pendingQuestion.value
+    if (!question || isSubmittingAnswer.value) {
+      return false
+    }
+    const text = (input?.text ?? questionText.value).trim()
+    isSubmittingAnswer.value = true
+    try {
+      respondAgentQuestion({
+        questionId: question.questionId,
+        selectedLabels: [...questionSelection.value],
+        text,
+      })
+      // 同步收敛：作答草稿由 questions-updated/questionId 变化路径重置，此处兜底再清
+      resetQuestionDraft()
+      setRunStatus('Agent 正在执行...', 'running')
+      return true
+    } catch (error) {
+      setRunStatus(error instanceof Error ? error.message : '回答提交失败', 'error')
+      return false
+    } finally {
+      isSubmittingAnswer.value = false
+    }
+  }
+
+  /** 跳过当前提问：返回明确取消结局，Agent 在不获得答案的情况下调整后续处理。 */
+  function skipCurrentQuestion() {
+    const question = pendingQuestion.value
+    if (!question) {
+      return
+    }
+    skipAgentQuestion(question.questionId)
+    resetQuestionDraft()
+    setRunStatus('Agent 正在执行...', 'running')
+  }
+
+  /** 清空实时改动队列（切项目时由 ProjectView 调用，跨项目不串扰） */
+  function clearRecentFileChanges() {
+    recentFileChanges.value = []
   }
 
   return {
     changedFiles,
     lastFileChange,
+    recentFileChanges,
+    clearRecentFileChanges,
     queue,
     isRunning,
     isStopping,
@@ -605,11 +1081,20 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     renderItems,
     pendingConfirmation,
+    activeWriteConfirmation,
+    pendingConfirmationCount,
     pendingConfirmationsBySession,
     sessionsWithPendingConfirmations,
+    pendingQuestion,
+    pendingQuestionsBySession,
+    sessionsWithPendingQuestions,
+    questionSelection,
+    questionText,
+    isSubmittingAnswer,
     sessionView,
     sessions,
     activeSessionId,
+    runningSessionIds,
     historyStart,
     loadingOlder,
     hasMoreHistory,
@@ -618,6 +1103,8 @@ export const useChatStore = defineStore('chat', () => {
     hasSessionView,
     streamingMessageId,
     abortRun,
+    archiveSession,
+    compactActiveSession,
     confirmWriteTool,
     createNewSession,
     deleteSession,
@@ -629,9 +1116,16 @@ export const useChatStore = defineStore('chat', () => {
     removeQueuedMessage,
     renameSession,
     selectSession,
+    setSessionProjectForTest,
     sendMessage,
     setRunStatus,
+    skipCurrentQuestion,
     steerQueuedMessage,
+    submitQuestionAnswer,
+    unarchiveSession,
+    toggleQuestionOption,
     toggleProcessGroup,
+    sessionSaveFailures,
+    dismissSessionSaveFailure,
   }
 })

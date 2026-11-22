@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ProcessGroupItem } from '../../stores/chat-render'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 任务组折叠（文档 3 S4）：一轮任务的过程消息（context-summary / 工具行 / 中间 assistant 文本）
@@ -40,15 +41,7 @@ function revealOnMatch() {
       :title="group.collapsed ? '展开过程' : '收起过程'"
       @click="toggle"
     >
-      <svg
-        class="h-3 w-3 shrink-0 transition-transform"
-        :class="group.collapsed ? '' : 'rotate-90'"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-      </svg>
+      <AppIcon name="chevron-right" :size="12" class="h-3 w-3 shrink-0 transition-transform" :class="group.collapsed ? '' : 'rotate-90'" />
       <span class="truncate">{{ titleText }}</span>
     </button>
 

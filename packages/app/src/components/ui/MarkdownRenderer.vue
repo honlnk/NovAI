@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import FrontmatterCard from './FrontmatterCard.vue'
 import { parseMarkdownBlocks } from '../../utils/markdown-blocks'
 
 /**
@@ -13,14 +14,27 @@ const props = defineProps<{
   content: string
   /** 语义透传：该消息正在流式输出中（块级渲染本身已保证仅尾部块随 delta 更新，无需分支） */
   streaming?: boolean
+  /** 文件预览卡片化：识别开头 YAML frontmatter 围栏并以卡片呈现（默认关，聊天零变化） */
+  frontmatter?: boolean
+  /** 文件路径，透传给 FrontmatterCard 作展开态记忆键（真机回归：缺省时卡片实例跨文件复用会泄漏展开态） */
+  path?: string
 }>()
 
-const blocks = computed(() => parseMarkdownBlocks(props.content))
+const blocks = computed(() =>
+  parseMarkdownBlocks(props.content, { detectFrontmatter: props.frontmatter === true }),
+)
 </script>
 
 <template>
   <div class="markdown-body" :data-streaming="streaming || undefined">
-    <div v-for="block in blocks" :key="block.key" class="markdown-block" v-html="block.html" />
+    <template v-for="block in blocks" :key="block.key">
+      <FrontmatterCard
+        v-if="block.kind === 'frontmatter'"
+        :raw="block.raw ?? ''"
+        :path="path"
+      />
+      <div v-else class="markdown-block" v-html="block.html" />
+    </template>
   </div>
 </template>
 

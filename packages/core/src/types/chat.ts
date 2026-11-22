@@ -4,6 +4,7 @@ import type { ModelView } from '../core/agent/model-view'
 import type { AgentRoleId } from '../core/agent/roles'
 import type { DelegationSessionRunner } from '../core/agent/element-manager'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type { AskUserQuestionHandler } from '../core/agent/ask-user-question'
 import type { ChangeDiff, FileChange } from '../core/tools/types'
 
 export type ChatToolName =
@@ -14,19 +15,62 @@ export type ChatToolName =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'LoadSkill'
+  | 'ListPlans'
+  | 'ReadPlan'
+  | 'CreatePlan'
+  | 'UpdatePlan'
+  | 'DeletePlan'
+  | 'ListForeshadowing'
+  | 'ReadForeshadowing'
+  | 'ReadForeshadowingForPlanning'
+  | 'CreateForeshadowing'
+  | 'UpdateForeshadowing'
+  | 'DeleteForeshadowing'
+  | 'ForeshadowingCheck'
+  | 'ForeshadowingSync'
+  | 'RhythmList'
+  | 'RhythmRead'
+  | 'RhythmCreate'
+  | 'RhythmUpdate'
+  | 'RhythmDelete'
+  | 'RhythmCheck'
+  | 'RhythmSync'
+  | 'RhythmCurve'
+  | 'RelationList'
+  | 'RelationRead'
+  | 'RelationCreate'
+  | 'RelationUpdate'
+  | 'RelationDelete'
+  | 'RelationQuery'
+  | 'RelationCheck'
+  | 'TimelineList'
+  | 'TimelineRead'
+  | 'TimelineCreatePoint'
+  | 'TimelineCreateSpan'
+  | 'TimelineUpdate'
+  | 'TimelineDelete'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
   | 'KnowledgeLookup'
   | 'DelegateToElementManager'
+  | 'AskUserQuestion'
 
 export type UserTextMessage = {
   id: string
   role: 'user'
   kind: 'text'
   text: string
+  /**
+   * 气泡显示文本（交互优化计划 §3.2 显示/指令分离）：斜杠命令发送时存用户原草稿
+   * （如「/管理要素 整理人物」），text 则是展开后的驱动 prompt（内部指令，不得
+   * 出现在气泡、队列或自动标题里）。可选字段：普通消息/旧会话无此字段，渲染 text。
+   */
+  displayLabel?: string
   /** 用户在内容面板选中的引用内容，作为独立引用块展示在用户气泡内 */
   quote?: string
   /** 插话（steer）标记：渲染与普通用户气泡零视觉区别，仅供任务组分组规则判定（不是组边界）。 */
@@ -121,6 +165,26 @@ export type TurnLimitMessage = {
 }
 
 /**
+ * 本地命令状态行（交互优化计划 §3.2）：/压缩上下文 等客户端命令执行后在消息流里
+ * 的紧凑反馈位（图标 + 命令名 + 状态），随会话落盘持久保留。
+ * 只落终态（completed 已完成 / noop 未执行：没有可处理内容未做修改 / failed 失败）；
+ * 排队中/执行中是过程态，由状态栏与输入区就地反馈，不落消息。
+ */
+export type LocalCommandMessage = {
+  id: string
+  role: 'system'
+  kind: 'local-command'
+  /** 命令名（显示用，如「/压缩上下文」） */
+  command: string
+  outcome: 'completed' | 'noop' | 'failed'
+  /** 一行结果说明（状态行副文案） */
+  summary: string
+  /** 失败详情（展开区展示、可复制；不存异常堆栈） */
+  detail?: string
+  createdAt: string
+}
+
+/**
  * 改动汇总消息（取代 action-summary 生态位；任务完成 diff 面板在消息流里的占位）。
  * 只存 runId：面板数据渲染时从会话 changeLedger 按 runId 解析，不重复存 diff。
  * 随消息持久化，重载后每一轮的面板都在原位。
@@ -135,6 +199,33 @@ export type ChangeSummaryMessage = {
   createdAt: string
 }
 
+/**
+ * 主动提问卡（《Agent 主动提问工具计划》）：AskUserQuestion 工具调用在消息流里的
+ * 独立卡片位。问题提出时 push（answer 缺省 = 待回答），用户作答/跳过后原位补全
+ * answer 字段（历史重读仍可见问题、答案与结局）。卡片不折叠进普通工具过程组
+ * ——它是用户可见的交互主体，不是过程噪音。旧会话无此消息类型，按普通历史读取。
+ */
+export type AskUserQuestionMessage = {
+  id: string
+  role: 'system'
+  kind: 'ask-user-question'
+  /** 提问请求 id（questionMap 的键；与 tool-call 消息的 toolCallId 同值） */
+  questionId: string
+  question: string
+  header?: string
+  options?: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+  /** 用户回答（补全后卡片只读）：所选候选项标签（多选完整保留）+ 自由文本 + 结局 */
+  answer?: {
+    selectedLabels: string[]
+    text: string
+    outcome: 'answered' | 'cancelled'
+    /** ISO 时间 */
+    answeredAt: string
+  }
+  createdAt: string
+}
+
 export type ChatMessage =
   | UserTextMessage
   | AssistantTextMessage
@@ -144,7 +235,9 @@ export type ChatMessage =
   | ErrorMessage
   | ContextSummaryMessage
   | TurnLimitMessage
+  | LocalCommandMessage
   | ChangeSummaryMessage
+  | AskUserQuestionMessage
 
 export type ChatTargetContext = {
   type: 'chapter' | 'prompt-system' | 'prompt-outline' | 'element' | 'project'
@@ -160,6 +253,11 @@ export type ChatSessionStatus = 'idle' | 'running' | 'waiting-user' | 'awaiting-
 export type QueuedMessage = {
   id: string
   text: string
+  /**
+   * 气泡显示文本（显示/指令分离）：斜杠命令排队时存用户原草稿，text 是展开后的
+   * 驱动 prompt。可选字段：旧队列消息无此字段，渲染 text。
+   */
+  displayLabel?: string
   /** 排队时快照的引用内容 */
   quote?: string
   /**
@@ -184,6 +282,33 @@ export type InboxState = {
 }
 
 /**
+ * 改动定位的版本标识（交互优化计划 §7「前后内容版本」）：FNV-1a 内容哈希 +
+ * 写盘时刻 mtime。界面据此校验「记录坐标描述的版本 == 面板当前版本」，失配降级。
+ */
+export type FileChangeVersion = {
+  contentHash: string
+  updatedAt: string
+}
+
+/**
+ * 一处替换的行范围（1-based 闭区间，统一源码行口径）；空范围 end = start - 1
+ * （空文件填充 oldEnd=0；替换为空 newEnd = newStart - 1）。
+ */
+export type FileChangeRange = {
+  oldStart: number
+  oldEnd: number
+  newStart: number
+  newEnd: number
+}
+
+/** 一次写盘的定位信息：逐处范围 + 前后版本（created 无 beforeVersion） */
+export type FileChangeCoords = {
+  ranges: FileChangeRange[]
+  beforeVersion?: FileChangeVersion
+  afterVersion?: FileChangeVersion
+}
+
+/**
  * 改动账本的一条记录（append-only，与 modelView 彻底无关 → 天然免疫压缩）。
  * diff 仅 created/updated 有；renamed/deleted 无（删除原文去回收站 trashPath 看）。
  */
@@ -195,6 +320,11 @@ export type FileChangeRecord = {
   at: string
   change: FileChange
   diff?: ChangeDiff
+  /**
+   * 定位坐标与前后版本（§7，可选）：EditFile/CreateFile 写盘时由工具层产出；
+   * 旧记录/删除改名无此字段——界面降级为片段差异，不伪造高亮。
+   */
+  coords?: FileChangeCoords
   /** 改动归属：要素管理员子代理的写入带 elementManager（轮次归属标记，写回面板展示用）；主 Agent 记录无此字段 */
   agent?: 'element-manager'
 }
@@ -231,10 +361,17 @@ export type ChatSessionState = {
   constraintDocDigest?: string
   /** 要素目录 reminder 的 digest（name+summary 集，决策 0007）：要素集变化时原位替换、被压缩吞掉后重插。 */
   elementCatalogDigest?: string
+  /** 技能目录 reminder 的 digest（name+截断展示描述）：技能集变化时原位替换、被压缩吞掉后重插；旧会话无此字段按首注处理。 */
+  skillCatalogDigest?: string
   /** 最近一轮生效的大纲路径（null=未选择）；变化时向持久化历史追加切换留痕。 */
   lastOutlinePath?: string | null
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */
   title: string
+  /**
+   * 归档时间（ISO）。可选字段：旧会话无此字段视为未归档，无需迁移。
+   * 归档/恢复只改此字段，不改变 updatedAt（原活动时间保留，列表排序不受归档影响）。
+   */
+  archivedAt?: string
   /** 会话创建时间（ISO），落盘与列表排序用 */
   createdAt: string
   /** 会话最近更新时间（ISO），每轮保存刷新；列表按此降序 */
@@ -280,6 +417,11 @@ export type ChatTurnInput = {
    * 工具靠它创建并驱动特化角色真会话。未注入时该工具直接报错（测试/只读场景）。
    */
   runDelegationSession?: DelegationSessionRunner
+  /**
+   * 主动提问回调（service 层实现并注入）：主智能体的 AskUserQuestion 工具靠它
+   * 向用户提问并等待回答。未注入时该工具直接报错（测试/只读/非主角色场景）。
+   */
+  askUser?: AskUserQuestionHandler
 }
 
 export type ChatTurnResult = {

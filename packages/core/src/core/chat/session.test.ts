@@ -1,8 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-import { createChatSession, enqueueChatMessage, runChatDriver, _getActiveChatDriverCountForTest } from './session'
+import { createChatSession, enqueueChatMessage, runChatDriver, compactChatSession, _getActiveChatDriverCountForTest } from './session'
 import { enqueueToInbox } from './inbox'
 import { query } from '../agent/query'
+import { streamAgentCompletion } from '../agent/llm'
+import { COMPACTED_SUMMARY_OPEN } from '../agent/compaction'
+import { createModelView } from '../agent/model-view'
 import type { AgentMessage } from '../agent/messages'
 import type { ChatSessionState } from '../../types/chat'
 import type { ProjectConfig, ProjectSnapshot } from '../../types/project'
@@ -20,7 +23,18 @@ vi.mock('../logging/agent-log', () => ({
   writeAgentLog: vi.fn(),
 }))
 
+// 手动压缩走 runCompaction → streamAgentCompletion（不经上面被 mock 的 query），
+// 摘要调用在此打桩；其余模块保持真实实现。
+vi.mock('../agent/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agent/llm')>()
+  return {
+    ...actual,
+    streamAgentCompletion: vi.fn(),
+  }
+})
+
 const mockedQuery = vi.mocked(query)
+const mockedStream = vi.mocked(streamAgentCompletion)
 
 const stubProject = {
   id: 'proj-test',
@@ -264,5 +278,92 @@ describe('runChatDriver 分层循环（driver 层）', () => {
     )
     expect(steered).toHaveLength(1)
     expect(steered[0]).toMatchObject({ text: '运行中插一句' })
+  })
+})
+
+describe('compactChatSession 手动压缩（/压缩上下文）', () => {
+  beforeEach(() => {
+    mockedStream.mockReset()
+  })
+
+  // 手动压缩专用配置：小阈值 + 不按轮数保留，让 12 条小消息稳定落出可压区间
+  const compactConfig = {
+    llm: { baseUrl: 'https://example.com', apiKey: 'key', model: 'model' },
+    settings: {
+      enableDebugLogging: false,
+      conversationTokenLimit: 1000,
+      compressionKeepRecentTurns: 0,
+    },
+  } as unknown as ProjectConfig
+
+  /** 构造带长历史视图的会话：system + 12 条长消息（每条 ≈100 token，前段落出保留窗口） */
+  function createSessionWithLongHistory(): ChatSessionState {
+    const session = createChatSession('proj-test')
+    const messages: AgentMessage[] = [{ role: 'system', content: '系统提示' }]
+    for (let index = 0; index < 12; index += 1) {
+      messages.push(index % 2 === 0
+        ? { role: 'user', content: '一'.repeat(100) }
+        : { role: 'assistant', content: '一'.repeat(100) })
+    }
+    session.modelView = createModelView(messages)
+    return session
+  }
+
+  it('成功落地：模型视图收缩为摘要，显示层追加「已手动压缩」提示', async () => {
+    const session = createSessionWithLongHistory()
+    const beforeCount = session.modelView!.messages.length
+
+    mockedStream.mockResolvedValue({
+      content: '## Primary Request and Intent\n继续写第二章',
+      toolCalls: [],
+      finishReason: 'stop',
+    })
+
+    const outcome = await compactChatSession({ session, config: compactConfig })
+
+    expect(outcome.kind).toBe('compacted')
+    if (outcome.kind !== 'compacted') return
+    expect(outcome.compactedMessageCount).toBeGreaterThan(0)
+    expect(outcome.originalTokens).toBeGreaterThan(outcome.summaryTokens)
+    // 模型视图写回：system 不动、被压区间替换为检查点摘要消息
+    expect(session.modelView!.messages.length).toBeLessThan(beforeCount)
+    expect(session.modelView!.messages[0].role).toBe('system')
+    expect(session.modelView!.messages[1].content).toContain(COMPACTED_SUMMARY_OPEN)
+    // 显示层追加 context-summary 提示（与自动压缩同 kind，文案区分手动）
+    const summary = session.messages.at(-1)
+    expect(summary).toMatchObject({ role: 'system', kind: 'context-summary' })
+    expect(summary!.kind === 'context-summary' && summary!.summary).toContain('已手动压缩')
+  })
+
+  it('无可压缩区间：不发起摘要调用，视图与显示层都不动', async () => {
+    const session = createChatSession('proj-test')
+    session.modelView = createModelView([
+      { role: 'system', content: '系统提示' },
+      { role: 'user', content: '很短的一轮' },
+    ])
+
+    const outcome = await compactChatSession({ session, config: compactConfig })
+
+    expect(outcome).toEqual({ kind: 'noop', reason: 'nothing-to-compact' })
+    expect(mockedStream).not.toHaveBeenCalled()
+    expect(session.messages).toEqual([])
+    expect(session.modelView!.messages).toHaveLength(2)
+  })
+
+  it('摘要未通过校验：noop 且视图、显示层保持原样', async () => {
+    const session = createSessionWithLongHistory()
+    const viewBefore = [...session.modelView!.messages]
+
+    mockedStream.mockResolvedValue({
+      content: '废'.repeat(2000), // 比被压区间（≈1040 token）还长 → validateSummary 拒绝
+      toolCalls: [],
+      finishReason: 'stop',
+    })
+
+    const outcome = await compactChatSession({ session, config: compactConfig })
+
+    expect(outcome).toEqual({ kind: 'noop', reason: 'summary-rejected' })
+    expect(session.modelView!.messages).toEqual(viewBefore)
+    expect(session.messages).toEqual([])
   })
 })

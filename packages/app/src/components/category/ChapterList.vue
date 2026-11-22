@@ -1,15 +1,29 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ProjectFileNodeView } from '@novai/core/services/types'
+import type { ForeshadowingCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView } from '@novai/core/services/types'
+import { chapterRelatedForeshadowing, FORESHADOWING_STATUS_SHORT_LABELS } from '../../constants/foreshadowing'
+import { chapterRhythmCard } from '../../constants/rhythm'
+import { chapterTimelineEvents } from '../../constants/timeline'
 import { pickDirectoryChildren } from '../../utils/file-tree'
+import AppIcon from '../ui/AppIcon.vue'
+import type { ChapterTimelineEventSummary } from '../../constants/timeline'
 
 const props = defineProps<{
   files: ProjectFileNodeView[]
   activeFilePath?: string
+  /** 全量伏笔摘要（实时反查「本章相关伏笔」用；不传则不显示该区块） */
+  foreshadowingCards?: ForeshadowingCardSummaryView[]
+  /** 全量节奏卡摘要（实时反查「本章节奏卡」用；不传则不显示该区块） */
+  rhythmCards?: RhythmCardSummaryView[]
+  /** 时间线事件摘要（实时反查「本章相关事件」用；不传则不显示该区块） */
+  timelineEvents?: ChapterTimelineEventSummary[]
 }>()
 
 const emit = defineEmits<{
   selectFile: [path: string]
+  openForeshadowing: [id: string]
+  openRhythm: [id: string]
+  openTimelineEvent: [eventId: string]
 }>()
 
 /**
@@ -19,6 +33,25 @@ const emit = defineEmits<{
 const chapterNodes = computed(() => pickDirectoryChildren(props.files, 'chapters'))
 
 const hasChapters = computed(() => chapterNodes.value.length > 0)
+
+/**
+ * 本章相关伏笔（施工计划 §七）：根据伏笔 frontmatter 实时反查——埋设章是本章，
+ * 或暗示历史包含本章。不写入章节文件，章节正文保持纯净（§九）。
+ */
+const relatedForeshadowing = computed(() =>
+  chapterRelatedForeshadowing(props.foreshadowingCards ?? [], props.activeFilePath),
+)
+
+/**
+ * 本章节奏卡（施工计划 §七）：一章一卡，按章号实时反查。不写入章节文件。
+ */
+const rhythmCard = computed(() => chapterRhythmCard(props.rhythmCards ?? [], props.activeFilePath))
+
+/**
+ * 本章相关事件（时间线JSON化改造 §十一）：按事件的章节关联实时反查。
+ * 不写入章节文件；点击打开时间轴并定位该事件详情。
+ */
+const relatedTimelineEvents = computed(() => chapterTimelineEvents(props.timelineEvents ?? [], props.activeFilePath))
 
 /** 每个目录节点的展开状态，key = 目录 path */
 const expandedDirs = ref<Set<string>>(new Set())
@@ -38,11 +71,65 @@ function isDirExpanded(path: string) {
 
 <template>
   <div class="flex h-full flex-col">
-    <div class="px-4 py-3">
+    <div class="flex items-center justify-between px-4 py-3">
       <h2 class="text-sm font-semibold text-white">章节</h2>
+      <!-- 移动端关闭：由 CategoryPanel 注入，并排在标题行右端 -->
+      <slot name="mobile-close" />
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
+      <!-- 本章相关伏笔：选中章节后实时反查（frontmatter），不写入章节文件 -->
+      <div v-if="relatedForeshadowing.length" class="mb-2 rounded-md bg-white/5 px-2 py-2" data-testid="chapter-related-foreshadowing">
+        <p class="px-1 pb-1 text-xs font-medium text-gray-500">本章相关伏笔</p>
+        <ul class="space-y-0.5">
+          <li v-for="card in relatedForeshadowing" :key="card.id">
+            <button
+              class="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+              @click="emit('openForeshadowing', card.id)"
+            >
+              <AppIcon name="eye-off" :size="12" class="h-3 w-3 shrink-0 text-gray-600" />
+              <span class="flex-1 truncate">{{ card.name }}</span>
+              <span class="shrink-0 text-gray-600">{{ FORESHADOWING_STATUS_SHORT_LABELS[card.status] }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 本章节奏卡：选中章节后按章号实时反查（一章一卡），不写入章节文件 -->
+      <div v-if="rhythmCard" class="mb-2 rounded-md bg-white/5 px-2 py-2" data-testid="chapter-rhythm-card">
+        <p class="px-1 pb-1 text-xs font-medium text-gray-500">本章节奏卡</p>
+        <button
+          class="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+          @click="emit('openRhythm', rhythmCard.id)"
+        >
+          <AppIcon name="activity" :size="12" class="h-3 w-3 shrink-0 text-gray-600" />
+          <span class="flex-1 truncate">{{ rhythmCard.name }}</span>
+          <span
+            :class="['shrink-0', rhythmCard.status === 'deviated' ? 'text-red-400' : 'text-gray-600']"
+          >{{ rhythmCard.status === 'planned' ? '规划' : rhythmCard.status === 'written' ? '已写' : '偏差' }}</span>
+        </button>
+        <p class="px-1 pt-0.5 text-[10px] text-gray-600">
+          计划 冲突 {{ rhythmCard.plannedConflict }} · {{ rhythmCard.plannedMood }} · 钩子 {{ rhythmCard.plannedHook }} · {{ rhythmCard.plannedPayoff }}
+        </p>
+      </div>
+
+      <!-- 本章相关事件：选中章节后按事件章节关联实时反查，不写入章节文件 -->
+      <div v-if="relatedTimelineEvents.length" class="mb-2 rounded-md bg-white/5 px-2 py-2" data-testid="chapter-related-timeline-events">
+        <p class="px-1 pb-1 text-xs font-medium text-gray-500">本章相关事件</p>
+        <ul class="space-y-0.5">
+          <li v-for="event in relatedTimelineEvents" :key="event.eventId">
+            <button
+              class="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+              @click="emit('openTimelineEvent', event.eventId)"
+            >
+              <AppIcon name="timeline" :size="12" class="h-3 w-3 shrink-0 text-gray-600" />
+              <span class="flex-1 truncate">{{ event.title }}</span>
+              <span class="shrink-0 text-gray-600">{{ event.kind === 'span' ? '区间' : '点' }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <!-- 空状态：chapters/ 目录为空或不存在 -->
       <div v-if="!hasChapters" class="px-2 py-8 text-center">
         <p class="mb-1 text-sm text-gray-400">还没有章节</p>
@@ -58,24 +145,9 @@ function isDirExpanded(path: string) {
             class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
             @click="toggleDir(node.path)"
           >
-            <svg
-              :class="['h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', isDirExpanded(node.path) ? 'rotate-90' : '']"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-            </svg>
-            <svg class="h-4 w-4 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                v-if="isDirExpanded(node.path)"
-                stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z"
-              />
-              <path
-                v-else
-                stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-              />
-            </svg>
+            <AppIcon name="chevron-right" :size="14" :class="['h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', isDirExpanded(node.path) ? 'rotate-90' : '']" />
+            <AppIcon v-if="isDirExpanded(node.path)" name="folder-open" :size="16" class="h-4 w-4 shrink-0 text-gray-500" />
+            <AppIcon v-else name="folder" :size="16" class="h-4 w-4 shrink-0 text-gray-500" />
             <span class="flex-1 truncate">{{ node.name }}</span>
             <span class="shrink-0 text-xs text-gray-500">{{ node.children?.length ?? 0 }}</span>
           </button>
@@ -112,9 +184,7 @@ function isDirExpanded(path: string) {
             ]"
             @click="emit('selectFile', node.path)"
           >
-            <svg class="h-4 w-4 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+            <AppIcon name="file-text" :size="16" class="h-4 w-4 shrink-0 text-gray-500" />
             <span class="truncate">{{ node.name }}</span>
           </button>
         </li>

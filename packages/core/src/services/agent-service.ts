@@ -1,3 +1,5 @@
+import { RELATION_LEDGER_PATH } from '../types/relation'
+import { TIMELINE_LEDGER_PATH } from '../types/timeline'
 import {
   createChatSession,
   enqueueChatMessage,
@@ -5,8 +7,10 @@ import {
   wakeChatDriver,
   stopChatDriver,
   isChatDriverActive,
+  compactChatSession,
   DEFAULT_SESSION_TITLE,
   deriveSessionTitle,
+  type ManualCompactionOutcome,
   type SessionEvent,
 } from '../core/chat/session'
 import {
@@ -26,6 +30,11 @@ import { deriveChatTargetFromPath } from '../core/chat/target'
 import { readNovAiOverview, readOutlinePrompt, readSystemPrompt } from '../core/fs/project-fs'
 import { countDiffLines } from '../core/tools/file-tools/diff-line-stats'
 import type { ConfirmHandler } from '../core/agent/tool-execution'
+import type {
+  AskUserQuestionHandler,
+  AskUserQuestionInput,
+  AskUserQuestionOutput,
+} from '../core/agent/ask-user-question'
 import { INIT_NOVEL_PROMPT } from '../core/agent/init-novel-prompt'
 import {
   ELEMENT_MANAGER_TASK_PROMPT,
@@ -55,11 +64,17 @@ export { INIT_NOVEL_PROMPT }
  */
 export { ELEMENT_MANAGER_TASK_PROMPT }
 
+/** 手动压缩（/压缩上下文）的结果类型，app 层据 kind 与 reason 写状态栏文案。 */
+export type { ManualCompactionOutcome }
+
 import {
+  getRuntimeProject,
   requireRuntimeProject,
 } from './project-runtime'
 import type {
   AgentUiEvent,
+  AskUserQuestionAnswerView,
+  AskUserQuestionRequestView,
   ChangedFileView,
   FileChangeRecordView,
   ChatHistoryPageView,
@@ -117,12 +132,68 @@ function broadcastSessionConfirmations(sessionId: string): void {
   })
 }
 
+// 提问注册表（仿确认链）：questionId -> resolve。AskUserQuestion 工具在 run 内
+// await 提问回调挂起，UI 调 respondQuestion/skipQuestion 时 resolve，Agent Loop
+// 以工具结果继续。与确认链同构的关键差异：resolve 前先原位补全提问卡消息的
+// answer 字段（会话对象共享，session.messages 里的卡随之只读化）。
+type PendingQuestion = {
+  /** 提问请求 id（= 工具调用 id = 提问卡消息的 questionId） */
+  questionId: string
+  projectId: string
+  sessionId: string
+  /** 提问请求视图快照（questions-updated 广播与会话徽标用） */
+  view: AskUserQuestionRequestView
+  resolve: (output: AskUserQuestionOutput) => void
+}
+const questionMap = new Map<string, PendingQuestion>()
+
+/** 某会话当前的待回答提问快照（按注册顺序）；questions-updated 事件的载荷。 */
+function snapshotPendingQuestions(sessionId: string): AskUserQuestionRequestView[] {
+  return [...questionMap.values()]
+    .filter((pending) => pending.sessionId === sessionId)
+    .map((pending) => pending.view)
+}
+
+/** 广播某会话的待回答快照（提问注册/resolve 后调用；会话列表徽标据此更新）。 */
+function broadcastSessionQuestions(sessionId: string): void {
+  broadcastAgentEvent({
+    type: 'questions-updated',
+    sessionId,
+    questions: snapshotPendingQuestions(sessionId),
+  })
+}
+
 /** 每个项目当前激活的会话 id；新建/切换/删除时维护。 */
 const activeSessionByProject = new Map<string, string>()
 
 /**
+ * 会话是否处于不可淘汰状态（数据安全计划 §3-4「会话持久化」）：driver 活跃
+ * （运行中）、有未决写确认（等待用户确认）或有待回答提问（等待用户回答）。
+ * 这些会话被 LRU 淘汰后，归档/回答等操作会从盘读回旧副本改字段再整份写回，
+ * 被收尾的运行状态覆盖（归档丢失、答案回退）；空闲会话不受保护。
+ */
+function isSessionEvictionProtected(sessionId: string): boolean {
+  if (isChatDriverActive(sessionId)) {
+    return true
+  }
+  for (const pending of confirmationMap.values()) {
+    if (pending.sessionId === sessionId) {
+      return true
+    }
+  }
+  for (const pending of questionMap.values()) {
+    if (pending.sessionId === sessionId) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
  * 写入会话缓存：delete 后 set 把条目移到 Map 末尾（标记为最近使用），
- * 再在超限时淘汰头部（最旧）。所有缓存插入统一走这里，保证 LRU 一致性。
+ * 再在超限时淘汰最旧的未保护条目。所有缓存插入统一走这里，保证 LRU 一致性。
+ * 运行中/等待确认/等待提问的会话跳过淘汰（宁可超容驻留，也不让旧副本写回）；
+ * 它们回到空闲后，下一次 cacheSession 触发时会重新收敛到容量上限内。
  *
  * 导出仅供单测直接驱动缓存（验证 LRU 淘汰 / 项目级清理），业务代码不应直接调用。
  */
@@ -130,22 +201,79 @@ export function cacheSession(session: ChatSessionState) {
   sessionMap.delete(session.sessionId)
   sessionMap.set(session.sessionId, session)
   while (sessionMap.size > MAX_CACHED_SESSIONS) {
-    const oldest = sessionMap.keys().next().value
-    if (oldest === undefined) {
+    const evictable = Array.from(sessionMap.keys()).find((id) => !isSessionEvictionProtected(id))
+    if (evictable === undefined) {
       break
     }
-    sessionMap.delete(oldest)
+    sessionMap.delete(evictable)
   }
 }
 
+// ---------- 会话串行保存队列（数据安全计划 §3-4） ----------
+// 同一会话的保存请求（提问、回答、归档、恢复、重命名、任务收尾）按发生顺序串行
+// 执行；真正写盘前重新取权威快照（缓存命中的同一对象），先启动的旧快照不会后写盘。
+// 不同会话各自一条队列互不阻塞——不以全局锁拖慢整个工作台。
+const sessionSaveQueues = new Map<string, Promise<void>>()
+
 /**
- * 项目级清理：移除该项目的所有驻留会话 + 激活态。
+ * 把一次会话落盘排进该会话的串行队列。
+ *
+ * - 写盘前再查一次墓碑：删除会话与在途保存并发时，晚到的写不得复活刚删的文件；
+ * - 快照取 sessionMap 里的当前对象（各路径的修改都累积在同一对象上）；已被淘汰的
+ *   空闲会话回退用入队时的对象；
+ * - background 标签供 fire-and-forget 路径（提问卡/回答落盘）：失败广播
+ *   session-save-failed（可观测），而不是 `.catch(() => {})` 静默吞掉；缺省失败
+ *   直接抛给调用方（归档/重命名等 await 路径自带界面反馈）。
+ */
+function enqueueSessionSave(input: {
+  project: ProjectSnapshot
+  session: ChatSessionState
+  options?: { touchUpdatedAt?: boolean }
+  /** fire-and-forget 场景标签（写入 session-save-failed 的 reason） */
+  background?: string
+}): Promise<void> {
+  const sessionId = input.session.sessionId
+  const prev = sessionSaveQueues.get(sessionId) ?? Promise.resolve()
+  const run = prev
+    .catch(() => {}) // 前一次失败不断链：后续保存照常执行
+    .then(async () => {
+      if (deletedSessionIds.has(sessionId)) {
+        return
+      }
+      const authoritative = sessionMap.get(sessionId) ?? input.session
+      await saveSession(input.project, authoritative, input.options)
+    })
+  sessionSaveQueues.set(sessionId, run)
+  const cleanup = () => {
+    if (sessionSaveQueues.get(sessionId) === run) {
+      sessionSaveQueues.delete(sessionId)
+    }
+  }
+  void run.then(cleanup, cleanup)
+  const background = input.background
+  if (background !== undefined) {
+    void run.catch((error) => {
+      broadcastAgentEvent({
+        type: 'session-save-failed',
+        sessionId,
+        projectId: input.project.id,
+        reason: background,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+  return run
+}
+
+/**
+ * 项目级清理：移除该项目的所有驻留会话 + 激活态 + 串行保存队列。
  * 供 closeProject / deleteRecentProject 在释放运行时项目时调用，避免历史会话累积泄漏。
  */
 export function evictProjectSessions(projectId: string) {
   for (const [id, session] of sessionMap) {
     if (session.projectId === projectId) {
       sessionMap.delete(id)
+      sessionSaveQueues.delete(id)
     }
   }
   for (const [id, tombstoneProjectId] of deletedSessionIds) {
@@ -160,10 +288,12 @@ export function evictProjectSessions(projectId: string) {
 /** 测试专用：重置 module-global 缓存，避免用例间状态串扰。 */
 export function _clearSessionCacheForTest() {
   sessionMap.clear()
+  sessionSaveQueues.clear()
   activeSessionByProject.clear()
   lastActiveFilePathByProject.clear()
   deletedSessionIds.clear()
   confirmationMap.clear()
+  questionMap.clear()
 }
 
 /** 测试专用：读取当前缓存内的 sessionId 列表（按 LRU 顺序，最近使用在末尾）。 */
@@ -187,7 +317,7 @@ export async function createSession(
   activeSessionByProject.set(projectId, session.sessionId)
 
   // 新建即落盘，确保列表能立即看到（即便用户还没发消息）
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
 
   return toChatSessionView(session)
 }
@@ -258,10 +388,48 @@ export async function listSessions(
     projectId,
     ...(meta.agent ? { agent: meta.agent } : {}),
     title: meta.title,
+    ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
+    status: meta.status,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     messageCount: meta.messageCount,
   }))
+}
+
+/**
+ * 归档/恢复会话（交互优化计划 §3.3）：只改 archivedAt，不改 updatedAt、不停止
+ * 运行中的 driver——归档是列表归类行为，会话本身照常收尾落盘（落盘的快照里
+ * archivedAt 已在，driver 复写不会丢）。返回更新后的摘要视图供前端即时刷新。
+ */
+export async function archiveAgentSession(
+  projectId: string,
+  sessionId: string,
+  archived: boolean,
+): Promise<ChatSessionSummaryView> {
+  const project = requireRuntimeProject(projectId)
+  const session = await resolveSession(projectId, sessionId)
+  if (!session) {
+    throw new Error(`会话不存在或已删除：${sessionId}`)
+  }
+
+  if (archived) {
+    session.archivedAt = new Date().toISOString()
+  } else {
+    delete session.archivedAt
+  }
+  await enqueueSessionSave({ project, session, options: { touchUpdatedAt: false } })
+
+  return {
+    sessionId: session.sessionId,
+    projectId,
+    ...(session.agent ? { agent: session.agent } : {}),
+    ...(session.archivedAt ? { archivedAt: session.archivedAt } : {}),
+    status: session.status,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messageCount: session.messages.length,
+  }
 }
 
 /** 重命名会话标题（只改 state.title，不动文件名）。返回更新后的视图。 */
@@ -277,22 +445,30 @@ export async function renameSession(
   }
 
   session.title = title.trim() || DEFAULT_SESSION_TITLE
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
 
   return toChatSessionView(session)
 }
 
-/** 已删除会话的墓碑（id → projectId）：driver 收尾回调据此静默丢弃，避免 saveSession 复活刚删的文件。不用 sessionMap 存在性判断——LRU 淘汰同样会把运行中会话移出缓存，会误伤正常收尾。 */
+/** 已删除会话的墓碑（id → projectId）：driver 收尾、串行保存队列写盘与缓存未命中的读盘据此静默跳过，避免在途操作把刚删的会话文件复活。不用 sessionMap 存在性判断——受保护会话之外仍可能被淘汰，存在性会误伤正常收尾。 */
 const deletedSessionIds = new Map<string, string>()
 
-/** 删除会话：先停 driver（运行中的会话被删后，收尾落盘会把刚删的文件复活），再删文件 + 移出内存；若删的是激活会话则激活置空（由前端决定后续切到哪条）。 */
+/** 删除会话：先停 driver（运行中的会话被删后，收尾落盘会把刚删的文件复活），再排空该会话的串行保存队列（删除必然落在最后一次保存之后），最后删文件 + 移出内存；若删的是激活会话则激活置空（由前端决定后续切到哪条）。 */
 export async function deleteSession(projectId: string, sessionId: string): Promise<void> {
   const project = requireRuntimeProject(projectId)
 
   stopChatDriver(sessionId)
   deletedSessionIds.set(sessionId, projectId)
+  // 挂起的提问一并取消（resolve 为 cancelled）：注册表不能遗留指向已删会话的条目
+  cancelPendingSessionQuestions(sessionId)
+  // 排空在途保存：写与删同经队列定序，删文件不会插进两次保存之间
+  const pending = sessionSaveQueues.get(sessionId)
+  if (pending) {
+    await pending.catch(() => {})
+  }
   await deleteSessionFile(project, sessionId)
   sessionMap.delete(sessionId)
+  sessionSaveQueues.delete(sessionId)
 
   if (activeSessionByProject.get(projectId) === sessionId) {
     activeSessionByProject.delete(projectId)
@@ -301,7 +477,8 @@ export async function deleteSession(projectId: string, sessionId: string): Promi
 
 /**
  * 取会话状态：内存优先，未命中则从盘读入并缓存。
- * 这是 sessionMap 多会话化后的统一读取入口。
+ * 这是 sessionMap 多会话化后的统一读取入口。已删会话（墓碑）缓存未命中时
+ * 不得从盘读回——在途写复活文件后，这里会把已删会话重新加载进保存流程。
  */
 async function resolveSession(
   projectId: string,
@@ -312,6 +489,10 @@ async function resolveSession(
     // 命中即回插，刷新 LRU 顺序（最近使用移到末尾）
     cacheSession(cached)
     return cached
+  }
+
+  if (deletedSessionIds.has(sessionId)) {
+    return null
   }
 
   const project = requireRuntimeProject(projectId)
@@ -372,6 +553,11 @@ export async function enqueueMessage(input: {
   projectId: string
   sessionId?: string
   text: string
+  /**
+   * 气泡显示文本（显示/指令分离，交互优化计划 §3.2）：斜杠命令发送时由 app 层传
+   * 用户原草稿，text 为展开后的驱动 prompt。缺省即普通消息（渲染 text）。
+   */
+  displayLabel?: string
   quote?: string
   mode: 'queue' | 'steer'
   /** 发送时打开的文件路径（隐式上下文，目标解析用快照） */
@@ -403,9 +589,11 @@ export async function enqueueMessage(input: {
     quote: input.quote,
     // 消息级快照：排队执行时按「发送那一刻」的文件解析目标，不被后来的入队覆盖
     ...(input.activeFilePath !== undefined ? { activeFilePath: input.activeFilePath } : {}),
+    // 显示/指令分离：气泡、队列与自动标题用用户原草稿，内部 prompt 不外露
+    ...(input.displayLabel !== undefined ? { displayLabel: input.displayLabel } : {}),
   })
   // 耐久入队先于唤醒（刷新后队列还在，不自动消费）
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
   broadcastQueueUpdated(session)
 
   void wakeSessionDriver({
@@ -415,7 +603,8 @@ export async function enqueueMessage(input: {
     titleContext: {
       hadNoUserMessage,
       titleBeforeRun,
-      firstUserText: input.text,
+      // 自动标题取用户原草稿（斜杠命令显示命令名+参数，不暴露内部 prompt 全文）
+      firstUserText: input.displayLabel ?? input.text,
     },
   })
   return { sessionId: session.sessionId }
@@ -426,7 +615,8 @@ export async function updateQueuedMessage(input: {
   projectId: string
   sessionId: string
   id: string
-  action: { kind: 'edit'; text: string } | { kind: 'remove' } | { kind: 'steer' }
+  /** edit：text 为展开后的驱动指令，displayLabel 为新显示草稿（编辑重推导，app 层负责展开） */
+  action: { kind: 'edit'; text: string; displayLabel?: string } | { kind: 'remove' } | { kind: 'steer' }
 }): Promise<void> {
   const project = requireRuntimeProject(input.projectId)
   const session = await resolveSession(input.projectId, input.sessionId)
@@ -435,7 +625,7 @@ export async function updateQueuedMessage(input: {
   }
 
   if (input.action.kind === 'edit') {
-    session.inbox = replaceInInbox(session.inbox, input.id, input.action.text)
+    session.inbox = replaceInInbox(session.inbox, input.id, input.action.text, input.action.displayLabel)
   } else if (input.action.kind === 'remove') {
     session.inbox = removeFromInbox(session.inbox, input.id)
   } else {
@@ -446,18 +636,79 @@ export async function updateQueuedMessage(input: {
     session.inbox = moveToNextStep(session.inbox, input.id)
   }
 
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
   broadcastQueueUpdated(session)
 }
 
-/** 停止指定会话的运行：abort 当前 turn + 清闩锁；队列保留不自动续跑。 */
+/**
+ * 停止指定会话的运行：abort 当前 turn + 清闩锁；队列保留不自动续跑。
+ * 挂起提问按取消、挂起确认按拒绝 resolve（§8：停止运行后服务层收敛等待状态，
+ * 不留下永久等待；abort 中断的 confirm await 只丢弃 Promise，注册表条目由此处清出）。
+ */
 export function stopAgentRun(sessionId: string): void {
   stopChatDriver(sessionId)
+  cancelPendingSessionQuestions(sessionId)
+  rejectPendingSessionConfirmations(sessionId)
 }
 
 /** 指定会话的 driver 是否活着（store 切换会话时恢复 isRunning 用）。 */
 export function isAgentRunActive(sessionId: string): boolean {
   return isChatDriverActive(sessionId)
+}
+
+/**
+ * 手动压缩会话上下文（/压缩上下文）：驱动器空闲时把当前模型视图的早期历史
+ * 浓缩为检查点摘要并落盘；压缩产生的 context-summary 消息即时广播给 UI。
+ * 运行中的会话拒绝手动压缩——driver 正持有同一视图，并发改写会互相踩。
+ */
+export async function compactSession(input: {
+  projectId: string
+  sessionId: string
+}): Promise<ManualCompactionOutcome> {
+  const project = requireRuntimeProject(input.projectId)
+  const session = await resolveSession(input.projectId, input.sessionId)
+  if (!session) {
+    throw new Error(`会话不存在或已删除：${input.sessionId}`)
+  }
+  if (isChatDriverActive(session.sessionId)) {
+    throw new Error('会话运行中不能手动压缩，请等待本轮结束或先停止运行')
+  }
+
+  // 特化角色（要素管理员直聊）用其覆盖模型配置生成摘要，与运行时口径一致
+  const role = getAgentRole(session.agent)
+  const effectiveConfig = role.mergeConfig?.(project.config) ?? project.config
+
+  const outcome = await compactChatSession({ session, config: effectiveConfig })
+
+  // 本地命令状态行（§3.2）：执行结果落成紧凑消息随会话持久化，刷新后在原位可查。
+  // 排队中/执行中不落消息（状态栏就地反馈）；driver 忙的拒绝在 UI 层提示，不落盘。
+  const statusLine: ChatMessage = {
+    id: createMessageId(),
+    role: 'system',
+    kind: 'local-command',
+    command: '/压缩上下文',
+    outcome: outcome.kind === 'compacted' ? 'completed' : outcome.kind === 'noop' && outcome.reason === 'nothing-to-compact' ? 'noop' : 'failed',
+    summary: outcome.kind === 'compacted'
+      ? `已压缩 ${outcome.compactedMessageCount} 条早期消息（约 ${outcome.originalTokens} → ${outcome.summaryTokens} token）`
+      : outcome.kind === 'noop' && outcome.reason === 'nothing-to-compact'
+        ? '没有可压缩的早期历史，未做修改'
+        : '压缩摘要未通过校验，上下文未改动',
+    ...(outcome.kind === 'noop' && outcome.reason === 'summary-rejected'
+      ? { detail: '生成的摘要内容未通过长度/格式校验（宁缺毋滥防线），本次上下文保持原样，可稍后重试。' }
+      : {}),
+    createdAt: new Date().toISOString(),
+  }
+  session.messages = [...session.messages, statusLine]
+  await enqueueSessionSave({ project, session })
+  emitMessageEvent(statusLine, session.sessionId, session.changeLedger)
+
+  if (outcome.kind === 'compacted') {
+    const summary = session.messages[session.messages.length - 2]
+    if (summary) {
+      emitMessageEvent(summary, session.sessionId, session.changeLedger)
+    }
+  }
+  return outcome
 }
 
 type DriverTitleContext = {
@@ -500,6 +751,12 @@ async function buildSessionTurnInput(input: {
       role.id === 'main' ? request : { ...request, agentLabel: role.displayName },
     )
 
+  // 主动提问回调：仅主智能体（要素管理员直聊/委派不问用户，工具面里也没装该工具）。
+  // 构造 → 广播 question-required → 等 UI 调 respondQuestion/skipQuestion → resolve 回灌。
+  const askUser: AskUserQuestionHandler | undefined = role.id === 'main'
+    ? (input) => requestQuestion(session.sessionId, project.id, input)
+    : undefined
+
   return {
     // 指令走收件箱首批，driver 不直接消费 instruction/quote
     instruction: '',
@@ -512,6 +769,7 @@ async function buildSessionTurnInput(input: {
       ? input.activeFilePath
       : lastActiveFilePathByProject.get(project.id) ?? null,
     confirm,
+    ...(askUser ? { askUser } : {}),
   }
 }
 
@@ -554,6 +812,7 @@ function createSessionEventForwarder(session: ChatSessionState, ledgerBaseline: 
     for (; emittedLedgerCount < ledger.length; emittedLedgerCount += 1) {
       broadcastAgentEvent({
         type: 'file-changed',
+        projectId: session.projectId,
         sessionId: session.sessionId,
         file: toFileChangeRecordView(ledger[emittedLedgerCount]),
       })
@@ -572,6 +831,8 @@ async function finalizeSuccessfulRun(options: {
   session: ChatSessionState
   ledgerBaseline: number
   titleContext?: DriverTitleContext
+  /** 本次连续运行的标识（driver-start 时生成）：随 run-finish 广播，UI 据此识别过期收尾 */
+  runId: string
 }): Promise<void> {
   const { project, session, ledgerBaseline } = options
 
@@ -579,6 +840,7 @@ async function finalizeSuccessfulRun(options: {
   // 此时 saveSession 会把刚删的会话文件复活，广播也会指向不存在的会话。
   if (deletedSessionIds.has(session.sessionId)) {
     rejectPendingSessionConfirmations(session.sessionId)
+    cancelPendingSessionQuestions(session.sessionId)
     return
   }
 
@@ -588,7 +850,7 @@ async function finalizeSuccessfulRun(options: {
     session.title = deriveSessionTitle(titleContext.firstUserText)
   }
   cacheSession(session)
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
 
   const turnChanges = (session.changeLedger ?? []).slice(ledgerBaseline).map(toFileChangeRecordView)
   const result: RunAgentTurnResult = {
@@ -599,23 +861,26 @@ async function finalizeSuccessfulRun(options: {
     sessionChangedFileCount: countSessionChangedFiles(session),
     session: toChatSessionView(session),
   }
-  broadcastAgentEvent({ type: 'run-finish', sessionId: session.sessionId, result })
+  broadcastAgentEvent({ type: 'run-finish', runId: options.runId, sessionId: session.sessionId, result })
 }
 
-/** driver 出错的统一收尾：清理该会话未决确认（避免注册表泄漏/UI 卡等待态）→ 落盘 → run-error。 */
+/** driver 出错的统一收尾：清理该会话未决确认与提问（避免注册表泄漏/UI 卡等待态）→ 落盘 → run-error。 */
 async function handleFailedRun(options: {
   project: ProjectSnapshot
   session: ChatSessionState
   error: unknown
+  /** 本次连续运行的标识（driver-start 时生成）：随 run-error 广播，UI 据此识别过期收尾 */
+  runId: string
 }): Promise<void> {
   const { project, session } = options
   rejectPendingSessionConfirmations(session.sessionId)
+  cancelPendingSessionQuestions(session.sessionId)
   // 会话已删：静默丢弃（saveSession 会复活刚删的会话文件，广播也会指向不存在的会话）。
   if (deletedSessionIds.has(session.sessionId)) {
     return
   }
-  await saveSession(project, session)
-  broadcastAgentEvent({ type: 'run-error', sessionId: session.sessionId, error: toNovAiError(options.error) })
+  await enqueueSessionSave({ project, session })
+  broadcastAgentEvent({ type: 'run-error', runId: options.runId, sessionId: session.sessionId, error: toNovAiError(options.error) })
 }
 
 /**
@@ -635,6 +900,11 @@ async function wakeSessionDriver(options: {
 
   const turnInput = await buildSessionTurnInput({ project, session })
 
+  // 本次连续运行的标识：driver-start 时生成一次，start/finish/error 三处广播同值——
+  // UI 据此识别收尾事件是否属于当前运行（F8 运行身份），不受「停止后立即重发」的
+  // 旧 driver 晚到收尾干扰
+  let runId = createRunId()
+
   wakeChatDriver({
     session,
     input: {
@@ -647,15 +917,21 @@ async function wakeSessionDriver(options: {
     onEvent: createSessionEventForwarder(session, ledgerBaseline),
     onLifecycle(event) {
       if (event.type === 'driver-start') {
-        broadcastAgentEvent({ type: 'run-start', runId: createRunId(), sessionId: session.sessionId })
+        // 会话已删（删除与在途唤醒并发）：不广播 run-start——UI 的运行标记不复活；
+        // driver 会继续跑到收尾，finalize/handleFailed 的墓碑静默兜底
+        if (deletedSessionIds.has(session.sessionId)) {
+          return
+        }
+        runId = createRunId()
+        broadcastAgentEvent({ type: 'run-start', runId, sessionId: session.sessionId })
         return
       }
       void (async () => {
         if (event.type === 'driver-error') {
-          await handleFailedRun({ project, session, error: event.error })
+          await handleFailedRun({ project, session, error: event.error, runId })
           return
         }
-        await finalizeSuccessfulRun({ project, session, ledgerBaseline, titleContext })
+        await finalizeSuccessfulRun({ project, session, ledgerBaseline, titleContext, runId })
       })()
     },
   })
@@ -676,8 +952,7 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
   const session = createChatSession(project.id, { agent: 'element-manager' })
   session.title = deriveSessionTitle(input.task)
   cacheSession(session)
-  await saveSession(project, session)
-  session.updatedAt = new Date().toISOString()
+  await enqueueSessionSave({ project, session }) // 原地盖 updatedAt：内存与落盘同值
   broadcastAgentEvent({
     type: 'session-created',
     sessionId: session.sessionId,
@@ -687,6 +962,7 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
       sessionId: session.sessionId,
       projectId: project.id,
       agent: 'element-manager',
+      status: session.status,
       title: session.title,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
@@ -696,12 +972,14 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
 
   // 任务入队（收件箱首批）→ 落盘 + 队列快照广播（用户此刻打开委派会话能看到排队中的任务）
   enqueueChatMessage(session, 'next-turn', { text: taskText })
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
   broadcastQueueUpdated(session)
 
   const ledgerBaseline = session.changeLedger?.length ?? 0
   const turnInput = await buildSessionTurnInput({ project, session, activeFilePath: null })
-  broadcastAgentEvent({ type: 'run-start', runId: createRunId(), sessionId: session.sessionId })
+  // 运行身份（F8）：委派会话的 start/finish/error 同值 runId
+  const runId = createRunId()
+  broadcastAgentEvent({ type: 'run-start', runId, sessionId: session.sessionId })
 
   try {
     // 主 driver 的停止信号随 input 传入：用户停主会话时，委派会话一并优雅停止
@@ -711,11 +989,11 @@ const delegationSessionRunner: DelegationSessionRunner = async (input) => {
       onEvent: createSessionEventForwarder(session, ledgerBaseline),
     })
   } catch (error) {
-    await handleFailedRun({ project, session, error })
+    await handleFailedRun({ project, session, error, runId })
     return toDelegationResult(session, true)
   }
 
-  await finalizeSuccessfulRun({ project, session, ledgerBaseline })
+  await finalizeSuccessfulRun({ project, session, ledgerBaseline, runId })
   return toDelegationResult(session)
 }
 
@@ -761,7 +1039,7 @@ async function resolveActiveOrCreate(projectId: string): Promise<ChatSessionStat
   const session = createChatSession(projectId)
   cacheSession(session)
   activeSessionByProject.set(projectId, session.sessionId)
-  await saveSession(project, session)
+  await enqueueSessionSave({ project, session })
   return session
 }
 
@@ -794,10 +1072,17 @@ function requestConfirmation(
   })
 }
 
-/** UI 调用：响应对某次写工具确认的接受/拒绝，唤醒等待中的 Agent Loop。 */
-export function respondConfirmation(confirmationId: string, accepted: boolean) {
+/**
+ * UI 调用：响应对某次写工具确认的接受/拒绝，唤醒等待中的 Agent Loop。
+ * expectedSessionId 供调用方自证会话归属（§8 按会话路由不串答）：携带且与注册时不符
+ * 视为误触，不 resolve 不广播。
+ */
+export function respondConfirmation(confirmationId: string, accepted: boolean, expectedSessionId?: string) {
   const pending = confirmationMap.get(confirmationId)
   if (!pending) {
+    return
+  }
+  if (expectedSessionId !== undefined && pending.sessionId !== expectedSessionId) {
     return
   }
   confirmationMap.delete(confirmationId)
@@ -816,12 +1101,197 @@ function rejectPendingSessionConfirmations(sessionId: string) {
   broadcastSessionConfirmations(sessionId)
 }
 
+/**
+ * 构造一次主动提问（仿确认链）：注册挂起 Promise → 广播 question-required →
+ * Agent Loop 在 askUser 回调里 await 它，直到 UI 调 respondQuestion/skipQuestion。
+ * questionId 由调用方（AskUserQuestion 工具 run）生成并透传，与工具调用 id 同值——
+ * 提问卡消息据此关联。
+ */
+function requestQuestion(
+  sessionId: string,
+  projectId: string,
+  input: { question: AskUserQuestionInput; toolCallId: string },
+): Promise<AskUserQuestionOutput> {
+  const questionId = input.toolCallId || createRunId()
+  const view: AskUserQuestionRequestView = {
+    questionId,
+    question: input.question.question,
+    ...(input.question.header ? { header: input.question.header } : {}),
+    ...(input.question.options ? { options: input.question.options.map((option) => ({ ...option })) } : {}),
+    ...(input.question.multiSelect ? { multiSelect: true } : {}),
+    createdAt: new Date().toISOString(),
+  }
+
+  // 先注册后广播：监听方可能在事件回调里立即 respondQuestion（测试/UI 即时响应），
+  // 注册必须先于 question-required 广播可达（与确认链同款次序约定）。
+  return new Promise<AskUserQuestionOutput>((resolve) => {
+    questionMap.set(questionId, { questionId, projectId, sessionId, view, resolve })
+
+    // 提问卡消息：在校验已过、挂起已注册的点成卡（session 层只留普通工具行）。
+    // 位置在提问工具行之后（工具行由 session.ts 先推）、工具结果之前——卡片即
+    // 用户交互主体，答案由 finalizeQuestion 据 questionId 原位补全。
+    // 会话被 LRU 淘汰时不推卡（罕见；question-required 事件本身带全部渲染数据）。
+    const session = sessionMap.get(sessionId)
+    if (session) {
+      const card: ChatMessage = {
+        id: createMessageId(),
+        role: 'system',
+        kind: 'ask-user-question',
+        questionId,
+        question: view.question,
+        ...(view.header ? { header: view.header } : {}),
+        ...(view.options ? { options: view.options.map((option) => ({ ...option })) } : {}),
+        ...(view.multiSelect ? { multiSelect: true } : {}),
+        createdAt: view.createdAt,
+      }
+      session.messages = [...session.messages, card]
+      session.updatedAt = new Date().toISOString()
+      broadcastAgentEvent({
+        type: 'message',
+        sessionId,
+        message: toChatMessageView(card, session.changeLedger),
+      })
+      // 问题提出即落盘（不等回答/收尾）：等待期间刷新页面后，历史中的问题保持可见
+      // （计划「停止、异常与刷新」——未回答卡片标记等待已中断，靠的就是这份持久化）。
+      // fire-and-forget 走串行队列 + background 标签：失败广播可观测事件，不静默吞掉。
+      const project = getRuntimeProject(projectId)
+      if (project) {
+        void enqueueSessionSave({ project, session, background: '提问卡落盘' })
+      }
+    }
+
+    broadcastAgentEvent({ type: 'question-required', sessionId, request: view })
+    // 待回答快照随注册广播：非激活会话据此点亮列表徽标（与 confirmations-updated 同构）
+    broadcastSessionQuestions(sessionId)
+  })
+}
+
+/**
+ * UI 调用：提交对某次提问的回答（所选标签 + 自由文本）。校验规则（计划「输入校验」）：
+ * 至少一个所选标签或非空文本；标签必须在原问题的候选项内；多选完整保留。
+ * 回答先原位补全提问卡消息（卡片只读化 + 广播），再 resolve 唤醒等待中的 Agent Loop。
+ */
+export function respondQuestion(input: {
+  questionId: string
+  selectedLabels: string[]
+  text: string
+}): void {
+  const pending = questionMap.get(input.questionId)
+  if (!pending) {
+    return
+  }
+
+  const selected = input.selectedLabels.map((label) => label.trim()).filter(Boolean)
+  const unknown = selected.filter(
+    (label) => !(pending.view.options ?? []).some((option) => option.label === label),
+  )
+  if (unknown.length > 0) {
+    throw new Error(`回答包含问题候选项之外的标签：${unknown.join('、')}`)
+  }
+  const text = input.text.trim()
+  if (selected.length === 0 && !text) {
+    throw new Error('回答不能为空：请至少选择一个候选项或填写补充说明')
+  }
+
+  finalizeQuestion(pending, {
+    selectedLabels: selected,
+    text,
+    outcome: 'answered',
+  })
+}
+
+/** UI 调用：跳过某次提问。返回明确取消结局，Agent 在不获得答案的情况下自行调整。 */
+export function skipQuestion(questionId: string): void {
+  const pending = questionMap.get(questionId)
+  if (!pending) {
+    return
+  }
+  finalizeQuestion(pending, { selectedLabels: [], text: '', outcome: 'cancelled' })
+}
+
+/**
+ * 回答收尾：出注册表 → 原位补全提问卡消息的 answer 字段（历史可见；卡片只读化）
+ * → 广播更新后的消息与徽标 → resolve 唤醒 Agent Loop。
+ * 会话可能已被 LRU 淘汰出缓存（读不到对象时跳过补全，只 resolve——工具结果仍正确回灌）。
+ */
+function finalizeQuestion(
+  pending: PendingQuestion,
+  answer: { selectedLabels: string[]; text: string; outcome: 'answered' | 'cancelled' },
+): void {
+  questionMap.delete(pending.questionId)
+
+  const session = sessionMap.get(pending.sessionId)
+  if (session) {
+    const card = session.messages.find(
+      (message) => message.kind === 'ask-user-question' && message.questionId === pending.questionId,
+    )
+    if (card && card.kind === 'ask-user-question') {
+      const answerView: AskUserQuestionAnswerView = {
+        selectedLabels: answer.selectedLabels,
+        text: answer.text,
+        outcome: answer.outcome,
+        answeredAt: new Date().toISOString(),
+      }
+      session.messages = session.messages.map((message) =>
+        message === card
+          ? { ...message, answer: answerView }
+          : message,
+      )
+      // 补全后的卡片消息即时广播（在位卡片翻只读态），再随收尾落盘
+      broadcastAgentEvent({
+        type: 'message',
+        sessionId: pending.sessionId,
+        message: toChatMessageView(
+          session.messages.find(
+            (m) => m.kind === 'ask-user-question' && m.questionId === pending.questionId,
+          )!,
+          session.changeLedger,
+        ),
+      })
+    }
+    // 回答落盘（不等 driver 收尾：停止/异常路径下答案也已在卡上）。
+    // fire-and-forget 走串行队列 + background 标签：失败广播可观测事件，不静默吞掉。
+    const project = getRuntimeProject(pending.projectId)
+    if (project) {
+      void enqueueSessionSave({ project, session, background: '回答落盘' })
+    }
+  }
+
+  pending.resolve({
+    selectedLabels: answer.selectedLabels,
+    text: answer.text,
+    outcome: answer.outcome,
+  })
+  broadcastSessionQuestions(pending.sessionId)
+}
+
+/**
+ * 清理某会话的全部未决提问，按取消 resolve（停止/删除/出错时调用）。
+ * 卡片消息保持无 answer 状态——旧等待请求不能再提交；刷新/重开后 UI 把无 answer
+ * 且不在待回答快照里的卡片标记为「等待已中断」（计划「停止、异常与刷新」）。
+ */
+function cancelPendingSessionQuestions(sessionId: string) {
+  for (const [id, pending] of questionMap) {
+    if (pending.sessionId === sessionId) {
+      questionMap.delete(id)
+      pending.resolve({ selectedLabels: [], text: '', outcome: 'cancelled' })
+    }
+  }
+  broadcastSessionQuestions(sessionId)
+}
+
 function toWriteConfirmationView(confirmation: WriteConfirmation): WriteConfirmationView {
   switch (confirmation.kind) {
     case 'create':
       return { kind: 'create', path: confirmation.path, content: confirmation.content }
     case 'edit':
-      return { kind: 'edit', path: confirmation.path, oldText: confirmation.oldText, newText: confirmation.newText }
+      return {
+        kind: 'edit',
+        path: confirmation.path,
+        oldText: confirmation.oldText,
+        newText: confirmation.newText,
+        ...(confirmation.replaceAll === true ? { replaceAll: true } : {}),
+      }
     case 'rename':
       return { kind: 'rename', fromPath: confirmation.fromPath, toPath: confirmation.toPath }
     case 'delete':
@@ -838,7 +1308,12 @@ function buildConfirmationTitle(confirmation: WriteConfirmation): string {
     case 'rename':
       return `重命名：${confirmation.fromPath} → ${confirmation.toPath}`
     case 'delete':
-      return `删除文件：${confirmation.path}`
+      if (confirmation.path.startsWith(RELATION_LEDGER_PATH)) {
+        return `删除关系：${confirmation.path}`
+      }
+      return confirmation.path.startsWith(TIMELINE_LEDGER_PATH)
+        ? `删除事件：${confirmation.path}`
+        : `删除文件：${confirmation.path}`
   }
 }
 
@@ -851,7 +1326,13 @@ function buildConfirmationSummary(confirmation: WriteConfirmation): string {
     case 'rename':
       return `将 ${confirmation.fromPath} 重命名为 ${confirmation.toPath}`
     case 'delete':
-      return `将删除 ${confirmation.path}（移入回收站）`
+      // 账本条目删除只移除账本里的一条，账本文件不进回收站
+      if (confirmation.path.startsWith(RELATION_LEDGER_PATH)) {
+        return '将从关系账本删除这一条关系（账本文件保留，不进回收站）'
+      }
+      return confirmation.path.startsWith(TIMELINE_LEDGER_PATH)
+        ? '将从时间线账本删除这一个事件（区间事件两端同删，账本文件保留，不进回收站）'
+        : `将删除 ${confirmation.path}（移入回收站）`
   }
 }
 
@@ -1033,6 +1514,8 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       role: message.role,
       kind: 'text',
       text: message.text,
+      // 显示/指令分离：user text 消息的气泡显示文本（斜杠命令原草稿）；assistant 无此字段
+      ...('displayLabel' in message && message.displayLabel !== undefined ? { displayLabel: message.displayLabel } : {}),
       // 仅 user text 消息有 quote/steered；assistant text 无此字段，undefined 自动忽略
       quote: 'quote' in message ? message.quote : undefined,
       steered: 'steered' in message ? message.steered : undefined,
@@ -1053,6 +1536,34 @@ function toChatMessageView(message: ChatMessage, ledger?: FileChangeRecord[]): C
       text: message.summary,
       targetPath: message.targetPath,
       relatedPaths: message.relatedPaths,
+      createdAt: message.createdAt,
+    }
+  }
+
+  if (message.kind === 'local-command') {
+    return {
+      id: message.id,
+      role: 'system',
+      kind: 'local-command',
+      command: message.command,
+      outcome: message.outcome,
+      text: message.summary,
+      ...(message.detail ? { detail: message.detail } : {}),
+      createdAt: message.createdAt,
+    }
+  }
+
+  if (message.kind === 'ask-user-question') {
+    return {
+      id: message.id,
+      role: 'system',
+      kind: 'ask-user-question',
+      questionId: message.questionId,
+      question: message.question,
+      ...(message.header ? { header: message.header } : {}),
+      ...(message.options ? { options: message.options.map((option) => ({ ...option })) } : {}),
+      ...(message.multiSelect ? { multiSelect: true } : {}),
+      ...(message.answer ? { answer: { ...message.answer } } : {}),
       createdAt: message.createdAt,
     }
   }
@@ -1137,6 +1648,7 @@ function toFileChangeRecordView(record: FileChangeRecord): FileChangeRecordView 
     at: record.at,
     change: toChangedFileView(record.change),
     ...(record.diff ? { diff: { ...record.diff } } : {}),
+    ...(record.coords ? { coords: record.coords } : {}),
     ...(record.agent ? { agent: record.agent } : {}),
   }
 }
@@ -1166,6 +1678,11 @@ function toNovAiError(error: unknown): NovAiError {
 
 function createRunId() {
   return `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 提问卡消息 id（与 core 的 createId('message') 同款形态，service 层独立生成）。 */
+function createMessageId() {
+  return `message-${Math.random().toString(36).slice(2, 10)}`
 }
 
 function toChatTargetView(target: ChatTargetContext | null): ChatTargetView | null {

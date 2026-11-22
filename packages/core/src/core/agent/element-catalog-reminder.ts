@@ -1,14 +1,15 @@
 import { digestElementCatalog } from '../elements/catalog'
-import { insertAfterSystem, replaceMessage, type ModelView } from './model-view'
-import type { AgentMessage } from './messages'
+import { syncCatalogReminder, type CatalogChannel } from '../disclosure/catalog-reminder'
 import type { ChatSessionState } from '../../types/chat'
 import type { ElementCatalogEntry } from '../../types/elements'
 import type { ElementType } from '../../types/rag'
+import type { ModelView } from './model-view'
 
 /**
  * 要素目录 reminder（渐进式披露 L1，决策 0007）：四类稳定要素的 type + name + summary
- * 清单，以 user-role `<system-reminder>` 紧跟 system 注入；digest 驱动原位替换，
- * 机制完全对齐 syncNovaiReminder / syncConstraintDocReminder。
+ * 清单，以 user-role `<system-reminder>` 紧跟 system 注入；digest 驱动原位替换。
+ * 注入机制已抽为公共通道（disclosure/catalog-reminder，与技能目录共用），
+ * 本文件只剩要素领域的渲染文案与会话字段声明。
  */
 
 /** 目录 reminder 的存在标记：首注/更新两版文案都含此标签，用于视图内检测。 */
@@ -21,7 +22,6 @@ const TYPE_LABELS: Record<ElementType, string> = {
   entity: '实体',
   worldbuilding: '世界观',
   plot: '剧情',
-  timeline: '时间线',
 }
 
 export function buildElementCatalogReminder(
@@ -49,6 +49,17 @@ export function buildElementCatalogReminder(
   ].join('\n')
 }
 
+/** 要素目录通道声明：渲染文案、digest（name+summary，决策 0007 决策二）与会话字段。 */
+const elementCatalogChannel: CatalogChannel<ElementCatalogEntry> = {
+  marker: ELEMENT_CATALOG_REMINDER_MARKER,
+  render: buildElementCatalogReminder,
+  digestOf: digestElementCatalog,
+  readDigest: (session) => session.elementCatalogDigest,
+  writeDigest: (session, digest) => {
+    session.elementCatalogDigest = digest
+  },
+}
+
 /**
  * 要素目录 digest 按需注入：空目录不注入；首轮、要素集变化、或被压缩吞掉后
  * 在 system 之后（重）注入。reminder 恒为视图中唯一一条——变化时原地替换。
@@ -59,26 +70,5 @@ export function syncElementCatalogReminder(input: {
   session: ChatSessionState
   entries: readonly ElementCatalogEntry[]
 }): void {
-  if (input.entries.length === 0) {
-    return
-  }
-
-  const digest = digestElementCatalog(input.entries)
-  const existingIndex = input.view.messages.findIndex(
-    (message) => message.role === 'user' && message.content.includes(ELEMENT_CATALOG_REMINDER_MARKER),
-  )
-  if (existingIndex >= 0 && digest === input.session.elementCatalogDigest) {
-    return
-  }
-
-  const reminder: AgentMessage = {
-    role: 'user',
-    content: buildElementCatalogReminder(input.entries, { isUpdate: existingIndex >= 0 }),
-  }
-  if (existingIndex >= 0) {
-    replaceMessage(input.view, existingIndex, reminder)
-  } else {
-    insertAfterSystem(input.view, reminder)
-  }
-  input.session.elementCatalogDigest = digest
+  syncCatalogReminder({ ...input, channel: elementCatalogChannel })
 }

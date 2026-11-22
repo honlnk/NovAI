@@ -23,6 +23,7 @@ import {
   updateRecentProjectCounts,
 } from '../core/project/recent-projects'
 import type { ProjectSnapshot } from '../types/project'
+import { ProjectPermissionRequiredError } from '../types/project'
 
 import {
   getRuntimeProject,
@@ -81,8 +82,12 @@ export async function restoreLastProject(): Promise<ProjectView | null> {
   const hasPermission = await hasProjectPermission(record.handle)
     || await requestProjectPermission(record.handle)
 
+  // 权限拒绝与「没有记录」语义不同：前者需要用户重新授权，抛类型化错误让界面分级提醒。
   if (!hasPermission) {
-    return null
+    throw new ProjectPermissionRequiredError(
+      `项目「${record.name}」尚未获得目录访问权限，需要重新授权后才能打开。`,
+      record.name,
+    )
   }
 
   const project = await repairProject(record.handle)
@@ -108,7 +113,10 @@ export async function restoreRecentProject(projectId: string): Promise<ProjectVi
     || await requestProjectPermission(record.handle)
 
   if (!hasPermission) {
-    return null
+    throw new ProjectPermissionRequiredError(
+      `项目「${record.name}」尚未获得目录访问权限，需要重新授权后才能打开。`,
+      record.name,
+    )
   }
 
   const project = await repairProject(record.handle)

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { SLASH_COMMANDS, type SlashCommandId } from '../../constants/slash-commands'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 斜杠命令菜单（R6）。
@@ -75,7 +76,9 @@ defineExpose({
           ]"
           @click="emit('select', command.id)"
         >
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-50 text-sm">{{ command.icon }}</span>
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-50">
+            <AppIcon :name="command.icon" :size="14" class="text-blue-400" />
+          </span>
           <div class="min-w-0 flex-1">
             <p class="text-sm font-semibold leading-5">{{ command.label }}</p>
             <p class="truncate text-xs font-medium text-gray-400">{{ command.description }}</p>

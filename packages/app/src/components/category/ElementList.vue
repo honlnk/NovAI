@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { ELEMENT_CATEGORIES } from '../../constants/elements'
 import { collectFilesByPrefix } from '../../utils/file-tree'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   files: ProjectFileNodeView[]
@@ -60,8 +61,10 @@ function isExpanded(key: string) {
 
 <template>
   <div class="flex h-full flex-col">
-    <div class="px-4 py-3">
+    <div class="flex items-center justify-between px-4 py-3">
       <h2 class="text-sm font-semibold text-white">要素</h2>
+      <!-- 移动端关闭：由 CategoryPanel 注入，并排在标题行右端 -->
+      <slot name="mobile-close" />
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
@@ -73,13 +76,8 @@ function isExpanded(key: string) {
             class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
             @click="toggleGroup(category.key)"
           >
-            <svg
-              :class="['h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', isExpanded(category.key) ? 'rotate-90' : '']"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-            </svg>
-            <span class="shrink-0 text-sm">{{ category.icon }}</span>
+            <AppIcon name="chevron-right" :size="14" :class="['h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', isExpanded(category.key) ? 'rotate-90' : '']" />
+            <AppIcon :name="category.icon" :size="15" class="shrink-0 text-gray-400" />
             <span class="flex-1 truncate">{{ category.label }}</span>
             <span class="shrink-0 text-xs text-gray-500">{{ counts.get(category.key) ?? 0 }}</span>
           </button>

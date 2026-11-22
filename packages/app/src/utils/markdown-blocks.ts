@@ -1,4 +1,5 @@
 import { sharedMarkdown } from './markdown'
+import { splitFrontmatter } from './frontmatter-display'
 
 /**
  * 一个顶层块的渲染结果。key 取块起始行号（token.map[0]）：
@@ -8,6 +9,10 @@ import { sharedMarkdown } from './markdown'
 export type MarkdownBlock = {
   key: number
   html: string
+  /** frontmatter 特殊块：html 恒为空串，渲染方以卡片呈现 raw（文件预览卡片化计划 Step 1） */
+  kind?: 'frontmatter'
+  /** kind === 'frontmatter' 时的围栏全文（含两行分隔线） */
+  raw?: string
 }
 
 type ParsedTokens = ReturnType<typeof sharedMarkdown.parse>
@@ -23,15 +28,52 @@ type ParsedTokens = ReturnType<typeof sharedMarkdown.parse>
  *
  * 已知偏差（与 dsh 相同）：流式期间块尚未闭合时，跨块的 reference-style link
  * 可能短暂按字面渲染，settled 后的完整 parse 自愈。
+ *
+ * options.detectFrontmatter（默认关，聊天路径零变化）：识别文件开头的 YAML
+ * frontmatter 围栏（splitFrontmatter 的识别门槛），把围栏的 hr + setext h2 两组
+ * 丢弃、换成单个 kind='frontmatter' 特殊块（key=0，html 空，raw 为围栏全文）。
+ * 正文块 key 仍取全源行号——高亮映射（markdownBlockIndicesInRange）无需感知。
  */
-export function parseMarkdownBlocks(source: string): MarkdownBlock[] {
+export function parseMarkdownBlocks(
+  source: string,
+  options?: { detectFrontmatter?: boolean },
+): MarkdownBlock[] {
   if (source.length === 0) {
     return []
   }
 
   const env = {}
   const tokens = sharedMarkdown.parse(source, env)
+  const groups = groupTopLevel(tokens)
 
+  if (options?.detectFrontmatter === true) {
+    const split = splitFrontmatter(source)
+    if (split.hasFrontmatter) {
+      const closeLine = split.raw.split('\n').length - 1
+      const blocks: MarkdownBlock[] = [{ key: 0, html: '', kind: 'frontmatter', raw: split.raw }]
+      for (const [index, group] of groups.entries()) {
+        const start = blockStartLine(group)
+        // 围栏覆盖的 hr 与 setext h2 两组丢弃（正文块起始行必然 > 闭合线行号）
+        if (start !== null && start <= closeLine) {
+          continue
+        }
+        blocks.push({
+          key: start ?? -(index + 1),
+          html: sharedMarkdown.renderer.render(group, sharedMarkdown.options, env),
+        })
+      }
+      return blocks
+    }
+  }
+
+  return groups.map((group, index) => ({
+    key: blockStartLine(group) ?? -(index + 1),
+    html: sharedMarkdown.renderer.render(group, sharedMarkdown.options, env),
+  }))
+}
+
+/** 深度回到 0 的连续 token 段为一个顶层块 */
+function groupTopLevel(tokens: ParsedTokens): ParsedTokens[] {
   const groups: ParsedTokens[] = []
   let current: ParsedTokens = []
   let depth = 0
@@ -47,19 +89,15 @@ export function parseMarkdownBlocks(source: string): MarkdownBlock[] {
   if (current.length > 0) {
     groups.push(current)
   }
-
-  return groups.map((group, index) => ({
-    key: blockKey(group, index),
-    html: sharedMarkdown.renderer.render(group, sharedMarkdown.options, env),
-  }))
+  return groups
 }
 
-/** 块的稳定 key：组内首个带位置信息 token 的起始行；无位置信息时退化为负序号（仅异常语法发生） */
-function blockKey(group: ParsedTokens, index: number): number {
+/** 组内首个带位置信息 token 的起始行；无位置信息时为 null（仅异常语法发生） */
+function blockStartLine(group: ParsedTokens): number | null {
   for (const token of group) {
     if (token.map) {
       return token.map[0]
     }
   }
-  return -(index + 1)
+  return null
 }

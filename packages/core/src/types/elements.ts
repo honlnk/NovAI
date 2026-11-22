@@ -8,6 +8,13 @@ export type ElementFrontmatter = {
   tags: string[]
   lastUpdatedChapter: string
   relatedChapters: string[]
+  /**
+   * 关联伏笔标识列表（如 [F-001, F-003]，键名 related_foreshadowing）：
+   * 主 Agent 登记的要素↔伏笔双向链（施工计划 §八）。章节文件不带伏笔字段，
+   * 从人物/物品视角看「牵动了哪些伏笔」靠这枚字段。伏笔账本对要素管理员不可见，
+   * 管理员只负责照原样保留，不新增不删改。
+   */
+  relatedForeshadowing: string[]
   updatedAt: string
 }
 

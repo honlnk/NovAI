@@ -1,6 +1,21 @@
 import type { ModelProtocol, ReasoningEffort } from './ai'
 
 /**
+ * 恢复/打开最近项目时目录读写权限未授予：与「没有记录」（service 返回 null）区分开，
+ * 供界面给出黄色授权提醒并提供重新授权入口，不得把权限拒绝误报为失败或用户取消。
+ */
+export class ProjectPermissionRequiredError extends Error {
+  /** 拒绝授权的目标项目名，供提醒文案展示 */
+  readonly projectName: string
+
+  constructor(message: string, projectName: string) {
+    super(message)
+    this.name = 'ProjectPermissionRequiredError'
+    this.projectName = projectName
+  }
+}
+
+/**
  * 写工具权限档位：review=仅审阅 / chapter=章节内容 / material=素材内容 /
  * chapter-material=章节+素材（默认） / full=完全访问。
  * 判定规则见 core/agent/permission.ts。
@@ -13,6 +28,12 @@ export type PermissionPreset = 'review' | 'chapter' | 'material' | 'chapter-mate
  * 值域落在 PermissionPreset 内，判定复用 decideWriteToolPermission，无独立分支。
  */
 export type ElementManagerPermissionPreset = Extract<PermissionPreset, 'review' | 'material' | 'full'>
+
+/**
+ * 伏笔看板列模式（创作心智模块施工计划 §三/§七）：frontmatter 恒存 6 状态，
+ * 看板列数可配——default 四列（按展示口径分组）/ full 六列（每状态一列）。
+ */
+export type ForeshadowingStatusMode = 'default' | 'full'
 
 export type ProjectSummary = {
   id: string
@@ -153,6 +174,16 @@ export type ProjectConfig = {
      * （W2 注入机制 + W3 改名迁移；旧配置 activeScenePromptPath 读取时自动映射）。
      */
     activeOutlinePath: string | null
+    /**
+     * 伏笔看板列模式（创作心智模块 §七）：default=4 列分组 / full=6 状态列；
+     * 旧配置缺省回填 default。
+     */
+    foreshadowingStatusMode: ForeshadowingStatusMode
+    /**
+     * 节奏卡偏差阈值（创作心智模块 §四）：|计划冲突强度 - 实际| ≥ 阈值判偏差；
+     * 1~10 整数，旧配置缺省回填 3。影响 RhythmUpdate 回写判定与节奏看板落偏差列。
+     */
+    rhythmDeviationThreshold: number
   }
 }
 

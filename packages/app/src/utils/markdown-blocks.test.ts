@@ -95,3 +95,47 @@ describe('parseMarkdownBlocks 切块', () => {
     }
   })
 })
+
+/**
+ * frontmatter 块识别（文件预览卡片化计划 Step 1）：flag 默认关（聊天零变化），
+ * 开启且识别成功时围栏的 hr + setext h2 替换为单个特殊块，正文块 key 取全源行号。
+ */
+describe('parseMarkdownBlocks frontmatter 识别', () => {
+  const SOURCE = '---\nid: 陈砚\ntype: character\n---\n\n# 陈砚\n\n正文段'
+
+  it('默认关：frontmatter 仍按 hr + setext h2 渲染（聊天行为逐字节不变）', () => {
+    const blocks = parseMarkdownBlocks(SOURCE)
+    expect(blocks[0].html).toContain('<hr>')
+    expect(blocks[1].html).toContain('<h2>id: 陈砚')
+    expect(blocks.some((block) => block.kind === 'frontmatter')).toBe(false)
+  })
+
+  it('开启识别：特殊块替换围栏渲染，正文块 key 保持全源行号', () => {
+    const blocks = parseMarkdownBlocks(SOURCE, { detectFrontmatter: true })
+    expect(blocks[0]).toMatchObject({ key: 0, html: '', kind: 'frontmatter' })
+    expect(blocks[0].raw).toContain('id: 陈砚')
+    // h1 在第 5 行（0-based）、正文段在第 7 行
+    expect(blocks[1]).toMatchObject({ key: 5 })
+    expect(blocks[1].html).toContain('<h1>陈砚</h1>')
+    expect(blocks[2]).toMatchObject({ key: 7 })
+    expect(blocks[2].html).toContain('正文段')
+    expect(blocks.some((block) => block.html.includes('<hr>'))).toBe(false)
+  })
+
+  it('开启识别但无 frontmatter：与默认路径完全一致', () => {
+    const source = '# 标题\n\n---\n\n正文里的分隔线'
+    expect(parseMarkdownBlocks(source, { detectFrontmatter: true })).toEqual(parseMarkdownBlocks(source))
+  })
+
+  it('未闭合围栏：不识别，按普通 markdown 渲染', () => {
+    const blocks = parseMarkdownBlocks('---\nid: 陈砚\n没有闭合', { detectFrontmatter: true })
+    expect(blocks[0].kind).toBeUndefined()
+    expect(blocks[0].html).toContain('<hr>')
+  })
+
+  it('CRLF 源码识别后正文块行号按归一前的行结构对齐', () => {
+    const blocks = parseMarkdownBlocks('---\r\nid: 陈砚\r\n---\r\n\r\n# 陈砚\r\n\r\n正文', { detectFrontmatter: true })
+    expect(blocks[0].kind).toBe('frontmatter')
+    expect(blocks[1].html).toContain('<h1>陈砚</h1>')
+  })
+})

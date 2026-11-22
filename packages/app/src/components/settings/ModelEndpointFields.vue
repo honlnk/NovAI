@@ -10,6 +10,7 @@ import type {
 } from '@novai/core/services/types'
 import PasswordInput from '../ui/PasswordInput.vue'
 import { useSettingsStore } from '../../stores/settings'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 模型端点配置的共享字段组（借鉴 duet 的模型配置交互）。
@@ -231,15 +232,7 @@ async function runTest() {
           @click="isProtocolOpen = !isProtocolOpen"
         >
           <span>{{ activeProtocolLabel }}</span>
-          <svg
-            class="h-4 w-4 shrink-0 text-gray-400 transition-transform"
-            :class="isProtocolOpen ? 'rotate-180' : ''"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
+          <AppIcon name="chevron-down" :size="16" class="h-4 w-4 shrink-0 text-gray-400 transition-transform" :class="isProtocolOpen ? 'rotate-180' : ''" />
         </button>
 
         <!-- 协议下拉浮层：选项附默认地址，让「切换协议联动替换地址」可被预期 -->
@@ -258,15 +251,7 @@ async function runTest() {
             class="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-gray-50"
             @click="selectProtocol(option)"
           >
-            <svg
-              class="mt-0.5 h-4 w-4 shrink-0"
-              :class="option.value === form.protocol ? 'text-blue-600' : 'text-transparent'"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-            </svg>
+            <AppIcon name="check" :size="16" class="mt-0.5 h-4 w-4 shrink-0" :class="option.value === form.protocol ? 'text-blue-600' : 'text-transparent'" />
             <span class="flex-1">
               <span class="block text-sm text-gray-700">{{ option.label }}</span>
               <span class="block text-xs text-gray-400">{{ option.baseUrl }}</span>
@@ -313,10 +298,7 @@ async function runTest() {
             :disabled="isLoadingModels"
             @click="loadModels"
           >
-            <svg v-if="isLoadingModels" class="mr-1 inline-block h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
+            <AppIcon v-if="isLoadingModels" name="loader-circle" :size="14" class="mr-1 inline-block h-3.5 w-3.5 animate-spin" />
             {{ isLoadingModels ? '获取中…' : '获取列表' }}
           </button>
         </div>

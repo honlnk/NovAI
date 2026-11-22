@@ -1,5 +1,5 @@
 import type { ProjectSnapshot } from '../../types/project'
-import type { FileChangeRecord } from '../../types/chat'
+import type { FileChangeCoords, FileChangeRecord } from '../../types/chat'
 import type { AgentToolCall, AgentToolResultMessage } from './messages'
 import type { AgentRunnableToolMap } from './tools'
 import type { ChangeDiff, FileChange, ReadFileState, WriteConfirmation } from '../tools/types'
@@ -8,8 +8,8 @@ import { maybeSpill, SPILLABLE_TOOLS } from './spill'
 
 export type ToolExecutionEvent =
   | { type: 'tool-call'; call: AgentToolCall; inputSummary: string }
-  /** fileChange/diff 仅在写工具成功执行后存在；diff 是片段级 before/after（改动账本用，不进模型视图）。 */
-  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff }
+  /** fileChange/diff/coords 仅在写工具成功执行后存在；diff 是片段级 before/after，coords 是定位坐标（均不进模型视图）。 */
+  | { type: 'tool-result'; call: AgentToolCall; ok: boolean; resultSummary: string; fileChange?: FileChange; diff?: ChangeDiff; coords?: FileChangeCoords; extraFileChanges?: FileChange[] }
 
 /**
  * 事件归属标记：要素管理员子代理的内层工具事件由委派工具透传时带上，
@@ -150,11 +150,14 @@ export async function executeAgentTool(input: {
       readFileStates: input.readFileStates,
       getChangeLedger: input.getChangeLedger,
       webClientId: input.webClientId,
+      toolCallId: input.call.id,
     })
     const resultSummary = tool.core.summarizeOutput(output)
-    // 写工具成功执行后提取结构化文件变更与片段级 diff，供改动账本累积
+    // 写工具成功执行后提取结构化文件变更、片段级 diff 与定位坐标，供改动账本累积
     const fileChange = tool.core.extractFileChange?.(output)
     const diff = tool.core.extractChangeDiff?.(output)
+    const coords = tool.core.extractChangeCoords?.(output)
+    const extraFileChanges = tool.core.extractExtraFileChanges?.(output)
 
     // 超长工具结果 spill：只对 RagSearch（无分页能力的内容型工具）。
     // ReadFile 已被三道闸豁免（单次 ≤50KB 字节）；spill 路径自身豁免二次 spill。
@@ -171,6 +174,8 @@ export async function executeAgentTool(input: {
       resultSummary,
       fileChange,
       diff,
+      ...(coords ? { coords } : {}),
+      ...(extraFileChanges && extraFileChanges.length > 0 ? { extraFileChanges } : {}),
     })
 
     return {

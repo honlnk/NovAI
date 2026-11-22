@@ -13,6 +13,7 @@ import { registerTextRefs, rescanTextRefs, scanTextRefs, TextRefNode } from './t
 const LEXICON = {
   slash: ['/管理要素', '/生成项目记忆'],
   outline: ['@主线', '@暗线'],
+  skill: ['#去AI味', '#文风仿写'],
 }
 
 /** 读出当前全部 TextRefNode 的文本（须在 editorState.read 内调用 $nodesOfType） */
@@ -65,6 +66,26 @@ describe('scanTextRefs 识别规则', () => {
   it('投影不受影响的前提自查：TextRef 文本参与纯文本投影', () => {
     expect(scanTextRefs(' @主线', LEXICON)).toEqual([{ start: 1, end: 4, kind: 'outline' }])
   })
+
+  it('#技能名 行首与空白后高亮（kind 为 skill，技能包 §3.3）', () => {
+    expect(scanTextRefs('#去AI味', LEXICON)).toEqual([{ start: 0, end: 5, kind: 'skill' }])
+    expect(scanTextRefs('帮我 #文风仿写 改这章', LEXICON)).toEqual([{ start: 3, end: 8, kind: 'skill' }])
+  })
+
+  it('`# 标题` 与 `##小标题` 不触发（Markdown 标题安全）', () => {
+    expect(scanTextRefs('# 标题文字', LEXICON)).toEqual([])
+    expect(scanTextRefs('##小标题', LEXICON)).toEqual([])
+  })
+
+  it('名单外 #话题标签 不高亮；与 @ / 斜杠 token 共存互不干扰', () => {
+    expect(scanTextRefs('#日常 闲话', LEXICON)).toEqual([])
+    const text = '/管理要素 核对 @主线 再 #去AI味'
+    expect(scanTextRefs(text, LEXICON)).toEqual([
+      { start: 0, end: 5, kind: 'slash' },
+      { start: 9, end: 12, kind: 'outline' },
+      { start: 15, end: 20, kind: 'skill' },
+    ])
+  })
 })
 
 describe('headless 集成：transform 建节点与降级', () => {
@@ -115,15 +136,21 @@ describe('headless 集成：transform 建节点与降级', () => {
     expect(refTexts(bridge)).toEqual(['@主线'])
   })
 
-  it('lexicon 变化后重扫生效（大纲列表动态加载场景）', () => {
-    let lexicon = { slash: LEXICON.slash, outline: [] as string[] }
+  it('#技能 token 同样高亮（选中技能后留在输入框的标签）', () => {
+    const bridge = createHighlightedBridge()
+    bridge.setDraft('#去AI味 帮我改这段')
+    expect(refTexts(bridge)).toEqual(['#去AI味'])
+  })
+
+  it('lexicon 变化后重扫生效（大纲/技能列表动态加载场景）', () => {
+    let lexicon = { slash: LEXICON.slash, outline: [] as string[], skill: [] as string[] }
     const bridge = useComposerBridge({ nodes: [TextRefNode] })
     registerTextRefs(bridge.editor, () => lexicon)
-    bridge.setDraft('看 @新大纲')
+    bridge.setDraft('看 @新大纲 用 #新技能')
     expect(refTexts(bridge)).toEqual([])
-    lexicon = { slash: LEXICON.slash, outline: ['@新大纲'] }
+    lexicon = { slash: LEXICON.slash, outline: ['@新大纲'], skill: ['#新技能'] }
     rescanTextRefs(bridge.editor)
-    expect(refTexts(bridge)).toEqual(['@新大纲'])
+    expect(refTexts(bridge)).toEqual(['@新大纲', '#新技能'])
   })
 
   it('多段落各自行首命令分别高亮', () => {

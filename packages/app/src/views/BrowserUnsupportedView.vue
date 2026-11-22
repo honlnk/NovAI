@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { EnvironmentReportView } from '@novai/core/services/types'
+import AppIcon from '../components/ui/AppIcon.vue'
 
 const props = defineProps<{
   report: EnvironmentReportView
@@ -59,9 +60,7 @@ async function handleCopyLink() {
       <div class="w-full max-w-2xl rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
         <div class="flex items-start gap-4">
           <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-orange-100">
-            <svg class="h-6 w-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
+            <AppIcon name="triangle-alert" :size="24" class="h-6 w-6 text-orange-600" />
           </div>
           <div class="min-w-0 flex-1">
             <h2 class="mb-2 text-xl font-semibold text-gray-900">NovAI 无法在当前浏览器中运行</h2>

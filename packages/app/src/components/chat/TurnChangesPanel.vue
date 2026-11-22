@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import type { ChatMessageView, FileChangeRecordView, TurnFileChangeView } from '@novai/core/services/types'
 
 import DiffLines from './DiffLines.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 任务完成 diff 面板（文档 3 S5）：change-summary 消息的渲染体，随消息持久化，
@@ -86,15 +87,7 @@ const changeLabels: Record<string, string> = {
       class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-gray-50"
       @click="toggleFiles"
     >
-      <svg
-        class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform"
-        :class="filesExpanded ? 'rotate-90' : ''"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-      </svg>
+      <AppIcon name="chevron-right" :size="14" class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform" :class="filesExpanded ? 'rotate-90' : ''" />
       <span class="font-medium text-gray-700">
         <span v-if="message.aborted" class="text-amber-600">已停止 · </span>本轮写回 {{ message.files.length }} 个文件
       </span>
@@ -128,7 +121,7 @@ const changeLabels: Record<string, string> = {
           >要素管理</span>
           <span class="min-w-0 flex-1 truncate">
             <template v-if="file.status === 'renamed' && file.fromPath">
-              {{ file.fromPath }} <span class="text-gray-400">→</span> {{ file.path }}
+              {{ file.fromPath }} <AppIcon name="arrow-right" :size="12" class="inline text-gray-400" /> {{ file.path }}
             </template>
             <template v-else-if="file.status === 'deleted'">
               {{ file.path }}<span class="ml-1 text-gray-400">（已删除）</span>
@@ -162,6 +155,10 @@ const changeLabels: Record<string, string> = {
               第 {{ index + 1 }} 处修改
             </div>
             <DiffLines :old-text="record.diff!.oldText" :new-text="record.diff!.newText" />
+            <!-- 旧记录无定位坐标（§7）：仍显示片段差异，但明确说明不支持定位，不伪造高亮 -->
+            <div v-if="!record.coords" class="px-1 pt-0.5 text-[10px] text-gray-400">
+              此历史记录不支持定位
+            </div>
           </div>
         </div>
       </div>

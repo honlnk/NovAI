@@ -37,7 +37,7 @@ pnpm monorepo（`packageManager` 固定为 pnpm@10.21.0，workspace glob 为 `pa
 
 在仓库根目录运行：
 
-- `pnpm dev` —— `@novai/app` 的 Vite 开发服务器（用户自己常驻一个在 http://localhost:5173；永远不要再起一个 —— 见「本地开发环境」）。
+- `pnpm dev` —— `@novai/app` 的 Vite 开发服务器（用户自己常驻一个在 http://localhost:5173；没在跑时可以临时起一个、用完关掉 —— 见「本地开发环境」）。
 - `pnpm test` —— 全 workspace 跑 `vitest run`。测试以 `*.test.ts` 形式与源码同目录，位于 `packages/**/src/**` 下（include 规则见根目录 `vitest.config.ts`）。
 - `pnpm typecheck` —— 全项目 `tsc --build`。按包单独跑：`pnpm --filter @novai/app typecheck`（vue-tsc）、`pnpm --filter @novai/core typecheck`。
 - `pnpm build` —— app 的 vue-tsc + vite build。
@@ -77,8 +77,10 @@ pnpm monorepo（`packageManager` 固定为 pnpm@10.21.0，workspace glob 为 `pa
 
 本机开发环境的既有事实。启动任何服务器或做浏览器/UI 验证之前，先查这里：
 
-- 用户常驻一个开发服务器在 **http://localhost:5173**（他们自己的 `pnpm dev`）。做浏览器/UI 验证时直接打开这个 URL。**永远不要再起一个开发服务器或编造别的端口** —— 浏览器标签页指向一个死端口（例如旧会话残留的 5199）时只会显示空白页，那不是应用坏了的证据。
+- 用户常驻一个开发服务器在 **http://localhost:5173**（他们自己的 `pnpm dev`）。做浏览器/UI 验证时直接打开这个 URL。**永远使用 5173 这个端口，不编造别的端口** —— 浏览器标签页指向一个死端口（例如旧会话残留的 5199）时只会显示空白页，那不是应用坏了的证据。
 - 如果页面看起来空白或异常，先检查预期端口上有没有服务在监听（例如 `curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/`），再动其他东西。
+- 5173 已在监听就直接使用，**不要再起第二个**；5173 没有服务时，可以临时起一个 `pnpm dev`（绑定同一端口）用于验证，**用完关掉**，不留常驻进程。
+- **worktree 例外**：在独立 worktree 的其他分支上开发任务、需要浏览器验证 worktree 代码时，**允许起一个临时 dev server 绑定 5173 以外的空闲端口**（Vite 未指定端口时会自动顺延，如 5174；验证时说明实际端口）。只对该端口做验证，不碰用户常驻的 5173 服务，**用完关掉**，不留常驻进程。
 - 常驻测试项目位于 **`~/note/test-novel`**，其 `novel.config.json` 里已配置好模型。真机/UI 验证用它（通过「打开项目」或「恢复项目」打开）。它的 API key 只在运行时读取，绝不能复制进本仓库的任何文件。
 
 ## 工作准则
@@ -105,15 +107,11 @@ pnpm monorepo（`packageManager` 固定为 pnpm@10.21.0，workspace glob 为 `pa
 
 `type(scope): 中文说明` —— 例如 `feat(view): 完成首页布局`。允许的 type：feat / fix / docs / refactor / test / chore / build / ci / perf / style / revert。scope 建议见 `CONTRIBUTING.md`。
 
-### 1. 只有用户批准才能提交 —— 长任务的分阶段提交除外
+### 1. 未用 goal 指令：提交须等用户批准；用了 goal 指令：直接提交、无需询问
 
-**默认（小改动）：** 写完代码后**不要**执行 `git commit`。写代码、跑验证（`pnpm test` / `pnpm typecheck`），然后**停下**。汇报做了什么，交给用户审查。只有当用户明确说提交时才提交（例如「提交一下」「commit it」）。如果改动横跨多个逻辑单元，先提出提交分组方案，让用户确认。
+**未使用 goal 指令：禁止直接提交。** 写完代码后**不要**执行 `git commit`。写代码、跑验证（`pnpm test` / `pnpm typecheck`），然后**停下**。汇报做了什么，交给用户审查。只有当用户明确说提交时才提交（例如「提交一下」「commit it」）。如果改动横跨多个逻辑单元，先提出提交分组方案，让用户确认。
 
-**长任务例外：** 当任务是大规模、分阶段的（多个步骤/波次、影响面大）时，期望分阶段提交，而不是最后攒一个巨型提交。智能体应该：
-
-- 在开始时（或任务变成长任务时）提前宣布分阶段提交计划；
-- 只在每个完成的阶段门禁处提交 —— 门禁 = 测试 + typecheck 全绿 + 文档已同步；绝不提交阶段中途的半成品；
-- 保持每个逻辑单元一个提交，每落地一个就汇报对应 hash。
+**使用了 goal 指令：不需要询问用户，直接提交。** 开工时宣布分阶段提交计划（宣布即可，无需等确认），在每个完成的阶段门禁处提交 —— 门禁 = 测试 + typecheck 全绿 + 文档已同步，绝不提交阶段中途的半成品；保持每个逻辑单元一个提交，每落地一个就汇报对应 hash。计划文档的任务清单里不要写「提交前取得用户批准」之类的条款。
 
 当提交涉及 `docs` 子模块时，先提交子模块，再推进父仓库指针。
 

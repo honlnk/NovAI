@@ -73,6 +73,7 @@ function normalizeFrontmatter(raw: string): ElementFrontmatter {
     tags: splitList(record.tags),
     lastUpdatedChapter: record.lastUpdatedChapter ?? record.last_updated_chapter ?? '',
     relatedChapters: splitList(record.relatedChapters ?? record.related_chapters),
+    relatedForeshadowing: splitList(record.relatedForeshadowing ?? record.related_foreshadowing),
     updatedAt: record.updatedAt ?? record.updated_at ?? '',
   }
 }
@@ -81,7 +82,6 @@ function normalizeType(value: string | undefined): ElementFrontmatter['type'] {
   if (
     value === 'location' ||
     value === 'entity' ||
-    value === 'timeline' ||
     value === 'plot' ||
     value === 'worldbuilding'
   ) {

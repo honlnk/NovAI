@@ -28,9 +28,18 @@ export async function buildProjectIndex(
     throw new Error('请先完成 Embedding 配置，再执行索引构建')
   }
 
+  // 旧时间线索引残留检测（时间线 JSON 化阶段 4 退役清扫）：增量构建发现已退役
+  // 前缀的残留文档时，本次升级为全量重建（clearProject 清空全部后按新范围重建）
+  let isFullRebuild = request.reason === 'full-rebuild' || request.reason === 'manual-rebuild' || request.reason === 'initial-build'
+  let existingDocs = isFullRebuild ? [] : await store.listProjectDocuments(project.id)
+  if (!isFullRebuild && existingDocs.some((doc) => RETIRED_INDEXED_ELEMENT_PREFIXES.some((prefix) => doc.sourcePath.startsWith(prefix)))) {
+    isFullRebuild = true
+    existingDocs = []
+  }
+
   await store.saveProjectMeta({
     projectId: project.id,
-    status: request.reason === 'full-rebuild' || request.reason === 'manual-rebuild' ? 'rebuilding' : 'building',
+    status: isFullRebuild ? 'rebuilding' : 'building',
     documentCount: 0,
     embeddingProvider,
     embeddingModel,
@@ -43,7 +52,6 @@ export async function buildProjectIndex(
 
   try {
     const elementPaths = collectElementPaths(project.tree, request.sourcePaths)
-    const isFullRebuild = request.reason === 'full-rebuild' || request.reason === 'manual-rebuild' || request.reason === 'initial-build'
 
     if (isFullRebuild) {
       await store.clearProject(project.id)
@@ -52,7 +60,6 @@ export async function buildProjectIndex(
     // 预拉旧文档用于 contentHash 短路：按 sourcePath 索引，命中且 hash/model/version
     // 全一致时复用旧 vector，跳过 Embedding 调用。
     // 全量重建已 clear，旧文档为空，短路自然失效（全部重新 embed），逻辑统一。
-    const existingDocs = isFullRebuild ? [] : await store.listProjectDocuments(project.id)
     const existingByPath = new Map(existingDocs.map((doc) => [doc.sourcePath, doc]))
 
     const documents = []
@@ -231,12 +238,17 @@ export async function markProjectIndexStale(
   dispatchIndexChange(projectId, updatedMeta)
 }
 
+/** 已退役的索引前缀（时间线 JSON 化阶段 4）：残留文档触发全量重建清空（防旧项目残留向量）。 */
+const RETIRED_INDEXED_ELEMENT_PREFIXES = ['elements/timeline/'] as const
+
 /**
- * 收集进入 RAG 索引的要素路径。范围收窄到 plots/timeline（决策 0007）：
+ * 收集进入 RAG 索引的要素路径。范围收窄到仅情节（决策 0007 + 时间线 JSON 化阶段 4）：
  * 四类稳定要素（characters/locations/entities/worldbuilding）改走渐进式披露
- * （目录 reminder + LoadElements），不再入索引；chapters 正文维持不入索引的既有事实。
+ * （目录 reminder + LoadElements），不再入索引；时间线已改为事件账本（elements/timeline.json），
+ * 不做语义索引——确定性查询走时间线六工具，语义连续性由模型读账本自行判断；
+ * chapters 正文维持不入索引的既有事实。
  */
-const RAG_INDEXED_ELEMENT_PREFIXES = ['elements/plots/', 'elements/timeline/'] as const
+const RAG_INDEXED_ELEMENT_PREFIXES = ['elements/plots/'] as const
 
 function collectElementPaths(tree: TreeNode[], preferredPaths?: string[]) {
   const source = new Set(preferredPaths ?? [])
@@ -276,10 +288,6 @@ function inferTypeFromPath(path: string) {
 
   if (path.startsWith('elements/entities/')) {
     return 'entity' as const
-  }
-
-  if (path.startsWith('elements/timeline/')) {
-    return 'timeline' as const
   }
 
   if (path.startsWith('elements/plots/')) {

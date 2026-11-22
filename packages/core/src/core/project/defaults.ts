@@ -71,19 +71,18 @@ export const LEGACY_DEFAULT_OUTLINE_TEMPLATE = `# Scene Prompt
  * 定位：本书要素库的「宪法」——要素管理员子代理的全部机构记忆（它每次全新上下文，只注入本文件）；
  * 用户可自由修改，改坏时模板分节说明有 core `templates.ts` 代码兜底。
  * 内容必须与代码资产保持一致：frontmatter 字段（types/elements.ts）、
- * 六类目录职责、五类模板分节名（core/elements/templates.ts）。
+ * 五类目录职责、四类模板分节名（core/elements/templates.ts）。
  */
 export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 
 这是本书要素库的管理规范。它只注入给「要素管理员」子代理（/管理要素 与要素管理任务专用），不进入主创作 Agent 的提示词。可以自由修改——要素管理员每次都以全新上下文启动，这份文件就是它全部的工作守则。
 
-## 六类目录职责与边界
+## 五类目录职责与边界
 
 - \`elements/characters/\`：人物。一人一文件。
 - \`elements/locations/\`：地点。一地一文件。
 - \`elements/entities/\`：具体实体——武器、武功、坐骑、丹药、信物、法器、书籍等会被点名、持有或发生状态变化的东西。
 - \`elements/plots/\`：剧情事件。一个独立事件一文件，不写「本章剧情」式的章节总纲。
-- \`elements/timeline/\`：时间线阶段。一个故事阶段一文件，记录该阶段内的事件经过与后续影响。
 - \`elements/worldbuilding/\`：世界观——抽象规则与体系（力量体系、社会制度、种族设定、地理总览等）。
 - entities 与 worldbuilding 的分界：会被具体持有、点名、损耗、转移的东西归 entities；作为背景规则被引用的体系归 worldbuilding。拿不准时归 worldbuilding，并在汇报中注明。
 
@@ -95,10 +94,11 @@ export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 
 ## frontmatter 维护规范
 
-要素文件以 YAML frontmatter 开头，字段：id / type / name / summary / tags / lastUpdatedChapter / relatedChapters / updatedAt。整理时：
+要素文件以 YAML frontmatter 开头，字段：id / type / name / summary / tags / lastUpdatedChapter / relatedChapters / related_foreshadowing / updatedAt。整理时：
 
 - tags：去除重复与无意义标签；标签是可检索的分类词，不写成要素类型名。
 - relatedChapters：与已有列表取并集，绝不覆盖丢失已有章节；格式如「第12章」。
+- related_foreshadowing：主 Agent 登记的关联伏笔标识（如 [F-001]），从人物/物品视角标记「牵动了哪些伏笔」。伏笔账本不在你的可见范围，这枚字段照原样保留——不新增、不删改、不合并，缺失时也不要补写。
 - lastUpdatedChapter：取涉及章节中最新的一章。
 - summary：一句话概括该要素当前状态；合并信息后同步更新。
 - updatedAt：整理时更新为当前时间。
@@ -126,7 +126,6 @@ export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 - location（地点）：基本信息 / 简介 / 空间位置 / 可见性与可达性 / 地点关系 / 相关剧情 / 状态变化
 - entity（实体）：基本信息 / 简介 / 外观或表现 / 来历 / 当前归属 / 能力或用途 / 剧情关联 / 状态变化
 - plot（剧情）：基本信息 / 核心事件 / 关键细节 / 登场人物 / 情感落点 / 暗线铺垫 / 关联要素
-- timeline（时间线）：基本信息（必含「故事内时间」「所属阶段」）/ 事件经过 / 涉及要素 / 后续影响
 - worldbuilding（世界观）：无固定模板，按规则体系自行组织分节。`
 
 /**
@@ -221,6 +220,8 @@ export const DEFAULT_CONFIG = {
     embeddingTextVersion: 1,
     enableDebugLogging: false,
     activeOutlinePath: null,
+    foreshadowingStatusMode: 'default',
+    rhythmDeviationThreshold: 3,
   },
 } as const
 
@@ -232,6 +233,18 @@ export const DEFAULT_PERMISSION_PRESET = DEFAULT_CONFIG.settings.permissionPrese
 export function isPermissionPreset(value: unknown): value is (typeof PERMISSION_PRESETS)[number] {
   return typeof value === 'string' && (PERMISSION_PRESETS as readonly string[]).includes(value)
 }
+
+/** 伏笔看板列模式的合法值表与默认值（语义见 types/project.ts 的 ForeshadowingStatusMode）。 */
+export const FORESHADOWING_STATUS_MODES = ['default', 'full'] as const
+
+export const DEFAULT_FORESHADOWING_STATUS_MODE = DEFAULT_CONFIG.settings.foreshadowingStatusMode
+
+export function isForeshadowingStatusMode(value: unknown): value is (typeof FORESHADOWING_STATUS_MODES)[number] {
+  return typeof value === 'string' && (FORESHADOWING_STATUS_MODES as readonly string[]).includes(value)
+}
+
+/** 节奏卡偏差阈值默认值（语义见 types/project.ts 的 rhythmDeviationThreshold；合法域由 clamp 保证）。 */
+export const DEFAULT_RHYTHM_DEVIATION_THRESHOLD = DEFAULT_CONFIG.settings.rhythmDeviationThreshold
 
 /** 要素管理员档位合法值表（Phase 2 计划 D3 裁剪三档，语义见 types/project.ts 的 ElementManagerPermissionPreset）。 */
 export const ELEMENT_MANAGER_PERMISSION_PRESETS = ['review', 'material', 'full'] as const

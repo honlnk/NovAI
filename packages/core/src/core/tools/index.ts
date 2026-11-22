@@ -6,8 +6,54 @@ import {
   renameFileTool,
 } from './file-tools'
 import { findFilesTool, listDirectoryTool } from './directory-tools'
+import { searchFilesTool } from './search-text'
 import { ragSearchTool } from './rag-search'
 import { loadElementsTool } from './load-elements'
+import { loadSkillTool } from './load-skill'
+import {
+  createPlanTool,
+  deletePlanTool,
+  listPlansTool,
+  readPlanTool,
+  updatePlanTool,
+} from './plan-tools'
+import {
+  createForeshadowingTool,
+  deleteForeshadowingTool,
+  foreshadowingCheckTool,
+  foreshadowingSyncTool,
+  listForeshadowingTool,
+  readForeshadowingForPlanningTool,
+  readForeshadowingTool,
+  updateForeshadowingTool,
+} from './foreshadowing-tools'
+import {
+  rhythmCheckTool,
+  rhythmCreateTool,
+  rhythmCurveTool,
+  rhythmDeleteTool,
+  rhythmListTool,
+  rhythmReadTool,
+  rhythmSyncTool,
+  rhythmUpdateTool,
+} from './rhythm-tools'
+import {
+  relationCheckTool,
+  relationCreateTool,
+  relationDeleteTool,
+  relationListTool,
+  relationQueryTool,
+  relationReadTool,
+  relationUpdateTool,
+} from './relation-tools'
+import {
+  timelineCreatePointTool,
+  timelineCreateSpanTool,
+  timelineDeleteTool,
+  timelineListTool,
+  timelineReadTool,
+  timelineUpdateTool,
+} from './timeline-tools'
 import { getFileChangeHistoryTool } from './change-history-tool'
 import { webSearchTool } from './web-search'
 import { webFetchTool } from './web-fetch'
@@ -22,6 +68,8 @@ import type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  SearchFilesInput,
+  SearchFilesOutput,
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
   KnowledgeLookupInput,
@@ -31,6 +79,74 @@ import type {
   LoadElementsInput,
   LoadElementsOutput,
   LoadedElement,
+  LoadSkillInput,
+  LoadSkillOutput,
+  ListPlansInput,
+  ListPlansOutput,
+  ReadPlanInput,
+  ReadPlanOutput,
+  CreatePlanInput,
+  CreatePlanOutput,
+  UpdatePlanInput,
+  UpdatePlanOutput,
+  DeletePlanInput,
+  DeletePlanOutput,
+  ListForeshadowingInput,
+  ListForeshadowingOutput,
+  ReadForeshadowingInput,
+  ReadForeshadowingOutput,
+  ReadForeshadowingForPlanningOutput,
+  CreateForeshadowingInput,
+  CreateForeshadowingOutput,
+  UpdateForeshadowingInput,
+  UpdateForeshadowingOutput,
+  DeleteForeshadowingInput,
+  DeleteForeshadowingOutput,
+  ForeshadowingCheckInput,
+  ForeshadowingCheckOutput,
+  ForeshadowingSyncInput,
+  ForeshadowingSyncOutput,
+  RhythmListInput,
+  RhythmListOutput,
+  RhythmReadInput,
+  RhythmReadOutput,
+  RhythmCreateInput,
+  RhythmCreateOutput,
+  RhythmUpdateInput,
+  RhythmUpdateOutput,
+  RhythmDeleteInput,
+  RhythmDeleteOutput,
+  RhythmCheckInput,
+  RhythmCheckOutput,
+  RhythmSyncInput,
+  RhythmSyncOutput,
+  RhythmCurveInput,
+  RhythmCurveOutput,
+  RelationListInput,
+  RelationListOutput,
+  RelationReadInput,
+  RelationReadOutput,
+  RelationCreateInput,
+  RelationCreateOutput,
+  RelationUpdateInput,
+  RelationUpdateOutput,
+  RelationDeleteInput,
+  RelationDeleteOutput,
+  RelationQueryInput,
+  RelationQueryOutput,
+  RelationCheckInput,
+  RelationCheckOutput,
+  TimelineListInput,
+  TimelineListOutput,
+  TimelineReadInput,
+  TimelineReadOutput,
+  TimelineCreatePointInput,
+  TimelineCreateSpanInput,
+  TimelineCreateOutput,
+  TimelineUpdateInput,
+  TimelineUpdateOutput,
+  TimelineDeleteInput,
+  TimelineDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -59,6 +175,8 @@ export type {
   EditFileOutput,
   FindFilesInput,
   FindFilesOutput,
+  SearchFilesInput,
+  SearchFilesOutput,
   GetFileChangeHistoryInput,
   GetFileChangeHistoryOutput,
   KnowledgeLookupInput,
@@ -68,6 +186,74 @@ export type {
   LoadElementsInput,
   LoadElementsOutput,
   LoadedElement,
+  LoadSkillInput,
+  LoadSkillOutput,
+  ListPlansInput,
+  ListPlansOutput,
+  ReadPlanInput,
+  ReadPlanOutput,
+  CreatePlanInput,
+  CreatePlanOutput,
+  UpdatePlanInput,
+  UpdatePlanOutput,
+  DeletePlanInput,
+  DeletePlanOutput,
+  ListForeshadowingInput,
+  ListForeshadowingOutput,
+  ReadForeshadowingInput,
+  ReadForeshadowingOutput,
+  ReadForeshadowingForPlanningOutput,
+  CreateForeshadowingInput,
+  CreateForeshadowingOutput,
+  UpdateForeshadowingInput,
+  UpdateForeshadowingOutput,
+  DeleteForeshadowingInput,
+  DeleteForeshadowingOutput,
+  ForeshadowingCheckInput,
+  ForeshadowingCheckOutput,
+  ForeshadowingSyncInput,
+  ForeshadowingSyncOutput,
+  RhythmListInput,
+  RhythmListOutput,
+  RhythmReadInput,
+  RhythmReadOutput,
+  RhythmCreateInput,
+  RhythmCreateOutput,
+  RhythmUpdateInput,
+  RhythmUpdateOutput,
+  RhythmDeleteInput,
+  RhythmDeleteOutput,
+  RhythmCheckInput,
+  RhythmCheckOutput,
+  RhythmSyncInput,
+  RhythmSyncOutput,
+  RhythmCurveInput,
+  RhythmCurveOutput,
+  RelationListInput,
+  RelationListOutput,
+  RelationReadInput,
+  RelationReadOutput,
+  RelationCreateInput,
+  RelationCreateOutput,
+  RelationUpdateInput,
+  RelationUpdateOutput,
+  RelationDeleteInput,
+  RelationDeleteOutput,
+  RelationQueryInput,
+  RelationQueryOutput,
+  RelationCheckInput,
+  RelationCheckOutput,
+  TimelineListInput,
+  TimelineListOutput,
+  TimelineReadInput,
+  TimelineReadOutput,
+  TimelineCreatePointInput,
+  TimelineCreateSpanInput,
+  TimelineCreateOutput,
+  TimelineUpdateInput,
+  TimelineUpdateOutput,
+  TimelineDeleteInput,
+  TimelineDeleteOutput,
   ReadFileInput,
   ReadFileOutput,
   ReadFileState,
@@ -93,8 +279,44 @@ type ToolOutputMap = {
   DeleteFile: DeleteFileOutput
   ListDirectory: ListDirectoryOutput
   FindFiles: FindFilesOutput
+  SearchFiles: SearchFilesOutput
   RagSearch: RagSearchOutput
   LoadElements: LoadElementsOutput
+  LoadSkill: LoadSkillOutput
+  ListPlans: ListPlansOutput
+  ReadPlan: ReadPlanOutput
+  CreatePlan: CreatePlanOutput
+  UpdatePlan: UpdatePlanOutput
+  DeletePlan: DeletePlanOutput
+  ListForeshadowing: ListForeshadowingOutput
+  ReadForeshadowing: ReadForeshadowingOutput
+  ReadForeshadowingForPlanning: ReadForeshadowingForPlanningOutput
+  CreateForeshadowing: CreateForeshadowingOutput
+  UpdateForeshadowing: UpdateForeshadowingOutput
+  DeleteForeshadowing: DeleteForeshadowingOutput
+  ForeshadowingCheck: ForeshadowingCheckOutput
+  ForeshadowingSync: ForeshadowingSyncOutput
+  RhythmList: RhythmListOutput
+  RhythmRead: RhythmReadOutput
+  RhythmCreate: RhythmCreateOutput
+  RhythmUpdate: RhythmUpdateOutput
+  RhythmDelete: RhythmDeleteOutput
+  RhythmCheck: RhythmCheckOutput
+  RhythmSync: RhythmSyncOutput
+  RhythmCurve: RhythmCurveOutput
+  RelationList: RelationListOutput
+  RelationRead: RelationReadOutput
+  RelationCreate: RelationCreateOutput
+  RelationUpdate: RelationUpdateOutput
+  RelationDelete: RelationDeleteOutput
+  RelationQuery: RelationQueryOutput
+  RelationCheck: RelationCheckOutput
+  TimelineList: TimelineListOutput
+  TimelineRead: TimelineReadOutput
+  TimelineCreatePoint: TimelineCreateOutput
+  TimelineCreateSpan: TimelineCreateOutput
+  TimelineUpdate: TimelineUpdateOutput
+  TimelineDelete: TimelineDeleteOutput
   GetFileChangeHistory: GetFileChangeHistoryOutput
   WebSearch: WebSearchOutput
   WebFetch: WebFetchOutput
@@ -109,8 +331,44 @@ const tools = {
   DeleteFile: deleteFileTool,
   ListDirectory: listDirectoryTool,
   FindFiles: findFilesTool,
+  SearchFiles: searchFilesTool,
   RagSearch: ragSearchTool,
   LoadElements: loadElementsTool,
+  LoadSkill: loadSkillTool,
+  ListPlans: listPlansTool,
+  ReadPlan: readPlanTool,
+  CreatePlan: createPlanTool,
+  UpdatePlan: updatePlanTool,
+  DeletePlan: deletePlanTool,
+  ListForeshadowing: listForeshadowingTool,
+  ReadForeshadowing: readForeshadowingTool,
+  ReadForeshadowingForPlanning: readForeshadowingForPlanningTool,
+  CreateForeshadowing: createForeshadowingTool,
+  UpdateForeshadowing: updateForeshadowingTool,
+  DeleteForeshadowing: deleteForeshadowingTool,
+  ForeshadowingCheck: foreshadowingCheckTool,
+  ForeshadowingSync: foreshadowingSyncTool,
+  RhythmList: rhythmListTool,
+  RhythmRead: rhythmReadTool,
+  RhythmCreate: rhythmCreateTool,
+  RhythmUpdate: rhythmUpdateTool,
+  RhythmDelete: rhythmDeleteTool,
+  RhythmCheck: rhythmCheckTool,
+  RhythmSync: rhythmSyncTool,
+  RhythmCurve: rhythmCurveTool,
+  RelationList: relationListTool,
+  RelationRead: relationReadTool,
+  RelationCreate: relationCreateTool,
+  RelationUpdate: relationUpdateTool,
+  RelationDelete: relationDeleteTool,
+  RelationQuery: relationQueryTool,
+  RelationCheck: relationCheckTool,
+  TimelineList: timelineListTool,
+  TimelineRead: timelineReadTool,
+  TimelineCreatePoint: timelineCreatePointTool,
+  TimelineCreateSpan: timelineCreateSpanTool,
+  TimelineUpdate: timelineUpdateTool,
+  TimelineDelete: timelineDeleteTool,
   GetFileChangeHistory: getFileChangeHistoryTool,
   WebSearch: webSearchTool,
   WebFetch: webFetchTool,

@@ -4,8 +4,15 @@ import {
   syncNovaiReminder,
 } from '../agent/prompt'
 import { syncElementCatalogReminder } from '../agent/element-catalog-reminder'
+import { syncSkillCatalogReminder } from '../agent/skill-catalog-reminder'
 import { scanElementCatalog } from '../elements/catalog'
+import { discoverSkills } from '../skills/discovery'
 import { buildSteeringContent, query } from '../agent/query'
+import {
+  computeRetainTokens,
+  runCompaction,
+  selectCompactionRange,
+} from '../agent/compaction'
 import { getAgentRole, syncConstraintDocReminder, type AgentRoleId } from '../agent/roles'
 import type { TaggedToolExecutionEvent } from '../agent/tool-execution'
 import {
@@ -36,6 +43,7 @@ import type {
   QueuedMessage,
 } from '../../types/chat'
 import type { AgentMessage } from '../agent/messages'
+import type { ProjectConfig } from '../../types/project'
 
 /** driver 运行中的会话事件（service 层转发为 AgentUiEvent 用；type 随事件携带 sessionId 路由）。 */
 export type SessionEvent =
@@ -115,7 +123,7 @@ export function isChatDriverActive(sessionId: string): boolean {
 export function enqueueChatMessage(
   session: ChatSessionState,
   target: InboxTarget,
-  input: { text: string; quote?: string; activeFilePath?: string | null },
+  input: { text: string; quote?: string; activeFilePath?: string | null; displayLabel?: string },
 ): QueuedMessage {
   const enqueued = enqueueToInbox(session.inbox, target, input)
   session.inbox = enqueued.state
@@ -212,6 +220,53 @@ export async function runChatDriver(options: RunChatDriverOptions): Promise<Chat
   }
 }
 
+/** 手动压缩结果：compacted = 摘要已落地；noop 携带原因（视图一律未动）。 */
+export type ManualCompactionOutcome =
+  | { kind: 'compacted'; compactedMessageCount: number; originalTokens: number; summaryTokens: number }
+  | { kind: 'noop'; reason: 'nothing-to-compact' | 'summary-rejected' }
+
+/**
+ * 手动压缩会话上下文（/压缩上下文）：把当前模型视图的早期历史立即浓缩为检查点摘要。
+ * 与 query 内的自动压缩共用同一套选区与摘要逻辑（保留参数口径、八节检查点、宁缺毋滥），
+ * 差别仅在触发来源是用户而非压力检查。拷贝建视图（与 runDriverTurn 同口径）：
+ * noop 路径不污染会话持有的视图；成功才写回并推一条 context-summary 显示消息
+ * （不带队 onEvent——落盘与广播由 service 层负责）。
+ */
+export async function compactChatSession(options: {
+  session: ChatSessionState
+  config: ProjectConfig
+  signal?: AbortSignal
+}): Promise<ManualCompactionOutcome> {
+  const { session, config } = options
+  const view = createModelView(session.modelView?.messages ?? [])
+  const thresholdTokens = config.settings.conversationTokenLimit
+  const keepRecentTurns = config.settings.compressionKeepRecentTurns
+  const retainTokens = computeRetainTokens(view.messages, thresholdTokens, keepRecentTurns)
+
+  // 先判区间再调摘要：区分「没有可压缩内容」与「摘要未通过校验」两种 noop，给 UI 不同文案
+  if (!selectCompactionRange(view, retainTokens)) {
+    return { kind: 'noop', reason: 'nothing-to-compact' }
+  }
+
+  const result = await runCompaction({ config, view, retainTokens, signal: options.signal })
+  if (!result) {
+    return { kind: 'noop', reason: 'summary-rejected' }
+  }
+
+  session.modelView = view
+  pushMessage(
+    session,
+    {
+      id: createId('message'),
+      role: 'system',
+      kind: 'context-summary',
+      summary: `已手动压缩 ${result.compactedMessageCount} 条早期消息（约 ${result.originalTokens} → ${result.summaryTokens} token），此前对话以检查点摘要继续`,
+      createdAt: new Date().toISOString(),
+    },
+  )
+  return { kind: 'compacted', ...result }
+}
+
 type DriverTurnBatch = {
   steering: QueuedMessage[]
   followup?: QueuedMessage
@@ -255,11 +310,12 @@ async function runDriverTurn(options: {
 
   // 显示层逐条 push（批次内顺序 = 先全部 steer 气泡，后 followup 气泡）：
   // followup = 普通 user 气泡，是任务组边界；steer 批次 = steering 气泡（steered 标记），不是边界。
+  // displayLabel（显示/指令分离）随消息落盘：斜杠命令气泡显示用户原草稿，不暴露内部 prompt。
   for (const message of batch.steering) {
     pushMessage(session, createSteeringMessage(message), onEvent)
   }
   if (batch.followup) {
-    pushMessage(session, createUserMessage(batch.followup.text, batch.followup.quote), onEvent)
+    pushMessage(session, createUserMessage(batch.followup.text, batch.followup.quote, batch.followup.displayLabel), onEvent)
   }
   // 每 turn 的两条 context-summary 保持每 turn push；steer 续 turn 在 query 内发生，不产生新条目
   pushMessage(session, createContextSummary(target), onEvent)
@@ -316,6 +372,14 @@ async function runDriverTurn(options: {
     syncElementCatalogReminder({ view: modelView, session, entries: catalogEntries })
   }
 
+  // 技能目录 reminder（渐进式披露 L1，《技能包底层能力施工计划》）：skills/ 下合格
+  // 技能的 name+description 清单，排在要素目录之后（after-leading-reminders，决策 11）。
+  // 每 turn 用实时句柄重扫（同轮新建的技能下一轮即入目录）。
+  if (role.injectSkillCatalog) {
+    const skillOutcome = await discoverSkills(input.project)
+    syncSkillCatalogReminder({ view: modelView, session, skills: skillOutcome.skills })
+  }
+
   if (role.injectOutline) {
     // 大纲切换留痕：激活大纲变化时追加持久化 user 消息（先于本批用户消息进视图）
     const outlinePath = input.outline?.path ?? null
@@ -347,6 +411,8 @@ async function runDriverTurn(options: {
     session.agent && session.agent !== 'main' ? session.agent : undefined
   const appendToolEventMessage = (event: TaggedToolExecutionEvent) => {
     if (event.type === 'tool-call') {
+      // AskUserQuestion 的提问卡由 service 层在 requestQuestion 里推送（校验已过、
+      // 挂起已注册才成卡）：校验失败的提问调用也走这里，不该留卡。
       pushMessage(
         session,
         {
@@ -377,8 +443,23 @@ async function runDriverTurn(options: {
             at: new Date().toISOString(),
             change: event.fileChange,
             ...(event.diff ? { diff: event.diff } : {}),
+            ...(event.coords ? { coords: event.coords } : {}),
             ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
           },
+        ]
+      }
+      // 顺带改动的其他文件（懒分配标识写回要素、级联更新账本）：各记一条，无片段 diff
+      if (event.ok && event.extraFileChanges?.length) {
+        const at = new Date().toISOString()
+        session.changeLedger = [
+          ...(session.changeLedger ?? []),
+          ...event.extraFileChanges.map((change) => ({
+            id: createId('change'),
+            runId,
+            at,
+            change,
+            ...(sessionAgentTag ? { agent: sessionAgentTag } : {}),
+          })),
         ]
       }
 
@@ -400,11 +481,12 @@ async function runDriverTurn(options: {
     }
   }
 
-  // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具；要素管理员 = 白名单 + 路径闸。
-  // signal 与委派会话驱动器是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
+  // 工具面（角色声明组装）：主角色 = 全量工具 + 委派工具 + 主动提问工具；要素管理员 = 白名单 + 路径闸。
+  // signal、委派会话驱动器与提问回调是会话层闭包，经 context 注入——这些运行态不进 ToolRuntime。
   const tools = role.createTools({
     signal,
     runDelegationSession: input.runDelegationSession,
+    askUser: input.askUser,
   })
   const enableDebugLogging = Boolean(input.config.settings.enableDebugLogging)
   let aborted = false
@@ -850,13 +932,14 @@ function pushErrorMessage(
   )
 }
 
-function createUserMessage(text: string, quote?: string): ChatMessage {
+function createUserMessage(text: string, quote?: string, displayLabel?: string): ChatMessage {
   return {
     id: createId('message'),
     role: 'user',
     kind: 'text',
     text,
     quote,
+    ...(displayLabel !== undefined ? { displayLabel } : {}),
     createdAt: new Date().toISOString(),
   }
 }
@@ -868,6 +951,7 @@ function createSteeringMessage(message: QueuedMessage): ChatMessage {
     role: 'user',
     kind: 'text',
     text: message.text,
+    ...(message.displayLabel !== undefined ? { displayLabel: message.displayLabel } : {}),
     quote: message.quote,
     steered: true,
     createdAt: message.at,

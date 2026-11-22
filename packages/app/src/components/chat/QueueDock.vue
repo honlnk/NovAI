@@ -2,19 +2,27 @@
 import { computed, ref } from 'vue'
 
 import type { QueuedMessageView } from '@novai/core/services/types'
+import { expandSlashCommand } from '../../constants/slash-commands'
+import { expandSkillMentions } from '../../constants/skill-mention'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * QueueDock（文档 4 S5）：渲染在输入框正上方。
  * 1 条直接显示行；多条默认折叠成「N 条排队消息」计数头 + 展开箭头；空队列不渲染。
  * 每行三个操作：编辑（行内 input，Enter 存 Esc 取消）、删除（撤回）、立即插话（仅运行中可用）。
+ * 显示/指令分离（交互优化计划 §3.2）：行显示 displayLabel（用户原草稿）；编辑提交时
+ * 按新草稿重新展开斜杠命令与 #技能 点名（与 ChatPanel 发送链路同序：slash 先、skill 后），
+ * text 与 displayLabel 一起回传。
  */
 const props = defineProps<{
   queue: QueuedMessageView[]
   running: boolean
+  /** 技能名单（编辑重推导 #点名 用，与发送链路同一投影；技能包 §3.3） */
+  skillNames: string[]
 }>()
 
 const emit = defineEmits<{
-  (e: 'edit', id: string, text: string): void
+  (e: 'edit', id: string, text: string, displayLabel?: string): void
   (e: 'remove', id: string): void
   (e: 'steer', id: string): void
 }>()
@@ -43,12 +51,18 @@ const editingText = ref('')
 
 function startEdit(message: QueuedMessageView) {
   editingId.value = message.id
-  editingText.value = message.text
+  // 编辑的是显示草稿（斜杠命令行显示原草稿，不是内部 prompt）
+  editingText.value = message.displayLabel ?? message.text
 }
 
 function commitEdit() {
   if (editingId.value !== null && editingText.value.trim()) {
-    emit('edit', editingId.value, editingText.value.trim())
+    const displayDraft = editingText.value.trim()
+    // 编辑重推导（显示/指令分离）：新草稿命中斜杠命令时重新展开为驱动 prompt，
+    // #技能 点名句追加其后（与发送链路同序）；发生任一展开时原草稿作为
+    // displayLabel 回传；未命中则清除标记（displayLabel 缺省）
+    const expanded = expandSkillMentions(expandSlashCommand(displayDraft), props.skillNames)
+    emit('edit', editingId.value, expanded, expanded === displayDraft ? undefined : displayDraft)
   }
   editingId.value = null
 }
@@ -70,15 +84,7 @@ function cancelEdit() {
       class="mb-0 flex w-full items-center gap-2 text-xs font-medium text-blue-700"
       @click="expanded = !expanded"
     >
-      <svg
-        class="h-3 w-3 transition-transform"
-        :class="expanded ? 'rotate-90' : ''"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-      </svg>
+      <AppIcon name="chevron-right" :size="12" class="h-3 w-3 transition-transform" :class="expanded ? 'rotate-90' : ''" />
       {{ headerLabel }}
     </button>
 
@@ -108,8 +114,8 @@ function cancelEdit() {
       <span
         v-else
         class="min-w-0 flex-1 truncate text-gray-700"
-        :title="message.text"
-      >{{ message.text }}</span>
+        :title="message.displayLabel ?? message.text"
+      >{{ message.displayLabel ?? message.text }}</span>
 
       <!-- 行操作：编辑 / 删除 / 立即插话（仅运行中可用） -->
       <button

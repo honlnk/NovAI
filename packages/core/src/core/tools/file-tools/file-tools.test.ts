@@ -6,6 +6,9 @@ import {
   readFileTool,
   renameFileTool,
 } from '../file-tools'
+import { createAgentTools } from '../../agent/tools'
+import { createReadFileState } from './read-file-state'
+import { hashContent } from '../../util/hash'
 import type { ProjectSnapshot } from '../../../types/project'
 import type { ToolRuntime } from '../types'
 
@@ -48,6 +51,215 @@ describe('file tools', () => {
       oldText: '旧内容',
       newText: '新内容',
     }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
+  })
+
+  it('人工先落盘、AI 后编辑：拦截不覆盖人工版本，重读后按新内容编辑成功（§三 防线二闭环）', async () => {
+    const runtime = createRuntime({
+      'chapters/第001章-初遇.txt': 'AI 读到的原文',
+    })
+
+    await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+    // 人工在 AI 读取后落盘（自动保存写回磁盘，mtime 与内容都变）
+    await writeProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt', '人工先落盘的新版本')
+
+    // AI 持旧读取状态执行编辑：被读后写校验拦截，人工版本不被覆盖
+    await expect(editFileTool.run({
+      path: 'chapters/第001章-初遇.txt',
+      oldText: 'AI 读到的原文',
+      newText: 'AI 的修改',
+    }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
+    await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('人工先落盘的新版本')
+
+    // 不存在「工具自动重读」：受控 Agent 收到错误后显式重新 ReadFile，再按新内容编辑成功
+    await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+    const editOutput = await editFileTool.run({
+      path: 'chapters/第001章-初遇.txt',
+      oldText: '人工先落盘的新版本',
+      newText: '重读后的修改',
+    }, runtime)
+    expect(editOutput.occurrences).toBe(1)
+    await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('重读后的修改')
+  })
+
+  describe('空文件特判（D1：oldText="" 填充空文件）', () => {
+    it('文件不存在时报错并引导使用 CreateFile', async () => {
+      const runtime = createRuntime({})
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '初始内容',
+      }, runtime)).rejects.toThrow('不存在；新建文件请使用 CreateFile')
+    })
+
+    it('文件为空时允许直接写入，且不需要先 ReadFile（豁免读后写校验）', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '',
+      })
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '第一段\n第二段',
+      }, runtime)
+
+      expect(output.occurrences).toBe(1)
+      expect(output.oldText).toBe('')
+      expect(output.newText).toBe('第一段\n第二段')
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('第一段\n第二段')
+
+      // diff 口径与 CreateFile 一致：oldText 为空、全绿
+      expect(editFileTool.extractChangeDiff?.(output)).toEqual({
+        oldText: '',
+        newText: '第一段\n第二段',
+        linesAdded: 2,
+        linesRemoved: 0,
+      })
+    })
+
+    it('只含空白的文件也视为空文件，允许填充', async () => {
+      const runtime = createRuntime({
+        'elements/characters/空白.md': '  \n\t\n',
+      })
+
+      await editFileTool.run({
+        path: 'elements/characters/空白.md',
+        oldText: '',
+        newText: '姓名：林婉儿',
+      }, runtime)
+
+      await expect(readProjectText(runtime.project.handle, 'elements/characters/空白.md')).resolves.toBe('姓名：林婉儿')
+    })
+
+    it('文件非空时拒绝 oldText="" 整体写入', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '已有内容',
+      })
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '覆盖内容',
+      }, runtime)).rejects.toThrow('非空')
+
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('已有内容')
+    })
+
+    it('空文件 + 非空 oldText 匹配失败时，错误消息教学 oldText="" 入口（ZCode 式错误教学）', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '',
+      })
+
+      // 空文件也走正常读后写链路：先 Read 注册读取状态，再用非空 oldText 编辑
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '不存在的原文',
+        newText: '初始内容',
+      }, runtime)).rejects.toThrow('为空；向空文件写入内容请把 oldText 设为空字符串')
+    })
+  })
+
+  it('EditFile 成功结果的模型文案带免重读后缀（ZCode 式动态反馈，代替系统提示词静态规则）', () => {
+    const formatted = createAgentTools().EditFile.formatResult({
+      path: 'chapters/第001章-初遇.txt',
+      occurrences: 1,
+      contentLength: 10,
+      linesAdded: 1,
+      linesRemoved: 0,
+      oldText: '旧',
+      newText: '新',
+    })
+
+    expect(formatted).toContain('已修改 chapters/第001章-初遇.txt')
+    expect(formatted).toContain('无需重新读取即可继续编辑')
+    // 前缀仍复用 summarizeOutput，聊天摘要与模型文案共享同一句主体
+    expect(formatted).toContain('替换 1 处')
+  })
+
+  describe('连续编辑免重读（D2：写后更新 readFileState）', () => {
+    it('Read → Edit → Edit 连续编辑中间不需要重新 ReadFile', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一段\n第二段\n第三段',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第一段',
+        newText: '第一段改',
+      }, runtime)
+
+      // 关键断言：不再删除读取状态，第二次 Edit 不要求重读
+      const editAgain = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第三段',
+        newText: '第三段改',
+      }, runtime)
+
+      expect(editAgain.occurrences).toBe(1)
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('第一段改\n第二段\n第三段改')
+    })
+
+    it('Edit 成功后 readFileState 更新为新内容（sourceTool: Edit），文件未变时再次校验直接放行', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '旧内容',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '旧内容',
+        newText: '新内容',
+      }, runtime)
+
+      const state = runtime.readFileStates?.get('chapters/第001章-初遇.txt')
+      expect(state).toBeDefined()
+      expect(state?.sourceTool).toBe('Edit')
+      expect(state?.contentHash).toBe(createReadFileState('chapters/第001章-初遇.txt', '新内容', new File([], 'x')).contentHash)
+    })
+
+    it('外部 touch（mtime 变新但内容未变）不误拦：hash 兜底放行', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一段\n第二段',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      touchMemoryFile(runtime.project.handle, 'chapters/第001章-初遇.txt', 10)
+
+      // mtime 前进但内容与 hash 都没变：放行
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段',
+        newText: '第二段改',
+      }, runtime)
+
+      await expect(readProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt')).resolves.toBe('第一段\n第二段改')
+    })
+
+    it('Edit 之后外部再改动，下一次 Edit 仍被正确拦截', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一段\n第二段',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+      await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第一段',
+        newText: '第一段改',
+      }, runtime)
+
+      // 外部改动（mtime/size/hash 全变）
+      await writeProjectText(runtime.project.handle, 'chapters/第001章-初遇.txt', '外部完全改写的内容')
+
+      await expect(editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二段',
+        newText: '第二段改',
+      }, runtime)).rejects.toThrow('已在 ReadFile 之后发生变化')
+    })
   })
 
   it('creates new files but refuses to overwrite existing files', async () => {
@@ -288,37 +500,37 @@ describe('file tools', () => {
       await expect(createFileTool.run({
         path: '.novel/spill/abc.txt',
         content: '写入内部目录',
-      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      }, runtime)).rejects.toThrow('不能指向应用内部文件')
 
       await expect(createFileTool.run({
         path: '.novel/logs/today.json',
         content: '{}',
-      }, runtime)).rejects.toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      }, runtime)).rejects.toThrow('不能指向应用内部文件')
 
       // validateInput 层同样拦（第一道闸）
       expect(() => createFileTool.validateInput({
         path: '.novel/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('.novai/ 配置目录整体禁写（与 novel.config.json 同级受保护，仅 app service 层可写）', () => {
       expect(() => createFileTool.validateInput({
         path: '.novai/session-state.json',
         content: '{}',
-      })).toThrow('不能指向项目内部文件')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: '.novai/session-state.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件')
+      })).toThrow('不能指向应用内部文件')
 
       // 大小写变体同样被拒（APFS 大小写不敏感）
       expect(() => createFileTool.validateInput({
         path: '.NOVAI/other.json',
         content: 'x',
-      })).toThrow('不能指向项目内部文件')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('EditFile 禁止改 .novel/ 与 novel.config.json（validateInput 层拦截）', () => {
@@ -326,39 +538,46 @@ describe('file tools', () => {
         path: 'novel.config.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: '.novel/sessions/s1.json',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('大小写变体同样被拒（APFS 大小写不敏感，Novel.Config.JSON 命中真实配置）', () => {
       expect(() => createFileTool.validateInput({
         path: '.NOVEL/spill/abc.txt',
         content: 'x',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: 'Novel.Config.JSON',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
 
       expect(() => editFileTool.validateInput({
         path: '.Novel/Spill/abc.txt',
         oldText: 'a',
         newText: 'b',
-      })).toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+      })).toThrow('不能指向应用内部文件')
     })
 
     it('spill 文件仍禁写/删/改名（只放行读）', () => {
       expect(() => deleteFileTool.validateInput({ path: '.novel/spill/abc.txt' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+        .toThrow('不能指向应用内部文件')
       expect(() => renameFileTool.validateInput({ fromPath: 'a.md', toPath: '.novel/spill/b.txt' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai）')
+        .toThrow('不能指向应用内部文件')
+    })
+
+    it('报错为教学式文案（D5）：参数标签前缀 + 边界 + 密钥原因 + 出路', () => {
+      expect(() => createFileTool.validateInput({ path: 'novel.config.json', content: 'x' }))
+        .toThrow('CreateFile.path 不能指向应用内部文件。novel.config.json（项目配置，含模型密钥）')
+      expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
+        .toThrow('其余请直接询问用户，不要尝试读取配置文件')
     })
   })
 
@@ -425,14 +644,14 @@ describe('file tools', () => {
       expect(output.content).toBe('spill 完整内容')
 
       expect(() => readFileTool.validateInput({ path: '.novel/logs/today.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
       expect(() => readFileTool.validateInput({ path: '.novel/sessions/s1.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
       expect(() => readFileTool.validateInput({ path: 'novel.config.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
       // 大小写变体同规则
       expect(() => readFileTool.validateInput({ path: '.NOVEL/logs/today.json' }))
-        .toThrow('不能指向项目内部文件（novel.config.json、.novel、.novai；.novel/spill/ 除外）')
+        .toThrow('不能指向应用内部文件')
     })
   })
 
@@ -524,6 +743,147 @@ describe('file tools', () => {
         content: '新',
       }, runtime)
       await expect(readProjectText(runtime.project.handle, 'chapters/第001章-新.txt')).resolves.toBe('新')
+    })
+  })
+
+  describe('定位坐标（§7：改动账本逐处行范围 + 前后版本）', () => {
+    it('EditFile 单处替换产出正确行范围与前后版本', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '第一行\n第二行\n第三行',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '第二行',
+        newText: '第二行改',
+      }, runtime)
+
+      expect(output.coords).toBeDefined()
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 2, oldEnd: 2, newStart: 2, newEnd: 2 },
+      ])
+      // 前后版本都有，且内容哈希不同（内容确实变了）
+      expect(output.coords?.beforeVersion?.contentHash).toBeTruthy()
+      expect(output.coords?.afterVersion?.contentHash).toBeTruthy()
+      expect(output.coords?.beforeVersion?.contentHash).not.toBe(output.coords?.afterVersion?.contentHash)
+      // 版本时间取自盘上文件的真实 mtime
+      expect(output.coords?.afterVersion?.updatedAt).toBeTruthy()
+      // extractChangeCoords 转交 output.coords（账本链路入口）
+      expect(editFileTool.extractChangeCoords?.(output)).toBe(output.coords)
+    })
+
+    it('EditFile 空文件填充产出空原文范围（oldEnd=0）', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '',
+      })
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '',
+        newText: '第一段\n第二段',
+      }, runtime)
+
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 1, oldEnd: 0, newStart: 1, newEnd: 2 },
+      ])
+      expect(output.coords?.beforeVersion).toBeDefined()
+      expect(output.coords?.afterVersion).toBeDefined()
+    })
+
+    it('EditFile replaceAll 产出逐处范围', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '旧名出场\n中间过渡\n旧名又出场',
+      })
+
+      await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime)
+
+      const output = await editFileTool.run({
+        path: 'chapters/第001章-初遇.txt',
+        oldText: '旧名',
+        newText: '新名',
+        replaceAll: true,
+      }, runtime)
+
+      expect(output.occurrences).toBe(2)
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 1, oldEnd: 1, newStart: 1, newEnd: 1 },
+        { oldStart: 3, oldEnd: 3, newStart: 3, newEnd: 3 },
+      ])
+    })
+
+    it('CreateFile 产出整文件范围，无 beforeVersion', async () => {
+      const runtime = createRuntime({})
+
+      const output = await createFileTool.run({
+        path: 'chapters/第001章-新篇.txt',
+        content: '第一段\n第二段\n第三段',
+      }, runtime)
+
+      expect(output.coords).toBeDefined()
+      expect(output.coords?.ranges).toEqual([
+        { oldStart: 1, oldEnd: 0, newStart: 1, newEnd: 3 },
+      ])
+      // 新建没有原文，只有 afterVersion
+      expect(output.coords?.beforeVersion).toBeUndefined()
+      expect(output.coords?.afterVersion?.contentHash).toBe(hashContent('第一段\n第二段\n第三段'))
+      expect(createFileTool.extractChangeCoords?.(output)).toBe(output.coords)
+    })
+  })
+
+  describe('技能包文件的 ReadFile 素材提示行（3.6）', () => {
+    it('读 skills/ 下文件：渲染结果首行带素材提示，行号与正文不变', async () => {
+      const runtime = createRuntime({
+        'skills/去AI味/SKILL.md': '---\ndescription: 降低 AI 腔\n---\n\n第一段\n第二段',
+      })
+
+      const output = await readFileTool.run({ path: 'skills/去AI味/SKILL.md' }, runtime)
+      const formatted = createAgentTools().ReadFile.formatResult(output)
+
+      expect(formatted).toContain('此文件属于技能包')
+      expect(formatted).toContain('要按技能工作请用 LoadSkill 加载')
+      // 输出结构体不带提示行：content/numberedContent 与普通文件完全同构
+      expect(output.content).toBe('---\ndescription: 降低 AI 腔\n---\n\n第一段\n第二段')
+      expect(output.numberedContent).toContain('5 | 第一段')
+      expect(output.numberedContent).toContain('6 | 第二段')
+      // 渲染里的带号正文原样保留（提示行不挤占行号）
+      expect(formatted).toContain('5 | 第一段')
+    })
+
+    it('读非 skills/ 路径（含同名文件 prompts/skills.md）：不加提示行', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '正文',
+        'prompts/skills.md': '普通提示词',
+      })
+
+      const chapter = createAgentTools().ReadFile.formatResult(
+        await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime),
+      )
+      const prompt = createAgentTools().ReadFile.formatResult(
+        await readFileTool.run({ path: 'prompts/skills.md' }, runtime),
+      )
+
+      expect(chapter).not.toContain('此文件属于技能包')
+      expect(prompt).not.toContain('此文件属于技能包')
+    })
+
+    it('带提示行的读取结果不影响 EditFile 旧文本匹配（提示行只在渲染层）', async () => {
+      const runtime = createRuntime({
+        'skills/去AI味/references/词表.md': '词一\n词二',
+      })
+
+      await readFileTool.run({ path: 'skills/去AI味/references/词表.md' }, runtime)
+
+      // 模型从渲染结果抄的 oldText 就是文件原文（不含提示行与行号）
+      const editOutput = await editFileTool.run({
+        path: 'skills/去AI味/references/词表.md',
+        oldText: '词二',
+        newText: '词二改',
+      }, runtime)
+
+      expect(editOutput.occurrences).toBe(1)
+      await expect(readProjectText(runtime.project.handle, 'skills/去AI味/references/词表.md')).resolves.toBe('词一\n词二改')
     })
   })
 })
@@ -718,6 +1078,31 @@ async function writeProjectText(rootHandle: FileSystemDirectoryHandle, path: str
   const writable = await fileHandle.createWritable()
   await writable.write(content)
   await writable.close()
+}
+
+/** 模拟外部 touch：只把 memory 条目的 lastModified 前进 deltaMs，内容不动。 */
+function touchMemoryFile(rootHandle: MemoryDirectoryHandle, path: string, deltaMs: number) {
+  let current: MemoryEntry = rootHandle.__entry
+
+  for (const segment of path.split('/')) {
+    if (current.kind !== 'directory') {
+      throw new Error(`Not a directory: ${path}`)
+    }
+
+    const next = current.entries.get(segment)
+
+    if (!next) {
+      throw new Error(`Not found: ${path}`)
+    }
+
+    current = next
+  }
+
+  if (current.kind !== 'file') {
+    throw new Error(`Not a file: ${path}`)
+  }
+
+  current.lastModified += deltaMs
 }
 
 async function readProjectText(rootHandle: FileSystemDirectoryHandle, path: string) {

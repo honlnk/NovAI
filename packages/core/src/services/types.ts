@@ -1,6 +1,16 @@
-import type { PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
+import type { ForeshadowingStatusMode, PermissionPreset, ProjectConfig, SearchConfig } from '../types/project'
 import type { ReasoningEffort } from '../types/ai'
 import type { AgentRoleId } from '../core/agent/roles'
+import type { PlanScanIssue } from '../types/plans'
+import type { ForeshadowingScanIssue, ForeshadowingStatus } from '../types/foreshadowing'
+import type {
+  RhythmHook,
+  RhythmMood,
+  RhythmPayoff,
+  RhythmScanIssue,
+  RhythmStatus,
+} from '../types/rhythm'
+import type { FileChangeCoords } from '../types/chat'
 
 // app 层的合法导入面（services/*、types/*）；思考档位可见性按协议 × 方言过滤时使用
 export { isDeepSeekDialect } from '../core/ai/shared'
@@ -70,6 +80,10 @@ export type ProjectConfigView = {
     embeddingTextVersion: number
     enableDebugLogging: boolean
     activeOutlinePath: string | null
+    /** 伏笔看板列模式（default 4 列 / full 6 列；语义见 types/project.ts） */
+    foreshadowingStatusMode: ForeshadowingStatusMode
+    /** 节奏卡偏差阈值（1~10，默认 3；语义见 types/project.ts） */
+    rhythmDeviationThreshold: number
   }
 }
 
@@ -178,7 +192,7 @@ export type FimCompletionInputView = {
   signal?: AbortSignal
 }
 
-export type ElementTypeView = 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'
+export type ElementTypeView = 'character' | 'location' | 'entity' | 'plot' | 'worldbuilding'
 
 export type IndexStatusView = 'empty' | 'building' | 'ready' | 'stale' | 'rebuilding' | 'error'
 
@@ -239,6 +253,215 @@ export type FileContentView = {
   updatedAt: string
 }
 
+/* ---------- 技能（技能包 UI/UX 施工计划 §3.1 视图类型） ---------- */
+
+/** 技能包内附属文件分类（与核心域 SkillFileKind 同值域）。 */
+export type SkillFileKindView = 'text' | 'script' | 'unsupported'
+
+export type SkillFileEntryView = {
+  /** 相对技能文件夹的路径（不含 SKILL.md）。 */
+  path: string
+  size: number
+  kind: SkillFileKindView
+}
+
+/** 技能行上的 warning 级诊断（名字不一致、文件过多等；技能仍对 AI 可见）。 */
+export type SkillWarningView = {
+  code: string
+  message: string
+}
+
+/** 合格技能（AI 可见）：列表行、展开清单与 #技能 弹层用它。 */
+export type SkillView = {
+  /** 技能身份：文件夹名。 */
+  name: string
+  /** frontmatter name（与文件夹名不同时保留作展示参考）。 */
+  displayName?: string
+  description: string
+  whenToUse?: string
+  directory: string
+  skillFilePath: string
+  files: SkillFileEntryView[]
+  filesOmitted?: number
+  warnings: SkillWarningView[]
+}
+
+/** 被跳过的技能（error 级诊断，AI 看不见）：列表末尾灰显，行内给人话原因。 */
+export type BrokenSkillView = {
+  name: string
+  directory: string
+  /** 人话原因 + 修复提示（如「缺少描述……补上 description 即可」）。 */
+  reason: string
+  code: string
+  /** SKILL.md 路径（存在时可点开修复）。 */
+  skillFilePath?: string
+}
+
+export type SkillListView = {
+  skills: SkillView[]
+  broken: BrokenSkillView[]
+}
+
+/** 导入候选：所选文件夹（单技能）或其一级子文件夹（合集）中含 SKILL.md 的技能。 */
+export type SkillImportCandidateView = {
+  folderName: string
+  /** 目标 skills/<folderName> 已存在（UI 标「同名已存在」不可勾选）。 */
+  hasConflict: boolean
+}
+
+/** 导入来源形态：根下有 SKILL.md 为单技能，否则扫描一级子文件夹。 */
+export type SkillImportScanView = {
+  mode: 'single' | 'collection'
+  candidates: SkillImportCandidateView[]
+}
+
+/** 导入结果：逐个成功/跳过（同名已存在，不覆盖）。 */
+export type SkillImportOutcomeView = {
+  imported: string[]
+  skipped: Array<{ folderName: string; reason: 'exists' }>
+}
+
+/** 计划卡片状态（与核心域 PlanStatus 同值域；View 层显式声明避免 app 导入核心内部实现）。 */
+export type PlanStatusView = 'inbox' | 'planned' | 'in-progress' | 'done' | 'on-hold'
+
+/** 计划卡片摘要：列表、看板列与 AI ListPlans 使用，不携带全部正文。 */
+export type PlanCardSummaryView = {
+  id: string
+  status: PlanStatusView
+  order: number
+  createdAt: string
+  updatedAt: string
+  title: string
+  summary: string
+  sourcePath: string
+}
+
+/** 完整计划卡片（详情编辑与 AI ReadPlan 使用）。 */
+export type PlanCardView = PlanCardSummaryView & {
+  body: string
+  /** 读取时文件全文 hash：保存时回传做冲突检测（外部修改守卫）。 */
+  contentHash: string
+}
+
+/** 看板视图：常驻四栏 + on-hold（由调用方决定是否展示）与目录扫描异常报告。 */
+export type PlanBoardView = {
+  columns: Readonly<Record<PlanStatusView, readonly PlanCardSummaryView[]>>
+  issues: readonly PlanScanIssueView[]
+}
+
+export type PlanScanIssueView = PlanScanIssue
+
+/** 伏笔卡片状态（与核心域 ForeshadowingStatus 同值域：六状态精确值，四列视图由 UI 折叠）。 */
+export type ForeshadowingStatusView = ForeshadowingStatus
+
+/**
+ * 伏笔卡片摘要：看板列、列表与 AI ListForeshadowing 使用，不携带正文分节。
+ * 必须含 plantedAt/payoffWindow/isRedHerring：看板卡片与「该收了」高亮依赖它们。
+ */
+export type ForeshadowingCardSummaryView = {
+  id: string
+  name: string
+  status: ForeshadowingStatusView
+  order: number
+  createdAt: string
+  updatedAt: string
+  /** 埋设章节（完整路径「卷/章」）。 */
+  plantedAt: string
+  /** 预计回收窗口（区间两端）；未设置为 null。 */
+  payoffWindow: readonly [string, string] | null
+  /** 是否故意误导（红鲱鱼）。 */
+  isRedHerring: boolean
+  /**
+   * 暗示历史（再提及的章节「卷/章」列表）：章节侧栏「本章相关伏笔」实时反查依赖它，
+   * 摘要也必须携带（否则非埋设章看不到相关伏笔）。
+   */
+  relatedChapters: string[]
+  /** 摘要（读者视角正文首个非标题非空行，不含作者真相）。 */
+  summary: string
+  sourcePath: string
+}
+
+/**
+ * 完整伏笔卡片（详情编辑使用）。直接携带作者真相：UI 是作者本人的界面，
+ * truth-hidden 防线（写正文链路只见 readerBody）在 AI 工具链路上，不在 view 层。
+ */
+export type ForeshadowingCardView = ForeshadowingCardSummaryView & {
+  relatedCharacters: string[]
+  relatedEntities: string[]
+  /** 实际回收章节；未回收为 null。 */
+  resolvedAt: string | null
+  /** 放弃原因（避免日后误以为漏写）；未放弃为 null。 */
+  abandonedReason: string | null
+  /** 读者视角正文（正文去掉「作者真相」节）。 */
+  readerBody: string
+  /** 作者真相正文（无该节时为空串）。 */
+  authorTruth: string
+  /** 读取时文件全文 hash：保存时回传做冲突检测（外部修改守卫）。 */
+  contentHash: string
+}
+
+/** 伏笔看板视图：列固定为六个 frontmatter 状态精确值 + 目录扫描异常报告。 */
+export type ForeshadowingBoardView = {
+  columns: Readonly<Record<ForeshadowingStatusView, readonly ForeshadowingCardSummaryView[]>>
+  issues: readonly ForeshadowingScanIssueView[]
+}
+
+export type ForeshadowingScanIssueView = ForeshadowingScanIssue
+
+/** 节奏卡状态（与核心域 RhythmStatus 同值域：三列看板 规划中/已写/偏差）。 */
+export type RhythmStatusView = RhythmStatus
+
+/**
+ * 节奏卡摘要：看板列与 AI RhythmList 使用，不携带正文。必须含计划值/实际值/
+ * 偏差标记：看板卡片（冲突强度着色、实际值对比、偏差列）与章节侧栏反查依赖它们。
+ */
+export type RhythmCardSummaryView = {
+  id: string
+  name: string
+  status: RhythmStatusView
+  order: number
+  createdAt: string
+  updatedAt: string
+  /** 关联章节（如 第083章）。 */
+  chapterRef: string
+  plannedConflict: number
+  plannedMood: RhythmMood
+  plannedHook: RhythmHook
+  plannedPayoff: RhythmPayoff
+  actualConflict: number | null
+  actualMood: RhythmMood | null
+  actualHook: RhythmHook | null
+  actualPayoff: RhythmPayoff | null
+  deviationFlag: boolean
+  /** 摘要（正文「节奏意图」节首个非空行）。 */
+  summary: string
+  sourcePath: string
+}
+
+/** 完整节奏卡（详情编辑使用）：补齐计划角色/备注、实际自评、偏差说明与正文三节。 */
+export type RhythmCardView = RhythmCardSummaryView & {
+  plannedCharacters: string[]
+  plannedNote: string | null
+  actualNote: string | null
+  deviationNote: string | null
+  /** 节奏意图正文。 */
+  intentBody: string
+  /** 上下文衔接正文。 */
+  linkBody: string
+  /** 作者备注正文。 */
+  authorNoteBody: string
+  /** 读取时文件全文 hash：保存时回传做冲突检测（外部修改守卫）。 */
+  contentHash: string
+}
+
+/** 节奏看板视图：列固定为三个状态精确值 + 目录扫描异常报告。 */
+export type RhythmBoardView = {
+  columns: Readonly<Record<RhythmStatusView, readonly RhythmCardSummaryView[]>>
+  issues: readonly RhythmScanIssueView[]
+}
+
+export type RhythmScanIssueView = RhythmScanIssue
+
 export type ProjectIssueView =
   | 'missing-config'
   | 'invalid-config'
@@ -258,13 +481,50 @@ export type ToolNameView =
   | 'DeleteFile'
   | 'ListDirectory'
   | 'FindFiles'
+  | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'LoadSkill'
+  | 'ListPlans'
+  | 'ReadPlan'
+  | 'CreatePlan'
+  | 'UpdatePlan'
+  | 'DeletePlan'
+  | 'ListForeshadowing'
+  | 'ReadForeshadowing'
+  | 'ReadForeshadowingForPlanning'
+  | 'CreateForeshadowing'
+  | 'UpdateForeshadowing'
+  | 'DeleteForeshadowing'
+  | 'ForeshadowingCheck'
+  | 'ForeshadowingSync'
+  | 'RhythmList'
+  | 'RhythmRead'
+  | 'RhythmCreate'
+  | 'RhythmUpdate'
+  | 'RhythmDelete'
+  | 'RhythmCheck'
+  | 'RhythmSync'
+  | 'RhythmCurve'
+  | 'RelationList'
+  | 'RelationRead'
+  | 'RelationCreate'
+  | 'RelationUpdate'
+  | 'RelationDelete'
+  | 'RelationQuery'
+  | 'RelationCheck'
+  | 'TimelineList'
+  | 'TimelineRead'
+  | 'TimelineCreatePoint'
+  | 'TimelineCreateSpan'
+  | 'TimelineUpdate'
+  | 'TimelineDelete'
   | 'GetFileChangeHistory'
   | 'WebSearch'
   | 'WebFetch'
   | 'KnowledgeLookup'
   | 'DelegateToElementManager'
+  | 'AskUserQuestion'
 
 export type ToolCallView = {
   id: string
@@ -321,6 +581,11 @@ export type FileChangeRecordView = {
     linesAdded: number
     linesRemoved: number
   }
+  /**
+   * 定位坐标与前后版本（交互优化计划 §7）：EditFile/CreateFile 写盘时由工具层产出。
+   * 旧记录/删除改名无此字段——界面降级为片段差异，不伪造高亮。
+   */
+  coords?: FileChangeCoords
   /** 改动归属：要素管理员子代理的记录带 elementManager（写回面板归属标记）；主 Agent 记录无此字段 */
   agent?: 'element-manager'
 }
@@ -352,6 +617,8 @@ export type ChatMessageView =
       role: 'user'
       kind: 'text'
       text: string
+      /** 气泡显示文本（显示/指令分离）：斜杠命令时为用户原草稿；缺省渲染 text */
+      displayLabel?: string
       /** 引用的选中内容，渲染为用户气泡内的独立引用块 */
       quote?: string
       /** 插话产生的用户消息：渲染与普通气泡相同，仅作分组边界判定的数据标记（不是组边界） */
@@ -369,6 +636,19 @@ export type ChatMessageView =
       thinkingSignature?: string
       targetPath?: string
       relatedPaths?: string[]
+      createdAt: string
+    }
+  | {
+      id: string
+      role: 'system'
+      kind: 'ask-user-question'
+      questionId: string
+      question: string
+      header?: string
+      options?: Array<{ label: string; description?: string }>
+      multiSelect?: boolean
+      /** 用户回答（存在则卡片只读展示；缺省 = 待回答） */
+      answer?: AskUserQuestionAnswerView
       createdAt: string
     }
   | {
@@ -411,6 +691,19 @@ export type ChatMessageView =
       role: 'system'
       kind: 'context-summary' | 'turn-limit' | 'error'
       text: string
+      createdAt: string
+    }
+  | {
+      id: string
+      role: 'system'
+      kind: 'local-command'
+      /** 命令名（如「/压缩上下文」） */
+      command: string
+      outcome: 'completed' | 'noop' | 'failed'
+      /** 一行结果说明 */
+      text: string
+      /** 失败详情（展开区展示、可复制） */
+      detail?: string
       createdAt: string
     }
 
@@ -456,9 +749,13 @@ export type ChatHistoryPageView = {
 export type ChatSessionSummaryView = {
   sessionId: string
   projectId: string
-  /** 会话角色（缺省即主角色）：会话列表按角色分组的依据 */
+  /** 会话角色（缺省即主角色）：列表角色小标签的依据 */
   agent?: AgentRoleId
   title: string
+  /** 归档时间（缺省即未归档）：列表筛选「已归档」的依据 */
+  archivedAt?: string
+  /** 会话状态（落盘快照）：「进行中/待处理」筛选与状态展示的依据 */
+  status: 'idle' | 'running' | 'waiting-user' | 'awaiting-confirmation' | 'error'
   createdAt: string
   updatedAt: string
   messageCount: number
@@ -469,6 +766,8 @@ export type EnqueueMessageInput = {
   projectId: string
   sessionId?: string
   text: string
+  /** 气泡显示文本（显示/指令分离）：斜杠命令发送时传用户原草稿，text 为展开后的驱动 prompt */
+  displayLabel?: string
   /** 引用的选中内容，随消息入队快照 */
   quote?: string
   mode: 'queue' | 'steer'
@@ -481,13 +780,15 @@ export type UpdateQueuedMessageInput = {
   projectId: string
   sessionId: string
   id: string
-  action: { kind: 'edit'; text: string } | { kind: 'remove' } | { kind: 'steer' }
+  action: { kind: 'edit'; text: string; displayLabel?: string } | { kind: 'remove' } | { kind: 'steer' }
 }
 
 /** QueueDock 渲染用排队消息视图：placement = queued（next-turn 排队）/ steering（next-step 插话）。 */
 export type QueuedMessageView = {
   id: string
   text: string
+  /** 气泡显示文本（显示/指令分离）：斜杠命令排队时为用户原草稿；缺省渲染 text */
+  displayLabel?: string
   quote?: string
   at: string
   placement: 'queued' | 'steering'
@@ -509,9 +810,28 @@ export type RunAgentTurnResult = {
 
 export type WriteConfirmationView =
   | { kind: 'create'; path: string; content: string }
-  | { kind: 'edit'; path: string; oldText: string; newText: string }
+  | { kind: 'edit'; path: string; oldText: string; newText: string; /** 全部替换：确认面板按候选原文在当前文件的所有出现处预览 */ replaceAll?: boolean }
   | { kind: 'rename'; fromPath: string; toPath: string }
   | { kind: 'delete'; path: string }
+
+/** 提问卡的用户回答视图（answer 存在则卡片只读）。 */
+export type AskUserQuestionAnswerView = {
+  selectedLabels: string[]
+  text: string
+  outcome: 'answered' | 'cancelled'
+  answeredAt: string
+}
+
+/** 待回答请求视图（question-required 事件载荷与会话快照共用）。 */
+export type AskUserQuestionRequestView = {
+  /** 提问请求 id（= 工具调用 id = 提问卡消息的 questionId） */
+  questionId: string
+  question: string
+  header?: string
+  options?: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+  createdAt: string
+}
 
 export type FileChangeConfirmationView = {
   id: string
@@ -526,6 +846,14 @@ export type FileChangeConfirmationView = {
 
 export type AgentUiEvent =
   | { type: 'run-start'; runId: string; sessionId: string }
+  /**
+   * driver 出错收尾（数据安全计划 F8 运行身份）：runId 标识本次连续运行——
+   * 停止后立即重发时旧 driver 的收尾可能晚于新 run 的事件到达，UI 据此识别
+   * 过期收尾，不接受其整份快照。
+   */
+  | { type: 'run-error'; runId: string; sessionId: string; error: NovAiError }
+  /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
+  | { type: 'run-finish'; runId: string; sessionId: string; result: RunAgentTurnResult }
   | { type: 'message'; sessionId: string; message: ChatMessageView }
   /** 模型流式输出的文本增量（瞬态渲染态）；同一条 assistant 消息共享稳定 messageId，最终由 message 事件原位落盘。 */
   | { type: 'message-delta'; sessionId: string; messageId: string; text: string }
@@ -536,7 +864,7 @@ export type AgentUiEvent =
   | { type: 'tool-call'; sessionId: string; toolCall: ToolCallView }
   | { type: 'tool-result'; sessionId: string; toolResult: ToolResultView }
   /** 写工具落盘后广播（载荷为完整账本记录）；文件树刷新用。 */
-  | { type: 'file-changed'; sessionId: string; file: FileChangeRecordView }
+  | { type: 'file-changed'; projectId: string; sessionId: string; file: FileChangeRecordView }
   /** 收件箱任何变化（入队/抽干/编辑/删除）时广播全量快照。 */
   | { type: 'queue-updated'; sessionId: string; queue: QueuedMessageView[] }
   | { type: 'confirmation-required'; sessionId: string; request: FileChangeConfirmationView }
@@ -545,15 +873,28 @@ export type AgentUiEvent =
    * 要素管理员会话）打「待确认」徽标；激活会话的确认卡仍以 confirmation-required 为准。
    */
   | { type: 'confirmations-updated'; sessionId: string; confirmations: FileChangeConfirmationView[] }
-  | { type: 'run-error'; sessionId: string; error: NovAiError }
-  /** driver 一次连续运行收敛（抽干收工/停止收尾）；多 turn 时只在最后发一次。 */
-  | { type: 'run-finish'; sessionId: string; result: RunAgentTurnResult }
+  /**
+   * 主动提问到达：Agent 在任务中途向用户提了一个问题，等待回答（questionMap 挂起）。
+   * UI 据此渲染提问卡可交互态并等待期间改道普通输入；回答经 respondQuestion 提交。
+   */
+  | { type: 'question-required'; sessionId: string; request: AskUserQuestionRequestView }
+  /**
+   * 某会话的待回答快照（提问注册/resolve 后广播）：会话列表据此打「待回答」徽标，
+   * 切换会话后仍能恢复等待态（与 confirmations-updated 同构）。
+   */
+  | { type: 'questions-updated'; sessionId: string; questions: AskUserQuestionRequestView[] }
   /**
    * 服务端新落盘了一个会话（委派会话在主会话运行中创建）：载荷自带列表摘要，
    * 前端直接 upsert 进会话列表——事件后再遍历文件系统会在创建方连发落盘的
    * 写窗口内漏掉新会话文件，不可靠。
    */
   | { type: 'session-created'; sessionId: string; projectId: string; summary: ChatSessionSummaryView }
+  /**
+   * 会话后台保存失败（fire-and-forget 路径，如提问卡/回答落盘）：没有调用方接收
+   * 异常，失败必须广播给 UI 可观测展示，不得静默吞掉（数据安全计划 §3-4）。
+   * reason 说明是哪条链路的保存（如「提问卡落盘」「回答落盘」）。
+   */
+  | { type: 'session-save-failed'; sessionId: string; projectId: string; reason: string; message: string }
 
 export type NovAiErrorCode =
   | 'PROJECT_NOT_OPEN'

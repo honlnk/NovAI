@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Category } from '../../constants/category'
 import Tooltip from '../ui/Tooltip.vue'
+import AppIcon from '../ui/AppIcon.vue'
 
 defineProps<{
   activeCategory: Category
@@ -18,17 +20,26 @@ const emit = defineEmits<{
   'element-manager': []
   /** 打开向量索引独立管理页（RagIndexModal） */
   rag: []
+  /** 打开关系图谱弹窗（RelationModal） */
+  relation: []
+  /** 打开时间轴弹窗（TimelineModal） */
+  timeline: []
 }>()
 
 /**
  * 顶部分类项（设置走单独的 openSettings，不在此列）。
- * 顺序按产品决策：对话 → 章节 → 要素 → 提示词。
+ * 顺序按产品决策：对话 → 章节 → 要素 → 提示词 → 技能 → 计划 → 伏笔（提示词之后、设置之前）。
+ * 技能排在提示词之后、计划之前（技能包 UI/UX 施工计划决策 3）。
  */
 const categoryItems: { key: Category; label: string; icon: string }[] = [
   { key: 'conversation', label: '对话', icon: 'chat' },
   { key: 'chapter', label: '章节', icon: 'book' },
   { key: 'element', label: '要素', icon: 'tag' },
   { key: 'prompt', label: '提示词', icon: 'note' },
+  { key: 'skill', label: '技能', icon: 'skill' },
+  { key: 'plan', label: '计划', icon: 'clipboard' },
+  { key: 'foreshadowing', label: '伏笔', icon: 'foreshadowing' },
+  { key: 'rhythm', label: '节奏', icon: 'rhythm' },
 ]
 
 /**
@@ -36,7 +47,7 @@ const categoryItems: { key: Category; label: string; icon: string }[] = [
  * enabled 标记是否已实现：已实现的正常态可点击，未实现的灰一档提示「即将推出」。
  * 顺序对应原 FileTreeSidebar 底部：校对 → 章节整理 → 版本管理，管理要素与向量索引为后补。
  */
-const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag'; label: string; icon: string; enabled: boolean }[] = [
+const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag' | 'relation' | 'timeline'; label: string; icon: string; enabled: boolean }[] = [
   { key: 'proofread', label: '校对', icon: 'check', enabled: false },
   // 章节整理的机械改名工具已下线（2026-09-21）：它是未来 AI 整理模块的前置基建，
   // 待该模块立计划开发时再启用；命名规范的工具层强制不受影响。
@@ -46,106 +57,175 @@ const actionItems: { key: 'proofread' | 'organize' | 'version' | 'element-manage
   // 不占用当前会话的上下文。图标与 ChatPanel 工具栏按钮同为叶子。
   { key: 'element-manager', label: '管理要素', icon: 'library', enabled: true },
   { key: 'rag', label: '向量索引', icon: 'database', enabled: true },
+  // 关系图谱：人物/势力/地点关系的可视化画布与登记入口（关系图谱施工计划 §六）
+  { key: 'relation', label: '关系图谱', icon: 'network', enabled: true },
+  // 时间线：事件账本的时间轴弹窗入口（时间线 JSON 化改造施工计划 §9.4）
+  { key: 'timeline', label: '时间线', icon: 'timeline', enabled: true },
 ]
 
 /**
  * 模板里不能直接动态调 emit（联合类型无法匹配 emit 重载），
  * 在 script 里集中分发。
  */
-function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag') {
+function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager' | 'rag' | 'relation' | 'timeline') {
   switch (key) {
     case 'proofread': emit('proofread'); break
     case 'organize': emit('organize'); break
     case 'version': emit('version'); break
     case 'element-manager': emit('element-manager'); break
     case 'rag': emit('rag'); break
+    case 'relation': emit('relation'); break
+    case 'timeline': emit('timeline'); break
   }
 }
+
+/**
+ * 矮屏滚动提示：滚动区上/下缘还有被遮住的内容时亮起发光带（双向对称）。
+ * 纯 CSS 判定不了「是否可滚动」，由 scroll 事件 + ResizeObserver 维护该状态。
+ */
+const scrollArea = ref<HTMLElement | null>(null)
+const canScrollUp = ref(false)
+const canScrollDown = ref(false)
+
+function updateScrollHint() {
+  const el = scrollArea.value
+  if (!el) return
+  // 1px 容差防浮点误差；滚到头（该侧没有隐藏内容）即熄灭
+  canScrollUp.value = el.scrollTop > 1
+  canScrollDown.value = el.scrollTop + el.clientHeight < el.scrollHeight - 1
+}
+
+let hintObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  const el = scrollArea.value
+  if (!el) return
+  el.addEventListener('scroll', updateScrollHint, { passive: true })
+  // 观察滚动区自身（视口/布局变化）与两个内容组（将来增删图标项），高度变化后重算
+  const observer = new ResizeObserver(updateScrollHint)
+  hintObserver = observer
+  observer.observe(el)
+  Array.from(el.children).forEach((child) => observer.observe(child))
+})
+
+onBeforeUnmount(() => {
+  scrollArea.value?.removeEventListener('scroll', updateScrollHint)
+  hintObserver?.disconnect()
+  hintObserver = null
+})
 </script>
 
 <template>
-  <nav class="flex w-14 shrink-0 flex-col items-center justify-between border-r border-white/10 bg-[#171717] py-2">
-    <!-- 顶部分类图标 -->
-    <div class="flex flex-col items-center gap-1">
-      <Tooltip
-        v-for="item in categoryItems"
-        :key="item.key"
-        :text="item.label"
-        preferred-placement="right"
-      >
-        <button
-          :aria-label="item.label"
-          :class="[
-            'group flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
-            activeCategory === item.key
-              ? 'bg-white/15 text-white'
-              : 'text-gray-400 hover:bg-white/10 hover:text-gray-200',
-          ]"
-          @click="emit('select', item.key)"
-        >
-          <!-- 对话 -->
-          <svg v-if="item.icon === 'chat'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-          </svg>
-          <!-- 章节 -->
-          <svg v-else-if="item.icon === 'book'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-          </svg>
-          <!-- 要素 -->
-          <svg v-else-if="item.icon === 'tag'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-          </svg>
-          <!-- 提示词 -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-          </svg>
-        </button>
-      </Tooltip>
+  <!-- z-[46]：显式层级让分类抽屉（z-[45]）收起时从工具栏下方滑过而不是盖过它；
+       仍低于全屏弹窗/tooltip 的 z-50（z 序：遮罩 40 < 抽屉 45 < 工具栏 46 < 弹窗 50） -->
+  <!-- 矮屏溢出（两段式）：分隔线 + 设置 + 返回首页固定在底座、矮屏也不消失；
+       其余内容在中部滚动区内滚动。滚动区内部仍是 flex sticky-footer 模式——
+       不用 justify-between（负剩余空间下起点侧溢出不可达），动作组用 mt-auto：
+       规范规定 auto margin 在剩余空间为负时按 0 处理，空间充裕时动作组贴底
+       （视觉同 justify-between），溢出时与分类组合拢、区内滚动。 -->
+  <nav class="z-[46] flex w-14 shrink-0 flex-col border-r border-white/10 bg-[#171717] py-2">
+    <!-- 中部滚动区：外包 relative 壳挂发光提示层——提示层不能放进滚动容器，
+         否则 absolute bottom-0 会锚到内容末端、随内容一起滚走 -->
+    <div class="relative flex min-h-0 flex-1 flex-col">
+      <div ref="scrollArea" class="flex min-h-0 flex-1 flex-col items-center overflow-y-auto">
+        <!-- 顶部分类图标 -->
+        <div class="flex shrink-0 flex-col items-center gap-1">
+          <Tooltip
+            v-for="item in categoryItems"
+            :key="item.key"
+            :text="item.label"
+            preferred-placement="right"
+          >
+            <button
+              :aria-label="item.label"
+              :class="[
+                'group flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+                activeCategory === item.key
+                  ? 'bg-white/15 text-white'
+                  : 'text-gray-400 hover:bg-white/10 hover:text-gray-200',
+              ]"
+              @click="emit('select', item.key)"
+            >
+              <!-- 对话 -->
+              <AppIcon name="message-circle-more" :size="20" class="h-5 w-5" v-if="item.icon === 'chat'" />
+              <!-- 章节 -->
+              <AppIcon name="book-open" :size="20" class="h-5 w-5" v-else-if="item.icon === 'book'" />
+              <!-- 要素 -->
+              <AppIcon name="tag" :size="20" class="h-5 w-5" v-else-if="item.icon === 'tag'" />
+              <!-- 提示词 -->
+              <AppIcon name="clipboard-check" :size="20" class="h-5 w-5" v-else-if="item.icon === 'note'" />
+              <!-- 技能（星火——可复用的写作方法素材） -->
+              <AppIcon name="sparkles" :size="20" class="h-5 w-5" v-else-if="item.icon === 'skill'" />
+              <!-- 计划（剪贴板清单） -->
+              <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'clipboard'" />
+              <!-- 伏笔（遮眼——隐藏的线索与真相） -->
+              <AppIcon name="eye-off" :size="20" class="h-5 w-5" v-else-if="item.icon === 'foreshadowing'" />
+              <!-- 节奏（心律波纹——全本节奏曲线） -->
+              <AppIcon name="activity" :size="20" class="h-5 w-5" v-else />
+            </button>
+          </Tooltip>
+        </div>
+
+        <!-- 底部动作项：功能占位（mt-auto：贴底，溢出时自动合拢参与滚动区内滚动） -->
+        <div class="mt-auto flex shrink-0 flex-col items-center gap-1">
+          <!-- 功能项：已实现的正常态，未实现的灰一档提示「即将推出」 -->
+          <Tooltip
+            v-for="item in actionItems"
+            :key="item.key"
+            :text="item.enabled ? item.label : `${item.label}（即将推出）`"
+            :delay="300"
+            preferred-placement="right"
+          >
+            <button
+              :aria-label="item.enabled ? item.label : `${item.label}（即将推出）`"
+              :class="[
+                'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+                item.enabled
+                  ? 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
+                  : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
+              ]"
+              @click="emitAction(item.key)"
+            >
+              <!-- 校对 -->
+              <AppIcon name="circle-check" :size="20" class="h-5 w-5" v-if="item.icon === 'check'" />
+              <!-- 章节整理 -->
+              <AppIcon name="list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'list'" />
+              <!-- 版本管理 -->
+              <AppIcon name="arrows-right-left" :size="20" class="h-5 w-5" v-else-if="item.icon === 'branch'" />
+              <!-- 管理要素（书架，与聊天工具栏按钮同款） -->
+              <AppIcon name="library" :size="20" class="h-5 w-5" v-else-if="item.icon === 'library'" />
+              <!-- 向量索引（circle-stack） -->
+              <AppIcon name="database" :size="20" class="h-5 w-5" v-else-if="item.icon === 'database'" />
+              <!-- 关系图谱（节点连线网络） -->
+              <AppIcon name="network" :size="20" class="h-5 w-5" v-else-if="item.icon === 'network'" />
+              <!-- 时间线（时钟回溯——故事内时间轴） -->
+              <AppIcon name="timeline" :size="20" class="h-5 w-5" v-else />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+
+      <!-- 发光提示（双向）：该侧还有被遮住的内容时亮起；不挡点击/悬停、不随内容滚动。
+           各向越界 8px 贴住视觉边界——顶部贴 nav 顶缘（py-2）、底部亮缘正对分隔线
+           （底座 pt-1 + 分隔线 my-1），光从「内容消失线」发出 -->
+      <div
+        aria-hidden="true"
+        :class="[
+          'pointer-events-none absolute inset-x-0 -top-2 h-8 bg-linear-to-b from-white/15 via-white/5 to-transparent transition-opacity duration-200',
+          canScrollUp ? 'opacity-100' : 'opacity-0',
+        ]"
+      />
+      <div
+        aria-hidden="true"
+        :class="[
+          'pointer-events-none absolute inset-x-0 -bottom-2 h-8 bg-linear-to-t from-white/15 via-white/5 to-transparent transition-opacity duration-200',
+          canScrollDown ? 'opacity-100' : 'opacity-0',
+        ]"
+      />
     </div>
 
-    <!-- 底部动作项：功能占位 + 设置 + 返回首页 -->
-    <div class="flex flex-col items-center gap-1">
-      <!-- 功能项：已实现的正常态，未实现的灰一档提示「即将推出」 -->
-      <Tooltip
-        v-for="item in actionItems"
-        :key="item.key"
-        :text="item.enabled ? item.label : `${item.label}（即将推出）`"
-        :delay="300"
-        preferred-placement="right"
-      >
-        <button
-          :aria-label="item.enabled ? item.label : `${item.label}（即将推出）`"
-          :class="[
-            'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
-            item.enabled
-              ? 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
-              : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
-          ]"
-          @click="emitAction(item.key)"
-        >
-          <!-- 校对 -->
-          <svg v-if="item.icon === 'check'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <!-- 章节整理 -->
-          <svg v-else-if="item.icon === 'list'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-          </svg>
-          <!-- 版本管理 -->
-          <svg v-else-if="item.icon === 'branch'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-          </svg>
-          <!-- 管理要素（书架，与聊天工具栏按钮同款） -->
-          <svg v-else-if="item.icon === 'library'" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 6l4 14M12 6v14M8 8v12M4 4v16" />
-          </svg>
-          <!-- 向量索引（circle-stack） -->
-          <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 5.625c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
-          </svg>
-        </button>
-      </Tooltip>
-
+    <!-- 固定底座：分隔线 + 设置 + 返回首页（矮屏也始终可见可点） -->
+    <div class="flex shrink-0 flex-col items-center gap-1 pt-1">
       <!-- 分隔线 -->
       <div class="my-1 h-px w-6 bg-white/10" />
 
@@ -155,10 +235,7 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           class="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
           @click="emit('openSettings')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
+          <AppIcon name="settings" :size="20" class="h-5 w-5" />
         </button>
       </Tooltip>
       <Tooltip text="返回首页" :delay="300" preferred-placement="right">
@@ -167,9 +244,7 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           class="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
           @click="emit('backToHome')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-          </svg>
+          <AppIcon name="home" :size="20" class="h-5 w-5" />
         </button>
       </Tooltip>
     </div>

@@ -16,6 +16,9 @@ import {
   updateRecentProjectCounts,
 } from '@novai/core/services/project-service'
 import {
+  FileExistsError,
+  FileSaveConflictError,
+  createFile,
   readFile,
   refreshFiles,
   writeFile,
@@ -28,8 +31,9 @@ import type {
   ProjectFileNodeView,
   ProjectView,
 } from '@novai/core/services/types'
+import { ProjectPermissionRequiredError } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
-import type { PermissionPreset } from '@novai/core/types/project'
+import type { ForeshadowingStatusMode, PermissionPreset } from '@novai/core/types/project'
 import type { RecentProject } from '@novai/core/types/project'
 
 /**
@@ -37,6 +41,34 @@ import type { RecentProject } from '@novai/core/types/project'
  * onMounted 等场景可能多次触发 loadRecentProjects，用 module 级 flag 保证同一时刻只跑一次后台刷新。
  */
 let isRefreshingCounts = false
+
+/**
+ * 项目操作的非失败反馈：用户主动取消、待重新授权、无记录等中性/提醒级信息。
+ * 与 errorMessage（真实失败的红色错误）严格分级——取消与待授权不是错误（交互优化计划 §5）。
+ */
+export type ProjectActionNotice = {
+  kind: 'cancelled' | 'permission' | 'info'
+  message: string
+  /** kind='permission' 时提供重新授权的重跑目标：'last'=上次项目，其余为最近项目 id */
+  retryTarget?: string
+}
+
+/**
+ * 内容面板手动保存的结果（交互优化计划 §6 保存状态机的数据源）：
+ * ok=true 才算「已保存」；conflict=true 表示版本失配（外部修改/删除），
+ * 草稿仍保留在面板，由用户选择覆盖保存或读取最新。
+ */
+export type SaveFileOutcome =
+  | { ok: true; file: FileContentView }
+  | { ok: false; conflict: boolean; message: string; diskUpdatedAt?: string }
+
+/**
+ * 新建文件语义写入的结果（数据安全计划 §3-3「恢复为草稿副本」/ §3-6「将草稿另存为副本」）：
+ * exists=true 表示目标已被占用——副本保存绝不覆盖，调用方提示另选名称。
+ */
+export type CreateFileOutcome =
+  | { ok: true; file: FileContentView }
+  | { ok: false; exists: boolean; message: string }
 
 export const useProjectStore = defineStore('project', () => {
   const currentProject = ref<ProjectView | null>(null)
@@ -46,56 +78,96 @@ export const useProjectStore = defineStore('project', () => {
   const isBusy = ref(false)
   const errorMessage = ref('')
   const statusMessage = ref('等待选择小说项目')
+  const notice = ref<ProjectActionNotice | null>(null)
+
+  function dismissNotice() {
+    notice.value = null
+  }
 
   const isReady = computed(() => currentProject.value !== null)
   const isFileSystemSupported = computed(() => isProjectAccessSupported())
 
+  /**
+   * 项目选择代次（数据安全计划 F6）：每次发起打开/创建/恢复项目递增，关闭项目同样
+   * 递增。恢复流程（restoreRecentProject 等）挂起期间用户已切到别的项目（或回到首页）
+   * 时，晚到的恢复结果不覆盖新现场——只完成自己的只读工作，不 setCurrentProject。
+   */
+  let projectSelectionGeneration = 0
+
   async function createNewProject(projectName: string) {
-    return runProjectAction(async () => {
-      const project = await createProject(projectName)
-      await setCurrentProject(project)
-      statusMessage.value = `已创建项目「${project.name}」`
-      return project
-    })
+    const generation = ++projectSelectionGeneration
+    return runProjectAction(
+      async () => {
+        const project = await createProject(projectName)
+        if (generation !== projectSelectionGeneration) {
+          return null
+        }
+        await setCurrentProject(project)
+        statusMessage.value = `已创建项目「${project.name}」`
+        return project
+      },
+      { cancelNotice: '未选择目录，项目未创建' },
+    )
   }
 
   async function openExistingProject() {
-    return runProjectAction(async () => {
-      const project = await openProject()
-      await setCurrentProject(project)
-      statusMessage.value = `已打开项目「${project.name}」`
-      return project
-    })
+    const generation = ++projectSelectionGeneration
+    return runProjectAction(
+      async () => {
+        const project = await openProject()
+        if (generation !== projectSelectionGeneration) {
+          return null
+        }
+        await setCurrentProject(project)
+        statusMessage.value = `已打开项目「${project.name}」`
+        return project
+      },
+      { cancelNotice: '未选择目录，项目未打开' },
+    )
   }
 
   async function restoreLastOpenedProject() {
-    return runProjectAction(async () => {
-      const project = await restoreLastProject()
+    const generation = ++projectSelectionGeneration
+    return runProjectAction(
+      async () => {
+        const project = await restoreLastProject()
 
-      if (!project) {
-        statusMessage.value = '没有可恢复的上次项目，或目录权限尚未授权'
-        return null
-      }
+        if (!project) {
+          notice.value = { kind: 'info', message: '没有可恢复的上次项目记录' }
+          return null
+        }
+        if (generation !== projectSelectionGeneration) {
+          return null
+        }
 
-      await setCurrentProject(project)
-      statusMessage.value = `已恢复上次项目「${project.name}」`
-      return project
-    })
+        await setCurrentProject(project)
+        statusMessage.value = `已恢复上次项目「${project.name}」`
+        return project
+      },
+      { permissionRetryTarget: 'last' },
+    )
   }
 
   async function openRecentProject(projectId: string) {
-    return runProjectAction(async () => {
-      const project = await restoreRecentProject(projectId)
+    const generation = ++projectSelectionGeneration
+    return runProjectAction(
+      async () => {
+        const project = await restoreRecentProject(projectId)
 
-      if (!project) {
-        statusMessage.value = '没有找到该最近项目，或目录权限尚未授权'
-        return null
-      }
+        if (!project) {
+          notice.value = { kind: 'info', message: '没有找到该最近项目记录' }
+          return null
+        }
+        if (generation !== projectSelectionGeneration) {
+          return null
+        }
 
-      await setCurrentProject(project)
-      statusMessage.value = `已打开最近项目「${project.name}」`
-      return project
-    })
+        await setCurrentProject(project)
+        statusMessage.value = `已打开最近项目「${project.name}」`
+        return project
+      },
+      { permissionRetryTarget: projectId },
+    )
   }
 
   async function loadLastProjectSummary() {
@@ -198,6 +270,8 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     const project = currentProject.value
+    // 关闭也是一次项目选择意图：此后晚到的恢复结果不得复活已关闭的项目现场
+    projectSelectionGeneration += 1
 
     await runProjectAction(async () => {
       await closeProject(project.id)
@@ -207,40 +281,165 @@ export const useProjectStore = defineStore('project', () => {
     })
   }
 
+  /**
+   * 文件选择代次（数据安全计划 F6）：每次发起新的打开递增。读取完成时已有更新的
+   * 选择意图（读了甲又读乙、甲后完成）或项目已切走，结果直接丢弃——当前面板
+   * 不被过期读取覆盖。
+   */
+  let fileSelectionGeneration = 0
+
   async function openFile(path: string) {
     if (!currentProject.value) {
       return null
     }
+    const projectId = currentProject.value.id
+    const generation = ++fileSelectionGeneration
 
     errorMessage.value = ''
 
     try {
-      activeFile.value = await readFile(currentProject.value.id, path)
-      return activeFile.value
+      const content = await readFile(projectId, path)
+      if (generation !== fileSelectionGeneration || currentProject.value?.id !== projectId) {
+        return null
+      }
+      activeFile.value = content
+      return content
     } catch (error) {
-      errorMessage.value = toMessage(error, '读取文件失败')
+      if (currentProject.value?.id === projectId) {
+        errorMessage.value = toMessage(error, '读取文件失败')
+      }
       return null
     }
   }
 
   /**
-   * 保存内容面板编辑模式的草稿到磁盘。
-   * 写盘成功后更新 activeFile（同步最新 updatedAt），不刷新整个文件树
-   *（文件树结构未变，仅内容更新）。
+   * 只读探测某文件当前磁盘内容，不动 activeFile（§8 确认面板审阅候选写入用：
+   * 展示 diff 与确认前版本复检都不应把用户正在看的文件换掉）。
+   * 文件不存在（create 候选目标已被占用等）返回 null。
    */
-  async function saveFile(path: string, content: string) {
+  async function peekFile(path: string): Promise<FileContentView | null> {
     if (!currentProject.value) {
       return null
+    }
+    try {
+      return await readFile(currentProject.value.id, path)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 带失败原因的只读探测（数据安全计划 §3-5：磁盘读取失败与文件不存在必须分开提示，
+   * 不能把所有异常都解释为「文件不存在」）。项目未打开时返回 unreadable。
+   */
+  async function probeFile(
+    path: string,
+    targetProjectId?: string,
+  ): Promise<
+    | { kind: 'ok'; file: FileContentView }
+    | { kind: 'missing' }
+    | { kind: 'unreadable'; message: string }
+  > {
+    const projectId = targetProjectId ?? currentProject.value?.id
+    if (!projectId) {
+      return { kind: 'unreadable', message: '没有打开的项目' }
+    }
+    try {
+      const file = await readFile(projectId, path)
+      return { kind: 'ok', file }
+    } catch (error) {
+      // 文件系统 API 的「不存在」信号（getFileHandle/getDirectoryHandle 抛 NotFoundError）
+      if (error instanceof DOMException && error.name === 'NotFoundError') {
+        return { kind: 'missing' }
+      }
+      return { kind: 'unreadable', message: toMessage(error, '读取文件失败') }
+    }
+  }
+
+  /**
+   * 保存内容面板编辑模式的草稿到磁盘（数据安全计划 §3-1：保存绑定完整请求上下文）。
+   *
+   * - 目标项目在调用开始时固定：等待写盘期间切换项目，写盘仍落在原项目，
+   *   不会写入乙项目；
+   * - 结果只应用仍有效的归属：等待期间当前文件已被切走时不回写 activeFile
+   *   （不把面板拉回被保存的文件）；面板按返回的 file 处理本次保存绑定的草稿。
+   *
+   * 返回判别结果供面板保存状态机使用：冲突（文件被外部修改/删除）单独标出，
+   * 由面板的冲突界面（版本比较与选择）呈现，本 store 不再提供覆盖出口。
+   */
+  async function saveFile(
+    path: string,
+    content: string,
+    options?: {
+      expectedUpdatedAt?: string
+      /** 编辑基线正文的内容哈希（正文自动保存计划 §四.3：时间戳识别不出变化时兜底判冲突） */
+      expectedBaseHash?: string
+      force?: boolean
+      projectId?: string
+    },
+  ): Promise<SaveFileOutcome> {
+    const projectId = options?.projectId ?? currentProject.value?.id
+    if (!projectId) {
+      return { ok: false, conflict: false, message: '没有打开的项目' }
     }
 
     errorMessage.value = ''
 
     try {
-      activeFile.value = await writeFile(currentProject.value.id, path, content)
-      return activeFile.value
+      const saved = await writeFile(projectId, path, content, {
+        ...(options?.force
+          ? {}
+          : {
+              ...(options?.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: options.expectedUpdatedAt } : {}),
+              ...(options?.expectedBaseHash !== undefined ? { expectedBaseHash: options.expectedBaseHash } : {}),
+            }),
+      })
+      if (currentProject.value?.id === projectId && activeFile.value?.path === path) {
+        activeFile.value = saved
+      }
+      return { ok: true, file: saved }
     } catch (error) {
-      errorMessage.value = toMessage(error, '保存文件失败')
-      return null
+      if (error instanceof FileSaveConflictError) {
+        return {
+          ok: false,
+          conflict: true,
+          message: error.message,
+          diskUpdatedAt: error.diskUpdatedAt,
+        }
+      }
+      const message = toMessage(error, '保存文件失败')
+      errorMessage.value = message
+      return { ok: false, conflict: false, message }
+    }
+  }
+
+  /**
+   * 新建文件语义的写入（数据安全计划 §3-3/§3-6）：「恢复为草稿副本」「将草稿另存为副本」
+   * 用。目标已存在时失败（exists=true，提示另选名称），绝不覆盖既有文件；
+   * 不触碰 activeFile——打开新文件由调用方决定。
+   */
+  async function createFileCopy(
+    path: string,
+    content: string,
+    options?: { projectId?: string },
+  ): Promise<CreateFileOutcome> {
+    const projectId = options?.projectId ?? currentProject.value?.id
+    if (!projectId) {
+      return { ok: false, exists: false, message: '没有打开的项目' }
+    }
+
+    errorMessage.value = ''
+
+    try {
+      const created = await createFile(projectId, path, content)
+      return { ok: true, file: created }
+    } catch (error) {
+      if (error instanceof FileExistsError) {
+        return { ok: false, exists: true, message: error.message }
+      }
+      const message = toMessage(error, '保存副本失败')
+      errorMessage.value = message
+      return { ok: false, exists: false, message }
     }
   }
 
@@ -261,10 +460,15 @@ export const useProjectStore = defineStore('project', () => {
 
     errorMessage.value = ''
 
+    const projectId = currentProject.value.id
     try {
+      const files = await refreshFiles(projectId)
+      if (currentProject.value?.id !== projectId) {
+        return
+      }
       currentProject.value = {
         ...currentProject.value,
-        files: await refreshFiles(currentProject.value.id),
+        files,
       }
       await syncRecentProjectCounts()
       statusMessage.value = '文件树已刷新'
@@ -406,13 +610,55 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
-  async function runProjectAction<T>(action: () => Promise<T>) {
+  /**
+   * 切换伏笔看板列模式（创作心智模块 §七：看板顶栏与设置页共用写回链路）：
+   * 写盘 + 同步 currentProject 快照，伏笔看板列口径即时切换。
+   */
+  async function changeForeshadowingStatusMode(
+    projectId: string,
+    mode: ForeshadowingStatusMode,
+  ): Promise<boolean> {
     errorMessage.value = ''
+
+    try {
+      const savedConfig = await updateConfig(projectId, {
+        settings: { foreshadowingStatusMode: mode },
+      })
+      updateCurrentProjectConfig(savedConfig)
+      return true
+    } catch (error) {
+      errorMessage.value = toMessage(error, '切换伏笔列模式失败')
+      return false
+    }
+  }
+
+  async function runProjectAction<T>(
+    action: () => Promise<T>,
+    options: { cancelNotice?: string; permissionRetryTarget?: string } = {},
+  ) {
+    errorMessage.value = ''
+    notice.value = null
     isBusy.value = true
 
     try {
       return await action()
     } catch (error) {
+      // 分级反馈（交互优化计划 §5）：用户主动取消与权限待授权不是失败，
+      // 不进红色错误区，由视图在原操作附近就地轻提醒。
+      if (isAbortError(error)) {
+        notice.value = { kind: 'cancelled', message: options.cancelNotice ?? '操作已取消' }
+        return null
+      }
+
+      if (error instanceof ProjectPermissionRequiredError) {
+        notice.value = {
+          kind: 'permission',
+          message: error.message,
+          retryTarget: options.permissionRetryTarget,
+        }
+        return null
+      }
+
       errorMessage.value = toMessage(error, '项目操作失败')
       return null
     } finally {
@@ -428,19 +674,25 @@ export const useProjectStore = defineStore('project', () => {
     isFileSystemSupported,
     isReady,
     lastProjectSummary,
+    notice,
     recentProjects,
     statusMessage,
     changeActiveOutlinePath,
     changePermissionPreset,
     changeReasoningEffort,
+    changeForeshadowingStatusMode,
     clearActiveFile,
     closeCurrentProject,
+    createFileCopy,
     createNewProject,
+    dismissNotice,
     forgetLastOpenedProject,
     loadLastProjectSummary,
     loadRecentProjects,
     openExistingProject,
     openFile,
+    peekFile,
+    probeFile,
     openRecentProject,
     refreshTree,
     removeRecentProject,
@@ -449,6 +701,11 @@ export const useProjectStore = defineStore('project', () => {
     updateCurrentProjectConfig,
   }
 })
+
+/** 目录选择器用户取消时浏览器抛出的 AbortError（DOMException 的现代浏览器形态）。 */
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
 
 function toMessage(error: unknown, fallback: string) {
   if (error instanceof Error) {

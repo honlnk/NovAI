@@ -34,7 +34,6 @@ describe('buildAgentSystemPrompt', () => {
       'locations/：地点，一地一文件',
       'entities/：具体实体',
       'plots/：剧情事件',
-      'timeline/：时间线阶段',
       'worldbuilding/：世界观',
       'prompts/：提示词文件',
       '.novel/：应用内部数据',

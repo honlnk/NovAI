@@ -80,6 +80,24 @@ export function insertAfterSystem(view: ModelView, message: AgentMessage): void 
   view.messages = [view.messages[0], message, ...view.messages.slice(1)]
 }
 
+/**
+ * 插到 system（index 0）之后连续 `<system-reminder>` 块的末尾（《技能包底层能力
+ * 施工计划》决策 11）：引用层目录（如技能目录）排在宪法层与项目记忆 reminder 之后、
+ * 先于全部历史。与 insertAfterSystem 并存：后者恒插第 1 位（后注入者在前），
+ * 现有 reminder 的位置不动。空视图直接作为首条插入。
+ */
+export function insertAfterLeadingReminders(view: ModelView, message: AgentMessage): void {
+  let index = view.messages[0]?.role === 'system' ? 1 : 0
+  while (
+    index < view.messages.length
+    && view.messages[index]?.role === 'user'
+    && view.messages[index]!.content.trimStart().startsWith('<system-reminder>')
+  ) {
+    index += 1
+  }
+  view.messages = [...view.messages.slice(0, index), message, ...view.messages.slice(index)]
+}
+
 /** 原地替换指定下标的消息（reminder 内容更新用，保持其余消息对象不变）。 */
 export function replaceMessage(view: ModelView, index: number, message: AgentMessage): void {
   view.messages = view.messages.map((item, i) => (i === index ? message : item))

@@ -4,6 +4,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ReasoningEffort } from '@novai/core/types/ai'
 
 import type { reasoningEffortLabel } from '../../constants/reasoning-efforts'
+import AppIcon from '../ui/AppIcon.vue'
 
 /**
  * 思考强度档位选择器（对话输入区入口，思考强度计划 D3）：
@@ -68,19 +69,9 @@ onBeforeUnmount(() => {
       :title="`思考强度：${label}（点击切换档位）`"
       @click="toggle"
     >
-      <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
+      <AppIcon name="zap" :size="14" class="h-3.5 w-3.5 text-gray-400" />
       <span>{{ label }}</span>
-      <svg
-        class="h-3 w-3 text-gray-400 transition-transform"
-        :class="isOpen ? 'rotate-180' : ''"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-      </svg>
+      <AppIcon name="chevron-down" :size="12" class="h-3 w-3 text-gray-400 transition-transform" :class="isOpen ? 'rotate-180' : ''" />
     </button>
 
     <!-- 档位菜单：按钮上方弹出、右锚向左展开（入口在发送按钮左侧、贴近输入区右缘） -->
@@ -99,15 +90,7 @@ onBeforeUnmount(() => {
         class="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-gray-50"
         @click="select(option.value)"
       >
-        <svg
-          class="mt-0.5 h-4 w-4 shrink-0"
-          :class="option.value === effort ? 'text-blue-600' : 'text-transparent'"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-        </svg>
+        <AppIcon name="check" :size="16" class="mt-0.5 h-4 w-4 shrink-0" :class="option.value === effort ? 'text-blue-600' : 'text-transparent'" />
         <span class="min-w-0">
           <span class="block text-sm font-medium text-gray-800">{{ option.label }}</span>
           <span class="mt-0.5 block text-xs leading-snug text-gray-500">{{ option.hint }}</span>

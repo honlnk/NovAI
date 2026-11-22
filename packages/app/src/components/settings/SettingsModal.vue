@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import type { ProjectConfigPatch, ProjectConfigView } from '@novai/core/services/types'
 import BaseModal from '../ui/BaseModal.vue'
@@ -12,8 +12,8 @@ import RerankSettingsPanel from './RerankSettingsPanel.vue'
 import SearchSettingsPanel from './SearchSettingsPanel.vue'
 import { useProjectStore } from '../../stores/project'
 import { useSettingsStore } from '../../stores/settings'
-import { useToast } from '../../composables/useToast'
 import type { SearchSettingsForm } from '../../utils/search-settings'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   projectId: string
@@ -28,7 +28,6 @@ const emit = defineEmits<{
 
 const settingsStore = useSettingsStore()
 const projectStore = useProjectStore()
-const toast = useToast()
 
 type SettingsTab = 'llm' | 'embedding' | 'rerank' | 'completion' | 'search' | 'element-manager' | 'project'
 
@@ -107,10 +106,12 @@ const projectForm = reactive({
   agentMaxTurns: 0,
   permissionPreset: 'chapter-material' as 'review' | 'chapter' | 'material' | 'chapter-material' | 'full',
   enableDebugLogging: false,
+  foreshadowingStatusMode: 'default' as 'default' | 'full',
+  rhythmDeviationThreshold: 3,
 })
 
 /** 自动保存状态，聚合展示在 footer 左侧。 */
-type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 const saveState = ref<SaveState>('idle')
 
 /** 回填表单期间挂起自动保存，避免磁盘数据回写触发一轮无意义保存。 */
@@ -182,6 +183,8 @@ onMounted(async () => {
         agentMaxTurns: settings.agentMaxTurns ?? 0,
         permissionPreset: settings.permissionPreset ?? 'chapter-material',
         enableDebugLogging: settings.enableDebugLogging ?? false,
+        foreshadowingStatusMode: settings.foreshadowingStatusMode ?? 'default',
+        rhythmDeviationThreshold: settings.rhythmDeviationThreshold ?? 3,
       })
     }
   }
@@ -246,7 +249,8 @@ function buildElementManagerPatch(): ProjectConfigPatch['elementManager'] {
   }
 
   pendingPatch = mergePendingPatch(pendingPatch, patch)
-  saveState.value = 'saving'
+  // 防抖窗口内是「待保存」而非「保存中」：请求尚未发出，不伪造进度（§5）
+  saveState.value = 'pending'
 
   if (saveTimer) {
     clearTimeout(saveTimer)
@@ -271,17 +275,59 @@ async function flushSave() {
   }
 
   const patch = pendingPatch
+  saveState.value = 'saving'
   const saved = await settingsStore.saveConfig(props.projectId, patch)
 
   if (saved) {
     pendingPatch = null
     syncCurrentProjectConfig(saved)
     saveState.value = 'saved'
+    scheduleSavedReset()
     return
   }
 
+  // 失败反馈就地收敛在底栏状态位（红色可点重试），不再叠加 toast 双通道报错
   saveState.value = 'error'
-  toast.error(settingsStore.errorMessage || '设置自动保存失败')
+}
+
+/** 「已自动保存」停留 2 秒后回到 idle，绿灯不长期驻留 */
+const SAVED_RESET_MS = 2000
+let savedResetTimer: ReturnType<typeof setTimeout> | undefined
+
+function scheduleSavedReset() {
+  if (savedResetTimer) {
+    clearTimeout(savedResetTimer)
+  }
+  savedResetTimer = setTimeout(() => {
+    savedResetTimer = undefined
+    if (saveState.value === 'saved') {
+      saveState.value = 'idle'
+    }
+  }, SAVED_RESET_MS)
+}
+
+onBeforeUnmount(() => {
+  if (savedResetTimer) {
+    clearTimeout(savedResetTimer)
+    savedResetTimer = undefined
+  }
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = undefined
+  }
+})
+
+/**
+ * 关闭前先落盘队列中的修改（设置页优化计划定式）。保存失败时不静默关闭——
+ * 队列与表单随组件卸载会丢失未保存更改（§5：失败保留现场、原因和重试），
+ * 保持打开，由用户重试或显式「放弃更改并关闭」。
+ */
+async function handleClose() {
+  await flushSave()
+  if (pendingPatch) {
+    return
+  }
+  emit('close')
 }
 
 /**
@@ -294,8 +340,13 @@ function handleSaveImmediately() {
   }, 0)
 }
 
-async function handleClose() {
-  await flushSave()
+/** 显式放弃未保存的更改并关闭：保存失败被拦截时的逃生口 */
+function discardAndClose() {
+  pendingPatch = null
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = undefined
+  }
   emit('close')
 }
 
@@ -374,9 +425,7 @@ function restoreTab(): SettingsTab {
         class="cursor-pointer rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
         @click="handleClose"
       >
-        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <AppIcon name="x" :size="20" class="h-5 w-5" />
       </button>
     </header>
 
@@ -426,13 +475,13 @@ function restoreTab(): SettingsTab {
       </div>
     </div>
 
-    <!-- 底栏：自动保存状态 + 关闭 -->
+    <!-- 底栏：自动保存状态（待保存/保存中/已保存/失败可重试）+ 关闭 -->
     <footer class="flex shrink-0 items-center justify-between border-t border-gray-200 px-5 py-4">
       <p
         class="text-xs"
         :class="{
           'text-gray-400': saveState === 'idle',
-          'text-gray-500': saveState === 'saving',
+          'text-gray-500': saveState === 'pending' || saveState === 'saving',
           'text-green-600': saveState === 'saved',
           'cursor-pointer font-medium text-red-600 hover:text-red-700': saveState === 'error',
         }"
@@ -440,17 +489,29 @@ function restoreTab(): SettingsTab {
         @click="retrySave"
       >
         <span v-if="saveState === 'idle'">更改会自动保存</span>
+        <span v-else-if="saveState === 'pending'">更改待保存…</span>
         <span v-else-if="saveState === 'saving'">保存中…</span>
         <span v-else-if="saveState === 'saved'">已自动保存</span>
         <span v-else>自动保存失败，点击重试</span>
       </p>
-      <button
-        type="button"
-        class="cursor-pointer rounded-lg bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
-        @click="handleClose"
-      >
-        关闭
-      </button>
+      <div class="flex items-center gap-3">
+        <button
+          v-if="saveState === 'error'"
+          type="button"
+          class="cursor-pointer rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          data-testid="settings-discard-close"
+          @click="discardAndClose"
+        >
+          放弃更改并关闭
+        </button>
+        <button
+          type="button"
+          class="cursor-pointer rounded-lg bg-black px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+          @click="handleClose"
+        >
+          关闭
+        </button>
+      </div>
     </footer>
   </BaseModal>
 </template>

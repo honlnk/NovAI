@@ -66,25 +66,39 @@ describe('主角色声明与重构前装配等价', () => {
     expect(AGENT_ROLES.main.wrapUserContent(input)).toBe(buildAgentUserContext(input))
   })
 
-  it('工具面 = 全量工具 + 委派工具（与重构前硬编码一致）', () => {
+  it('工具面 = 全量工具 + 委派工具 + 主动提问工具（主角色专属装配）', () => {
     const expectedFull = [
       'ReadFile', 'EditFile', 'CreateFile', 'RenameFile', 'DeleteFile',
-      'ListDirectory', 'FindFiles', 'RagSearch', 'LoadElements', 'GetFileChangeHistory',
+      'ListDirectory', 'FindFiles', 'SearchFiles', 'RagSearch', 'LoadElements', 'LoadSkill',
+      'ListPlans', 'ReadPlan', 'CreatePlan', 'UpdatePlan', 'DeletePlan',
+      'ListForeshadowing', 'ReadForeshadowing', 'ReadForeshadowingForPlanning',
+      'CreateForeshadowing', 'UpdateForeshadowing', 'DeleteForeshadowing',
+      'ForeshadowingCheck', 'ForeshadowingSync',
+      'RhythmList', 'RhythmRead', 'RhythmCreate', 'RhythmUpdate', 'RhythmDelete',
+      'RhythmCheck', 'RhythmSync', 'RhythmCurve',
+      'RelationList', 'RelationRead', 'RelationCreate', 'RelationUpdate', 'RelationDelete',
+      'RelationQuery', 'RelationCheck',
+      'TimelineList', 'TimelineRead', 'TimelineCreatePoint', 'TimelineCreateSpan',
+      'TimelineUpdate', 'TimelineDelete',
+      'GetFileChangeHistory',
       'WebSearch', 'WebFetch', 'KnowledgeLookup',
     ]
     const tools = AGENT_ROLES.main.createTools()
     const names = toolNames(tools)
-    expect(names).toEqual([...expectedFull, 'DelegateToElementManager'])
+    expect(names).toEqual([...expectedFull, 'DelegateToElementManager', 'AskUserQuestion'])
     for (const name of names) {
       expect(isAgentToolName(name)).toBe(true)
     }
-    // context 是委派工具的运行态（confirm/signal/事件转发），不传也能装配（测试/纯装配场景）
+    // context 是委派工具/提问工具的运行态（confirm/signal/事件转发），不传也能装配（测试/纯装配场景）
     expect(AGENT_ROLES.main.createTools({})).toHaveProperty('DelegateToElementManager')
+    expect(AGENT_ROLES.main.createTools({})).toHaveProperty('AskUserQuestion')
   })
 
   it('注入面声明：项目记忆与大纲都注入；不可被委派', () => {
     expect(AGENT_ROLES.main.injectNovaiOverview).toBe(true)
     expect(AGENT_ROLES.main.injectOutline).toBe(true)
+    expect(AGENT_ROLES.main.injectElementCatalog).toBe(true)
+    expect(AGENT_ROLES.main.injectSkillCatalog).toBe(true)
     expect(AGENT_ROLES.main.delegatable).toBe(false)
     expect(AGENT_ROLES.main.constraintDoc).toBeUndefined()
     expect(AGENT_ROLES.main.mergeConfig).toBeUndefined()
@@ -100,13 +114,14 @@ describe('要素管理员角色声明', () => {
     expect(viaRole).toBe(buildElementManagerSystemPrompt({ model: 'qwen-max' }))
   })
 
-  it('工具面 = 白名单七件（无委派工具，防递归）', () => {
+  it('工具面 = 白名单七件（无委派工具防递归，也无主动提问工具——要素管理员不问用户）', () => {
     const names = toolNames(AGENT_ROLES['element-manager'].createTools())
     expect(names.sort()).toEqual([
       'CreateFile', 'EditFile', 'FindFiles', 'ListDirectory',
       'RagSearch', 'ReadFile', 'RenameFile',
     ])
     expect(names).not.toContain('DelegateToElementManager')
+    expect(names).not.toContain('AskUserQuestion')
     expect(names).not.toContain('DeleteFile')
     expect(names).not.toContain('WebSearch')
   })
@@ -123,6 +138,8 @@ describe('要素管理员角色声明', () => {
     const role = AGENT_ROLES['element-manager']
     expect(role.injectNovaiOverview).toBe(false)
     expect(role.injectOutline).toBe(false)
+    expect(role.injectElementCatalog).toBe(false)
+    expect(role.injectSkillCatalog).toBe(false)
     expect(role.delegatable).toBe(true)
     expect(role.constraintDoc?.path).toBe('prompts/ELEMENT.md')
   })

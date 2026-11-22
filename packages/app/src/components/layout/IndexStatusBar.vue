@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import Tooltip from '../ui/Tooltip.vue'
+import AppIcon from '../ui/AppIcon.vue'
 import { useIndexStore, getIndexStatusDotClass, getIndexStatusLabel } from '../../stores/index'
 import type { RunStatusType } from '../../stores/chat'
 import type { IndexStatusView } from '@novai/core/services/types'
@@ -118,8 +119,10 @@ function formatTime(iso: string) {
 </script>
 
 <template>
+  <!-- z-[46]：应用骨架层（与 ActivityBar 同级）。高于左右抽屉遮罩（z-40）——
+       抽屉/内容面板蒙层不压状态栏；低于全屏弹窗与 toast（z-50） -->
   <div
-    class="flex h-7 shrink-0 items-center gap-3 border-t border-gray-200 bg-gray-50 px-3 text-xs text-gray-600"
+    class="z-[46] flex h-7 shrink-0 items-center gap-3 border-t border-gray-200 bg-gray-50 px-3 text-xs text-gray-600"
   >
     <!-- 左侧：项目层状态（索引 + 大纲） -->
     <div class="flex min-w-0 items-center gap-3">
@@ -141,13 +144,13 @@ function formatTime(iso: string) {
         </button>
       </Tooltip>
 
-      <!-- 当前激活大纲（紧凑内联，无壳）：📍 名称 × -->
+      <!-- 当前激活大纲（紧凑内联，无壳）：定位图标 名称 × -->
       <div
         v-if="activeOutlineName"
         class="flex min-w-0 items-center gap-1 text-green-600"
         title="当前写作大纲"
       >
-        <span class="shrink-0">📍</span>
+        <AppIcon name="map-pin" :size="12" class="shrink-0" />
         <span class="truncate font-medium">{{ activeOutlineName }}</span>
         <button
           type="button"
@@ -155,9 +158,7 @@ function formatTime(iso: string) {
           title="关闭大纲"
           @click="handleClearOutline"
         >
-          <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <AppIcon name="x" :size="12" class="h-3 w-3" />
         </button>
       </div>
     </div>

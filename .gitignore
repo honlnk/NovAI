@@ -4,3 +4,6 @@ dist
 .DS_Store
 *.tsbuildinfo
 .zcode/plans
+
+# Claude Code 本地配置与技能
+.claude/

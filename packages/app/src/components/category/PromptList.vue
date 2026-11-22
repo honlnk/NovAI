@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { ProjectFileNodeView } from '@novai/core/services/types'
 import { pickDirectoryChildren } from '../../utils/file-tree'
+import AppIcon from '../ui/AppIcon.vue'
 
 const props = defineProps<{
   files: ProjectFileNodeView[]
@@ -56,8 +57,10 @@ function isOutlineActive(path: string): boolean {
 
 <template>
   <div class="flex h-full flex-col">
-    <div class="px-4 py-3">
+    <div class="flex items-center justify-between px-4 py-3">
       <h2 class="text-sm font-semibold text-white">提示词</h2>
+      <!-- 移动端关闭：由 CategoryPanel 注入，并排在标题行右端 -->
+      <slot name="mobile-close" />
     </div>
 
     <div class="flex-1 overflow-y-auto px-2 pb-2">
@@ -74,7 +77,7 @@ function isOutlineActive(path: string): boolean {
           ]"
           @click="emit('selectFile', systemPrompt.path)"
         >
-          <span class="shrink-0">📄</span>
+          <AppIcon name="file-text" :size="15" class="shrink-0" />
           <span class="truncate">{{ systemPrompt.name }}</span>
           <span class="ml-auto shrink-0 text-xs text-gray-500">恒激活</span>
         </button>
@@ -96,7 +99,7 @@ function isOutlineActive(path: string): boolean {
           ]"
           @click="emit('selectFile', novaiOverview.path)"
         >
-          <span class="shrink-0">📋</span>
+          <AppIcon name="clipboard-list" :size="15" class="shrink-0" />
           <span class="truncate">{{ novaiOverview.name }}</span>
           <span class="ml-auto shrink-0 text-xs text-gray-500">背景注入</span>
         </button>
@@ -118,7 +121,7 @@ function isOutlineActive(path: string): boolean {
           ]"
           @click="emit('selectFile', elementSchema.path)"
         >
-          <span class="shrink-0">📚</span>
+          <AppIcon name="library" :size="15" class="shrink-0" />
           <span class="truncate">{{ elementSchema.name }}</span>
           <span class="ml-auto shrink-0 text-xs text-gray-500">要素管理专用</span>
         </button>
@@ -151,24 +154,24 @@ function isOutlineActive(path: string): boolean {
               ]"
               @click="emit('selectFile', node.path)"
             >
-              <span class="shrink-0">📜</span>
+              <AppIcon name="scroll" :size="15" class="shrink-0" />
               <span class="flex-1 truncate">{{ node.name }}</span>
               <!-- 已激活：绿色实心点，点击关闭 -->
               <span
                 v-if="isOutlineActive(node.path)"
-                class="shrink-0 text-xs text-green-400"
+                class="shrink-0 text-green-400"
                 role="button"
                 title="当前激活大纲，点击关闭"
                 aria-label="关闭当前大纲"
                 @click.stop="emit('changeOutline', null)"
-                >●</span>
+              ><AppIcon name="circle-dot" :size="12" /></span>
               <!-- 未激活：空心点，hover 显示，点击激活 -->
               <button
                 v-else
-                class="shrink-0 rounded px-1 text-xs text-gray-600 opacity-0 transition-opacity hover:text-gray-300 group-hover:opacity-100"
+                class="shrink-0 rounded px-1 text-gray-600 opacity-0 transition-opacity hover:text-gray-300 group-hover:opacity-100"
                 title="设为当前大纲"
                 @click.stop="emit('changeOutline', node.path)"
-                >○</button>
+              ><AppIcon name="circle" :size="12" /></button>
             </button>
           </li>
         </ul>

@@ -10,7 +10,9 @@ import {
   $isRangeSelection,
   $isTextNode,
   $setSelection,
+  COMMAND_PRIORITY_CRITICAL,
   createEditor,
+  KEY_ENTER_COMMAND,
   type ElementNode,
   type Klass,
   type LexicalEditor,
@@ -60,6 +62,12 @@ export interface ComposerBridge {
    * 三条件合并（照 dsh keymap）：event 自带标记 + 桥监听的 composition 期 + 尾窗。
    */
   isComposing: (event: Pick<KeyboardEvent, 'isComposing' | 'keyCode'>) => boolean
+  /**
+   * 组字是否进行中（或 Safari compositionend 后 10ms 尾窗）。
+   * 鼠标发送路径（不经键盘事件）用它守卫：组字期清空编辑器会与未提交的
+   * 组字 DOM 文本竞态，产生残行/丢字。
+   */
+  isCompositionActive: () => boolean
 }
 
 export interface ComposerBridgeOptions {
@@ -206,6 +214,21 @@ export function useComposerBridge(options: ComposerBridgeOptions = {}): Composer
     },
   })
   registerPlainText(editor)
+  // 非 Shift 的 Enter 在命令层兜底消费：ChatPanel 的 keydown 发送/菜单处理后，
+  // plain-text 插件仍会在同一次 keydown 里向已清空的编辑器插入换行（发送残行）。
+  // CRITICAL 优先级抢在它的 KEY_ENTER_COMMAND fallback 之前返回 true；
+  // Shift+Enter 放行保留换行，event 为 null 的内部派发不拦截。
+  editor.registerCommand(
+    KEY_ENTER_COMMAND,
+    (event) => {
+      if (event === null || event.shiftKey) {
+        return false
+      }
+      event.preventDefault()
+      return true
+    },
+    COMMAND_PRIORITY_CRITICAL,
+  )
   // 与 dsh composer 同参数：1000ms 合并窗
   registerHistory(editor, createEmptyHistoryState(), 1000)
 
@@ -281,7 +304,10 @@ export function useComposerBridge(options: ComposerBridgeOptions = {}): Composer
     let matched = false
     const cleaned = beforeCursor.replace(re, (match: string) => {
       matched = true
-      const boundary = match.startsWith('/') || match.startsWith('@') ? '' : match.slice(0, 1)
+      // 边界字符只可能是空白（(?:^|\s) 命中 \s 时 match 以该空白开头；命中 ^ 时
+      // match 直接以触发符开头，无边界）——按空白判定与触发符种类解耦，新增
+      // 触发符（如 #）不会再把触发符误留成「边界」（曾产生 `##技能名 ` 双井号）
+      const boundary = /^\s/.test(match) ? match.slice(0, 1) : ''
       return `${boundary}${replacement}`
     })
     if (!matched) return false
@@ -328,6 +354,9 @@ export function useComposerBridge(options: ComposerBridgeOptions = {}): Composer
     },
     isComposing(event) {
       return isImeComposing(event) || composingActive || Date.now() < composingGuardUntil
+    },
+    isCompositionActive() {
+      return composingActive || Date.now() < composingGuardUntil
     },
   }
 }
