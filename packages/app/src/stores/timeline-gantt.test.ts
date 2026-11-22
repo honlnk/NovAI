@@ -51,16 +51,43 @@ describe('layoutTimelineGantt（甘特排布）', () => {
     expect(rows(layout)).toEqual([0, 1, 0, 1])
   })
 
-  it('标题相撞的相邻点事件分行；明确时间计入宽度（有日期更早换行）', () => {
+  it('标题相撞的相邻点事件分行；日期写在表头，不计入标题占位', () => {
     const long = layoutTimelineGantt([point(0, '一二三四五六七八九十'), point(1, '一二三四五六七八九十')], 2, { minStep: 96, measure })
     expect(long.rowCount).toBe(2)
 
-    // 四字标题：右缘 x0+61，+12 间隙 ≤ 下一个左缘 x0+89 → 同行
+    // 四字标题：右缘 x0+61，+12 间隙 ≤ 下一个左缘 x0+89 → 同行；带短日期也不改变行排布
     const noDate = layoutTimelineGantt([point(0, '一二三四'), point(1, '一二三四')], 2, { minStep: 96, measure })
     expect(noDate.rowCount).toBe(1)
-    // 加两字日期（6 + 22）：右缘 x0+89，+12 越过 → 换行
     const withDate = layoutTimelineGantt([point(0, '一二三四', 'ab'), point(1, '一二三四')], 2, { minStep: 96, measure })
-    expect(withDate.rowCount).toBe(2)
+    expect(withDate.rowCount).toBe(1)
+    expect(withDate.items[0]!.right).toBe(noDate.items[0]!.right)
+  })
+
+  it('表头日期：落在事件起始列中心；相邻两列日期放不下时加宽列宽，互不重叠', () => {
+    // 「苍穹历·320年」8 字 × 11px = 88px；相邻两列需 (88 + 88) / 2 + 10 = 98px
+    const layout = layoutTimelineGantt([point(0, '甲', '苍穹历·320年'), point(1, '乙', '苍穹历·321年')], 2, { minStep: 48, measure })
+    expect(layout.step).toBe(98)
+    expect(layout.labels.map((label) => label.text)).toEqual(['苍穹历·320年', '苍穹历·321年'])
+    const [first, second] = layout.labels
+    expect(first!.x).toBe(ganttColumnX(0, 98))
+    expect(first!.x + first!.width / 2 + 10).toBeLessThanOrEqual(second!.x - second!.width / 2)
+    // 首列日期左缘不被截断
+    expect(first!.x - first!.width / 2).toBeGreaterThanOrEqual(4)
+    expect(layout.width).toBeGreaterThanOrEqual(second!.x + second!.width / 2)
+  })
+
+  it('表头日期：区间写在开始列；同一日期连续出现时每列都写；无日期的列不产生标签', () => {
+    const layout = layoutTimelineGantt([
+      span(0, 3, '修行'),
+      point(1, '甲'),
+      point(2, '乙', '苍穹历·320年'),
+      point(4, '丙', '苍穹历·320年'),
+    ].map((entry, index) => (index === 0 ? { ...entry, dateLabel: '苍穹历·319年' } : entry)), 5, { minStep: 96, measure })
+    expect(layout.labels.map((label) => [label.index, label.text])).toEqual([
+      [0, '苍穹历·319年'],
+      [2, '苍穹历·320年'],
+      [4, '苍穹历·320年'],
+    ])
   })
 
   it('超过 6 行的需求 → 加宽列宽而不加行', () => {

@@ -70,12 +70,15 @@ function mountAxis(props: Partial<{ nodes: TimelineAxisNode[]; entries: GanttEnt
 }
 
 describe('TimelineAxis 甘特视图', () => {
-  it('表头每个标记一列；点事件与区间各画一个条目，日期灰字跟在标题后', () => {
+  it('表头只写世界观日期（不写列序号，无日期的列留空）；标题后不再跟日期', () => {
     const wrapper = mountAxis()
     const svg = wrapper.get('[data-testid="timeline-axis-svg"]')
-    expect(svg.findAll('text').filter((text) => /^[1-4]$/.test(text.text()))).toHaveLength(4)
+    expect(svg.findAll('text').filter((text) => /^[0-9]+$/.test(text.text()))).toHaveLength(0)
+    expect(svg.findAll('[data-testid^="timeline-date-"]').map((text) => text.text())).toEqual(['苍穹历·320年'])
+    expect(wrapper.find('[data-testid="timeline-date-0"]').exists()).toBe(true)
     expect(wrapper.findAll('[data-testid^="timeline-item-"]')).toHaveLength(3)
-    expect(wrapper.get('[data-testid="timeline-item-EVT-a"] tspan').text()).toBe('苍穹历·320年')
+    expect(wrapper.find('[data-testid="timeline-item-EVT-a"] tspan').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="timeline-item-EVT-a"] text').text()).toBe('北境之战')
     expect(wrapper.get('[data-testid="timeline-item-EVT-b"]').find('rect').exists()).toBe(true)
     expect(wrapper.get('[data-testid="timeline-item-EVT-a"]').find('polygon').exists()).toBe(true)
     // 区间内的点事件与区间不同行

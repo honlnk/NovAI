@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
  * 时间轴甘特视图（时间轴甘特图改造计划 §三、§四）：
- * - 横轴 = 列表顺序：每个时间标记占一列（end 只占列，即区间横条右端），表头写列序号；
+ * - 横轴 = 列表顺序：每个时间标记占一列（end 只占列，即区间横条右端）；表头不写列序号，
+ *   只在事件起始列写世界观日期（明确时间），无日期的列留空；日期放不下时排布自动加宽列宽；
  * - 点事件 = 菱形 + 右侧标题；区间事件 = 从开始列画到结束列的横条，标题写在条内，
- *   比横条长时越过右端继续写（横条长度不变）；有明确时间时标题后跟灰色小字；
+ *   比横条长时越过右端继续写（横条长度不变）；
  * - 行由纯函数 layoutTimelineGantt 动态排布（最多 6 行，放不下加宽列宽），任何数据变化整体重排；
  * - 缩放滑块 = 最小列宽（父层注入），实际列宽只会更宽；
  * - 平移：鼠标在轴上按住拖动即横纵平移（移动超过阈值后不再触发点选）；触屏走原生滚动；
@@ -21,7 +22,6 @@ import {
   GANTT_DATE_FONT,
   GANTT_PAD_X,
   GANTT_TITLE_FONT,
-  ganttColumnX,
   layoutTimelineGantt,
   type GanttEntry,
   type GanttLayoutItem,
@@ -29,7 +29,7 @@ import {
 } from '../../stores/timeline-gantt'
 
 const props = defineProps<{
-  /** 全部标记（每个一列）：决定列数与表头序号 */
+  /** 全部标记（每个一列）：决定列数 */
   nodes: TimelineAxisNode[]
   /** 甘特条目（point / start 各一条） */
   entries: GanttEntry[]
@@ -103,17 +103,13 @@ function rowTop(row: number): number {
   return HEADER_H + row * ROW_H
 }
 
-function columnX(index: number): number {
-  return ganttColumnX(index, layout.value.step)
-}
-
 function isSelected(item: GanttLayoutItem): boolean {
   return item.eventId === props.selectedEventId
 }
 
 function tooltip(item: GanttLayoutItem): string {
-  const kind = item.kind === 'span' ? `区间 #${item.startIndex + 1}–#${item.endIndex + 1}` : `#${item.startIndex + 1}`
-  return `${kind} ${item.title}${item.dateLabel ? `（${item.dateLabel}）` : ''}`
+  const kind = item.kind === 'span' ? '区间 ' : ''
+  return `${kind}${item.title}${item.dateLabel ? `（${item.dateLabel}）` : '（未填日期）'}`
 }
 
 function select(item: GanttLayoutItem) {
@@ -125,7 +121,6 @@ function diamondPoints(cx: number, cy: number, half = 6): string {
   return `${cx},${cy - half} ${cx + half},${cy} ${cx},${cy + half} ${cx - half},${cy}`
 }
 
-const TITLE_DATE_GAP = 6
 
 /* ---------- 拖动平移 ---------- */
 
@@ -285,17 +280,18 @@ watch(
       class="block select-none"
       data-testid="timeline-axis-svg"
     >
-      <!-- 表头：列序号（每个时间标记一列） -->
+      <!-- 表头：世界观日期（事件起始列；无日期的列留空） -->
       <text
-        v-for="node in nodes"
-        :key="`col-${node.marker.id}`"
-        :x="columnX(node.ordinal - 1)"
+        v-for="label in layout.labels"
+        :key="`date-${label.index}`"
+        :data-testid="`timeline-date-${label.index}`"
+        :x="label.x"
         :y="15"
         text-anchor="middle"
-        font-size="11"
-        fill="#9ca3af"
+        :font-size="GANTT_DATE_FONT"
+        fill="#6b7280"
         class="pointer-events-none"
-      >{{ node.ordinal }}</text>
+      >{{ label.text }}</text>
 
       <!-- 行分隔线 -->
       <line
@@ -341,7 +337,7 @@ watch(
           />
           <!-- 透明命中区：越出横条的标题也可点 -->
           <rect :x="item.left" :y="rowTop(item.row) + 5" :width="item.right - item.left" height="24" fill="transparent" />
-          <text :x="item.barLeft + 8" :y="rowTop(item.row) + 21" font-size="12" fill="#3730a3" :font-weight="isSelected(item) ? 600 : 400" class="pointer-events-none">{{ item.title }}<tspan v-if="item.dateLabel" :dx="TITLE_DATE_GAP" :font-size="GANTT_DATE_FONT" fill="#9ca3af" font-weight="400">{{ item.dateLabel }}</tspan></text>
+          <text :x="item.barLeft + 8" :y="rowTop(item.row) + 21" font-size="12" fill="#3730a3" :font-weight="isSelected(item) ? 600 : 400" class="pointer-events-none">{{ item.title }}</text>
         </template>
 
         <!-- 点：菱形 + 右侧标题 -->
@@ -349,7 +345,7 @@ watch(
           <rect :x="item.left" :y="rowTop(item.row) + 5" :width="item.right - item.left" height="24" fill="transparent" />
           <circle v-if="isSelected(item)" :cx="item.x" :cy="rowTop(item.row) + 17" r="10" fill="none" stroke="#4f46e5" stroke-width="2" />
           <polygon :points="diamondPoints(item.x, rowTop(item.row) + 17)" :fill="isSelected(item) ? '#4f46e5' : '#6366f1'" />
-          <text :x="item.x + 13" :y="rowTop(item.row) + 21" :font-size="GANTT_TITLE_FONT" :fill="isSelected(item) ? '#4f46e5' : '#374151'" :font-weight="isSelected(item) ? 600 : 400" class="pointer-events-none">{{ item.title }}<tspan v-if="item.dateLabel" :dx="TITLE_DATE_GAP" :font-size="GANTT_DATE_FONT" fill="#9ca3af" font-weight="400">{{ item.dateLabel }}</tspan></text>
+          <text :x="item.x + 13" :y="rowTop(item.row) + 21" :font-size="GANTT_TITLE_FONT" :fill="isSelected(item) ? '#4f46e5' : '#374151'" :font-weight="isSelected(item) ? 600 : 400" class="pointer-events-none">{{ item.title }}</text>
         </template>
       </g>
     </svg>

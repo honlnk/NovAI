@@ -5,6 +5,8 @@
  * - 行与事件不绑定：横向不重叠的条目可共用一行；多行都能放时选条目最少的行（均匀分配）；
  * - 行数封顶 6，放不下就加宽列宽重排；区间嵌套深度本身超过 6 时上限放宽到该深度；
  *   列宽加到 480 仍失败则以不限行数完成，保证必然终止；
+ * - 表头按列显示世界观日期（明确时间），不显示列序号；日期比列宽时同样加宽列宽，
+ *   保证相邻两列的日期互不重叠、首列日期不被左缘截断；同一日期连续出现时每列都写；
  * - 同一输入必得同一输出（确定性），筛选命中态不参与排布（筛选时图不跳动）。
  *
  * 文字测宽经参数注入：组件侧用 canvas measureText，单测注入固定字宽。
@@ -15,7 +17,7 @@ export type GanttEntry = {
   eventId: string
   kind: 'point' | 'span'
   title: string
-  /** 明确时间展示文字（无则空串）；相对时间不上图 */
+  /** 明确时间展示文字（无则空串）：显示在表头本列位置；相对时间不上图 */
   dateLabel: string
   startIndex: number
   /** 点事件等于 startIndex */
@@ -35,8 +37,17 @@ export type GanttLayoutItem = GanttEntry & {
   right: number
 }
 
+/** 表头日期标签：落在事件起始列中心（文字居中） */
+export type GanttHeaderLabel = {
+  index: number
+  text: string
+  x: number
+  width: number
+}
+
 export type GanttLayout = {
   items: GanttLayoutItem[]
+  labels: GanttHeaderLabel[]
   rowCount: number
   /** 实际列宽（≥ minStep） */
   step: number
@@ -50,11 +61,15 @@ export const GANTT_MAX_ROWS = 6
 export const GANTT_MAX_STEP = 480
 export const GANTT_STEP_INCREMENT = 8
 export const GANTT_TITLE_FONT = 12
+/** 表头日期字号 */
 export const GANTT_DATE_FONT = 11
 export const GANTT_PAD_X = 24
 
 const ITEM_GAP = 12
-const DATE_GAP = 6
+/** 表头相邻两个日期之间的最小留白 */
+const HEADER_GAP = 10
+/** 首个日期左缘距内容左边的最小距离 */
+const HEADER_EDGE = 4
 const POINT_HALF = 7
 const POINT_TEXT_GAP = 6
 const BAR_PAD = 8
@@ -63,10 +78,26 @@ export function ganttColumnX(index: number, step: number): number {
   return GANTT_PAD_X + index * step + step / 2
 }
 
-/** 条目文字宽：标题 +（有明确时间时）间隙 + 日期 */
-export function ganttTextWidth(entry: Pick<GanttEntry, 'title' | 'dateLabel'>, measure: GanttMeasure): number {
-  const title = measure(entry.title, GANTT_TITLE_FONT)
-  return entry.dateLabel ? title + DATE_GAP + measure(entry.dateLabel, GANTT_DATE_FONT) : title
+/** 条目文字宽：只有标题（日期写在表头，不跟在标题后） */
+export function ganttTextWidth(entry: Pick<GanttEntry, 'title'>, measure: GanttMeasure): number {
+  return measure(entry.title, GANTT_TITLE_FONT)
+}
+
+/** 表头日期在给定列宽下不重叠、不被左缘截断所需的最小列宽（无日期为 0） */
+export function ganttHeaderMinStep(labels: ReadonlyArray<{ index: number; width: number }>): number {
+  let required = 0
+  const first = labels[0]
+  if (first) {
+    // 左缘 = PAD + i·step + step/2 − w/2 ≥ HEADER_EDGE
+    required = Math.max(required, (first.width / 2 + HEADER_EDGE - GANTT_PAD_X) / (first.index + 0.5))
+  }
+  for (let position = 1; position < labels.length; position += 1) {
+    const previous = labels[position - 1]!
+    const current = labels[position]!
+    const columns = current.index - previous.index
+    required = Math.max(required, ((previous.width + current.width) / 2 + HEADER_GAP) / columns)
+  }
+  return required
 }
 
 /** 同一列上「覆盖该列的区间数 + 该列是否有点事件」的最大值（与列宽无关的行数下界） */
@@ -154,19 +185,27 @@ export function layoutTimelineGantt(
   columnCount: number,
   options: { minStep: number; measure: GanttMeasure },
 ): GanttLayout {
-  const minStep = Math.max(1, options.minStep)
+  const requestedStep = Math.max(1, options.minStep)
   if (entries.length === 0) {
-    return { items: [], rowCount: 0, step: minStep, width: GANTT_PAD_X * 2 + columnCount * minStep }
+    return { items: [], labels: [], rowCount: 0, step: requestedStep, width: GANTT_PAD_X * 2 + columnCount * requestedStep }
   }
 
   const textWidths = entries.map((entry) => ganttTextWidth(entry, options.measure))
+  const headerLabels = entries
+    .filter((entry) => entry.dateLabel)
+    .map((entry) => ({ index: entry.startIndex, text: entry.dateLabel, width: options.measure(entry.dateLabel, GANTT_DATE_FONT) }))
+    .sort((left, right) => left.index - right.index)
+  // 表头日期放得下是硬约束：起步列宽直接抬到所需值（不受 6 行规则影响）
+  const minStep = Math.max(requestedStep, Math.ceil(ganttHeaderMinStep(headerLabels)))
   const maxRows = Math.max(GANTT_MAX_ROWS, ganttOverlapDepth(entries, columnCount))
   const maxStep = Math.max(GANTT_MAX_STEP, minStep)
 
   const finish = (items: GanttLayoutItem[], rowCount: number, step: number): GanttLayout => {
+    const labels = headerLabels.map((label) => ({ ...label, x: ganttColumnX(label.index, step) }))
     const contentRight = items.reduce((max, item) => Math.max(max, item.right), 0)
+    const labelRight = labels.reduce((max, label) => Math.max(max, label.x + label.width / 2), 0)
     const gridRight = GANTT_PAD_X + columnCount * step
-    return { items, rowCount, step, width: Math.ceil(Math.max(contentRight, gridRight) + GANTT_PAD_X) }
+    return { items, labels, rowCount, step, width: Math.ceil(Math.max(contentRight, labelRight, gridRight) + GANTT_PAD_X) }
   }
 
   for (let step = minStep; step <= maxStep; step += GANTT_STEP_INCREMENT) {
