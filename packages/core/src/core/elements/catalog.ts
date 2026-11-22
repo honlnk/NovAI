@@ -1,6 +1,6 @@
 import { parseElementFile } from './parser'
 import { readProjectFile } from '../fs/project-fs'
-import { hashContent } from '../util/hash'
+import { digestCatalogEntries } from '../disclosure/catalog-reminder'
 
 import type { ProjectSnapshot, TreeNode } from '../../types/project'
 import type { ElementCatalogEntry } from '../../types/elements'
@@ -58,10 +58,10 @@ export async function scanElementCatalog(project: ProjectSnapshot): Promise<Elem
  * 版本标记类字段一概不进 digest。
  */
 export function digestElementCatalog(entries: readonly ElementCatalogEntry[]): string {
-  const canonical = sortCatalogEntries([...entries])
-    .map((entry) => JSON.stringify([entry.name, entry.summary]))
-    .join('\n')
-  return hashContent(canonical)
+  return digestCatalogEntries(entries, {
+    compare: compareCatalogEntries,
+    project: (entry) => JSON.stringify([entry.name, entry.summary]),
+  })
 }
 
 /** 树内收集四类目录下的 .md 路径（plots/timeline 及其他目录一概不收）。 */
@@ -94,14 +94,17 @@ function isCatalogPath(path: string): boolean {
 
 /** 稳定排序：类型分组序 + name 序。枚举顺序归一，保证 digest 与目录渲染都不抖动。 */
 function sortCatalogEntries(entries: ElementCatalogEntry[]): ElementCatalogEntry[] {
+  return [...entries].sort(compareCatalogEntries)
+}
+
+/** digest 归一与目录排序共用的 comparator（抽为命名函数供 digestCatalogEntries 复用）。 */
+function compareCatalogEntries(a: ElementCatalogEntry, b: ElementCatalogEntry): number {
   const typeOrder = new Map(CATALOG_ELEMENT_DIRECTORIES.map(({ type }, index) => [type, index]))
-  return [...entries].sort((a, b) => {
-    const typeDiff = (typeOrder.get(a.type) ?? 0) - (typeOrder.get(b.type) ?? 0)
-    if (typeDiff !== 0) {
-      return typeDiff
-    }
-    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
-  })
+  const typeDiff = (typeOrder.get(a.type) ?? 0) - (typeOrder.get(b.type) ?? 0)
+  if (typeDiff !== 0) {
+    return typeDiff
+  }
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
 }
 
 function inferNameFromPath(path: string): string {
