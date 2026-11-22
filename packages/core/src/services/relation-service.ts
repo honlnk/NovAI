@@ -8,6 +8,7 @@ import {
   queryRelations,
   removeInvalidRelationEntries,
   removeRelationsReferencing,
+  removeRelationsReferencingEvent,
   removeRelationsReferencingPath,
   saveRelationLayout,
   updateRelation,
@@ -17,6 +18,7 @@ import {
   resolveElementById,
   searchElementEntries,
 } from '../core/elements/reference-index'
+import { loadTimelineLedger } from '../core/timeline/store'
 import { rescanProject, writeProjectTextFile } from '../core/fs/project-fs'
 import { createTrashPath } from '../core/fs/trash'
 import { writeJsonLedger } from '../core/ledger/json-ledger'
@@ -25,6 +27,7 @@ import type { ElementReferenceIndex } from '../core/elements/reference-index'
 import { requireRuntimeProject } from './project-runtime'
 import type { ProjectSnapshot } from '../types/project'
 import type { ElementType } from '../types/rag'
+import type { TimelineEvent, TimelineMarker } from '../types/timeline'
 import type {
   RelationLayoutMap,
   RelationLedgerIssue,
@@ -79,6 +82,8 @@ function broadcastRelationChange(event: RelationChangeEvent): void {
 
 export type RelationNodeView =
   | { status: 'resolved'; kind: 'element'; id: string; type: ElementType; name: string; summary: string; sourcePath: string }
+  /** 事件端点：名称与摘要取自时间线账本，无 type / sourcePath */
+  | { status: 'resolved'; kind: 'event'; id: string; name: string; summary: string }
   | { status: 'missing'; kind: RelationNodeRef['kind']; id: string }
   | { status: 'ambiguous'; kind: 'element'; id: string; sourcePaths: string[] }
 
@@ -139,10 +144,22 @@ export async function getGraph(projectId: string): Promise<RelationGraphView> {
   }
 
   const index = await buildElementReferenceIndex({ ...project, tree: await rescanProject(project) })
+  // 事件端点按时间线账本解析出标题/摘要；账本损坏或事件已删时按缺失呈现（幽灵节点）
+  let events: Map<string, { title: string; summary: string }> | null = null
+  try {
+    const timeline = await loadTimelineLedger(project)
+    events = new Map(
+      timeline.markers
+        .filter((marker): marker is Extract<TimelineMarker, { event: TimelineEvent }> => marker.kind !== 'end')
+        .map((marker) => [marker.eventId, { title: marker.event.title, summary: marker.event.summary }]),
+    )
+  } catch {
+    events = null
+  }
   const edges = document.relations.map((relation) => ({
     relation,
-    from: resolveNodeView(index, relation.from),
-    to: resolveNodeView(index, relation.to),
+    from: resolveNodeView(index, events, relation.from),
+    to: resolveNodeView(index, events, relation.to),
   }))
 
   return {
@@ -156,10 +173,14 @@ export async function getGraph(projectId: string): Promise<RelationGraphView> {
 
 function resolveNodeView(
   index: ElementReferenceIndex,
+  events: Map<string, { title: string; summary: string }> | null,
   ref: RelationNodeRef,
 ): RelationNodeView {
   if (ref.kind === 'event') {
-    return { status: 'missing', kind: 'event', id: ref.id }
+    const event = events?.get(ref.id)
+    return event
+      ? { status: 'resolved', kind: 'event', id: ref.id, name: event.title, summary: event.summary }
+      : { status: 'missing', kind: 'event', id: ref.id }
   }
   const resolution = resolveElementById(index, ref.id)
   if (resolution.status === 'resolved') {
@@ -180,7 +201,7 @@ function resolveNodeView(
   return { status: 'missing', kind: 'element', id: ref.id }
 }
 
-/** 按名称子串搜索可作为关系节点的要素（选择器数据；旧时间线要素不出现）。 */
+/** 按名称子串搜索可作为关系节点的要素（选择器数据；时间线事件不在此列，走时间线账本）。 */
 export async function getElementOptions(
   projectId: string,
   query: string,
@@ -189,7 +210,7 @@ export async function getElementOptions(
   const snapshot = await freshSnapshot(projectId)
   const index = await buildElementReferenceIndex(snapshot)
   return searchElementEntries(index, query, type)
-    .filter((entry) => entry.type !== 'timeline')
+
     .map((entry) => ({
       id: entry.id,
       type: entry.type,
@@ -256,6 +277,20 @@ export async function removeReferences(
   const result = 'sourcePath' in target
     ? await removeRelationsReferencingPath(project, target.sourcePath)
     : await removeRelationsReferencing(project, target.elementId)
+  if (result.removedRelations.length > 0) {
+    broadcastRelationChange({ projectId, source, kind: 'relations' })
+  }
+  return result
+}
+
+/** 级联清理（事件删除链路）：移除任一端引用该时间线事件的关系（timeline-service 编排调用）。 */
+export async function removeEventReferences(
+  projectId: string,
+  eventId: string,
+  source: 'ui' | 'agent' = 'agent',
+) {
+  const project = requireRuntimeProject(projectId)
+  const result = await removeRelationsReferencingEvent(project, eventId)
   if (result.removedRelations.length > 0) {
     broadcastRelationChange({ projectId, source, kind: 'relations' })
   }

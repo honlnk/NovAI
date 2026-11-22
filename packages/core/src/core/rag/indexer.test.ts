@@ -281,7 +281,7 @@ describe('buildProjectIndex contentHash 增量短路', () => {
     expect(storeState.removeCount).toBe(1)
   })
 
-  it('索引范围收窄（决策 0007）：四类稳定要素不入索引，只有 plots/timeline 入索引', async () => {
+  it('索引范围收窄（决策 0007 + 时间线账本化退役）：四类稳定要素不入索引，只有 plots 入索引', async () => {
     files.set('elements/characters/a.md', { content: elementMd('elements/characters/a.md', '甲'), updatedAt: '' })
     files.set('elements/locations/b.md', { content: elementMd('elements/locations/b.md', '乙'), updatedAt: '' })
     files.set('elements/entities/c.md', { content: elementMd('elements/entities/c.md', '丙'), updatedAt: '' })
@@ -301,9 +301,28 @@ describe('buildProjectIndex contentHash 增量短路', () => {
       { projectId: PROJECT_ID, reason: 'manual-rebuild' },
     )
 
-    expect(embeddingCalls).toHaveLength(2)
-    expect(result.indexedCount).toBe(2)
+    expect(embeddingCalls).toHaveLength(1)
+    expect(result.indexedCount).toBe(1)
     const indexedPaths = Array.from(storeState.docs.values()).map((doc) => doc.sourcePath)
-    expect(indexedPaths).toEqual(['elements/plots/plot-a.md', 'elements/timeline/tl-a.md'])
+    expect(indexedPaths).toEqual(['elements/plots/plot-a.md'])
+  })
+
+  it('退役清扫：增量索引遇到旧 timeline 文档时自动升级为全量重建并清空', async () => {
+    // 预置一份旧时间线索引文档（时间线账本化前的残留）
+    storeState.docs.set(
+      `${PROJECT_ID}::old-tl`,
+      seedDoc({ id: 'old-tl', sourcePath: 'elements/timeline/tl-old.md' }),
+    )
+    files.set('elements/plots/plot-b.md', { content: elementMd('elements/plots/plot-b.md', '新情节'), updatedAt: '' })
+
+    const result = await buildProjectIndex(
+      makeProject([fileNode('elements/plots/plot-b.md')]),
+      { projectId: PROJECT_ID, reason: 'incremental-update' },
+    )
+
+    // 旧文档被清掉，只剩本次索引的 plots 文档；meta 报告 rebuilding（全量链路）
+    expect(result.indexedCount).toBe(1)
+    expect(result.status).toBe('ready')
+    expect(Array.from(storeState.docs.values()).map((doc) => doc.sourcePath)).toEqual(['elements/plots/plot-b.md'])
   })
 })

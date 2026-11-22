@@ -13,13 +13,12 @@ import type { ElementType } from '../../types/rag'
  * 改名走纯文件移动不重写 frontmatter，已有引用天然不受影响。
  */
 
-/** 引用索引覆盖的六类要素目录（比目录披露宽：plots/timeline 也参与解析，供领域自行取舍）。 */
+/** 引用索引覆盖的五类要素目录（plots 也参与解析供领域取舍；时间线已改为事件账本，不再是要素目录）。 */
 const REFERENCE_ELEMENT_DIRECTORIES: readonly { dir: string; type: ElementType }[] = [
   { dir: 'elements/characters/', type: 'character' },
   { dir: 'elements/locations/', type: 'location' },
   { dir: 'elements/entities/', type: 'entity' },
   { dir: 'elements/plots/', type: 'plot' },
-  { dir: 'elements/timeline/', type: 'timeline' },
   { dir: 'elements/worldbuilding/', type: 'worldbuilding' },
 ]
 

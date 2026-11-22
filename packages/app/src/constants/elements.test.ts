@@ -4,15 +4,15 @@ import { ELEMENT_CATEGORIES } from './elements'
 import { APP_ICONS } from '../components/ui/app-icons'
 
 /**
- * 六分类契约（交互优化计划 §9）：顺序、数量、目录归属固定，图标为受控语义注册表成员。
+ * 五分类契约（交互优化计划 §9 + 时间线账本化退役）：顺序、数量、目录归属固定，
+ * 图标为受控语义注册表成员。时间线不再是要素目录（事件走 elements/timeline.json 账本）。
  */
-describe('ELEMENT_CATEGORIES 六分类契约', () => {
-  it('六个分组顺序固定：人物/地点/其他实体/时间线/情节/设定', () => {
+describe('ELEMENT_CATEGORIES 五分类契约', () => {
+  it('五个分组顺序固定：人物/地点/其他实体/情节/设定', () => {
     expect(ELEMENT_CATEGORIES.map((category) => category.label)).toEqual([
       '人物',
       '地点',
       '其他实体',
-      '时间线',
       '情节',
       '设定',
     ])
@@ -20,7 +20,6 @@ describe('ELEMENT_CATEGORIES 六分类契约', () => {
       'character',
       'location',
       'entity',
-      'timeline',
       'plot',
       'worldbuilding',
     ])
@@ -31,18 +30,16 @@ describe('ELEMENT_CATEGORIES 六分类契约', () => {
       'elements/characters',
       'elements/locations',
       'elements/entities',
-      'elements/timeline',
       'elements/plots',
       'elements/worldbuilding',
     ])
   })
 
-  it('图标全部是受控注册表中的 Lucide 语义名（§9：人物轮廓/地图标记/菱形/日历/分支/地球）', () => {
+  it('图标全部是受控注册表中的 Lucide 语义名（§9：人物轮廓/地图标记/菱形/分支/地球）', () => {
     expect(ELEMENT_CATEGORIES.map((category) => category.icon)).toEqual([
       'user',
       'map-pin',
       'diamond',
-      'calendar',
       'git-branch',
       'globe',
     ])

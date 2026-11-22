@@ -11,11 +11,13 @@ import {
   searchElementEntries,
 } from '../elements/reference-index'
 import { rescanProject } from '../fs/project-fs'
+import { loadTimelineLedger, TimelineCorruptError } from '../timeline/store'
 import { hashContent } from '../util/hash'
 
 import type { ElementReferenceEntry, ElementReferenceIndex } from '../elements/reference-index'
 import type { ProjectSnapshot } from '../../types/project'
 import type { ElementType } from '../../types/rag'
+import type { TimelineEvent, TimelineMarker } from '../../types/timeline'
 import type {
   RelationLayoutMap,
   RelationLedgerDocument,
@@ -307,25 +309,40 @@ async function freshReferenceIndex(project: ProjectSnapshot): Promise<{ snapshot
 
 /* ---------- 节点选择与解析 ---------- */
 
-/** 已校验的节点选择器：稳定标识或「类型 + 精确名称」二选一。 */
+/** 已校验的节点选择器：稳定标识或「类型 + 精确名称」二选一；事件用时间线事件标识。 */
 export type RelationNodeSelector =
   | { kind: 'element'; id: string }
   | { kind: 'element'; type: ElementType; name: string }
   /** 按要素文件路径定位（界面选择尚未分配标识的要素用） */
   | { kind: 'element'; sourcePath: string }
+  /** 时间线事件端点（EVT- 标识，账本化时间线上线后开放） */
+  | { kind: 'event'; eventId: string }
 
-export type ResolvedNode = {
-  ref: RelationNodeRef
-  entry: ElementReferenceEntry
-  /** 本次调用是否为其懒分配了新标识（变更呈现用） */
-  assignedId: boolean
-}
+export type ResolvedNode =
+  | {
+      ref: RelationNodeRef
+      kind: 'element'
+      entry: ElementReferenceEntry
+      /** 本次调用是否为其懒分配了新标识（变更呈现用） */
+      assignedId: boolean
+    }
+  | {
+      ref: RelationNodeRef
+      kind: 'event'
+      /** 事件端点不落要素文件，无引用索引条目，也无需懒分配标识 */
+      entry: null
+      assignedId: false
+    }
 
 /**
  * 只读解析节点（不写盘）：校验存在性、唯一性与节点类型。
  * 懒分配标识必须等全部校验通过后再做（assignNodeId），否则失败的调用也会改写要素文件。
  */
 export function locateRelationNode(index: ElementReferenceIndex, selector: RelationNodeSelector): ElementReferenceEntry {
+  if ('eventId' in selector) {
+    throw new RelationError('事件端点走时间线账本解析，不经要素引用索引定位')
+  }
+
   let entry: ElementReferenceEntry
 
   if ('sourcePath' in selector) {
@@ -362,22 +379,89 @@ export function locateRelationNode(index: ElementReferenceIndex, selector: Relat
     entry = exact[0]
   }
 
-  if (entry.type === 'timeline') {
-    throw new RelationError(
-      `「${entry.name}」是旧时间线要素，不是关系节点（时间线不作为整体要素进入关系图）；`
-      + '时间线事件账本完成后可引用具体事件。请选择人物、地点、实体、情节或世界观要素',
-    )
-  }
   if (!RELATION_ELEMENT_NODE_TYPES.includes(entry.type)) {
     throw new RelationError(`「${entry.name}」的要素类型（${entry.type}）不能作为关系节点`)
   }
   return entry
 }
 
+/** 已定位的端点：要素（引用索引条目）或事件（时间线账本中的事件标题）。 */
+export type LocatedEndpoint =
+  | { kind: 'element'; entry: ElementReferenceEntry }
+  | { kind: 'event'; eventId: string; title: string }
+
+/** 只读定位事件端点：时间线账本中按 EVT- 标识查找事件标题。 */
+async function locateEventEndpoint(project: ProjectSnapshot, eventId: string): Promise<LocatedEndpoint> {
+  let document
+  try {
+    document = await loadTimelineLedger(project)
+  } catch (error) {
+    if (error instanceof TimelineCorruptError) {
+      throw new RelationError('时间线账本已损坏，暂时无法解析事件引用；请先在时间轴中初始化修复账本，再登记事件关系')
+    }
+    throw error
+  }
+  const marker = document.markers.find(
+    (candidate): candidate is Extract<TimelineMarker, { event: TimelineEvent }> => candidate.kind !== 'end' && candidate.eventId === eventId,
+  )
+  if (!marker) {
+    throw new RelationError(
+      `找不到事件 ${eventId}；事件可能已被删除。可用 TimelineList 查看现有事件标识，或改用要素端点`,
+    )
+  }
+  return { kind: 'event', eventId, title: marker.event.title }
+}
+
+/** 统一入口：按选择器定位端点（要素走引用索引，事件走时间线账本）。 */
+async function locateRelationEndpoint(
+  project: ProjectSnapshot,
+  index: ElementReferenceIndex,
+  selector: RelationNodeSelector,
+): Promise<LocatedEndpoint> {
+  if (selector.kind === 'event') {
+    if (!selector.eventId) {
+      throw new RelationError('事件端点缺少事件标识；请传入 EVT- 开头的事件标识')
+    }
+    return locateEventEndpoint(project, selector.eventId)
+  }
+  return { kind: 'element', entry: locateRelationNode(index, selector) }
+}
+
+/** 校验通过后落地端点引用：要素懒分配标识，事件直接成引用。 */
+async function finalizeEndpoint(project: ProjectSnapshot, located: LocatedEndpoint): Promise<ResolvedNode> {
+  if (located.kind === 'event') {
+    return { kind: 'event', ref: { kind: 'event', id: located.eventId }, entry: null, assignedId: false }
+  }
+  return assignNodeId(project, located.entry)
+}
+
+/** 已定位端点的预期引用（要素缺标识时为 null：重复校验推迟到分配后）。 */
+function plannedEndpointRef(located: LocatedEndpoint): RelationNodeRef | null {
+  if (located.kind === 'event') {
+    return { kind: 'event', id: located.eventId }
+  }
+  return located.entry.id ? { kind: 'element', id: located.entry.id } : null
+}
+
+/** 两端是否指向同一对象（自环校验）：要素比路径，事件比标识。 */
+function sameEndpointTarget(left: LocatedEndpoint, right: LocatedEndpoint): boolean {
+  if (left.kind !== right.kind) {
+    return false
+  }
+  if (left.kind === 'event' && right.kind === 'event') {
+    return left.eventId === right.eventId
+  }
+  if (left.kind === 'element' && right.kind === 'element') {
+    return left.entry.sourcePath === right.entry.sourcePath
+  }
+  return false
+}
+
 /** 为已校验的节点确保稳定标识（缺失时写回 frontmatter）。 */
 export async function assignNodeId(project: ProjectSnapshot, entry: ElementReferenceEntry): Promise<ResolvedNode> {
   const ensured = await ensureElementId(project, entry.sourcePath)
   return {
+    kind: 'element',
     ref: { kind: 'element', id: ensured.id },
     entry: { ...entry, id: ensured.id },
     assignedId: ensured.assigned,
@@ -460,17 +544,19 @@ export async function createRelation(project: ProjectSnapshot, options: CreateRe
 
     // 先做完全部只读校验，再懒分配标识：失败的登记不得改写任何要素文件
     const { snapshot, index } = await freshReferenceIndex(project)
-    const fromEntry = locateRelationNode(index, options.from)
-    const toEntry = locateRelationNode(index, options.to)
-    if (fromEntry.sourcePath === toEntry.sourcePath) {
+    const fromLocated = await locateRelationEndpoint(snapshot, index, options.from)
+    const toLocated = await locateRelationEndpoint(snapshot, index, options.to)
+    if (sameEndpointTarget(fromLocated, toLocated)) {
       assertDistinctEndpoints({ kind: 'element', id: 'self' }, { kind: 'element', id: 'self' })
     }
-    if (fromEntry.id && toEntry.id) {
-      assertNotDuplicate(document.relations, { kind: 'element', id: fromEntry.id }, { kind: 'element', id: toEntry.id }, type)
+    const plannedFrom = plannedEndpointRef(fromLocated)
+    const plannedTo = plannedEndpointRef(toLocated)
+    if (plannedFrom && plannedTo) {
+      assertNotDuplicate(document.relations, plannedFrom, plannedTo, type)
     }
 
-    const from = await assignNodeId(snapshot, fromEntry)
-    const to = await assignNodeId(snapshot, toEntry)
+    const from = await finalizeEndpoint(snapshot, fromLocated)
+    const to = await finalizeEndpoint(snapshot, toLocated)
 
     const now = (options.now ?? new Date()).toISOString()
     const relation: RelationRecord = {
@@ -487,8 +573,8 @@ export async function createRelation(project: ProjectSnapshot, options: CreateRe
     const contentHash = await persistLedger(project, document)
 
     const assignedElementIds: { sourcePath: string; id: string }[] = []
-    if (from.assignedId) assignedElementIds.push({ sourcePath: from.entry.sourcePath, id: from.ref.id })
-    if (to.assignedId) assignedElementIds.push({ sourcePath: to.entry.sourcePath, id: to.ref.id })
+    if (from.kind === 'element' && from.assignedId) assignedElementIds.push({ sourcePath: from.entry.sourcePath, id: from.ref.id })
+    if (to.kind === 'element' && to.assignedId) assignedElementIds.push({ sourcePath: to.entry.sourcePath, id: to.ref.id })
 
     return {
       relation,
@@ -562,24 +648,26 @@ export async function updateRelation(project: ProjectSnapshot, options: UpdateRe
 
     // 端点未变（选择器标识即当前引用）不重新解析：悬空/重复标识的关系仍可改类型与描述
     const isUnchanged = (selector: RelationNodeSelector | undefined, ref: RelationNodeRef) =>
-      selector === undefined || ('id' in selector && ref.kind === 'element' && selector.id === ref.id)
+      selector === undefined
+      || ('id' in selector && ref.kind === 'element' && selector.id === ref.id)
+      || (selector.kind === 'event' && ref.kind === 'event' && selector.eventId === ref.id)
     const needsFrom = !isUnchanged(options.from, current.from)
     const needsTo = !isUnchanged(options.to, current.to)
 
-    let fromEntry: ElementReferenceEntry | null = null
-    let toEntry: ElementReferenceEntry | null = null
+    let fromLocated: LocatedEndpoint | null = null
+    let toLocated: LocatedEndpoint | null = null
     let snapshot: ProjectSnapshot = project
     if (needsFrom || needsTo) {
       const fresh = await freshReferenceIndex(project)
       snapshot = fresh.snapshot
-      if (needsFrom) fromEntry = locateRelationNode(fresh.index, options.from!)
-      if (needsTo) toEntry = locateRelationNode(fresh.index, options.to!)
+      if (needsFrom) fromLocated = await locateRelationEndpoint(snapshot, fresh.index, options.from!)
+      if (needsTo) toLocated = await locateRelationEndpoint(snapshot, fresh.index, options.to!)
     }
 
     // 只读校验（含自环/重复）先于懒分配
-    const plannedFrom: RelationNodeRef | null = fromEntry ? (fromEntry.id ? { kind: 'element', id: fromEntry.id } : null) : current.from
-    const plannedTo: RelationNodeRef | null = toEntry ? (toEntry.id ? { kind: 'element', id: toEntry.id } : null) : current.to
-    if (fromEntry && toEntry && fromEntry.sourcePath === toEntry.sourcePath) {
+    const plannedFrom: RelationNodeRef | null = fromLocated ? plannedEndpointRef(fromLocated) : current.from
+    const plannedTo: RelationNodeRef | null = toLocated ? plannedEndpointRef(toLocated) : current.to
+    if (fromLocated && toLocated && sameEndpointTarget(fromLocated, toLocated)) {
       assertDistinctEndpoints({ kind: 'element', id: 'self' }, { kind: 'element', id: 'self' })
     }
     if (plannedFrom && plannedTo) {
@@ -590,15 +678,19 @@ export async function updateRelation(project: ProjectSnapshot, options: UpdateRe
     const assignedElementIds: { sourcePath: string; id: string }[] = []
     let from = current.from
     let to = current.to
-    if (fromEntry) {
-      const resolved = await assignNodeId(snapshot, fromEntry)
+    if (fromLocated) {
+      const resolved = await finalizeEndpoint(snapshot, fromLocated)
       from = resolved.ref
-      if (resolved.assignedId) assignedElementIds.push({ sourcePath: fromEntry.sourcePath, id: resolved.ref.id })
+      if (resolved.kind === 'element' && resolved.assignedId) {
+        assignedElementIds.push({ sourcePath: resolved.entry.sourcePath, id: resolved.ref.id })
+      }
     }
-    if (toEntry) {
-      const resolved = await assignNodeId(snapshot, toEntry)
+    if (toLocated) {
+      const resolved = await finalizeEndpoint(snapshot, toLocated)
       to = resolved.ref
-      if (resolved.assignedId) assignedElementIds.push({ sourcePath: toEntry.sourcePath, id: resolved.ref.id })
+      if (resolved.kind === 'element' && resolved.assignedId) {
+        assignedElementIds.push({ sourcePath: resolved.entry.sourcePath, id: resolved.ref.id })
+      }
     }
 
     const relation: RelationRecord = {
@@ -705,6 +797,30 @@ export async function removeRelationsReferencing(project: ProjectSnapshot, eleme
   return removeRelationsToElementIds(project, new Set([elementId]))
 }
 
+/** 级联（事件删除链路）：移除任一端引用该事件的全部关系，并清理其画布坐标。 */
+export async function removeRelationsReferencingEvent(project: ProjectSnapshot, eventId: string): Promise<{ removedRelations: RelationRecord[]; contentHash: string | null }> {
+  return withRelationWriteLock(project, async () => {
+    const document = await loadRelationLedger(project)
+    // 对齐要素级联：隔离条目不阻挡，原样写回
+    if (hasStructuralIssue(document)) {
+      assertWritable(document)
+    }
+
+    const removedRelations = document.relations.filter(
+      (relation) => relation.from.kind === 'event' && relation.from.id === eventId
+        || relation.to.kind === 'event' && relation.to.id === eventId,
+    )
+    if (removedRelations.length === 0 && !(eventId in document.layout)) {
+      return { removedRelations: [], contentHash: document.contentHash }
+    }
+
+    document.relations = document.relations.filter((relation) => !removedRelations.includes(relation))
+    delete document.layout[eventId]
+    const contentHash = await persistLedger(project, document, { preserveIssues: true })
+    return { removedRelations, contentHash }
+  })
+}
+
 /** 级联（按路径）：先经引用索引把路径映射为标识，再统一移除（DeleteFile 等只握有路径的链路）。 */
 export async function removeRelationsReferencingPath(project: ProjectSnapshot, sourcePath: string): Promise<{ removedRelations: RelationRecord[]; elementIds: string[] }> {
   const { index } = await freshReferenceIndex(project)
@@ -747,20 +863,31 @@ export type RelationCheckIssue =
   | { kind: 'duplicate-relation'; id: string; duplicateOf: string; fromId: string; toId: string; type: string }
   | { kind: 'dangling-reference'; relationId: string; endpoint: 'from' | 'to'; id: string }
   | { kind: 'ambiguous-reference'; relationId: string; endpoint: 'from' | 'to'; id: string; sourcePaths: string[] }
-  | { kind: 'timeline-node'; relationId: string; endpoint: 'from' | 'to'; name: string; sourcePath: string }
-  | { kind: 'event-reference-unsupported'; relationId: string; endpoint: 'from' | 'to'; id: string }
 
-/** 全量检查：账本隔离条目 + 重复关系 + 悬空/歧义引用 + 时间线节点 + 事件引用。 */
+/** 全量检查：账本隔离条目 + 重复关系 + 悬空/歧义引用（要素与事件端点分别解析）。 */
 export async function checkRelationLedger(project: ProjectSnapshot): Promise<{ issues: RelationCheckIssue[] }> {
   const { index } = await freshReferenceIndex(project)
   const document = await loadRelationLedger(project)
   const issues: RelationCheckIssue[] = [...document.issues]
 
+  // 事件端点按时间线账本解析；账本损坏时跳过事件检查（时间线界面自身会呈现损坏态）
+  let eventIds: Set<string> | null = null
+  try {
+    const timeline = await loadTimelineLedger(project)
+    eventIds = new Set(timeline.markers.filter((marker) => marker.kind !== 'end').map((marker) => marker.eventId))
+  } catch (error) {
+    if (!(error instanceof TimelineCorruptError)) {
+      throw error
+    }
+  }
+
   for (const relation of document.relations) {
     for (const endpoint of ['from', 'to'] as const) {
       const ref = relation[endpoint]
       if (ref.kind === 'event') {
-        issues.push({ kind: 'event-reference-unsupported', relationId: relation.id, endpoint, id: ref.id })
+        if (eventIds && !eventIds.has(ref.id)) {
+          issues.push({ kind: 'dangling-reference', relationId: relation.id, endpoint, id: ref.id })
+        }
         continue
       }
       const resolution = resolveElementById(index, ref.id)
@@ -768,8 +895,6 @@ export async function checkRelationLedger(project: ProjectSnapshot): Promise<{ i
         issues.push({ kind: 'dangling-reference', relationId: relation.id, endpoint, id: ref.id })
       } else if (resolution.status === 'ambiguous') {
         issues.push({ kind: 'ambiguous-reference', relationId: relation.id, endpoint, id: ref.id, sourcePaths: resolution.sourcePaths })
-      } else if (resolution.entry.type === 'timeline') {
-        issues.push({ kind: 'timeline-node', relationId: relation.id, endpoint, name: resolution.entry.name, sourcePath: resolution.entry.sourcePath })
       }
     }
   }

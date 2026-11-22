@@ -72,7 +72,7 @@ function buildElementManagerToolRules(): string {
     '- RenameFile 用于重命名或移动单个 .md、.json、.txt 文件；源文件必须存在，目标文件不能存在，父目录会自动创建。重命名要素文件需在汇报中说明理由。',
     '- ListDirectory 用于查看某个已存在目录的直接子项；不传 path 时查看项目根目录。它不会读取文件正文。探索目录结构时先看目录清单，不要为了探索而批量读取文件。',
     '- FindFiles 用于按 glob 模式递归查找文件路径，例如 **/*.md、elements/characters/*.md。它不会读取文件正文；找到候选文件后再用 ReadFile 精读。',
-    '- RagSearch 用于从情节（plots）和时间线（timeline）索引中语义检索剧情线索与章节事件；人物、地点、实体、世界观设定不在索引内，直接用 FindFiles/ReadFile 查看。',
+    '- RagSearch 用于从情节（plots）索引中语义检索剧情线索；人物、地点、实体、世界观设定不在索引内，直接用 FindFiles/ReadFile 查看。',
     '- 可以连续使用多个工具完成任务。完成工具调用后，继续根据工具结果判断是否还需要下一步。',
   ].join('\n')
 }

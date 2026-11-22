@@ -21,6 +21,7 @@ import type {
   RelationEdgeView,
   RelationElementOptionView,
   RelationGraphView,
+  RelationNodeView,
 } from '@novai/core/services/relation-service'
 import type {
   RelationLayoutMap,
@@ -56,13 +57,13 @@ export type RelationLoadState = 'idle' | 'loading' | 'ready' | 'error' | 'corrup
 /** 画布节点的渲染摘要（store 产出纯数据，Vue Flow 形状由画布组件映射） */
 export type RelationCanvasNode = {
   id: string
-  /** 稳定标识（ELM-…） */
+  /** 稳定标识（ELM-… / EVT-…） */
   elementId: string
   label: string
-  /** 要素类型；幽灵节点（无法解析）为 'ghost' */
-  nodeType: ElementType | 'ghost'
+  /** 要素类型；时间线事件端点为 'event'；幽灵节点（无法解析）为 'ghost' */
+  nodeType: ElementType | 'event' | 'ghost'
   summary: string
-  /** 引用解析状态：missing = 要素已删除；ambiguous = 标识重复 */
+  /** 引用解析状态：missing = 要素/事件已删除；ambiguous = 标识重复 */
   status: 'resolved' | 'missing' | 'ambiguous'
   x: number
   y: number
@@ -193,13 +194,10 @@ export const useRelationStore = defineStore('relation', () => {
       if (relationType && edge.relation.type !== relationType) {
         return false
       }
-      if (elementType && edge.from.status !== 'resolved' && edge.to.status !== 'resolved') {
-        return false
-      }
       if (elementType) {
-        const fromHit = edge.from.status === 'resolved' && edge.from.type === elementType
-        const toHit = edge.to.status === 'resolved' && edge.to.type === elementType
-        if (!fromHit && !toHit) {
+        // 事件端点无要素类型，不参与 elementType 筛选（其他类型照常命中）
+        const matchElementType = (node: RelationNodeView) => node.status === 'resolved' && node.kind === 'element' && node.type === elementType
+        if (!matchElementType(edge.from) && !matchElementType(edge.to)) {
           return false
         }
       }
@@ -222,6 +220,14 @@ export const useRelationStore = defineStore('relation', () => {
     return ids
   })
 
+  /** 幽灵节点摘要文案：要素与事件端点分别说明悬空原因 */
+  function ghostSummary(node: RelationNodeView): string {
+    if (node.status === 'ambiguous') {
+      return '标识重复：多个要素占用同一稳定标识'
+    }
+    return node.kind === 'event' ? '时间线事件可能已删除（悬空引用）' : '要素可能已删除（悬空引用）'
+  }
+
   /** 画布节点：可见边的端点 + 搜索补充节点；坐标 = 账本 layout ⊕ 拖拽覆盖 ⊕ 默认圆 */
   const canvasNodes = computed<RelationCanvasNode[]>(() => {
     const layout = { ...(graph.value?.layout ?? {}), ...layoutOverride.value }
@@ -234,7 +240,7 @@ export const useRelationStore = defineStore('relation', () => {
               id: node.id,
               elementId: node.id,
               label: node.name,
-              nodeType: node.type,
+              nodeType: node.kind === 'element' ? node.type : 'event',
               summary: node.summary,
               status: 'resolved',
               x: 0,
@@ -247,7 +253,7 @@ export const useRelationStore = defineStore('relation', () => {
             elementId: node.id,
             label: `未解析 ${node.id}`,
             nodeType: 'ghost',
-            summary: node.status === 'ambiguous' ? '标识重复：多个要素占用同一稳定标识' : '要素可能已删除（悬空引用）',
+            summary: ghostSummary(node),
             status: node.status,
             x: 0,
             y: 0,
@@ -272,7 +278,7 @@ export const useRelationStore = defineStore('relation', () => {
           elementId: id,
           label: `未解析 ${id}`,
           nodeType: 'ghost',
-          summary: node.status === 'ambiguous' ? '标识重复：多个要素占用同一稳定标识' : '要素可能已删除（悬空引用）',
+          summary: ghostSummary(node),
           status: node.status,
           x: 0,
           y: 0,

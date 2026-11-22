@@ -192,7 +192,7 @@ export type FimCompletionInputView = {
   signal?: AbortSignal
 }
 
-export type ElementTypeView = 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'
+export type ElementTypeView = 'character' | 'location' | 'entity' | 'plot' | 'worldbuilding'
 
 export type IndexStatusView = 'empty' | 'building' | 'ready' | 'stale' | 'rebuilding' | 'error'
 

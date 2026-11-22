@@ -353,7 +353,7 @@ export type RagSearchInput = {
   topK?: number
   finalLimit?: number
   filters?: {
-    type?: Array<'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'>
+    type?: Array<'character' | 'location' | 'entity' | 'plot' | 'worldbuilding'>
     tags?: string[]
     lastUpdatedChapter?: string
   }
@@ -367,7 +367,7 @@ export type RagSearchOutput = {
   candidates: Array<{
     id: string
     sourcePath: string
-    type: 'character' | 'location' | 'entity' | 'timeline' | 'plot' | 'worldbuilding'
+    type: 'character' | 'location' | 'entity' | 'plot' | 'worldbuilding'
     name: string
     summary: string
     retrievalText: string
@@ -934,10 +934,12 @@ export type RhythmCurveOutput = {
 
 /* ---------- 关系图谱（关系图谱施工计划 §五：主 Agent 专属七工具） ---------- */
 
-/** 工具入参的节点定位：稳定标识或「类型 + 精确名称」二选一（kind 第一版恒为 element）。 */
+/** 工具入参的节点定位：要素用稳定标识或「类型 + 精确名称」二选一；事件用 kind: 'event' + eventId。 */
 export type RelationNodeInput = {
-  kind?: 'element'
+  kind?: 'element' | 'event'
   id?: string
+  /** 事件端点的时间线事件标识（kind: 'event' 时必填，EVT- 开头） */
+  eventId?: string
   type?: string
   name?: string
 }
@@ -1293,6 +1295,10 @@ export type TimelineDeleteOutput = {
   cascadedCausedBy: number
   /** 仍以该事件为相对时间锚的事件（锚保留、待作者改绑；空数组 = 无） */
   anchoredEvents: Array<{ eventId: string; title: string }>
+  /** 因该事件删除而被级联移除的关系条数（引用它的关系账本条目） */
+  removedEventRelations: number
+  /** 关系级联失败时的错误信息（空串 = 成功） */
+  eventRelationCascadeError: string
   linesAdded: number
   linesRemoved: number
 }

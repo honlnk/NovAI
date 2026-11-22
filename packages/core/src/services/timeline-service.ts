@@ -36,6 +36,7 @@ import { writeJsonLedger } from '../core/ledger/json-ledger'
 import type { ElementReferenceIndex } from '../core/elements/reference-index'
 
 import { requireRuntimeProject } from './project-runtime'
+import { removeEventReferences } from './relation-service'
 import type { ProjectSnapshot } from '../types/project'
 import type { ElementType } from '../types/rag'
 import type { ChapterCatalog } from '../types/chapters'
@@ -269,11 +270,29 @@ export async function moveMarker(projectId: string, options: MoveTimelineMarkerO
   return result
 }
 
-export async function deleteTimelineEventEntry(projectId: string, eventId: string, source: 'ui' | 'agent' = 'ui'): Promise<DeleteTimelineEventResult> {
+/** 事件删除结果 + 关系级联信息（服务层编排：领域结果之外附带跨账本清理报告）。 */
+export type DeleteTimelineEventEntryResult = DeleteTimelineEventResult & {
+  /** 因该事件删除而被级联移除的关系条数 */
+  removedEventRelations: number
+  /** 级联失败时的错误信息（不回滚事件删除，只报告） */
+  eventRelationCascadeError: string
+}
+
+export async function deleteTimelineEventEntry(projectId: string, eventId: string, source: 'ui' | 'agent' = 'ui'): Promise<DeleteTimelineEventEntryResult> {
   const project = requireRuntimeProject(projectId)
   const result = await deleteTimelineEvent(project, { eventId })
   broadcastTimelineChange({ projectId, source, kind: 'events' })
-  return result
+
+  // 级联：移除引用该事件的关系（对齐要素删除级联；失败不回滚，仅报告）
+  let removedEventRelations = 0
+  let eventRelationCascadeError = ''
+  try {
+    const cascade = await removeEventReferences(projectId, eventId, source)
+    removedEventRelations = cascade.removedRelations.length
+  } catch (error) {
+    eventRelationCascadeError = error instanceof Error ? error.message : '事件的关系引用级联清理失败'
+  }
+  return { ...result, removedEventRelations, eventRelationCascadeError }
 }
 
 export async function cleanupInvalidEntries(projectId: string, source: 'ui' | 'agent' = 'ui') {
@@ -353,7 +372,6 @@ export async function getElementOptions(
   const snapshot = await freshSnapshot(projectId)
   const index = await buildElementReferenceIndex(snapshot)
   return searchElementEntries(index, query, type)
-    .filter((entry) => entry.type !== 'timeline')
     .map((entry) => ({
       id: entry.id,
       type: entry.type,

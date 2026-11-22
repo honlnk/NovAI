@@ -9,7 +9,7 @@ import { DEFAULT_ELEMENT_SCHEMA } from './defaults'
  */
 describe('DEFAULT_ELEMENT_SCHEMA', () => {
   const sections = [
-    '## 六类目录职责与边界',
+    '## 五类目录职责与边界',
     '## 命名规范',
     '## frontmatter 维护规范',
     '## 链接约定',

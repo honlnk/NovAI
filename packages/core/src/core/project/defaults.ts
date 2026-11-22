@@ -71,19 +71,18 @@ export const LEGACY_DEFAULT_OUTLINE_TEMPLATE = `# Scene Prompt
  * 定位：本书要素库的「宪法」——要素管理员子代理的全部机构记忆（它每次全新上下文，只注入本文件）；
  * 用户可自由修改，改坏时模板分节说明有 core `templates.ts` 代码兜底。
  * 内容必须与代码资产保持一致：frontmatter 字段（types/elements.ts）、
- * 六类目录职责、五类模板分节名（core/elements/templates.ts）。
+ * 五类目录职责、四类模板分节名（core/elements/templates.ts）。
  */
 export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 
 这是本书要素库的管理规范。它只注入给「要素管理员」子代理（/管理要素 与要素管理任务专用），不进入主创作 Agent 的提示词。可以自由修改——要素管理员每次都以全新上下文启动，这份文件就是它全部的工作守则。
 
-## 六类目录职责与边界
+## 五类目录职责与边界
 
 - \`elements/characters/\`：人物。一人一文件。
 - \`elements/locations/\`：地点。一地一文件。
 - \`elements/entities/\`：具体实体——武器、武功、坐骑、丹药、信物、法器、书籍等会被点名、持有或发生状态变化的东西。
 - \`elements/plots/\`：剧情事件。一个独立事件一文件，不写「本章剧情」式的章节总纲。
-- \`elements/timeline/\`：时间线阶段。一个故事阶段一文件，记录该阶段内的事件经过与后续影响。
 - \`elements/worldbuilding/\`：世界观——抽象规则与体系（力量体系、社会制度、种族设定、地理总览等）。
 - entities 与 worldbuilding 的分界：会被具体持有、点名、损耗、转移的东西归 entities；作为背景规则被引用的体系归 worldbuilding。拿不准时归 worldbuilding，并在汇报中注明。
 
@@ -127,7 +126,6 @@ export const DEFAULT_ELEMENT_SCHEMA = `# 要素库规范（ELEMENT.md）
 - location（地点）：基本信息 / 简介 / 空间位置 / 可见性与可达性 / 地点关系 / 相关剧情 / 状态变化
 - entity（实体）：基本信息 / 简介 / 外观或表现 / 来历 / 当前归属 / 能力或用途 / 剧情关联 / 状态变化
 - plot（剧情）：基本信息 / 核心事件 / 关键细节 / 登场人物 / 情感落点 / 暗线铺垫 / 关联要素
-- timeline（时间线）：基本信息（必含「故事内时间」「所属阶段」）/ 事件经过 / 涉及要素 / 后续影响
 - worldbuilding（世界观）：无固定模板，按规则体系自行组织分节。`
 
 /**

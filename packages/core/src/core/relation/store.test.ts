@@ -11,12 +11,14 @@ import {
   queryRelations,
   removeInvalidRelationEntries,
   removeRelationsReferencing,
+  removeRelationsReferencingEvent,
   removeRelationsReferencingPath,
   relationVersion,
   saveRelationLayout,
   updateRelation,
 } from './store'
 import { RELATION_LEDGER_PATH } from '../../types/relation'
+import { TIMELINE_LEDGER_PATH } from '../../types/timeline'
 import { writeProjectTextFile, readProjectTextFile } from '../fs/project-fs'
 import type { ProjectSnapshot } from '../../types/project'
 
@@ -177,10 +179,9 @@ describe('createRelation', () => {
     expect(result.relation.to).toEqual({ kind: 'element', id: 'ELM-bbbbbbbbbb' })
   })
 
-  it('校验拦截：自环、空/超长类型、同向同类型重复、找不到/重名要素、时间线要素', async () => {
+  it('校验拦截：自环、空/超长类型、同向同类型重复、找不到/重名要素', async () => {
     await seedElement('elements/characters/林澜.md', { name: '林澜' })
     await seedElement('elements/characters/老周.md', { name: '老周' })
-    await seedElement('elements/timeline/大事件.md', { name: '大事件', type: 'timeline' })
     await seedElement('elements/characters/副本.md', { name: '重名', type: 'character' })
     await seedElement('elements/characters/副本2.md', { name: '重名', type: 'character' })
 
@@ -213,12 +214,6 @@ describe('createRelation', () => {
       to: { kind: 'element', type: 'character', name: '林澜' },
       type: '盟友',
     })).rejects.toThrow('无法确定指向')
-
-    await expect(createRelation(project, {
-      from: { kind: 'element', type: 'timeline', name: '大事件' },
-      to: { kind: 'element', type: 'character', name: '林澜' },
-      type: '关联',
-    })).rejects.toThrow('旧时间线要素')
 
     // 同向同类型重复；反向是独立条目
     await createRelation(project, {
@@ -473,6 +468,168 @@ describe('queryRelations / checkRelationLedger', () => {
 })
 
 /* ---------- review 修复批回归 ---------- */
+
+/* ---------- 事件端点（时间线账本联动，时间线JSON化改造 §11） ---------- */
+
+describe('事件端点：登记、校验、级联与检查', () => {
+  async function seedTimelineEvent(eventId: string, title: string): Promise<void> {
+    await writeProjectTextFile(root, TIMELINE_LEDGER_PATH, JSON.stringify({
+      version: 1,
+      markers: [
+        {
+          id: `TM-${eventId.slice(4, 14)}`,
+          kind: 'point',
+          eventId,
+          event: {
+            title,
+            summary: '',
+            storyTime: null,
+            relativeTime: null,
+            participants: [],
+            plotIds: [],
+            chapters: [],
+            causedBy: [],
+            createdAt: '2026-11-22T00:00:00.000Z',
+            updatedAt: '2026-11-22T00:00:00.000Z',
+          },
+        },
+      ],
+    }, null, 2))
+  }
+
+  it('事件端点登记成功：直接成 event 引用，不懒分配标识、不改写要素文件', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedTimelineEvent('EVT-aaaaaaaaaa', '北境之战')
+
+    const result = await createRelation(project, {
+      from: { kind: 'event', eventId: 'EVT-aaaaaaaaaa' },
+      to: { kind: 'element', type: 'character', name: '林澜' },
+      type: '导致',
+      description: '战后林澜性情大变',
+    })
+
+    expect(result.relation.from).toEqual({ kind: 'event', id: 'EVT-aaaaaaaaaa' })
+    expect(result.relation.to).toEqual({ kind: 'element', id: 'ELM-aaaaaaaaaa' })
+    // 事件端点不懒分配；已有标识的要素也不再写回
+    expect(result.assignedElementIds).toHaveLength(0)
+  })
+
+  it('找不到事件与事件自环被拦截', async () => {
+    await seedTimelineEvent('EVT-aaaaaaaaaa', '北境之战')
+
+    await expect(createRelation(project, {
+      from: { kind: 'event', eventId: 'EVT-zzzzzzzzzz' },
+      to: { kind: 'element', type: 'character', name: '林澜' },
+      type: '关联',
+    })).rejects.toThrow('找不到事件')
+
+    await expect(createRelation(project, {
+      from: { kind: 'event', eventId: 'EVT-aaaaaaaaaa' },
+      to: { kind: 'event', eventId: 'EVT-aaaaaaaaaa' },
+      type: '自指',
+    })).rejects.toThrow('自环')
+  })
+
+  it('时间线账本损坏时事件端点登记被拒绝并提示修复', async () => {
+    await writeProjectTextFile(root, TIMELINE_LEDGER_PATH, '根本不是 JSON')
+    await seedElement('elements/characters/林澜.md', { name: '林澜' })
+
+    await expect(createRelation(project, {
+      from: { kind: 'event', eventId: 'EVT-aaaaaaaaaa' },
+      to: { kind: 'element', type: 'character', name: '林澜' },
+      type: '关联',
+    })).rejects.toThrow('时间线账本已损坏')
+  })
+
+  it('更新关系可把端点改为事件；端点未变（同 eventId）不重新解析', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedElement('elements/characters/老周.md', { name: '老周', id: 'ELM-bbbbbbbbbb' })
+    await seedTimelineEvent('EVT-cccccccccc', '铁剑门兴起')
+    const created = await createRelation(project, {
+      from: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      to: { kind: 'element', id: 'ELM-bbbbbbbbbb' },
+      type: '盟友',
+    })
+
+    const updated = await updateRelation(project, {
+      id: created.relation.id,
+      from: { kind: 'event', eventId: 'EVT-cccccccccc' },
+      description: '改挂事件端点',
+    })
+    expect(updated.relation.from).toEqual({ kind: 'event', id: 'EVT-cccccccccc' })
+    expect(updated.relation.to).toEqual({ kind: 'element', id: 'ELM-bbbbbbbbbb' })
+    expect(updated.previous.from).toEqual({ kind: 'element', id: 'ELM-aaaaaaaaaa' })
+
+    // 同 eventId 选择器 = 端点未变：即使时间线账本被清空也不再解析
+    await writeProjectTextFile(root, TIMELINE_LEDGER_PATH, JSON.stringify({ version: 1, markers: [] }, null, 2))
+    const untouched = await updateRelation(project, {
+      id: created.relation.id,
+      from: { kind: 'event', eventId: 'EVT-cccccccccc' },
+      description: '只改描述',
+    })
+    expect(untouched.relation.from).toEqual({ kind: 'event', id: 'EVT-cccccccccc' })
+  })
+
+  it('级联：removeRelationsReferencingEvent 移除两端任一引用该事件的关系并清理坐标', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedElement('elements/characters/老周.md', { name: '老周', id: 'ELM-bbbbbbbbbb' })
+    await seedTimelineEvent('EVT-cccccccccc', '北境之战')
+    const asFrom = await createRelation(project, {
+      from: { kind: 'event', eventId: 'EVT-cccccccccc' },
+      to: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      type: '导致',
+    })
+    const asTo = await createRelation(project, {
+      from: { kind: 'element', id: 'ELM-bbbbbbbbbb' },
+      to: { kind: 'event', eventId: 'EVT-cccccccccc' },
+      type: '目击',
+    })
+    await createRelation(project, {
+      from: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      to: { kind: 'element', id: 'ELM-bbbbbbbbbb' },
+      type: '盟友',
+    })
+    await saveRelationLayout(project, {
+      'EVT-cccccccccc': { x: 1, y: 2 },
+      'ELM-aaaaaaaaaa': { x: 3, y: 4 },
+    })
+
+    const { removedRelations } = await removeRelationsReferencingEvent(project, 'EVT-cccccccccc')
+    expect(removedRelations.map((relation) => relation.id).sort()).toEqual([asFrom.relation.id, asTo.relation.id].sort())
+
+    const document = await loadRelationLedger(project)
+    expect(document.relations).toHaveLength(1)
+    expect(document.relations[0]!.type).toBe('盟友')
+    // 事件坐标清掉，要素坐标保留
+    expect(document.layout['EVT-cccccccccc']).toBeUndefined()
+    expect(document.layout['ELM-aaaaaaaaaa']).toEqual({ x: 3, y: 4 })
+
+    // 再跑一次是幂等空操作
+    const again = await removeRelationsReferencingEvent(project, 'EVT-cccccccccc')
+    expect(again.removedRelations).toHaveLength(0)
+  })
+
+  it('检查：事件引用对账时间线——存在则干净，已删则报悬空；账本损坏时跳过事件检查', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜', id: 'ELM-aaaaaaaaaa' })
+    await seedTimelineEvent('EVT-cccccccccc', '北境之战')
+    await createRelation(project, {
+      from: { kind: 'event', eventId: 'EVT-cccccccccc' },
+      to: { kind: 'element', id: 'ELM-aaaaaaaaaa' },
+      type: '导致',
+    })
+    expect((await checkRelationLedger(project)).issues).toHaveLength(0)
+
+    // 事件被删除（账本还在，事件没了）
+    await writeProjectTextFile(root, TIMELINE_LEDGER_PATH, JSON.stringify({ version: 1, markers: [] }, null, 2))
+    const { issues } = await checkRelationLedger(project)
+    expect(issues).toHaveLength(1)
+    expect(issues[0]).toMatchObject({ kind: 'dangling-reference', id: 'EVT-cccccccccc', endpoint: 'from' })
+
+    // 时间线账本损坏（JSON 无法解析）：不误报、不崩溃（事件检查跳过，由时间线界面呈现损坏态）
+    await writeProjectTextFile(root, TIMELINE_LEDGER_PATH, '根本不是 JSON')
+    expect((await checkRelationLedger(project)).issues).toHaveLength(0)
+  })
+})
 
 describe('review 修复批', () => {
   async function seedPairWithRelation() {

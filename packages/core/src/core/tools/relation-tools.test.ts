@@ -13,6 +13,7 @@ import { deleteFileTool } from './file-tools'
 import { setRuntimeProject, clearRuntimeProjects } from '../../services/project-runtime'
 import { writeProjectTextFile, readProjectTextFile } from '../fs/project-fs'
 import { RELATION_LEDGER_PATH } from '../../types/relation'
+import { TIMELINE_LEDGER_PATH } from '../../types/timeline'
 import type { ProjectSnapshot } from '../../types/project'
 import type { ToolRuntime } from './types'
 
@@ -147,6 +148,30 @@ async function seedPair() {
   await seedElement('elements/characters/老周.md', { name: '老周', id: 'ELM-bbbbbbbbbb' })
 }
 
+/** 时间线账本种子：一个点事件（事件端点工具链路用）。 */
+async function seedTimelineEvent() {
+  await writeProjectTextFile(root, TIMELINE_LEDGER_PATH, JSON.stringify({
+    version: 1,
+    markers: [{
+      id: 'TM-b1c2d3e4f5',
+      kind: 'point',
+      eventId: 'EVT-aaaaaaaaaa',
+      event: {
+        title: '北境之战',
+        summary: '决定性会战',
+        storyTime: null,
+        relativeTime: null,
+        participants: [],
+        plotIds: [],
+        chapters: [],
+        causedBy: [],
+        createdAt: '2026-11-22T00:00:00.000Z',
+        updatedAt: '2026-11-22T00:00:00.000Z',
+      },
+    }],
+  }, null, 2))
+}
+
 /* ---------- RelationCreate ---------- */
 
 describe('RelationCreate', () => {
@@ -199,7 +224,7 @@ describe('RelationCreate', () => {
     }), runtime())).rejects.toThrow('同向同类型')
   })
 
-  it('校验拦截：节点定位缺字段、非要素类型、kind 非 element', () => {
+  it('校验拦截：节点定位缺字段、非要素类型、事件端点缺 eventId', () => {
     expect(() => relationCreateTool.validateInput({
       from: {}, to: { type: 'character', name: '老周' }, type: '盟友',
     })).toThrow('必须提供 id')
@@ -208,10 +233,31 @@ describe('RelationCreate', () => {
     })).toThrow('type 与 name 都必须提供')
     expect(() => relationCreateTool.validateInput({
       from: { type: 'timeline', name: '大事件' }, to: { id: 'ELM-aaaaaaaaaa' }, type: '关联',
-    })).toThrow('旧时间线要素不是关系节点')
+    })).toThrow('时间线事件请用 kind')
     expect(() => relationCreateTool.validateInput({
       from: { kind: 'event', id: 'EVT-0001' }, to: { id: 'ELM-aaaaaaaaaa' }, type: '关联',
-    })).toThrow('第一版只支持 element')
+    })).toThrow('必须提供 eventId')
+    expect(() => relationCreateTool.validateInput({
+      from: { kind: 'chapter', id: 'x' }, to: { id: 'ELM-aaaaaaaaaa' }, type: '关联',
+    })).toThrow('只支持 element')
+  })
+
+  it('事件端点建关系：kind event + eventId 定位，输出摘要带事件名', async () => {
+    await seedPair()
+    await seedTimelineEvent()
+
+    const result = await relationCreateTool.run(relationCreateTool.validateInput({
+      from: { kind: 'event', eventId: 'EVT-aaaaaaaaaa' }, to: { id: 'ELM-aaaaaaaaaa' }, type: '导致',
+    }), runtime())
+
+    expect(result.from).toMatchObject({ kind: 'event', id: 'EVT-aaaaaaaaaa', name: '北境之战' })
+    expect(result.to).toMatchObject({ kind: 'element', id: 'ELM-aaaaaaaaaa' })
+    expect(relationCreateTool.summarizeOutput(result)).toContain('北境之战')
+
+    // 事件不存在 → 明确报错并引导 TimelineList
+    await expect(relationCreateTool.run(relationCreateTool.validateInput({
+      from: { kind: 'event', eventId: 'EVT-zzzzzzzzzz' }, to: { id: 'ELM-aaaaaaaaaa' }, type: '关联',
+    }), runtime())).rejects.toThrow('找不到事件')
   })
 })
 
@@ -359,7 +405,7 @@ describe('RelationCheck', () => {
     const broken = await relationCheckTool.run(relationCheckTool.validateInput({}), runtime())
     expect(broken.ok).toBe(false)
     expect(broken.totalCount).toBeGreaterThan(0)
-    expect(broken.issues.some((issue) => issue.kind === 'dangling-reference' && issue.detail.includes('找不到要素'))).toBe(true)
+    expect(broken.issues.some((issue) => issue.kind === 'dangling-reference' && issue.detail.includes('找不到对应对象'))).toBe(true)
   })
 
   it('账本损坏时读写工具统一报损坏提示', async () => {

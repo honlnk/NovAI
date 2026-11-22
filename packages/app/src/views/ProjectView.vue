@@ -63,6 +63,7 @@ import { pickDirectoryChildren } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
 import { useForeshadowingStore } from '../stores/foreshadowing'
 import { useRhythmStore } from '../stores/rhythm'
+import { useTimelineStore } from '../stores/timeline'
 import { foreshadowingChapterNumber, type ForeshadowingColumnMode } from '../constants/foreshadowing'
 
 const route = useRoute()
@@ -73,6 +74,7 @@ const indexStore = useIndexStore()
 const planStore = usePlanStore()
 const foreshadowingStore = useForeshadowingStore()
 const rhythmStore = useRhythmStore()
+const timelineStore = useTimelineStore()
 const toast = useToast()
 // 「查看已归档」动作经模块级单例切换对话列表筛选（不跨组件转发 ref）
 const { showArchived: showArchivedFilter } = useConversationFilter()
@@ -299,6 +301,11 @@ onMounted(async () => {
     && (activeCategory.value === 'rhythm' || activeCategory.value === 'chapter')
   ) {
     await rhythmStore.loadBoard(projectId.value)
+  }
+
+  // 时间线同理：恢复后停留在章节分类时补一次事件账本加载（章节侧栏「本章相关事件」）
+  if (projectStore.currentProject && activeCategory.value === 'chapter') {
+    void timelineStore.open(projectId.value)
   }
 
   // 刷新后恢复持久化草稿（§六.2 存量恢复迁移）：逐文件核对磁盘——内容与磁盘
@@ -746,6 +753,11 @@ watch(activeCategory, async (category, previous) => {
     // 章节分类也要节奏数据：章节侧栏「本章节奏卡」实时反查依赖看板摘要
     await rhythmStore.loadBoard(projectId.value)
   }
+  if (category === 'chapter' && projectStore.currentProject) {
+    // 章节分类也要时间线数据：章节侧栏「本章相关事件」实时反查依赖事件账本视图
+    // （open 对同项目幂等；弹窗未挂载时只装载数据不显示）
+    void timelineStore.open(projectId.value)
+  }
 })
 
 /** 切换/关闭项目时清理上一个项目的计划板状态（含编辑会话）与面板展开偏好 */
@@ -761,6 +773,10 @@ watch(() => projectStore.currentProject?.id, (_newId, previousId) => {
   isForeshadowingPanelOpen.value = false
   rhythmStore.reset()
   isRhythmPanelOpen.value = false
+  // 停留在章节分类时补一次时间线加载：章节侧栏「本章相关事件」反查依赖当前项目视图
+  if (projectStore.currentProject && activeCategory.value === 'chapter') {
+    void timelineStore.open(projectStore.currentProject.id)
+  }
 })
 
 /** 右侧面板当前应展示的内容与可见性（文件 / 计划详情 / 新建互斥，规则见 workspace-panel） */
@@ -1071,6 +1087,17 @@ const latestChapterNumber = computed(() => {
 /** 伏笔看板列模式（项目设置 foreshadowingStatusMode；看板顶栏按钮切换即保存设置） */
 const foreshadowingColumnMode = computed<ForeshadowingColumnMode>(() =>
   projectStore.currentProject?.config.settings.foreshadowingStatusMode === 'full' ? 'full' : 'default')
+
+/** 章节侧栏「本章相关事件」点击：装载数据后打开时间轴并定位该事件详情 */
+async function handleOpenTimelineEvent(eventId: string) {
+  const pid = projectId.value
+  if (!pid) {
+    return
+  }
+  await timelineStore.open(pid)
+  await timelineStore.openDetail(eventId)
+  isTimelineOpen.value = true
+}
 
 /** 打开伏笔详情（看板卡片 / 侧栏最近列表 / 章节侧栏「本章相关伏笔」共用同一入口）：
  *  面板随点击展开；从其他分类（章节侧栏）进入时先切到伏笔分类——详情面板按分类归属展示 */
@@ -1519,6 +1546,7 @@ function handleGoToSettings() {
         :rhythm-cards="rhythmRecentCards"
         :is-rhythm-loading="rhythmStore.isLoading"
         :selected-rhythm-id="rhythmStore.selectedCardId"
+        :timeline-events="timelineStore.chapterEvents"
         :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :running-ids="chatStore.runningSessionIds"
         :is-open="isCategoryOpen"
@@ -1543,6 +1571,7 @@ function handleGoToSettings() {
         @open-rhythm-board="selectCategory('rhythm')"
         @refresh-rhythm="handleRhythmRefresh"
         @open-rhythm-create="handleOpenRhythmCreate"
+        @open-timeline-event="handleOpenTimelineEvent"
         @open-rhythm-card="(id) => { selectCategory('rhythm'); handleOpenRhythmCard(id) }"
       />
 

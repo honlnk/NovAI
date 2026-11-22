@@ -8,11 +8,11 @@ import type {
 } from './types'
 import type { ElementType } from '../../types/rag'
 
-const ELEMENT_TYPES: ElementType[] = ['timeline', 'plot']
+const ELEMENT_TYPES: ElementType[] = ['plot']
 
 export const ragSearchTool: ToolDefinition<'RagSearch', RagSearchInput, RagSearchOutput> = {
   name: 'RagSearch',
-  description: '基于当前项目的情节（plots）与时间线（timeline）向量索引做语义检索，用于召回剧情线索与章节事件；人物、地点、实体、世界观设定走要素清单 + LoadElements，不在本索引内。',
+  description: '基于当前项目的情节（plots）向量索引做语义检索，用于召回剧情线索；人物、地点、实体、世界观设定走要素清单 + LoadElements，时间线事件走时间线工具（无语义索引），都不在本索引内。',
   validateInput(input) {
     const value = asObject(input)
 

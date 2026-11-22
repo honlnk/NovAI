@@ -18,7 +18,6 @@ const REQUIRED_DIRECTORY_PATHS = [
   'elements/characters',
   'elements/locations',
   'elements/entities',
-  'elements/timeline',
   'elements/plots',
   'elements/worldbuilding',
   'prompts',

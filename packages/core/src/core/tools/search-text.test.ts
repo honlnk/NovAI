@@ -329,7 +329,9 @@ describe('SearchFiles 装配面', () => {
     const prompt = buildAgentSystemPrompt({})
 
     expect(prompt).toContain('- SearchFiles 用于按文件内容搜索')
-    expect(prompt).toContain('- RagSearch：从情节（plots）和时间线（timeline）索引中语义检索')
+    expect(prompt).toContain('- RagSearch：从情节（plots）索引中语义检索剧情线索')
+    // 时间线已退出语义索引（决策 0008）：账本事件改走 TimelineList/TimelineQuery
+    expect(prompt).toContain('时间线事件账本没有语义索引')
     expect(prompt).toContain('请用 SearchFiles')
     // 插入位置：FindFiles 之后
     expect(prompt.indexOf('- FindFiles 用于')).toBeLessThan(prompt.indexOf('- SearchFiles 用于'))

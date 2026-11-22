@@ -48,12 +48,20 @@ function isNodeInputType(value: string): value is (typeof NODE_INPUT_TYPES)[numb
   return (NODE_INPUT_TYPES as readonly string[]).includes(value)
 }
 
-/** 节点定位入参：稳定标识或「类型 + 精确名称」二选一（都给时以标识优先）。 */
+/** 节点定位入参：要素用稳定标识或「类型 + 精确名称」二选一（都给时以标识优先）；事件用 eventId。 */
 function readNodeSelector(value: unknown, label: string): RelationNodeSelector {
   const record = asRecord(value)
   const kind = record.kind === undefined ? 'element' : record.kind
+
+  if (kind === 'event') {
+    const eventId = (record.eventId === undefined ? '' : readString(record.eventId, `${label}.eventId`)).trim()
+    if (!eventId) {
+      throw new Error(`${label} 按事件定位时必须提供 eventId（EVT- 开头的时间线事件标识，可用 TimelineList 查询）`)
+    }
+    return { kind: 'event', eventId }
+  }
   if (kind !== 'element') {
-    throw new Error(`${label}.kind 第一版只支持 element；事件引用等时间线事件账本上线后开放`)
+    throw new Error(`${label}.kind 只支持 element（要素）或 event（时间线事件）`)
   }
 
   const id = record.id === undefined ? undefined : readString(record.id, `${label}.id`).trim()
@@ -68,7 +76,7 @@ function readNodeSelector(value: unknown, label: string): RelationNodeSelector {
       throw new Error(`${label} 按「类型 + 名称」定位时 type 与 name 都必须提供；已有稳定标识则传 id 即可`)
     }
     if (!isNodeInputType(type)) {
-      throw new Error(`${label}.type 必须是 ${NODE_INPUT_TYPES.join(' / ')} 之一（旧时间线要素不是关系节点）`)
+      throw new Error(`${label}.type 必须是 ${NODE_INPUT_TYPES.join(' / ')} 之一；时间线事件请用 kind: 'event' + eventId`)
     }
     return { kind: 'element', type, name }
   }
@@ -86,7 +94,8 @@ function toNodeSummary(node: NodeView): RelationNodeSummary {
     kind: node.kind,
     id: node.id,
     name: node.status === 'resolved' ? node.name : '',
-    type: node.status === 'resolved' ? node.type : '',
+    // 事件端点无要素类型，用 'event' 标注以便模型区分端点类别
+    type: node.status === 'resolved' ? (node.kind === 'element' ? node.type : 'event') : '',
   }
 }
 
@@ -111,7 +120,7 @@ function nameMapFromGraph(graph: GraphView): Map<string, RelationNodeSummary> {
   for (const edge of graph.edges) {
     for (const node of [edge.from, edge.to]) {
       if (node.status === 'resolved' && !map.has(node.id)) {
-        map.set(node.id, { kind: node.kind, id: node.id, name: node.name, type: node.type })
+        map.set(node.id, { kind: node.kind, id: node.id, name: node.name, type: node.kind === 'element' ? node.type : 'event' })
       }
     }
   }
@@ -123,6 +132,9 @@ function unresolvedSummary(id: string, kind: 'element' | 'event'): RelationNodeS
 }
 
 function describeSelectorNode(node: RelationNodeInput): string {
+  if (node.kind === 'event') {
+    return node.eventId || '未定位的事件'
+  }
   if (node.id) {
     return node.id
   }
@@ -180,11 +192,9 @@ export const relationListTool: ToolDefinition<'RelationList', RelationListInput,
     let edges = graph.edges
     const elementType = input.elementType
     if (elementType !== undefined) {
-      edges = edges.filter(
-        (edge) =>
-          (edge.from.status === 'resolved' && edge.from.type === elementType)
-          || (edge.to.status === 'resolved' && edge.to.type === elementType),
-      )
+      // 事件端点无要素类型，不参与 elementType 筛选（要找事件端点的关系按 relationType/全文查）
+      const matchElementType = (node: NodeView) => node.status === 'resolved' && node.kind === 'element' && node.type === elementType
+      edges = edges.filter((edge) => matchElementType(edge.from) || matchElementType(edge.to))
     }
     const relationType = input.relationType
     if (relationType !== undefined) {
@@ -342,7 +352,7 @@ export const relationQueryTool: ToolDefinition<'RelationQuery', RelationQueryInp
 
 export const relationCheckTool: ToolDefinition<'RelationCheck', RelationCheckInput, RelationCheckOutput> = {
   name: 'RelationCheck',
-  description: '检查关系账本数据健康：格式非法条目、重复关系、悬空引用（要素已删除）、标识重复与旧时间线要素误用。报告问题并给出处理建议。',
+  description: '检查关系账本数据健康：格式非法条目、重复关系、悬空引用（要素已删除或事件已删除）、标识重复。报告问题并给出处理建议。',
   validateInput(input) {
     asRecord(input)
     return {}
@@ -360,13 +370,9 @@ export const relationCheckTool: ToolDefinition<'RelationCheck', RelationCheckInp
         case 'duplicate-relation':
           return { kind: issue.kind, detail: `重复关系：${issue.id} 与 ${issue.duplicateOf} 重复（同向同类型 ${issue.type}），删除其中一条` }
         case 'dangling-reference':
-          return { kind: issue.kind, detail: `悬空引用：关系 ${issue.relationId} 的${issue.endpoint === 'from' ? '起点' : '终点'} ${issue.id} 找不到要素（可能已删除），删除该关系或重建要素` }
+          return { kind: issue.kind, detail: `悬空引用：关系 ${issue.relationId} 的${issue.endpoint === 'from' ? '起点' : '终点'} ${issue.id} 找不到对应对象（要素或时间线事件可能已删除），删除该关系或重建对象` }
         case 'ambiguous-reference':
           return { kind: issue.kind, detail: `标识重复：关系 ${issue.relationId} 的${issue.endpoint === 'from' ? '起点' : '终点'} ${issue.id} 对应多个要素（${issue.sourcePaths.join('、')}），先在要素库修正重复标识` }
-        case 'timeline-node':
-          return { kind: issue.kind, detail: `误用旧时间线要素：关系 ${issue.relationId} 的${issue.endpoint === 'from' ? '起点' : '终点'}引用了「${issue.name}」；请改用其他类型要素作节点` }
-        case 'event-reference-unsupported':
-          return { kind: issue.kind, detail: `事件引用：关系 ${issue.relationId} 的${issue.endpoint === 'from' ? '起点' : '终点'}引用了事件 ${issue.id}，事件账本未上线，请先移除` }
       }
     })
 
@@ -392,7 +398,7 @@ export const relationCheckTool: ToolDefinition<'RelationCheck', RelationCheckInp
 
 export const relationCreateTool: ToolDefinition<'RelationCreate', RelationCreateInput, RelationCreateOutput> = {
   name: 'RelationCreate',
-  description: '登记一条有向关系。两端用稳定标识（id）或「类型 + 精确名称」定位；type 用短词（如 盟友/血缘/隶属/位于），细腻语义写 description。同一方向同一类型只登记一条；反向是独立条目。',
+  description: '登记一条有向关系。两端用稳定标识（id）或「类型 + 精确名称」定位要素，或用 kind: "event" + eventId 引用时间线事件（EVT- 标识）；type 用短词（如 盟友/血缘/隶属/位于），细腻语义写 description。同一方向同一类型只登记一条；反向是独立条目。',
   validateInput(input) {
     const value = asRecord(input)
     const from = readNodeSelector(value.from, 'RelationCreate.from')

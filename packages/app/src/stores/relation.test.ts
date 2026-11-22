@@ -202,6 +202,34 @@ describe('画布节点与边派生', () => {
     store.filterElementType = ''
   })
 
+  it('事件端点：解析出的事件成「事件」节点，悬空事件成幽灵并说明原因', async () => {
+    vi.mocked(getGraph).mockResolvedValue(graphView({
+      edges: [
+        {
+          relation: relation('REL-3333333333', { type: '导致', to: { kind: 'event', id: 'EVT-cccccccccc' } }),
+          from: graphView().edges[0]!.from,
+          to: { status: 'resolved' as const, kind: 'event' as const, id: 'EVT-cccccccccc', name: '北境之战', summary: '决定性会战' },
+        },
+        {
+          relation: relation('REL-4444444444', { type: '目击', from: { kind: 'event', id: 'EVT-zzzzzzzzzz' } }),
+          from: { status: 'missing' as const, kind: 'event' as const, id: 'EVT-zzzzzzzzzz' },
+          to: graphView().edges[0]!.to,
+        },
+      ],
+    }))
+    const store = useRelationStore()
+    await store.open('proj-1')
+
+    const resolved = store.canvasNodes.find((node) => node.id === 'EVT-cccccccccc')!
+    expect(resolved.nodeType).toBe('event')
+    expect(resolved.label).toBe('北境之战')
+    expect(resolved.summary).toBe('决定性会战')
+
+    const dangling = store.canvasNodes.find((node) => node.id === 'EVT-zzzzzzzzzz')!
+    expect(dangling.nodeType).toBe('ghost')
+    expect(dangling.summary).toContain('时间线事件可能已删除')
+  })
+
   it('聚焦：非直接相连的边降透明', async () => {
     const store = useRelationStore()
     await store.open('proj-1')

@@ -82,7 +82,6 @@ function normalizeType(value: string | undefined): ElementFrontmatter['type'] {
   if (
     value === 'location' ||
     value === 'entity' ||
-    value === 'timeline' ||
     value === 'plot' ||
     value === 'worldbuilding'
   ) {

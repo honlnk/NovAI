@@ -644,11 +644,6 @@ function locateTimelineElement(
     entry = exact[0]!
   }
 
-  if (entry.type === 'timeline') {
-    throw new TimelineError(
-      `${label} 不能引用旧时间线要素「${entry.name}」（时间线不再是要素）；时间线事件请直接登记到事件账本`,
-    )
-  }
   if (!allowedTypes.includes(entry.type)) {
     throw new TimelineError(
       `${label} 引用的「${entry.name}」类型是 ${entry.type}，不在允许范围（${allowedTypes.join(' / ')}）`,

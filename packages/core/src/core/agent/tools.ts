@@ -149,17 +149,21 @@ function relationNodeParameter(field: 'from' | 'to', role: string): {
     properties: {
       kind: {
         type: 'string',
-        enum: ['element'],
-        description: '可选，节点类别；第一版恒为 element（要素），事件引用等时间线事件账本上线后开放。',
+        enum: ['element', 'event'],
+        description: '可选，节点类别：element（要素，默认）或 event（时间线事件，需配 eventId）。',
       },
       id: {
         type: 'string',
         description: `可选，${role}要素的稳定标识（ELM- 开头）；与 type+name 二选一，都给时以 id 为准。`,
       },
+      eventId: {
+        type: 'string',
+        description: `kind 为 event 时必填：${role}时间线事件的标识（EVT- 开头，可用 TimelineList 查询）。`,
+      },
       type: {
         type: 'string',
         enum: ['character', 'location', 'entity', 'plot', 'worldbuilding'],
-        description: `可选，按名称定位时的要素类型（旧时间线要素不是关系节点）。`,
+        description: `可选，按名称定位时的要素类型；时间线事件请改用 kind: event + eventId。`,
       },
       name: {
         type: 'string',
@@ -168,7 +172,7 @@ function relationNodeParameter(field: 'from' | 'to', role: string): {
     },
     required: [],
     additionalProperties: false,
-    description: `${role}（${field}）：稳定标识或「类型 + 精确名称」二选一。`,
+    description: `${role}（${field}）：要素用稳定标识或「类型 + 精确名称」二选一；时间线事件用 kind: event + eventId。`,
   }
 }
 
@@ -668,7 +672,7 @@ export function createAgentTools(): AgentRunnableToolMap {
                   type: 'array',
                   items: {
                     type: 'string',
-                    enum: ['timeline', 'plot'],
+                    enum: ['plot'],
                   },
                   description: '可选，只检索指定类型（plot=剧情事件，timeline=时间线阶段）。',
                 },
@@ -713,7 +717,7 @@ export function createAgentTools(): AgentRunnableToolMap {
           ragSearchTool.summarizeOutput(output),
           `query: ${output.query}`,
           '',
-          lines.join('\n\n') || '暂无匹配结果。本索引只覆盖情节（elements/plots）与时间线（elements/timeline），需先在设置中构建向量索引。',
+          lines.join('\n\n') || '暂无匹配结果。本索引只覆盖情节（elements/plots），需先在设置中构建向量索引；时间线事件走 TimelineList/TimelineQuery（无语义索引）。',
         ].join('\n')
       },
     },
@@ -2273,6 +2277,11 @@ export function createAgentTools(): AgentRunnableToolMap {
         }
         if (output.anchoredEvents.length > 0) {
           lines.push(`注意：${output.anchoredEvents.map((event) => `《${event.title}》（${event.eventId}）`).join('、')} 仍以该事件为相对时间锚，锚已失效，建议提醒作者改绑或用 TimelineUpdate 调整`)
+        }
+        if (output.eventRelationCascadeError) {
+          lines.push(`关系引用级联清理失败：${output.eventRelationCascadeError}；请用 RelationCheck 检查关系账本`)
+        } else if (output.removedEventRelations > 0) {
+          lines.push(`已级联删除 ${output.removedEventRelations} 条引用该事件的关系`)
         }
         return lines.join('\n')
       },

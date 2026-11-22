@@ -891,6 +891,8 @@ export const timelineDeleteTool: ToolDefinition<'TimelineDelete', TimelineDelete
       removedMarkers: result.removed.length,
       cascadedCausedBy: result.cascadedCausedBy,
       anchoredEvents,
+      removedEventRelations: result.removedEventRelations,
+      eventRelationCascadeError: result.eventRelationCascadeError,
       linesAdded: 0,
       linesRemoved: diff.linesRemoved,
     }
@@ -902,7 +904,12 @@ export const timelineDeleteTool: ToolDefinition<'TimelineDelete', TimelineDelete
     const anchorNote = output.anchoredEvents.length > 0
       ? `；仍有 ${output.anchoredEvents.length} 个事件以它为相对时间锚（已提示改绑）`
       : ''
-    return `已删除${output.kind === 'span' ? '区间' : '点'}事件 ${output.eventId}（${output.title}）${anchorNote}`
+    const relationNote = output.eventRelationCascadeError
+      ? `；关系级联清理失败（${output.eventRelationCascadeError}），请用 RelationCheck 检查`
+      : output.removedEventRelations > 0
+        ? `；级联删除了 ${output.removedEventRelations} 条引用它的关系`
+        : ''
+    return `已删除${output.kind === 'span' ? '区间' : '点'}事件 ${output.eventId}（${output.title}）${anchorNote}${relationNote}`
   },
   extractFileChange() {
     return { type: 'updated' as const, path: TIMELINE_LEDGER_PATH }

@@ -21,7 +21,6 @@ const TYPE_LABELS: Record<ElementType, string> = {
   entity: '实体',
   worldbuilding: '世界观',
   plot: '剧情',
-  timeline: '时间线',
 }
 
 export function buildElementCatalogReminder(

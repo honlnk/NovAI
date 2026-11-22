@@ -156,7 +156,7 @@ beforeEach(() => {
     return { marker: created, endMarker: { id: 'TM-newspan112', kind: 'end', eventId: 'EVT-newspan111', startId: 'TM-newspan111' }, contentHash: 'hash-new', assignedElementIds: [], created: false }
   })
   vi.mocked(moveMarker).mockResolvedValue({ markers: baseMarkers(), contentHash: 'hash-moved' })
-  vi.mocked(deleteTimelineEventEntry).mockResolvedValue({ removed: [], cascadedCausedBy: 0, contentHash: 'hash-deleted' })
+  vi.mocked(deleteTimelineEventEntry).mockResolvedValue({ removed: [], cascadedCausedBy: 0, contentHash: 'hash-deleted', removedEventRelations: 0, eventRelationCascadeError: '' })
   setActivePinia(createPinia())
 })
 
@@ -230,6 +230,18 @@ describe('时间轴渲染模型', () => {
     // C 有相对时间角标；A 无时间角标
     expect(store.axisNodes[2]!.timeLabel).toBe('前 3 天')
     expect(store.axisNodes[0]!.timeLabel).toBe('')
+  })
+
+  it('chapterEvents 章节反查摘要：id/标题/形态/关联章号（结束标记不产出条目）', async () => {
+    const store = useTimelineStore()
+    await store.open('proj-1')
+
+    // 夹具：A 无章节关联、B 区间、C 关联第 1 章
+    expect(store.chapterEvents).toEqual([
+      { eventId: EVENT_A, title: '北境之战', kind: 'point', chapterNumbers: [] },
+      { eventId: EVENT_B, title: '铁剑门兴起', kind: 'span', chapterNumbers: [] },
+      { eventId: EVENT_C, title: '战前三日', kind: 'point', chapterNumbers: [1] },
+    ])
   })
 
   it('搜索/筛选命中做淡出不移除；无匹配保留全部位置', async () => {

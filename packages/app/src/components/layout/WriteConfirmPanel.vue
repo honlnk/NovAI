@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import type { FileChangeConfirmationView } from '@novai/core/services/types'
 import { RELATION_LEDGER_PATH } from '@novai/core/types/relation'
+import { TIMELINE_LEDGER_PATH } from '@novai/core/types/timeline'
 import { hashContent } from '@novai/core'
 
 import { useProjectStore } from '../../stores/project'
@@ -67,11 +68,12 @@ const candidate = computed(() => {
 const isCreate = computed(() => candidate.value?.kind === 'create')
 
 /**
- * 关系账本追加确认（create 候选指向 relations.json）：账本是读改写的追加式
- * JSON，目标存在是常态而非占用冲突——工具执行走 relationService 的版本校验，
- * 不会覆盖既有条目，面板不按「新建不覆盖」规则阻止。
+ * 追加式账本确认（create 候选指向 relations.json / timeline.json）：账本是
+ * 读改写的追加式 JSON，目标存在是常态而非占用冲突——工具执行走各自服务层的
+ * 版本校验，不会覆盖既有条目，面板不按「新建不覆盖」规则阻止。
  */
-const isAppendLedger = computed(() => candidate.value?.path.startsWith(RELATION_LEDGER_PATH) ?? false)
+const APPEND_LEDGER_PATHS = [RELATION_LEDGER_PATH, TIMELINE_LEDGER_PATH] as const
+const isAppendLedger = computed(() => APPEND_LEDGER_PATHS.some((path) => candidate.value?.path.startsWith(path) ?? false))
 
 /** 目标文件当前磁盘内容（create 时探测占用；读不到为 null） */
 const diskFile = ref<{ content: string; hash: string } | null>(null)
@@ -131,10 +133,11 @@ const segments = computed<TextHighlightSegment[] | null>(() => {
     return c.content === '' ? [] : [{ kind: 'green' as const, text: c.content }]
   }
   if (isAppendLedger.value) {
-    // 关系账本的更新确认：oldText 是展示用占位符，磁盘里定位不到也不该定位——
+    // 账本（关系/时间线）的更新确认：oldText 是展示用占位符，磁盘里定位不到也不该定位——
     // 直接展示要改的字段（绿），否则会落到「目标文件不可读」兜底文案误导作者
+    const itemLabel = c.path.startsWith(TIMELINE_LEDGER_PATH) ? '事件' : '关系'
     return [
-      { kind: 'plain' as const, text: '将修改这条关系的以下字段（实际差异以执行结果为准）：\n' },
+      { kind: 'plain' as const, text: `将修改这条${itemLabel}的以下字段（实际差异以执行结果为准）：\n` },
       { kind: 'green' as const, text: c.newText },
     ]
   }
@@ -193,7 +196,7 @@ async function loadDisk() {
         diskUnreadableMessage.value = probe.message
       }
     }
-    // create 候选的草稿分支按「目标为空」判定：文件不存在，或关系账本追加
+    // create 候选的草稿分支按「目标为空」判定：文件不存在，或追加式账本
     // 确认（账本存在是常态，不算被占用；磁盘真实内容仍进上方预览）
     const createAsEmpty = isCreate.value && (probe.kind === 'missing' || (probe.kind === 'ok' && isAppendLedger.value))
     draftBranch.value = resolveConfirmDraftBranch({
@@ -210,11 +213,11 @@ async function loadDisk() {
     })
     // 版本失配（审阅期间外部修改/候选原文消失）：与草稿维度并列判断
     if (probe.kind === 'ok' && c.kind === 'edit') {
-      // 关系账本的更新/删除确认：候选原文是展示用占位符，磁盘包含性检查不适用
+      // 账本（关系/时间线）的更新/删除确认：候选原文是展示用占位符，磁盘包含性检查不适用
       // （版本一致性由工具执行期的账本内容哈希校验兜底）
       staleState.value = isAppendLedger.value || probe.file.content.includes(c.oldText) ? 'idle' : 'missing'
     } else if (probe.kind === 'ok' && c.kind === 'create') {
-      // create 探测到内容 = 目标被占用；关系账本追加确认除外（目标存在是常态）
+      // create 探测到内容 = 目标被占用；追加式账本确认除外（目标存在是常态）
       staleState.value = isAppendLedger.value ? 'idle' : 'missing'
     } else {
       staleState.value = 'idle' // missing/unreadable 由草稿分支横幅独立提示
@@ -394,7 +397,7 @@ async function handleConfirm() {
     }
     if (fresh.kind === 'missing') {
       if (c.kind === 'create' && isAppendLedger.value) {
-        // 关系账本追加确认：账本尚不存在 = 首条关系落账（工具负责建账本），正常放行
+        // 追加式账本确认：账本尚不存在 = 首条条目落账（工具负责建账本），正常放行
         emit('confirm')
         return
       }
@@ -421,7 +424,7 @@ async function handleConfirm() {
     if (c.kind === 'create') {
       diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
       if (isAppendLedger.value) {
-        // 关系账本追加确认：复检只刷新磁盘预览，目标存在不构成「新建被占用」
+        // 追加式账本确认：复检只刷新磁盘预览，目标存在不构成「新建被占用」
         emit('confirm')
         return
       }
@@ -445,7 +448,7 @@ async function handleConfirm() {
     }
     if (c.kind === 'edit') {
       if (isAppendLedger.value) {
-        // 关系账本更新/删除确认：候选原文是展示用占位符，包含性/中途变更检查不适用——
+        // 账本（关系/时间线）更新/删除确认：候选原文是展示用占位符，包含性/中途变更检查不适用——
         // 复检磁盘可读即放行，版本一致性由工具执行期的账本内容哈希校验兜底
         diskFile.value = { content: fresh.file.content, hash: hashContent(fresh.file.content) }
         emit('confirm')

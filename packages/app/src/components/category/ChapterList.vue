@@ -3,8 +3,10 @@ import { computed, ref } from 'vue'
 import type { ForeshadowingCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView } from '@novai/core/services/types'
 import { chapterRelatedForeshadowing, FORESHADOWING_STATUS_SHORT_LABELS } from '../../constants/foreshadowing'
 import { chapterRhythmCard } from '../../constants/rhythm'
+import { chapterTimelineEvents } from '../../constants/timeline'
 import { pickDirectoryChildren } from '../../utils/file-tree'
 import AppIcon from '../ui/AppIcon.vue'
+import type { ChapterTimelineEventSummary } from '../../constants/timeline'
 
 const props = defineProps<{
   files: ProjectFileNodeView[]
@@ -13,12 +15,15 @@ const props = defineProps<{
   foreshadowingCards?: ForeshadowingCardSummaryView[]
   /** 全量节奏卡摘要（实时反查「本章节奏卡」用；不传则不显示该区块） */
   rhythmCards?: RhythmCardSummaryView[]
+  /** 时间线事件摘要（实时反查「本章相关事件」用；不传则不显示该区块） */
+  timelineEvents?: ChapterTimelineEventSummary[]
 }>()
 
 const emit = defineEmits<{
   selectFile: [path: string]
   openForeshadowing: [id: string]
   openRhythm: [id: string]
+  openTimelineEvent: [eventId: string]
 }>()
 
 /**
@@ -41,6 +46,12 @@ const relatedForeshadowing = computed(() =>
  * 本章节奏卡（施工计划 §七）：一章一卡，按章号实时反查。不写入章节文件。
  */
 const rhythmCard = computed(() => chapterRhythmCard(props.rhythmCards ?? [], props.activeFilePath))
+
+/**
+ * 本章相关事件（时间线JSON化改造 §十一）：按事件的章节关联实时反查。
+ * 不写入章节文件；点击打开时间轴并定位该事件详情。
+ */
+const relatedTimelineEvents = computed(() => chapterTimelineEvents(props.timelineEvents ?? [], props.activeFilePath))
 
 /** 每个目录节点的展开状态，key = 目录 path */
 const expandedDirs = ref<Set<string>>(new Set())
@@ -100,6 +111,23 @@ function isDirExpanded(path: string) {
         <p class="px-1 pt-0.5 text-[10px] text-gray-600">
           计划 冲突 {{ rhythmCard.plannedConflict }} · {{ rhythmCard.plannedMood }} · 钩子 {{ rhythmCard.plannedHook }} · {{ rhythmCard.plannedPayoff }}
         </p>
+      </div>
+
+      <!-- 本章相关事件：选中章节后按事件章节关联实时反查，不写入章节文件 -->
+      <div v-if="relatedTimelineEvents.length" class="mb-2 rounded-md bg-white/5 px-2 py-2" data-testid="chapter-related-timeline-events">
+        <p class="px-1 pb-1 text-xs font-medium text-gray-500">本章相关事件</p>
+        <ul class="space-y-0.5">
+          <li v-for="event in relatedTimelineEvents" :key="event.eventId">
+            <button
+              class="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+              @click="emit('openTimelineEvent', event.eventId)"
+            >
+              <AppIcon name="timeline" :size="12" class="h-3 w-3 shrink-0 text-gray-600" />
+              <span class="flex-1 truncate">{{ event.title }}</span>
+              <span class="shrink-0 text-gray-600">{{ event.kind === 'span' ? '区间' : '点' }}</span>
+            </button>
+          </li>
+        </ul>
       </div>
 
       <!-- 空状态：chapters/ 目录为空或不存在 -->

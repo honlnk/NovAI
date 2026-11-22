@@ -251,6 +251,6 @@ function isSelected(node: TimelineAxisNode): boolean {
     </svg>
 
     <!-- 空轴兜底（弹窗空态之外：账本只有 issue、没有任何合法标记时） -->
-    <p v-if="nodes.length === 0" class="px-4 py-6 text-center text-xs text-gray-400">账本中没有合法标记；异常条目见上方检查面板。</p>
+    <p v-if="nodes.length === 0" class="px-4 py-6 text-center text-xs text-gray-400">时间轴为空；新建事件后在此按故事内顺序显示。</p>
   </div>
 </template>

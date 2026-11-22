@@ -26,7 +26,6 @@ export const ELEMENT_CATEGORIES: ElementCategory[] = [
   { key: 'character', label: '人物', directory: 'elements/characters', icon: 'user' },
   { key: 'location', label: '地点', directory: 'elements/locations', icon: 'map-pin' },
   { key: 'entity', label: '其他实体', directory: 'elements/entities', icon: 'diamond' },
-  { key: 'timeline', label: '时间线', directory: 'elements/timeline', icon: 'calendar' },
   { key: 'plot', label: '情节', directory: 'elements/plots', icon: 'git-branch' },
   { key: 'worldbuilding', label: '设定', directory: 'elements/worldbuilding', icon: 'globe' },
 ]

@@ -35,6 +35,7 @@ import type {
   TimelineParticipant,
 } from '@novai/core/types/timeline'
 import { createSaveSessionRealm } from '../composables/save-session'
+import type { ChapterTimelineEventSummary } from '../constants/timeline'
 import type {
   SaveSessionPhase,
   SaveSessionRestoreRecord,
@@ -265,6 +266,24 @@ export const useTimelineStore = defineStore('timeline', () => {
 
   const eventCount = computed(() => markers.value.filter((item) => item.marker.kind !== 'end').length)
   const issueCount = computed(() => view.value?.issues.length ?? 0)
+
+  /** 章节侧栏「本章相关事件」反查摘要：非结束标记的事件（id/标题/形态/关联章号）。 */
+  const chapterEvents = computed<ChapterTimelineEventSummary[]>(() =>
+    markers.value
+      .map((item): ChapterTimelineEventSummary | null => {
+        const marker = item.marker
+        if (marker.kind === 'end') {
+          return null
+        }
+        return {
+          eventId: marker.eventId,
+          title: marker.event.title,
+          kind: marker.kind === 'start' ? 'span' : 'point',
+          chapterNumbers: marker.event.chapters.map((ref) => ref.chapterNumber),
+        }
+      })
+      .filter((summary): summary is ChapterTimelineEventSummary => summary !== null),
+  )
 
   const hasFilter = computed(
     () =>
@@ -1024,6 +1043,7 @@ export const useTimelineStore = defineStore('timeline', () => {
     laneCount,
     anchorLinks,
     eventCount,
+    chapterEvents,
     issueCount,
     hasFilter,
     matchedEventIds,

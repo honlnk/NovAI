@@ -9,6 +9,7 @@ import {
   timelineUpdateTool,
 } from './timeline-tools'
 import { setRuntimeProject, clearRuntimeProjects } from '../../services/project-runtime'
+import { relationCreateTool, relationListTool } from './relation-tools'
 import { readProjectTextFile, writeProjectTextFile } from '../fs/project-fs'
 import { TIMELINE_LEDGER_PATH } from '../../types/timeline'
 import type { ProjectSnapshot } from '../../types/project'
@@ -390,6 +391,38 @@ describe('TimelineDelete', () => {
 
     const list = await timelineListTool.run(timelineListTool.validateInput({}), runtime())
     expect(list.events.map((event) => event.title)).toEqual(['锚事件', '战后重建'])
+  })
+
+  it('删除事件级联清理引用它的关系（4b 解锁事件端点）', async () => {
+    await seedWorld()
+    const event = await timelineCreatePointTool.run(timelineCreatePointTool.validateInput({
+      event: { title: '北境之战' },
+    }), runtime())
+    // 人物要素 + 两条关系：一条引用该事件，一条纯要素关系
+    await writeProjectTextFile(root, 'elements/characters/林澜.md', [
+      '---',
+      'id: ELM-aaaaaaaaaa',
+      'type: character',
+      'name: 林澜',
+      'summary: ',
+      '---',
+      '',
+      '# 林澜',
+    ].join('\n'))
+    await relationCreateTool.run(relationCreateTool.validateInput({
+      from: { kind: 'event', eventId: event.eventId }, to: { id: 'ELM-aaaaaaaaaa' }, type: '导致',
+    }), runtime())
+    await relationCreateTool.run(relationCreateTool.validateInput({
+      from: { id: 'ELM-aaaaaaaaaa' }, to: { kind: 'event', eventId: event.eventId }, type: '目击',
+    }), runtime())
+
+    const output = await timelineDeleteTool.run(timelineDeleteTool.validateInput({ eventId: event.eventId }), runtime())
+    expect(output.removedEventRelations).toBe(2)
+    expect(output.eventRelationCascadeError).toBe('')
+    expect(timelineDeleteTool.summarizeOutput(output)).toContain('2 条引用它的关系')
+
+    const relations = await relationListTool.run(relationListTool.validateInput({}), runtime())
+    expect(relations.totalCount).toBe(0)
   })
 
   it('删除点事件：清空他事件指向它的因果引用', async () => {

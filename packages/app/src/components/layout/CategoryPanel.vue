@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ChatSessionSummaryView, ForeshadowingCardSummaryView, PlanCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView } from '@novai/core/services/types'
+import type { ChapterTimelineEventSummary } from '../../constants/timeline'
 import type { Category } from '../../constants/category'
 import ChapterList from '../category/ChapterList.vue'
 import ElementList from '../category/ElementList.vue'
@@ -39,6 +40,8 @@ defineProps<{
   isRhythmLoading: boolean
   /** 当前打开详情的节奏卡 id（侧栏最近列表选中态与详情一致） */
   selectedRhythmId?: string | null
+  /** 时间线事件摘要（章节侧栏「本章相关事件」实时反查用） */
+  timelineEvents: ChapterTimelineEventSummary[]
   /** 有待回答提问卡的会话 id 集（会话列表「待回答」徽标；提问按会话路由） */
   pendingQuestionIds?: Set<string>
   /** 实时运行中的会话 id 集（会话列表「进行中」筛选与徽标） */
@@ -83,6 +86,8 @@ const emit = defineEmits<{
   openRhythmCard: [id: string]
   /** 规划节奏卡（侧栏摘要卡下方入口） */
   openRhythmCreate: []
+  /** 打开时间轴并定位某事件详情（章节侧栏「本章相关事件」入口） */
+  openTimelineEvent: [eventId: string]
 }>()
 </script>
 
@@ -126,9 +131,11 @@ const emit = defineEmits<{
       :active-file-path="activeFilePath"
       :foreshadowing-cards="foreshadowingCards"
       :rhythm-cards="rhythmCards"
+      :timeline-events="timelineEvents"
       @select-file="emit('selectFile', $event)"
       @open-foreshadowing="emit('openForeshadowingCard', $event)"
       @open-rhythm="emit('openRhythmCard', $event)"
+      @open-timeline-event="emit('openTimelineEvent', $event)"
     >
       <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
     </ChapterList>

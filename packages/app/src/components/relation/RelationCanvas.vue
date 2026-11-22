@@ -34,13 +34,14 @@ const emit = defineEmits<{
   paneClick: []
 }>()
 
-/** 节点类型着色（边框与圆点；幽灵节点灰） */
+/** 节点类型着色（边框与圆点；事件端点红、幽灵节点灰） */
 const TYPE_COLORS: Record<string, string> = {
   character: '#3b82f6',
   location: '#10b981',
   entity: '#8b5cf6',
   plot: '#f59e0b',
   worldbuilding: '#14b8a6',
+  event: '#ef4444',
   ghost: '#9ca3af',
 }
 
@@ -50,6 +51,7 @@ const TYPE_LABELS: Record<string, string> = {
   entity: '实体',
   plot: '情节',
   worldbuilding: '世界观',
+  event: '事件',
   ghost: '未解析',
 }
 
