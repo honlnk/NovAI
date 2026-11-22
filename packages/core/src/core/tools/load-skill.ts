@@ -77,10 +77,12 @@ export const loadSkillTool: ToolDefinition<'LoadSkill', LoadSkillInput, LoadSkil
     return loadSkillFile(skill, { ...input, file: input.file }, runtime)
   },
 
+  // 工具行专属摘要（技能包 UI/UX 施工计划 §3.6）：不带 file「加载技能」、
+  // 带 file「读取技能文件」＋分页行号；失败行不走这里（沿用 ToolCallRow 失败态）
   summarizeInput(input) {
     return input.file
-      ? `加载技能：${input.name}/${input.file}${input.offset ? `（第 ${input.offset} 行起）` : ''}`
-      : `加载技能：${input.name}`
+      ? `读取技能文件 · ${input.name} / ${input.file}${input.offset ? `（第 ${input.offset} 行起）` : ''}`
+      : `加载技能 · ${input.name}`
   },
 
   summarizeOutput(output) {

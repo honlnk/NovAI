@@ -349,3 +349,16 @@ describe('renderSkillContent（formatResult 渲染）', () => {
     expect(rendered).toContain("可用 file: 'SKILL.md' 配合 offset/limit 分段读取")
   })
 })
+
+describe('summarizeInput（工具行专属摘要，技能包 UI/UX 施工计划 §3.6）', () => {
+  it('不带 file：加载技能 · 名称', () => {
+    expect(loadSkillTool.summarizeInput({ name: '去AI味' })).toBe('加载技能 · 去AI味')
+  })
+
+  it('带 file：读取技能文件 · 名称 / 文件；offset 时附第 N 行起', () => {
+    expect(loadSkillTool.summarizeInput({ name: '去AI味', file: 'references/词表.md' }))
+      .toBe('读取技能文件 · 去AI味 / references/词表.md')
+    expect(loadSkillTool.summarizeInput({ name: '去AI味', file: 'SKILL.md', offset: 51 }))
+      .toBe('读取技能文件 · 去AI味 / SKILL.md（第 51 行起）')
+  })
+})
