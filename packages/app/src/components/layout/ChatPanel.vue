@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ProjectFileNodeView } from '@novai/core/services/types'
+import type { ProjectFileNodeView, SkillView } from '@novai/core/services/types'
 import { checkElementReminder, markElementReminderShown } from '@novai/core/services/element-reminder-service'
 import { useChatStore } from '../../stores/chat'
 import { resolveSubmitMode, shouldBlockImeDefault } from '../../composables/keyboard'
@@ -14,6 +14,7 @@ import PermissionPresetPicker from '../chat/PermissionPresetPicker.vue'
 import QueueDock from '../chat/QueueDock.vue'
 import SelectionChip from '../chat/SelectionChip.vue'
 import OutlineCommandPopover from '../chat/OutlineCommandPopover.vue'
+import SkillCommandPopover from '../chat/SkillCommandPopover.vue'
 import {
   registerTextRefs,
   rescanTextRefs,
@@ -35,6 +36,7 @@ import {
   slashCommandDraftText,
   type SlashCommandId,
 } from '../../constants/slash-commands'
+import { expandSkillMentions } from '../../constants/skill-mention'
 import type { ChatRenderItem } from '../../stores/chat-render'
 import { AGENT_ROLE_META } from '../../constants/agent-roles'
 import { REPO_URL } from '../../constants/repo'
@@ -60,6 +62,8 @@ const props = defineProps<{
   outlines: ProjectFileNodeView[]
   /** 当前激活的大纲路径，null 表示未激活 **/
   activeOutlinePath: string | null
+  /** 合格技能列表（#点名弹层与发送展开用，broken 不参与；技能包 §3.3） */
+  skills: SkillView[]
 }>()
 
 const emit = defineEmits<{
@@ -98,10 +102,12 @@ const composer = useComposerBridge({
 })
 const { draft } = composer
 
-// token 高亮词表（W3）：斜杠命令取 labels（含 '/' 前缀），大纲取 '@' + 展示名（与弹层查询口径一致）
+// token 高亮词表（W3）：斜杠命令取 labels（含 '/' 前缀），大纲取 '@' + 展示名（与弹层查询口径一致），
+// 技能取 '#' + 文件夹名（#点名，技能包 §3.3）
 const textRefLexicon = computed<TextRefLexicon>(() => ({
   slash: SLASH_COMMANDS.map((entry) => entry.label),
   outline: props.outlines.map((node) => `@${node.name.replace(/\.md$/i, '')}`),
+  skill: skillNames.value.map((name) => `#${name}`),
 }))
 /** registerTextRefs 注销句柄（onMounted 注册，onBeforeUnmount 注销） */
 let unregisterTextRefs: (() => void) | null = null
@@ -401,9 +407,11 @@ async function handleSend(mode: 'queue' | 'steer' = 'queue') {
   // 回答只在提问接管面板里显式提交，普通输入不再隐式把发送当成答案
   // 斜杠命令前缀拦截（W3 D6）：行首命中的命令文本替换为驱动 prompt 全文，
   // 其后参数原样保留；不在行首的命令文本视作正文，不替换。
-  // 显示/指令分离（§3.2）：实际发生展开时把用户原草稿作为 displayLabel 随消息入队——
-  // 气泡、队列与自动标题显示原草稿，内部 prompt 不外露。
-  const message = expandSlashCommand(draftText)
+  // #技能 点名（技能包 §3.3）：命中的 #技能名 汇总为一句追加在斜杠展开结果之后，
+  // 要求模型先 LoadSkill 再完成请求——提示式，core 不改。
+  // 显示/指令分离（§3.2）：实际发生任一展开时把用户原草稿作为 displayLabel 随消息
+  // 入队——气泡、队列与自动标题显示原草稿，内部 prompt 与点名句不外露。
+  const message = expandSkillMentions(expandSlashCommand(draftText), skillNames.value)
   const displayLabel = message === draftText ? undefined : draftText
   // 发送前快照引用文本（发送过程中 chip 可能被清除）
   const quoteText = props.quote?.text
@@ -499,6 +507,29 @@ function handleKeydown(event: KeyboardEvent) {
       return
     }
   }
+  // #技能 弹层打开时：拦截导航键交给弹层
+  if (isSkillCommandOpen.value && skillPopoverRef.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      skillPopoverRef.value.moveDown()
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      skillPopoverRef.value.moveUp()
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      skillPopoverRef.value.confirm()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      handleCloseSkillCommand()
+      return
+    }
+  }
   // 发送模式（dsh resolveSubmitMode）：Enter = 发送/排队，Ctrl/Cmd+Enter = 插话，
   // Shift+Enter 换行（contenteditable 的默认行为是产生段落，交给 Lexical）；
   // 空草稿 + Ctrl/Cmd+Enter = 全部排队消息逐条插话
@@ -524,10 +555,10 @@ function autoResizeEditor() {
 }
 
 /**
- * 调度输入补全。命令菜单 / @大纲 / 章节选择打开时不调度，避免与这些交互冲突。
+ * 调度输入补全。命令菜单 / @大纲 / #技能弹层打开时不调度，避免与这些交互冲突。
  */
 function scheduleInlineCompletion() {
-  if (isSlashMenuOpen.value || isOutlineCommandOpen.value) {
+  if (isSlashMenuOpen.value || isOutlineCommandOpen.value || isSkillCommandOpen.value) {
     clearSuggestion()
     return
   }
@@ -581,6 +612,40 @@ function handleCloseOutlineCommand() {
   isOutlineCommandOpen.value = false
 }
 
+// ===== #技能 点名弹层（技能包 UI/UX 施工计划 §3.3） =====
+
+/** #技能 弹层是否打开（无技能时也弹——弹层内显示「还没有技能」引导去左侧获取） */
+const isSkillCommandOpen = ref(false)
+/** # 后的筛选词 */
+const skillQuery = ref('')
+/** 弹层组件引用（键盘导航用） */
+const skillPopoverRef = ref<InstanceType<typeof SkillCommandPopover> | null>(null)
+
+/** 技能名单（发送展开、QueueDock 重推导与词表共用同一投影） */
+const skillNames = computed(() => props.skills.map((skill) => skill.name))
+
+/**
+ * 匹配光标前最近的 # 点名前缀。规则与 @大纲/斜杠同构：# 前是行首或空白，
+ * # 后到光标间不含空格/换行/#（`##` Markdown 标题因 # 紧跟 # 不误触；
+ * `# 标题` 因 # 后紧跟空格天然不匹配）。
+ */
+const SKILL_COMMAND_RE = /(?:^|\s)#([^\s#]*)$/
+
+/**
+ * 选中技能后（§3.3）：把光标前的 `#筛选词` 替换为 `#技能名 `（尾随空格收口
+ * token，弹层随之关闭），用户可继续补需求；发送链路的 expandSkillMentions
+ * 负责 #标签 的点名句展开。
+ */
+function handleSelectSkill(name: string) {
+  composer.replaceTokenBeforeCaret(SKILL_COMMAND_RE, `#${name} `)
+  isSkillCommandOpen.value = false
+  skillQuery.value = ''
+}
+
+function handleCloseSkillCommand() {
+  isSkillCommandOpen.value = false
+}
+
 // ===== 斜杠命令菜单 =====
 
 /** 斜杠命令菜单是否打开（输入 / 后弹出命令列表） */
@@ -602,26 +667,37 @@ function detectCommands() {
   if (!composer.isMounted()) {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
+    isSkillCommandOpen.value = false
     return
   }
   const cursor = composer.caretOffset() ?? draft.value.length
   const beforeCursor = draft.value.slice(0, cursor)
 
-  // @大纲、/ 命令两层互斥，同一时刻只开一个
+  // @大纲、/ 命令、#技能 三层互斥（触发符不同天然不重叠），同一时刻只开一个
   const outlineMatch = OUTLINE_COMMAND_RE.exec(beforeCursor)
   const slashMatch = SLASH_COMMAND_RE.exec(beforeCursor)
+  const skillMatch = SKILL_COMMAND_RE.exec(beforeCursor)
 
   if (slashMatch) {
     slashQuery.value = slashMatch[1]
     isSlashMenuOpen.value = true
     isOutlineCommandOpen.value = false
+    isSkillCommandOpen.value = false
   } else if (outlineMatch) {
     outlineQuery.value = outlineMatch[1]
     isOutlineCommandOpen.value = props.outlines.length > 0
     isSlashMenuOpen.value = false
+    isSkillCommandOpen.value = false
+  } else if (skillMatch) {
+    // 技能弹层恒开（含空技能引导），空态由弹层自身区分展示
+    skillQuery.value = skillMatch[1]
+    isSkillCommandOpen.value = true
+    isSlashMenuOpen.value = false
+    isOutlineCommandOpen.value = false
   } else {
     isOutlineCommandOpen.value = false
     isSlashMenuOpen.value = false
+    isSkillCommandOpen.value = false
   }
 }
 
@@ -716,6 +792,14 @@ onMounted(() => {
 // 大纲列表变化（增删/改名）时全量重扫：已输入的 @token 命中/失效都要跟着变
 watch(
   () => props.outlines,
+  () => {
+    if (composer.isMounted()) rescanTextRefs(composer.editor)
+  },
+)
+
+// 技能列表变化（新建/导入/删除后 store 刷新）时同样重扫 #token
+watch(
+  () => props.skills,
   () => {
     if (composer.isMounted()) rescanTextRefs(composer.editor)
   },
@@ -899,6 +983,7 @@ defineExpose({ prefillDraft })
         <QueueDock
           :queue="chatStore.queue"
           :running="chatStore.isRunning"
+          :skill-names="skillNames"
           @edit="handleQueueEdit"
           @remove="handleQueueRemove"
           @steer="handleQueueSteer"
@@ -922,6 +1007,15 @@ defineExpose({ prefillDraft })
             :query="outlineQuery"
             @select="handleSelectOutline"
             @close="handleCloseOutlineCommand"
+          />
+          <!-- #技能 点名弹层（技能包 §3.3） -->
+          <SkillCommandPopover
+            v-if="isSkillCommandOpen"
+            ref="skillPopoverRef"
+            :skills="skills"
+            :query="skillQuery"
+            @select="handleSelectSkill"
+            @close="handleCloseSkillCommand"
           />
           <!-- 斜杠命令菜单（R6） -->
           <SlashCommandMenu

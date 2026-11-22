@@ -311,6 +311,13 @@ onMounted(async () => {
     void timelineStore.open(projectId.value)
   }
 
+  // 技能列表预载（技能包 §3.3）：#点名弹层与发送展开依赖名单——用户从没进过
+  // 技能分类时 store 为空会让弹层误显「还没有技能」；幂等加载（进技能分类的
+  // watch 同走 refresh），失败静默（分类入口与刷新按钮还有重试通道）
+  if (projectStore.currentProject) {
+    void skillStore.refresh(projectId.value).catch(() => {})
+  }
+
   // 刷新后恢复持久化草稿（§六.2 存量恢复迁移）：逐文件核对磁盘——内容与磁盘
   // 一致清冗余记录；基线一致自动续存（待写内容由自动保存落盘）；磁盘已变建立
   // 版本冲突；原路径已删除进入删除守护。回填本身绝不写正文文件；读取失败明确
@@ -1674,6 +1681,7 @@ function handleGoToSettings() {
         :quote="selectionQuote"
         :outlines="outlineList"
         :active-outline-path="activeOutlinePath"
+        :skills="skillStore.skills"
         @toggle-sidebar="toggleSidebar"
         @toggle-content-panel="toggleContentPanel"
         @clear-quote="handleClearQuote"

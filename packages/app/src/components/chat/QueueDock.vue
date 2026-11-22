@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 
 import type { QueuedMessageView } from '@novai/core/services/types'
 import { expandSlashCommand } from '../../constants/slash-commands'
+import { expandSkillMentions } from '../../constants/skill-mention'
 import AppIcon from '../ui/AppIcon.vue'
 
 /**
@@ -10,11 +11,14 @@ import AppIcon from '../ui/AppIcon.vue'
  * 1 条直接显示行；多条默认折叠成「N 条排队消息」计数头 + 展开箭头；空队列不渲染。
  * 每行三个操作：编辑（行内 input，Enter 存 Esc 取消）、删除（撤回）、立即插话（仅运行中可用）。
  * 显示/指令分离（交互优化计划 §3.2）：行显示 displayLabel（用户原草稿）；编辑提交时
- * 按新草稿重新展开斜杠命令，text 与 displayLabel 一起回传。
+ * 按新草稿重新展开斜杠命令与 #技能 点名（与 ChatPanel 发送链路同序：slash 先、skill 后），
+ * text 与 displayLabel 一起回传。
  */
 const props = defineProps<{
   queue: QueuedMessageView[]
   running: boolean
+  /** 技能名单（编辑重推导 #点名 用，与发送链路同一投影；技能包 §3.3） */
+  skillNames: string[]
 }>()
 
 const emit = defineEmits<{
@@ -55,8 +59,9 @@ function commitEdit() {
   if (editingId.value !== null && editingText.value.trim()) {
     const displayDraft = editingText.value.trim()
     // 编辑重推导（显示/指令分离）：新草稿命中斜杠命令时重新展开为驱动 prompt，
-    // 展开前原草稿作为 displayLabel 回传；未命中则清除命令标记（displayLabel 缺省）
-    const expanded = expandSlashCommand(displayDraft)
+    // #技能 点名句追加其后（与发送链路同序）；发生任一展开时原草稿作为
+    // displayLabel 回传；未命中则清除标记（displayLabel 缺省）
+    const expanded = expandSkillMentions(expandSlashCommand(displayDraft), props.skillNames)
     emit('edit', editingId.value, expanded, expanded === displayDraft ? undefined : displayDraft)
   }
   editingId.value = null
