@@ -419,6 +419,39 @@ describe('createTimelinePoint', () => {
     })).rejects.toThrow('不在允许范围')
   })
 
+  it('无标识要素按路径定位（UI 选择器口径）：懒分配标识；路径不存在则教学式报错', async () => {
+    await seedElement('elements/characters/林澜.md', { name: '林澜' })
+    await seedElement('elements/characters/苏晚.md', { name: '苏晚' })
+    await seedElement('elements/plots/夺剑.md', { name: '夺剑', type: 'plot' })
+
+    const result = await createTimelinePoint(project, {
+      event: {
+        title: '旧桥伏击',
+        participants: [
+          { kind: 'element', sourcePath: 'elements/characters/林澜.md' },
+          { kind: 'element', sourcePath: 'elements/characters/苏晚.md', role: '旁观' },
+        ],
+        plots: [{ kind: 'element', sourcePath: 'elements/plots/夺剑.md' }],
+      },
+      position: { at: 'last' },
+    })
+    // 两个同为空标识的要素各自解析到自己的文件，不被当作「同一标识被多个要素占用」
+    expect(result.assignedElementIds.map((item) => item.sourcePath)).toEqual([
+      'elements/characters/林澜.md',
+      'elements/characters/苏晚.md',
+      'elements/plots/夺剑.md',
+    ])
+    const event = result.marker.kind === 'point' ? result.marker.event : null
+    expect(event?.participants.map((participant) => participant.id)).toEqual(result.assignedElementIds.slice(0, 2).map((item) => item.id))
+    expect(event?.participants[1]).toMatchObject({ role: '旁观' })
+    expect(event?.plotIds).toEqual([result.assignedElementIds[2]!.id])
+
+    await expect(createTimelinePoint(project, {
+      event: { title: 'x', participants: [{ kind: 'element', sourcePath: 'elements/characters/不存在.md' }] },
+      position: { at: 'last' },
+    })).rejects.toThrow('找不到')
+  })
+
   it('章节引用经章节目录解析：章号缺失拒绝；事件互引（causedBy / 相对锚）必须已存在', async () => {
     await seedChapter('第001章-开端.txt')
     await seedChapter('第002章-旧桥.txt')

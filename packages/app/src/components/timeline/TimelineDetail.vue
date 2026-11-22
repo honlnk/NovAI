@@ -22,6 +22,7 @@ import SaveStatusLight from '../layout/SaveStatusLight.vue'
 import ChapterPicker from '../card-board/ChapterPicker.vue'
 import { useChapterCatalog } from '../../composables/chapter-catalog'
 import { narrativeModeLabel, useTimelineStore } from '../../stores/timeline'
+import { elementRefKey } from '../../utils/element-ref-key'
 
 const store = useTimelineStore()
 const catalog = useChapterCatalog()
@@ -109,7 +110,7 @@ async function searchParticipants(value: string) {
   const result = await store.searchElementOptions(text)
   if (token === participantToken) {
     participantOptions.value = result.filter(
-      (option) => TIMELINE_PARTICIPANT_TYPES.includes(option.type) && !(draft.value?.participants ?? []).some((entry) => entry.id === option.id),
+      (option) => TIMELINE_PARTICIPANT_TYPES.includes(option.type) && !(draft.value?.participants ?? []).some((entry) => entry.id === elementRefKey(option)),
     )
     participantOpen.value = true
   }
@@ -117,7 +118,7 @@ async function searchParticipants(value: string) {
 
 function addParticipant(option: TimelineElementOptionView) {
   store.rememberOption(option)
-  patch({ participants: [...(draft.value?.participants ?? []), { kind: 'element' as const, id: option.id }] })
+  patch({ participants: [...(draft.value?.participants ?? []), { kind: 'element' as const, id: elementRefKey(option) }] })
   participantQuery.value = ''
   participantOptions.value = []
   participantOpen.value = false
@@ -147,14 +148,14 @@ async function searchPlots(value: string) {
   }
   const result = await store.searchElementOptions(text, 'plot')
   if (token === plotToken) {
-    plotOptions.value = result.filter((option) => !(draft.value?.plotIds ?? []).includes(option.id))
+    plotOptions.value = result.filter((option) => !(draft.value?.plotIds ?? []).includes(elementRefKey(option)))
     plotOpen.value = true
   }
 }
 
 function addPlot(option: TimelineElementOptionView) {
   store.rememberOption(option)
-  patch({ plotIds: [...(draft.value?.plotIds ?? []), option.id] })
+  patch({ plotIds: [...(draft.value?.plotIds ?? []), elementRefKey(option)] })
   plotQuery.value = ''
   plotOptions.value = []
   plotOpen.value = false
@@ -567,7 +568,7 @@ async function removeEvent() {
               v-if="participantOpen && participantOptions.length > 0"
               class="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
             >
-              <li v-for="option in participantOptions" :key="option.id">
+              <li v-for="option in participantOptions" :key="elementRefKey(option)">
                 <button
                   type="button"
                   class="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-gray-50"
@@ -612,7 +613,7 @@ async function removeEvent() {
               v-if="plotOpen && plotOptions.length > 0"
               class="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
             >
-              <li v-for="option in plotOptions" :key="option.id">
+              <li v-for="option in plotOptions" :key="elementRefKey(option)">
                 <button
                   type="button"
                   class="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-gray-50"

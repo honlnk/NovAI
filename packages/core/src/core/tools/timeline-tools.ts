@@ -4,7 +4,7 @@ import {
   timelineMarkerContext,
   TimelineCorruptError,
   timelineEventVersion,
-  type TimelineElementSelector,
+  type TimelineAgentElementSelector,
 } from '../timeline/store'
 import type { TimelineParticipantInput } from '../timeline/store'
 import type {
@@ -111,7 +111,7 @@ function readOptionalPosition(value: unknown, label: string): TimelineInsertPosi
 }
 
 /** 要素定位入参：稳定标识或「类型 + 精确名称」二选一（都给时以标识优先）。 */
-function readElementSelector(value: unknown, label: string): TimelineElementSelector {
+function readElementSelector(value: unknown, label: string): TimelineAgentElementSelector {
   const record = asRecord(value)
   const id = record.id === undefined ? undefined : readString(record.id, `${label}.id`).trim()
   if (id) {
@@ -252,7 +252,7 @@ function toDomainPosition(position: TimelinePositionInput | undefined): Timeline
   return { at: position.at, anchorMarkerId: position.anchorMarkerId ?? '' }
 }
 
-function toDomainSelector(ref: TimelineElementRefInput): TimelineElementSelector {
+function toDomainSelector(ref: TimelineElementRefInput): TimelineAgentElementSelector {
   return readElementSelector(ref, '事件要素引用')
 }
 

@@ -48,6 +48,7 @@ import {
   removeTimelineBackup,
   scheduleTimelineBackup,
 } from '../composables/timeline-backup'
+import { elementRefKey, elementRefSelector } from '../utils/element-ref-key'
 
 /**
  * 时间线 store（时间线 JSON 化施工计划 §9.4）：对齐 relation store 的分层——
@@ -205,14 +206,14 @@ function patchFromDraft(draft: TimelineEventDraft, base: TimelineEventDraft): Ti
     patch.relativeTime = draft.relativeTime
   }
   if (!sameJson(draft.participants, base.participants)) {
+    // 草稿里尚无标识的要素以 path: 键暂存，提交时转成路径选择器由服务层懒分配标识
     patch.participants = draft.participants.map((participant) => ({
-      kind: 'element' as const,
-      id: participant.id,
+      ...elementRefSelector(participant.id),
       ...(participant.role ? { role: participant.role } : {}),
     }))
   }
   if (!sameJson(draft.plotIds, base.plotIds)) {
-    patch.plots = draft.plotIds.map((id) => ({ kind: 'element' as const, id }))
+    patch.plots = draft.plotIds.map((key) => elementRefSelector(key))
   }
   if (!sameJson(draft.chapters, base.chapters)) {
     patch.chapters = draft.chapters.map((ref) => ({ ...ref }))
@@ -986,7 +987,7 @@ export const useTimelineStore = defineStore('timeline', () => {
   const optionLabels = reactive(new Map<string, string>())
 
   function rememberOption(option: TimelineElementOptionView): void {
-    optionLabels.set(option.id, option.name)
+    optionLabels.set(elementRefKey(option), option.name)
   }
 
   /** 要素 id → 展示名：视图解析结果 > 选择器缓存 > id 本身 */

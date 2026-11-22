@@ -576,8 +576,16 @@ export function generateTimelineMarkerId(): string {
 
 /* ---------- 事件输入、定位与引用校验（阶段 2） ---------- */
 
-/** 要素引用选择器：稳定标识或「类型 + 精确名称」二选一（与关系节点同款语义）。 */
+/**
+ * 要素引用选择器：稳定标识 /「类型 + 精确名称」/ 要素文件路径三选一（与关系节点同款语义）。
+ * 路径定位给 UI 选择器用：尚无稳定标识的要素（标识首次被引用时才懒分配）按路径解析后再分配。
+ */
 export type TimelineElementSelector =
+  | TimelineAgentElementSelector
+  | { kind: 'element'; sourcePath: string }
+
+/** 智能体工具可用的子集：标识或「类型 + 名称」（工具入参不暴露路径定位）。 */
+export type TimelineAgentElementSelector =
   | { kind: 'element'; id: string }
   | { kind: 'element'; type: ElementType; name: string }
 
@@ -629,6 +637,12 @@ function locateTimelineElement(
       )
     }
     entry = resolution.entry
+  } else if ('sourcePath' in selector) {
+    const hit = index.entries.find((candidate) => candidate.sourcePath === selector.sourcePath)
+    if (!hit) {
+      throw new TimelineError(`${label} 引用的要素文件 ${selector.sourcePath} 找不到；可能已被删除或改名，请重新选择`)
+    }
+    entry = hit
   } else {
     const exact = searchElementEntries(index, selector.name, selector.type).filter((candidate) => candidate.name === selector.name)
     if (exact.length === 0) {

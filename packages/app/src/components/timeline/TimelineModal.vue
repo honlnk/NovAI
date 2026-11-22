@@ -11,6 +11,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { useTimelineStore } from '../../stores/timeline'
+import { elementRefKey } from '../../utils/element-ref-key'
 import type { TimelineElementOptionView } from '@novai/core/services/timeline-service'
 import WorkspaceModal from '../layout/WorkspaceModal.vue'
 import AppIcon from '../ui/AppIcon.vue'
@@ -71,11 +72,14 @@ watch(elementQuery, async (value) => {
 
 /** 筛选要素：情节 → 情节筛选；其余类型 → 参与者筛选（一个控件覆盖两类口径） */
 function applyElementFilter(option: TimelineElementOptionView) {
+  // 尚无标识的要素用 path: 键：它不可能被任何事件引用，筛选结果为空而非静默失效
+  const key = elementRefKey(option)
+  store.rememberOption(option)
   if (option.type === 'plot') {
-    store.filterPlotId = option.id
+    store.filterPlotId = key
     store.filterParticipantId = ''
   } else {
-    store.filterParticipantId = option.id
+    store.filterParticipantId = key
     store.filterPlotId = ''
   }
   elementQuery.value = ''
@@ -215,7 +219,7 @@ function onMoveMarker(markerId: string, targetIndex: number) {
             v-if="elementOpen && elementOptions.length > 0"
             class="absolute left-0 top-full z-30 mt-1 max-h-56 w-72 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
           >
-            <li v-for="option in elementOptions" :key="option.id">
+            <li v-for="option in elementOptions" :key="elementRefKey(option)">
               <button
                 type="button"
                 class="flex w-full flex-col items-start px-3 py-1.5 text-left transition-colors hover:bg-gray-50"

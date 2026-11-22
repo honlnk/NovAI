@@ -164,6 +164,37 @@ export function removeTimelineBackup(projectId: string, eventId: string): void {
   store.delete(key)
 }
 
+/** 立即落盘全部去抖中的待写记录（localStorage 同步写，页面卸载前调用可靠） */
+export function flushTimelineBackup(): void {
+  for (const timer of debounceTimers.values()) {
+    clearTimeout(timer)
+  }
+  debounceTimers.clear()
+  for (const [key, record] of [...pendingWrites.entries()]) {
+    pendingWrites.delete(key)
+    store.put(key, record)
+  }
+}
+
+/**
+ * 生命周期挂接：页面隐藏/关闭前立即落盘去抖中的草稿镜像（对齐 card/draft backup）。
+ * 否则输入后 800ms 内刷新或关页，磁盘写入来不及完成时镜像也还没写，草稿丢失。
+ * 返回退订函数。
+ */
+export function setupTimelineBackupLifecycle(): () => void {
+  const flush = () => {
+    flushTimelineBackup()
+  }
+  document.addEventListener('visibilitychange', flush)
+  window.addEventListener('pagehide', flush)
+  window.addEventListener('beforeunload', flush)
+  return () => {
+    document.removeEventListener('visibilitychange', flush)
+    window.removeEventListener('pagehide', flush)
+    window.removeEventListener('beforeunload', flush)
+  }
+}
+
 /** 读取某项目的全部持久化事件草稿（先落盘待写记录） */
 export function loadProjectTimelineBackups(projectId: string): PersistedTimelineDraftRecord[] {
   for (const [key, record] of [...pendingWrites.entries()]) {

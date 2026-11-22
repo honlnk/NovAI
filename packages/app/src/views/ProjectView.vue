@@ -20,6 +20,7 @@ import {
 } from '../composables/editor-session'
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
 import { setupCardBackupLifecycle } from '../composables/card-backup'
+import { flushTimelineBackup, setupTimelineBackupLifecycle } from '../composables/timeline-backup'
 import { clearChangeHighlights } from '../composables/useChangeHighlights'
 import { useCardChangeFeedback } from '../composables/useCardChangeFeedback'
 import { useFileChangeFeedback } from '../composables/useFileChangeFeedback'
@@ -380,6 +381,9 @@ onUnmounted(() => {
   teardownDraftBackup?.()
   teardownEditorAutosave?.()
   teardownCardBackup?.()
+  teardownTimelineBackup?.()
+  // 离开项目视图：时间线草稿镜像同步落盘（去抖中的输入不随视图卸载丢失）
+  flushTimelineBackup()
   for (const teardown of teardownCardSaveLifecycles) teardown()
   teardownCardSaveLifecycles = []
   // 离开项目视图（阶段 2）：关掉本视图打开的卡片输入自动保存，并尽力收口三域
@@ -408,15 +412,17 @@ onUnmounted(() => {
 
 // 草稿备份生命周期（数据安全计划 §3-2）：页面隐藏/关闭前立即落盘待写备份
 // 正文自动保存收口（§阶段 2）在同一时机独立挂接——写盘与镜像互不拖累；
-// 看板卡片草稿镜像（阶段 1）与卡片写盘收口（阶段 2）同样挂接
+// 看板卡片草稿镜像（阶段 1）、卡片写盘收口（阶段 2）与时间线事件草稿镜像同样挂接
 let teardownDraftBackup: (() => void) | null = null
 let teardownEditorAutosave: (() => void) | null = null
 let teardownCardBackup: (() => void) | null = null
+let teardownTimelineBackup: (() => void) | null = null
 let teardownCardSaveLifecycles: Array<() => void> = []
 onMounted(() => {
   teardownDraftBackup = setupDraftBackupLifecycle()
   teardownEditorAutosave = setupEditorAutosaveLifecycle()
   teardownCardBackup = setupCardBackupLifecycle()
+  teardownTimelineBackup = setupTimelineBackupLifecycle()
   teardownCardSaveLifecycles = [
     planStore.setupCardSaveLifecycle(),
     foreshadowingStore.setupCardSaveLifecycle(),

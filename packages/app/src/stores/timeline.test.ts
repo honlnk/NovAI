@@ -339,6 +339,29 @@ describe('详情编辑会话（save-session）', () => {
     expect(vi.mocked(updateTimelineEventEntry).mock.calls[0]![1].expectedEventVersion).toBe(timelineEventVersion(EVENT_A_DETAIL))
   })
 
+  it('尚无标识的要素以 path: 键入草稿，提交时转为路径选择器（不再传空标识）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const store = useTimelineStore()
+    await store.open('proj-1')
+    await store.openDetail(EVENT_A)
+
+    store.setDetailDraft(EVENT_A, {
+      participants: [
+        { kind: 'element', id: 'path:elements/characters/林远.md', role: '主角' },
+        { kind: 'element', id: 'ELM-0000000001' },
+      ],
+      plotIds: ['path:elements/plots/离乡求道.md'],
+    })
+    vi.advanceTimersByTime(2100)
+    await vi.waitFor(() => expect(updateTimelineEventEntry).toHaveBeenCalledTimes(1))
+    const patch = vi.mocked(updateTimelineEventEntry).mock.calls[0]![1].patch
+    expect(patch.participants).toEqual([
+      { kind: 'element', sourcePath: 'elements/characters/林远.md', role: '主角' },
+      { kind: 'element', id: 'ELM-0000000001' },
+    ])
+    expect(patch.plots).toEqual([{ kind: 'element', sourcePath: 'elements/plots/离乡求道.md' }])
+  })
+
   it('版本冲突：会话冻结并携带磁盘版本；「返回编辑」收起比较', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const store = useTimelineStore()
