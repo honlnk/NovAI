@@ -307,6 +307,25 @@ describe('buildProjectIndex contentHash 增量短路', () => {
     expect(indexedPaths).toEqual(['elements/plots/plot-a.md'])
   })
 
+  it('技能包不入 RAG 索引（《技能包底层能力施工计划》3.6 锁定：白名单只收 plots）', async () => {
+    files.set('skills/去AI味/SKILL.md', { content: '---\ndescription: 降低 AI 腔\n---\n\n正文方法', updatedAt: '' })
+    files.set('skills/去AI味/references/词表.md', { content: '词一\n词二', updatedAt: '' })
+    files.set('elements/plots/plot-c.md', { content: elementMd('elements/plots/plot-c.md', '庚'), updatedAt: '' })
+
+    const result = await buildProjectIndex(
+      makeProject([
+        fileNode('skills/去AI味/SKILL.md'),
+        fileNode('skills/去AI味/references/词表.md'),
+        fileNode('elements/plots/plot-c.md'),
+      ]),
+      { projectId: PROJECT_ID, reason: 'manual-rebuild' },
+    )
+
+    // 只有 plots 入索引；skills/ 下任何文件（含 .md）都不入
+    expect(result.indexedCount).toBe(1)
+    expect(Array.from(storeState.docs.values()).map((doc) => doc.sourcePath)).toEqual(['elements/plots/plot-c.md'])
+  })
+
   it('退役清扫：增量索引遇到旧 timeline 文档时自动升级为全量重建并清空', async () => {
     // 预置一份旧时间线索引文档（时间线账本化前的残留）
     storeState.docs.set(

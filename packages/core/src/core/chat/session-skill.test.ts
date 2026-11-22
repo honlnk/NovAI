@@ -318,3 +318,109 @@ describe('技能目录会话接线（阶段 2）', () => {
     expect(session.skillCatalogDigest).toBeUndefined()
   })
 })
+
+describe('技能增删改查闭环（阶段 3，3.6：管理走通用文件工具）', () => {
+  const SKILL_MD = '---\ndescription: 用天气推进情节\n---\n\n# 暴风雨写作法\n用风暴映射情绪。'
+
+  /** 脚本化 LLM 桩：按调用序号回放预排好的响应（跨多个 runChatDriver 轮次连续消费）。 */
+  let script: Response[]
+
+  beforeEach(() => {
+    script = []
+    fetchHandler = () => script.shift() ?? textSse('（脚本耗尽）')
+  })
+
+  function turnInput(snapshot: ProjectSnapshot) {
+    return {
+      instruction: '',
+      project: snapshot,
+      config: stubConfig,
+      systemPrompt: '',
+      activeFilePath: null,
+      confirm: async () => ({ accepted: true }),
+    }
+  }
+
+  function enqueue(session: ChatSessionState, text: string) {
+    session.inbox = enqueueToInbox(session.inbox, 'next-turn', { text }).state
+  }
+
+  function lastFetchText(): string {
+    return fetchCalls[fetchCalls.length - 1]!.messages.map((message) => message.content ?? '').join('\n')
+  }
+
+  it('新建 → 同轮可加载 → 下一轮入目录 → 改描述原位替换 → 删除后目录移除且加载未找到', async () => {
+    // 初始项目无技能（只有要素）；同一份快照贯穿全部轮次（文件落内存 FS 持续生效）
+    const snapshot = project(false)
+    const session = createChatSession('proj-skill-wiring')
+    enqueue(session, '帮我新建一个暴风雨写作法技能')
+
+    // 轮 1：CreateFile 新建技能 → 同一轮 LoadSkill 立即可加载（实时重扫）
+    script.push(toolCallSse('t1-c1', 'CreateFile', { path: 'skills/暴风雨/SKILL.md', content: SKILL_MD }))
+    script.push(toolCallSse('t1-c2', 'LoadSkill', { name: '暴风雨' }))
+    script.push(textSse('技能已建好并验证可加载'))
+    await runChatDriver({ session, input: turnInput(snapshot) })
+
+    const loadResult = session.messages.find(
+      (message) => message.kind === 'tool-result' && message.toolName === 'LoadSkill',
+    )
+    expect(loadResult?.ok).toBe(true)
+    expect(loadResult?.resultSummary).toContain('暴风雨')
+
+    // 轮 2：下一轮目录 reminder 出现该技能（首注文案）
+    enqueue(session, '开始写正文')
+    script.push(textSse('好的'))
+    await runChatDriver({ session, input: turnInput(snapshot) })
+    expect(lastFetchText()).toContain('<available_skills>')
+    expect(lastFetchText()).toContain('- 暴风雨：用天气推进情节')
+    expect(lastFetchText()).toContain('以下是本项目已安装的写作技能')
+
+    // 轮 3：ReadFile（读技能文件走素材提示行）→ EditFile 改 description（走确认卡）
+    enqueue(session, '把描述改得更清楚')
+    script.push(toolCallSse('t3-c1', 'ReadFile', { path: 'skills/暴风雨/SKILL.md' }))
+    script.push(toolCallSse('t3-c2', 'EditFile', {
+      path: 'skills/暴风雨/SKILL.md',
+      oldText: 'description: 用天气推进情节',
+      newText: 'description: 用风暴强度映射人物情绪起伏',
+    }))
+    script.push(textSse('描述已更新'))
+    await runChatDriver({ session, input: turnInput(snapshot) })
+
+    const editResult = session.messages.find(
+      (message) => message.kind === 'tool-result' && message.toolName === 'EditFile',
+    )
+    expect(editResult?.ok).toBe(true)
+
+    // 轮 4：目录原地替换（更新文案 + 新描述，仍是唯一一条技能目录）
+    enqueue(session, '继续')
+    script.push(textSse('好的'))
+    await runChatDriver({ session, input: turnInput(snapshot) })
+    const turn4Text = lastFetchText()
+    expect(turn4Text).toContain('- 暴风雨：用风暴强度映射人物情绪起伏')
+    expect(turn4Text).toContain('取代此前任何版本')
+    expect(turn4Text.match(/<available_skills>/g)).toHaveLength(1)
+
+    // 轮 5：删除技能（进回收站）
+    enqueue(session, '删掉这个技能')
+    script.push(toolCallSse('t5-c1', 'DeleteFile', { path: 'skills/暴风雨/SKILL.md' }))
+    script.push(textSse('已删除'))
+    await runChatDriver({ session, input: turnInput(snapshot) })
+    const deleteResult = session.messages.find(
+      (message) => message.kind === 'tool-result' && message.toolName === 'DeleteFile',
+    )
+    expect(deleteResult?.ok).toBe(true)
+
+    // 轮 6：目录已移除；LoadSkill 返回未找到（教学式，列空可用清单）
+    enqueue(session, '再用一次')
+    script.push(toolCallSse('t6-c1', 'LoadSkill', { name: '暴风雨' }))
+    script.push(textSse('技能没了'))
+    await runChatDriver({ session, input: turnInput(snapshot) })
+
+    expect(lastFetchText()).not.toContain('<available_skills>')
+    expect(session.skillCatalogDigest).toBeUndefined()
+    const finalLoad = [...session.messages]
+      .reverse()
+      .find((message) => message.kind === 'tool-result' && message.toolName === 'LoadSkill')
+    expect(finalLoad?.resultSummary).toContain('未找到技能「暴风雨」')
+  })
+})

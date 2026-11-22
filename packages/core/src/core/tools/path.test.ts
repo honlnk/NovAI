@@ -4,6 +4,7 @@ import {
   isAgentHiddenEntry,
   isInternalPath,
   isProtectedLedgerPath,
+  isSkillPath,
   isSpillReadablePath,
   protectedLedgerPathError,
   shouldSkipInWalk,
@@ -194,3 +195,30 @@ describe('受保护账本判定（时间线账本，阶段 1 接入）', () => {
   })
 })
 
+
+describe('技能包路径判定（3.6：skills/ 是普通可管理目录，大小写折叠）', () => {
+  it.each([
+    'skills/去AI味/SKILL.md',
+    'skills/去AI味/references/词表.md',
+    'SKILLS/去AI味/SKILL.md',
+    'Skills/技能/SKILL.md',
+  ])('isSkillPath("%s") 为 true', (path) => {
+    expect(isSkillPath(path)).toBe(true)
+  })
+
+  it.each([
+    'skills', // 裸目录名不算文件路径（ReadFile 只作用于文件）
+    'chapters/第001章-试炼.txt',
+    'prompts/skills.md', // 同名文件不受前缀误伤
+    'elements/characters/skills.md',
+  ])('isSkillPath("%s") 为 false', (path) => {
+    expect(isSkillPath(path)).toBe(false)
+  })
+
+  it('技能路径不是内部路径也不是受保护账本（普通目录：读写照常）', () => {
+    const skillFile = 'skills/去AI味/SKILL.md'
+    expect(isInternalPath(skillFile)).toBe(false)
+    expect(isProtectedLedgerPath(skillFile)).toBe(false)
+    expect(shouldSkipInWalk(skillFile)).toBe(false)
+  })
+})

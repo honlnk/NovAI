@@ -1,4 +1,5 @@
 import { assertChapterNameFormat, isChapterPath } from './chapter-name'
+import { SKILLS_DIRECTORY } from '../skills/types'
 
 const TEXT_FILE_EXTENSIONS = ['.md', '.json', '.txt'] as const
 
@@ -91,6 +92,15 @@ const PROTECTED_LEDGER_FILES = ['elements/relations.json', 'elements/timeline.js
 export function isProtectedLedgerPath(path: string): boolean {
   const folded = foldInternalPath(path)
   return PROTECTED_LEDGER_FILES.some((file) => folded === file)
+}
+
+/**
+ * 项目根相对路径是否技能包内文件（skills/ 子树，《技能包底层能力施工计划》3.6）。
+ * skills/ 是普通可管理目录（非内部路径、非受保护账本）：读写照常，仅 ReadFile
+ * 结果加素材提示行、LoadSkill 用同一前缀定位。根目录名以 skills 领域常量为单一来源。
+ */
+export function isSkillPath(path: string): boolean {
+  return foldInternalPath(path).startsWith(`${SKILLS_DIRECTORY}/`)
 }
 
 /** 是否 spill 取回通道自身或其子路径（内部路径中唯一可读的例外）。 */

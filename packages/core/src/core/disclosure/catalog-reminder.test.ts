@@ -192,6 +192,37 @@ describe('syncCatalogReminder', () => {
     expect(view.messages[1]).toBe(bReminder)
     expect(view.messages[2]!.content).toContain('最新 A 清单')
   })
+
+  it('目录清空（缺省通道）：既有 reminder 原样保留（要素通道行为锁定）', () => {
+    const view = makeView()
+    const session = makeSession()
+    syncCatalogReminder({ view, session, entries: ENTRIES, channel: makeChannelA() })
+    const digestBefore = session.digestA
+
+    syncCatalogReminder({ view, session, entries: [], channel: makeChannelA() })
+
+    expect(view.messages).toHaveLength(4)
+    expect(view.messages[1]!.content).toContain('<channel_a>')
+    expect(session.digestA).toBe(digestBefore)
+  })
+
+  it('目录清空（removeOnEmpty 通道）：移除既有 reminder 并清 digest', () => {
+    const view = makeView()
+    const session = makeSession()
+    const removable = { ...makeChannelB(), removeOnEmpty: true }
+    syncCatalogReminder({ view, session, entries: [{ name: '去AI味', summary: '写作方法' }], channel: removable })
+    syncCatalogReminder({ view, session, entries: ENTRIES, channel: makeChannelA() })
+    expect(view.messages).toHaveLength(5)
+
+    syncCatalogReminder({ view, session, entries: [], channel: removable })
+
+    // B 的 reminder 被移除，A 的不受影响，历史消息对象保持
+    expect(view.messages).toHaveLength(4)
+    expect(view.messages.map((message) => message.content).join('\n')).not.toContain('<channel_b>')
+    expect(view.messages[1]!.content).toContain('<channel_a>')
+    expect(session.digestB).toBeUndefined()
+    expect(session.digestA).toBeTruthy()
+  })
 })
 
 describe('digestCatalogEntries', () => {

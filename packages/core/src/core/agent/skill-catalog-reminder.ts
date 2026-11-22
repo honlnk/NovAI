@@ -67,7 +67,7 @@ export function digestSkillCatalog(skills: readonly SkillMetadata[]): string {
   })
 }
 
-/** 技能目录通道声明。 */
+/** 技能目录通道声明。removeOnEmpty：技能删光后移除目录（防模型按陈旧清单调用已删技能）。 */
 const skillCatalogChannel: CatalogChannel<SkillMetadata> = {
   marker: SKILL_CATALOG_REMINDER_MARKER,
   render: buildSkillCatalogReminder,
@@ -77,11 +77,13 @@ const skillCatalogChannel: CatalogChannel<SkillMetadata> = {
     session.skillCatalogDigest = digest
   },
   placement: 'after-leading-reminders',
+  removeOnEmpty: true,
 }
 
 /**
  * 技能目录 digest 按需注入：空目录（无 skills/ 或无合格技能）不注入；首轮、技能集
- * 变化、或被压缩吞掉后在开头连续 reminder 块末尾（重）注入——排在要素目录之后。
+ * 变化、或被压缩吞掉后在开头连续 reminder 块末尾（重）注入——排在要素目录之后；
+ * 技能删光时移除既有目录并清 digest（3.6 删除闭环）。
  */
 export function syncSkillCatalogReminder(input: {
   view: ModelView

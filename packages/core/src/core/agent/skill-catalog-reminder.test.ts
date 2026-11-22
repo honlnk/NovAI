@@ -177,6 +177,19 @@ describe('syncSkillCatalogReminder', () => {
     expect(session.skillCatalogDigest).toBeUndefined()
   })
 
+  it('技能删光后移除既有目录并清 digest（3.6 删除闭环，removeOnEmpty）', () => {
+    const view = makeView()
+    const session = makeSession()
+    syncSkillCatalogReminder({ view, session, skills: [makeSkill()] })
+    expect(view.messages).toHaveLength(4)
+
+    syncSkillCatalogReminder({ view, session, skills: [] })
+
+    expect(view.messages).toHaveLength(3)
+    expect(view.messages.map((message) => message.content).join('\n')).not.toContain('<available_skills>')
+    expect(session.skillCatalogDigest).toBeUndefined()
+  })
+
   it('digest 不变跳过；技能集变化原位替换；被压缩吞掉后重插', () => {
     const view = makeView()
     const session = makeSession()

@@ -831,6 +831,61 @@ describe('file tools', () => {
       expect(createFileTool.extractChangeCoords?.(output)).toBe(output.coords)
     })
   })
+
+  describe('技能包文件的 ReadFile 素材提示行（3.6）', () => {
+    it('读 skills/ 下文件：渲染结果首行带素材提示，行号与正文不变', async () => {
+      const runtime = createRuntime({
+        'skills/去AI味/SKILL.md': '---\ndescription: 降低 AI 腔\n---\n\n第一段\n第二段',
+      })
+
+      const output = await readFileTool.run({ path: 'skills/去AI味/SKILL.md' }, runtime)
+      const formatted = createAgentTools().ReadFile.formatResult(output)
+
+      expect(formatted).toContain('此文件属于技能包')
+      expect(formatted).toContain('要按技能工作请用 LoadSkill 加载')
+      // 输出结构体不带提示行：content/numberedContent 与普通文件完全同构
+      expect(output.content).toBe('---\ndescription: 降低 AI 腔\n---\n\n第一段\n第二段')
+      expect(output.numberedContent).toContain('5 | 第一段')
+      expect(output.numberedContent).toContain('6 | 第二段')
+      // 渲染里的带号正文原样保留（提示行不挤占行号）
+      expect(formatted).toContain('5 | 第一段')
+    })
+
+    it('读非 skills/ 路径（含同名文件 prompts/skills.md）：不加提示行', async () => {
+      const runtime = createRuntime({
+        'chapters/第001章-初遇.txt': '正文',
+        'prompts/skills.md': '普通提示词',
+      })
+
+      const chapter = createAgentTools().ReadFile.formatResult(
+        await readFileTool.run({ path: 'chapters/第001章-初遇.txt' }, runtime),
+      )
+      const prompt = createAgentTools().ReadFile.formatResult(
+        await readFileTool.run({ path: 'prompts/skills.md' }, runtime),
+      )
+
+      expect(chapter).not.toContain('此文件属于技能包')
+      expect(prompt).not.toContain('此文件属于技能包')
+    })
+
+    it('带提示行的读取结果不影响 EditFile 旧文本匹配（提示行只在渲染层）', async () => {
+      const runtime = createRuntime({
+        'skills/去AI味/references/词表.md': '词一\n词二',
+      })
+
+      await readFileTool.run({ path: 'skills/去AI味/references/词表.md' }, runtime)
+
+      // 模型从渲染结果抄的 oldText 就是文件原文（不含提示行与行号）
+      const editOutput = await editFileTool.run({
+        path: 'skills/去AI味/references/词表.md',
+        oldText: '词二',
+        newText: '词二改',
+      }, runtime)
+
+      expect(editOutput.occurrences).toBe(1)
+      await expect(readProjectText(runtime.project.handle, 'skills/去AI味/references/词表.md')).resolves.toBe('词一\n词二改')
+    })
+  })
 })
 
 function createRuntime(files: Record<string, string>): ToolRuntime {

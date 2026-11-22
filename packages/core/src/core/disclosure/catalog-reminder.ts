@@ -33,9 +33,15 @@ export type CatalogChannel<E> = {
   digestOf(entries: readonly E[]): string
   /** 会话 digest 字段的读/写（通道各自声明字段，如 elementCatalogDigest / skillCatalogDigest）。 */
   readDigest(session: ChatSessionState): string | undefined
-  writeDigest(session: ChatSessionState, digest: string): void
+  writeDigest(session: ChatSessionState, digest: string | undefined): void
   /** 插入位置；缺省 'after-system'（与既有三条 reminder 的行为一致）。 */
   placement?: CatalogPlacement
+  /**
+   * 目录清空时是否移除视图中已存在的 reminder（《技能包底层能力施工计划》3.6 删除闭环：
+   * 技能删光后目录随之移除，防模型按陈旧清单调用已删技能）。缺省 false——既有要素
+   * 通道行为不动（空目录只是不注入，旧 reminder 原样保留）。
+   */
+  removeOnEmpty?: boolean
 }
 
 /**
@@ -61,6 +67,7 @@ export function digestCatalogEntries<E>(
  * 目录 reminder 的 digest 按需注入（机制与 syncNovaiReminder / syncConstraintDocReminder 对齐）：
  * 空目录不注入；首轮、目录变化、或被压缩吞掉后（重）注入。reminder 恒为视图中
  * 唯一一条——变化时原地替换。写入成功后更新会话 digest 字段。
+ * 目录清空：缺省不动既有内容；声明 removeOnEmpty 的通道移除 reminder 并清 digest。
  */
 export function syncCatalogReminder<E>(input: {
   view: ModelView
@@ -69,6 +76,17 @@ export function syncCatalogReminder<E>(input: {
   channel: CatalogChannel<E>
 }): void {
   if (input.entries.length === 0) {
+    // 空目录默认不注入、也不动既有内容（既有要素通道行为）；声明 removeOnEmpty 的通道
+    // （技能）在目录清空时移除 reminder 并清 digest——删光技能后陈旧清单不应继续可见。
+    if (input.channel.removeOnEmpty) {
+      const existingIndex = input.view.messages.findIndex(
+        (message) => message.role === 'user' && message.content.includes(input.channel.marker),
+      )
+      if (existingIndex >= 0) {
+        input.view.messages.splice(existingIndex, 1)
+        input.channel.writeDigest(input.session, undefined)
+      }
+    }
     return
   }
 
