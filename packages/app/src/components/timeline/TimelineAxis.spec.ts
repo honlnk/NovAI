@@ -114,4 +114,99 @@ describe('TimelineAxis 甘特视图', () => {
     expect(wrapper.find('line').exists()).toBe(false)
     expect(wrapper.text()).toContain('时间轴为空')
   })
+
+  /** happy-dom 无真实布局：给滚动容器装可写的 scrollLeft/scrollTop 与固定矩形 */
+  function scrollable(wrapper: ReturnType<typeof mountAxis>) {
+    const el = wrapper.get('[data-testid="timeline-axis-scroll"]').element as HTMLElement
+    let left = 0
+    let top = 0
+    Object.defineProperty(el, 'scrollLeft', { configurable: true, get: () => left, set: (value: number) => { left = value } })
+    Object.defineProperty(el, 'scrollTop', { configurable: true, get: () => top, set: (value: number) => { top = value } })
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => ({}) })
+    return el
+  }
+
+  it('鼠标按住拖动平移：超过阈值后滚动容器，松手后的 click 不误选条目', async () => {
+    const wrapper = mountAxis()
+    const el = scrollable(wrapper)
+    el.scrollLeft = 300
+    const scroll = wrapper.get('[data-testid="timeline-axis-scroll"]')
+    await scroll.trigger('pointerdown', { pointerType: 'mouse', button: 0, pointerId: 1, clientX: 200, clientY: 50 })
+    await scroll.trigger('pointermove', { pointerType: 'mouse', pointerId: 1, clientX: 120, clientY: 40 })
+    expect(el.scrollLeft).toBe(380)
+    expect(el.scrollTop).toBe(10)
+    expect(scroll.classes()).toContain('cursor-grabbing')
+    await scroll.trigger('pointerup', { pointerType: 'mouse', pointerId: 1, clientX: 120, clientY: 40 })
+    await wrapper.get('[data-testid="timeline-item-EVT-a"] polygon').trigger('click')
+    expect(wrapper.emitted('select-event')).toBeUndefined()
+    // 下一次普通点击照常选中
+    await wrapper.get('[data-testid="timeline-item-EVT-a"] polygon').trigger('click')
+    expect(wrapper.emitted('select-event')).toEqual([['EVT-a']])
+  })
+
+  it('阈值内的抖动仍按点击处理；触屏不接管（走原生滚动）', async () => {
+    const wrapper = mountAxis()
+    const el = scrollable(wrapper)
+    const scroll = wrapper.get('[data-testid="timeline-axis-scroll"]')
+    await scroll.trigger('pointerdown', { pointerType: 'mouse', button: 0, pointerId: 1, clientX: 200, clientY: 50 })
+    await scroll.trigger('pointermove', { pointerType: 'mouse', pointerId: 1, clientX: 203, clientY: 51 })
+    await scroll.trigger('pointerup', { pointerType: 'mouse', pointerId: 1, clientX: 203, clientY: 51 })
+    await wrapper.get('[data-testid="timeline-item-EVT-c"] text').trigger('click')
+    expect(wrapper.emitted('select-event')).toEqual([['EVT-c']])
+    expect(el.scrollLeft).toBe(0)
+
+    await scroll.trigger('pointerdown', { pointerType: 'touch', button: 0, pointerId: 2, clientX: 200, clientY: 50 })
+    await scroll.trigger('pointermove', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 50 })
+    expect(el.scrollLeft).toBe(0)
+  })
+
+  it('滚轮缩放：纵向滚轮与捏合（ctrlKey）发出 zoom，上滚放大、下滚缩小；横向滚动不接管', async () => {
+    const wrapper = mountAxis()
+    scrollable(wrapper)
+    const scroll = wrapper.get('[data-testid="timeline-axis-scroll"]')
+
+    await scroll.trigger('wheel', { deltaY: 100, deltaX: 0, clientX: 300 })
+    // 鼠标一格（截断到 30）：96 × e^(−0.18) ≈ 80
+    expect(wrapper.emitted('zoom')).toEqual([[80]])
+
+    await scroll.trigger('wheel', { deltaY: -8, deltaX: 0, ctrlKey: true, clientX: 300 })
+    expect(wrapper.emitted('zoom')![1]![0]).toBeGreaterThan(96)
+
+    // 横向为主（Shift + 滚轮 / 触控板左右滑）：不发 zoom，交给原生横向滚动
+    await scroll.trigger('wheel', { deltaY: 2, deltaX: 40, clientX: 300 })
+    expect(wrapper.emitted('zoom')).toHaveLength(2)
+  })
+
+  it('缩放以指针下的列为锚：重排后把同一列滚回指针位置；到达上下限不再发 zoom', async () => {
+    const wrapper = mountAxis()
+    const el = scrollable(wrapper)
+    el.scrollLeft = 0
+    const scroll = wrapper.get('[data-testid="timeline-axis-scroll"]')
+    // 指针在容器 x=264：列坐标 (0 + 264 − 24) / 96 = 2.5
+    await scroll.trigger('wheel', { deltaY: -30, deltaX: 0, ctrlKey: true, clientX: 264 })
+    const next = wrapper.emitted('zoom')![0]![0] as number
+    await wrapper.setProps({ stepPx: next })
+    // 同一列坐标在新列宽下的位置减去指针偏移
+    expect(el.scrollLeft).toBeCloseTo(Math.max(0, 24 + 2.5 * next - 264), 0)
+
+    await wrapper.setProps({ stepPx: 240 })
+    await scroll.trigger('wheel', { deltaY: -30, deltaX: 0, ctrlKey: true, clientX: 264 })
+    expect(wrapper.emitted('zoom')).toHaveLength(1)
+  })
+
+  it('慢速捏合（每次 deltaY≈1）累计小数：最窄列宽下也能逐步放大，不被取整吃掉', async () => {
+    const wrapper = mountAxis()
+    scrollable(wrapper)
+    await wrapper.setProps({ stepPx: 48 })
+    const scroll = wrapper.get('[data-testid="timeline-axis-scroll"]')
+    for (let index = 0; index < 40; index += 1) {
+      await scroll.trigger('wheel', { deltaY: -1, deltaX: 0, ctrlKey: true, clientX: 300 })
+      const emitted = wrapper.emitted('zoom')
+      if (emitted) {
+        await wrapper.setProps({ stepPx: emitted[emitted.length - 1]![0] as number })
+      }
+    }
+    // 48 × e^(40 × 0.006) ≈ 61
+    expect(wrapper.props('stepPx')).toBeGreaterThanOrEqual(60)
+  })
 })

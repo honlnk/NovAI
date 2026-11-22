@@ -240,7 +240,7 @@ function onSelectEvent(eventId: string) {
           清除筛选
         </button>
 
-        <!-- 缩放 = 最小列宽（甘特排布放不下时实际列宽自动更宽） -->
+        <!-- 缩放 = 最小列宽（甘特排布放不下时实际列宽自动更宽）；轴上滚轮/捏合同步改这个值 -->
         <label class="ml-auto flex items-center gap-1.5 text-xs text-gray-500">
           缩放
           <input
@@ -248,7 +248,7 @@ function onSelectEvent(eventId: string) {
             type="range"
             min="48"
             max="240"
-            step="8"
+            step="1"
             aria-label="时间轴缩放"
             class="h-1 w-24 cursor-pointer accent-indigo-600"
           >
@@ -325,6 +325,7 @@ function onSelectEvent(eventId: string) {
             :step-px="store.stepPx"
             :selected-event-id="store.selectedEventId"
             @select-event="onSelectEvent"
+            @zoom="store.stepPx = $event"
           />
           <p v-if="store.hasFilter && store.matchedEventIds.size === 0" class="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-xs text-gray-400">
             当前筛选条件下没有匹配事件（标记已淡出显示）

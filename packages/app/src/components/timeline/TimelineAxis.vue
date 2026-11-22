@@ -5,16 +5,21 @@
  * - 点事件 = 菱形 + 右侧标题；区间事件 = 从开始列画到结束列的横条，标题写在条内，
  *   比横条长时越过右端继续写（横条长度不变）；有明确时间时标题后跟灰色小字；
  * - 行由纯函数 layoutTimelineGantt 动态排布（最多 6 行，放不下加宽列宽），任何数据变化整体重排；
- * - 缩放滑块 = 最小列宽（父层注入），实际列宽只会更宽；平移 = 容器原生滚动；
- * - 只读：点击选中事件，不提供拖拽（甘特计划决策 6）；相对时间与锚点不上图。
+ * - 缩放滑块 = 最小列宽（父层注入），实际列宽只会更宽；
+ * - 平移：鼠标在轴上按住拖动即横纵平移（移动超过阈值后不再触发点选）；触屏走原生滚动；
+ * - 缩放：滚轮纵向滚动、Ctrl/⌘ + 滚轮、触控板双指捏合（浏览器以 ctrlKey 滚轮事件上报）
+ *   都改最小列宽，并以指针下的列为锚保持位置不动；横向滚轮（Shift + 滚轮、触控板左右滑）
+ *   仍是原生横向滚动；
+ * - 只读：点击选中事件，不提供拖拽调整顺序（甘特计划决策 6）；相对时间与锚点不上图。
  *
  * 哑组件：条目与命中态由 store 产出，这里只测宽、排布、绘制。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import type { TimelineAxisNode } from '../../stores/timeline'
 import {
   GANTT_DATE_FONT,
+  GANTT_PAD_X,
   GANTT_TITLE_FONT,
   ganttColumnX,
   layoutTimelineGantt,
@@ -35,6 +40,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'select-event': [eventId: string]
+  /** 滚轮/捏合缩放：新的最小列宽（父层写回滑块值） */
+  zoom: [stepPx: number]
 }>()
 
 /* ---------- 测宽（canvas measureText；无 canvas 环境按字符估算） ---------- */
@@ -119,10 +126,157 @@ function diamondPoints(cx: number, cy: number, half = 6): string {
 }
 
 const TITLE_DATE_GAP = 6
+
+/* ---------- 拖动平移 ---------- */
+
+const containerRef = ref<HTMLDivElement | null>(null)
+
+/** 移动超过该距离才算平移（以下仍按点击处理） */
+const PAN_THRESHOLD = 4
+
+type PanState = { pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number; moved: boolean }
+const pan = ref<PanState | null>(null)
+/** 刚结束一次平移：吞掉紧随其后的 click，避免松手时误选条目 */
+let suppressClick = false
+
+function onPointerDown(event: PointerEvent) {
+  // 触屏/触控笔走原生滚动；只处理鼠标左键
+  if (event.pointerType !== 'mouse' || event.button !== 0 || !containerRef.value) {
+    return
+  }
+  suppressClick = false
+  pan.value = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: containerRef.value.scrollLeft,
+    scrollTop: containerRef.value.scrollTop,
+    moved: false,
+  }
+}
+
+function onPointerMove(event: PointerEvent) {
+  const state = pan.value
+  const container = containerRef.value
+  if (!state || !container || event.pointerId !== state.pointerId) {
+    return
+  }
+  const dx = event.clientX - state.startX
+  const dy = event.clientY - state.startY
+  if (!state.moved) {
+    if (Math.abs(dx) <= PAN_THRESHOLD && Math.abs(dy) <= PAN_THRESHOLD) {
+      return
+    }
+    state.moved = true
+    // 进入平移后才捕获指针：未移动的按下-松开仍是普通点击，落在条目上
+    container.setPointerCapture?.(event.pointerId)
+  }
+  container.scrollLeft = state.scrollLeft - dx
+  container.scrollTop = state.scrollTop - dy
+}
+
+function onPointerEnd(event: PointerEvent) {
+  const state = pan.value
+  if (!state || event.pointerId !== state.pointerId) {
+    return
+  }
+  if (state.moved) {
+    suppressClick = true
+    containerRef.value?.releasePointerCapture?.(event.pointerId)
+  }
+  pan.value = null
+}
+
+function onClickCapture(event: MouseEvent) {
+  if (suppressClick) {
+    suppressClick = false
+    event.stopPropagation()
+    event.preventDefault()
+  }
+}
+
+/* ---------- 滚轮 / 捏合缩放（以指针下的列为锚） ---------- */
+
+const ZOOM_MIN = 48
+const ZOOM_MAX = 240
+/** 单次事件 deltaY 截断（鼠标一格约 100，捏合约 1–10）与灵敏度：鼠标一格约缩放 17% */
+const ZOOM_DELTA_CAP = 30
+const ZOOM_SENSITIVITY = 0.006
+
+/** 连续缩放中的未取整列宽（见 onWheel） */
+let zoomFloat: number | null = null
+
+/** 待恢复的锚点：缩放前指针下的「列坐标」与指针在容器内的横向偏移 */
+let zoomAnchor: { column: number; offsetX: number } | null = null
+
+function normalizedDeltaY(event: WheelEvent): number {
+  // deltaMode 1 = 行、2 = 页：换算成像素量级
+  return event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY
+}
+
+function onWheel(event: WheelEvent) {
+  const container = containerRef.value
+  if (!container || props.nodes.length === 0) {
+    return
+  }
+  const pinchOrModifier = event.ctrlKey || event.metaKey
+  // 横向为主的滚动（Shift + 滚轮、触控板左右滑）保持原生横向滚动
+  if (!pinchOrModifier && Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+    return
+  }
+  const deltaY = normalizedDeltaY(event)
+  if (deltaY === 0) {
+    return
+  }
+  // 接管：阻止页面滚动与浏览器自身的 Ctrl + 滚轮页面缩放
+  event.preventDefault()
+
+  const current = layout.value.step
+  // 累计小数部分：慢速捏合每次只有 1px 级 deltaY，逐次取整会被吃掉、永远缩不动；
+  // 只要实际列宽仍跟随上次缩放（相差不到 1px），就在上次的小数值上继续累计
+  const base = zoomFloat !== null && Math.abs(zoomFloat - current) < 1 ? zoomFloat : current
+  const capped = Math.max(-ZOOM_DELTA_CAP, Math.min(ZOOM_DELTA_CAP, deltaY))
+  zoomFloat = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, base * Math.exp(-capped * ZOOM_SENSITIVITY)))
+  const next = Math.round(zoomFloat)
+  if (next === props.stepPx) {
+    return
+  }
+  const rect = container.getBoundingClientRect()
+  const offsetX = event.clientX - rect.left
+  zoomAnchor = {
+    column: (container.scrollLeft + offsetX - GANTT_PAD_X) / current,
+    offsetX,
+  }
+  emit('zoom', next)
+}
+
+// 实际列宽变化后（重排完成、DOM 已更新）把锚点列滚回指针下方
+watch(
+  () => layout.value.step,
+  (step) => {
+    const container = containerRef.value
+    if (!zoomAnchor || !container) {
+      return
+    }
+    container.scrollLeft = Math.max(0, GANTT_PAD_X + zoomAnchor.column * step - zoomAnchor.offsetX)
+    zoomAnchor = null
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
-  <div class="timeline-axis h-full w-full overflow-auto">
+  <div
+    ref="containerRef"
+    :class="['timeline-axis h-full w-full overflow-auto', nodes.length > 0 ? (pan?.moved ? 'cursor-grabbing [&_*]:cursor-grabbing' : 'cursor-grab') : '']"
+    data-testid="timeline-axis-scroll"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerEnd"
+    @pointercancel="onPointerEnd"
+    @click.capture="onClickCapture"
+    @wheel="onWheel"
+  >
     <svg
       v-if="nodes.length > 0"
       :width="svgWidth"
