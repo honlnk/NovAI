@@ -713,6 +713,13 @@ async function assembleTimelineEvent(
   if (input.storyTime !== undefined && input.storyTime !== null && (typeof input.storyTime.year !== 'number' || !Number.isFinite(input.storyTime.year))) {
     throw new TimelineError(`${label}.storyTime.year 必须是数值（架空纪年可为负）；系统不理解历法语义，只做记录`)
   }
+  // 写入侧与载入校验（reviveStoryTime）同一口径：否则越界月/日能写进去，下次载入却被隔离为非法条目、阻塞整本写入
+  if (input.storyTime && !isOptionalIntegerInRange(input.storyTime.month, 1, 12)) {
+    throw new TimelineError(`${label}.storyTime.month 必须是 1–12 的整数（不填则省略）`)
+  }
+  if (input.storyTime && !isOptionalIntegerInRange(input.storyTime.day, 1, 31)) {
+    throw new TimelineError(`${label}.storyTime.day 必须是 1–31 的整数（不填则省略）`)
+  }
 
   // 事件互引（因果前驱 / 相对时间锚）：只校验本次显式给出的引用；与基线相同的引用跳过存在性核对
   const causedBy = (input.causedBy ?? []).map((id) => id.trim())

@@ -300,6 +300,37 @@ async function removeEvent() {
           class="rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm text-gray-800 outline-none focus:border-gray-500"
         >
       </label>
+      <!-- 明确时间：建议填写（时间轴表头按它显示）；年份留空 = 不填日期 -->
+      <fieldset class="flex flex-col gap-2 rounded-lg border border-gray-200 px-3 py-2.5" data-testid="timeline-create-date">
+        <legend class="px-1 text-xs text-gray-500">日期（建议填写，时间轴表头按它显示；年份留空 = 不填）</legend>
+        <div class="grid grid-cols-2 gap-2 text-xs text-gray-500">
+          <label class="flex flex-col gap-1">
+            历法
+            <input v-model="store.createDraft.calendar" type="text" maxlength="20" placeholder="苍穹历" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+          <label class="flex flex-col gap-1">
+            年（可为负）
+            <input
+              v-model="store.createDraft.year"
+              type="number"
+              :placeholder="store.lastStoryTime ? `上一条：${store.lastStoryTime.year}` : '如 320'"
+              class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500"
+            >
+          </label>
+          <label class="flex flex-col gap-1">
+            季节
+            <input v-model="store.createDraft.season" type="text" maxlength="6" placeholder="春" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+          <label class="flex flex-col gap-1">
+            月
+            <input v-model="store.createDraft.month" type="number" min="1" max="12" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+          <label class="col-span-2 flex flex-col gap-1">
+            日
+            <input v-model="store.createDraft.day" type="number" min="1" max="31" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+        </div>
+      </fieldset>
       <label class="flex flex-col gap-1 text-xs text-gray-500">
         摘要（可选，其余字段建好后在详情里补）
         <textarea
@@ -495,7 +526,7 @@ async function removeEvent() {
               >
             </label>
           </div>
-          <p v-else class="text-[11px] text-gray-400">无明确时间的纯顺序事件合法且常见；时间轴只按列表顺序呈现。</p>
+          <p v-else class="text-[11px] text-gray-400">建议填写：时间轴表头按明确时间显示日期，不填只剩列表顺序，事件多了难以分辨发生在何时。</p>
         </fieldset>
 
         <!-- 相对时间（锚事件 + 偏移；锚链画在轴下） -->

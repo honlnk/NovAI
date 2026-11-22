@@ -68,6 +68,62 @@ export type TimelineNewDraft = {
   kind: 'point' | 'span'
   title: string
   summary: string
+  /** 明确时间各段（表单字符串；年份留空 = 不填日期）；历法打开表单时预填最近一次用过的历法名 */
+  calendar: string
+  year: string
+  season: string
+  month: string
+  day: string
+}
+
+/**
+ * 新建表单的日期段 → 明确时间：年份留空且未填季节/月/日 = 不填日期（null）；
+ * 填了季节/月/日却没填年份、或数值越界 → 返回错误文案（与领域载入校验同口径：月 1–12、日 1–31）。
+ */
+export function storyTimeFromNewDraft(draft: Pick<TimelineNewDraft, 'calendar' | 'year' | 'season' | 'month' | 'day'>):
+  { ok: true; value: StoryTime | null } | { ok: false; message: string } {
+  // v-model 绑定 type="number" 时 Vue 会把可解析的输入转成 number：统一转字符串再判空
+  const text = (value: unknown): string => (value === null || value === undefined ? '' : String(value).trim())
+  const year = text(draft.year)
+  const season = text(draft.season)
+  const month = text(draft.month)
+  const day = text(draft.day)
+  const calendar = text(draft.calendar)
+  if (!year) {
+    if (season || month || day) {
+      return { ok: false, message: '填了季节/月/日时，年份必填（架空纪年可为负数）' }
+    }
+    return { ok: true, value: null }
+  }
+  const yearValue = Number(year)
+  if (!Number.isInteger(yearValue)) {
+    return { ok: false, message: '年份必须是整数（架空纪年可为负数）' }
+  }
+  const parseRanged = (raw: string, max: number): number | undefined | false => {
+    if (!raw) {
+      return undefined
+    }
+    const value = Number(raw)
+    return Number.isInteger(value) && value >= 1 && value <= max ? value : false
+  }
+  const monthValue = parseRanged(month, 12)
+  if (monthValue === false) {
+    return { ok: false, message: '月份必须是 1–12 的整数' }
+  }
+  const dayValue = parseRanged(day, 31)
+  if (dayValue === false) {
+    return { ok: false, message: '日必须是 1–31 的整数' }
+  }
+  return {
+    ok: true,
+    value: {
+      ...(calendar ? { calendar } : {}),
+      year: yearValue,
+      ...(season ? { season } : {}),
+      ...(monthValue !== undefined ? { month: monthValue } : {}),
+      ...(dayValue !== undefined ? { day: dayValue } : {}),
+    },
+  }
 }
 
 /** 事件详情编辑会话（save-session 引擎领域字段） */
@@ -224,7 +280,7 @@ export const useTimelineStore = defineStore('timeline', () => {
 
   /** 新建事件表单 */
   const createOpen = ref(false)
-  const createDraft = reactive<TimelineNewDraft>({ kind: 'point', title: '', summary: '' })
+  const createDraft = reactive<TimelineNewDraft>({ kind: 'point', title: '', summary: '', calendar: '', year: '', season: '', month: '', day: '' })
   const createBusy = ref(false)
 
   /** 全量检查（检查面板按需触发，与账本加载隔离） */
@@ -778,7 +834,16 @@ export const useTimelineStore = defineStore('timeline', () => {
     }
     createBusy.value = true
     try {
-      const event: TimelineEventInput = { title, summary: createDraft.summary.trim() }
+      const storyTime = storyTimeFromNewDraft(createDraft)
+      if (!storyTime.ok) {
+        actionError.value = storyTime.message
+        return false
+      }
+      const event: TimelineEventInput = {
+        title,
+        summary: createDraft.summary.trim(),
+        ...(storyTime.value ? { storyTime: storyTime.value } : {}),
+      }
       const result = createDraft.kind === 'span'
         ? await createTimelineSpanEvent(pid, { event, startPosition: { at: 'last' }, endPosition: { at: 'last' } }, 'ui')
         : await createTimelinePointEvent(pid, { event, position: { at: 'last' } }, 'ui')
@@ -787,6 +852,11 @@ export const useTimelineStore = defineStore('timeline', () => {
       createDraft.kind = 'point'
       createDraft.title = ''
       createDraft.summary = ''
+      createDraft.calendar = ''
+      createDraft.year = ''
+      createDraft.season = ''
+      createDraft.month = ''
+      createDraft.day = ''
       await reloadView({ preserveViewport: true })
       await openDetail(result.marker.eventId)
       return true
@@ -798,9 +868,28 @@ export const useTimelineStore = defineStore('timeline', () => {
     }
   }
 
+  /**
+   * 最近一次用过的明确时间（列表中最靠后的带日期事件）：新建表单预填历法名、年份占位提示用，
+   * 让全书沿用同一历法名（与 AI 侧「全书同一历法名」的引导一致）。
+   */
+  const lastStoryTime = computed<StoryTime | null>(() => {
+    const list = markers.value
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      const marker = list[index]!.marker
+      if (marker.kind !== 'end' && marker.event.storyTime) {
+        return marker.event.storyTime
+      }
+    }
+    return null
+  })
+
   function openCreateForm(): void {
     createOpen.value = true
     selectedEventId.value = ''
+    // 历法名只在空着时预填（保留用户这次已改过的值）
+    if (!createDraft.calendar && lastStoryTime.value?.calendar) {
+      createDraft.calendar = lastStoryTime.value.calendar
+    }
   }
 
   /**
@@ -1021,6 +1110,7 @@ export const useTimelineStore = defineStore('timeline', () => {
     // 新建与整理
     createOpen,
     createDraft,
+    lastStoryTime,
     createBusy,
     openCreateForm,
     submitCreate,

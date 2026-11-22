@@ -630,6 +630,21 @@ describe('updateTimelineEvent', () => {
     await expect(updateTimelineEvent(project, { eventId: a.marker.eventId, patch: {} }))
       .rejects.toThrow('至少提供一项')
   })
+
+  it('明确时间的月/日越界在写入时拒绝（与载入校验同口径，防止写入后整本被隔离阻塞）', async () => {
+    const { a } = await seedTwo()
+    await expect(updateTimelineEvent(project, { eventId: a.marker.eventId, patch: { storyTime: { year: 320, month: 13 } } }))
+      .rejects.toThrow('month 必须是 1–12')
+    await expect(updateTimelineEvent(project, { eventId: a.marker.eventId, patch: { storyTime: { year: 320, month: 2, day: 32 } } }))
+      .rejects.toThrow('day 必须是 1–31')
+    await expect(createTimelinePoint(project, { event: { title: 'x', storyTime: { year: 320, month: 1.5 } }, position: { at: 'last' } }))
+      .rejects.toThrow('month 必须是 1–12')
+
+    // 合法值照常写入，重新载入不产生隔离条目
+    await updateTimelineEvent(project, { eventId: a.marker.eventId, patch: { storyTime: { calendar: '苍穹历', year: -5, month: 12, day: 31 } } })
+    const document = await loadTimelineLedger(project)
+    expect(document.issues).toEqual([])
+  })
 })
 
 describe('moveTimelineMarker', () => {

@@ -69,7 +69,7 @@ _setTimelineBackupStoreForTest({
   },
 } satisfies TimelineBackupStore)
 
-import { useTimelineStore } from './timeline'
+import { storyTimeFromNewDraft, useTimelineStore } from './timeline'
 
 /* ---------- 测试数据 ---------- */
 
@@ -426,6 +426,52 @@ describe('写入动作', () => {
     expect(createTimelinePointEvent).toHaveBeenCalledWith('proj-1', { event: { title: '新事件', summary: '新摘要' }, position: { at: 'last' } }, 'ui')
     expect(store.selectedEventId).toBe('EVT-newpoint11')
     expect(store.createOpen).toBe(false)
+  })
+
+  it('新建表单带日期：预填最近用过的历法名，提交时转成明确时间；日期填错不提交', async () => {
+    vi.mocked(getTimeline).mockResolvedValue(timelineView([
+      { id: MARKER_A, kind: 'point', eventId: EVENT_A, event: event(EVENT_A, { storyTime: { calendar: '苍穹历', year: 318 } }) },
+      { id: MARKER_C, kind: 'point', eventId: EVENT_C, event: event(EVENT_C, { storyTime: { calendar: '苍穹历', year: 320, season: '春' } }) },
+    ]))
+    const store = useTimelineStore()
+    await store.open('proj-1')
+
+    store.openCreateForm()
+    expect(store.createDraft.calendar).toBe('苍穹历')
+    expect(store.lastStoryTime).toEqual({ calendar: '苍穹历', year: 320, season: '春' })
+
+    store.createDraft.title = '拜入外门'
+    store.createDraft.month = '13'
+    store.createDraft.year = '320'
+    expect(await store.submitCreate()).toBe(false)
+    expect(store.actionError).toContain('月份')
+    expect(createTimelinePointEvent).not.toHaveBeenCalled()
+
+    // v-model 对 number 输入框给的是数字：同样接受
+    ;(store.createDraft as unknown as { year: number }).year = 320
+    store.createDraft.season = '夏'
+    store.createDraft.month = '6'
+    expect(await store.submitCreate()).toBe(true)
+    expect(createTimelinePointEvent).toHaveBeenCalledWith('proj-1', {
+      event: { title: '拜入外门', summary: '', storyTime: { calendar: '苍穹历', year: 320, season: '夏', month: 6 } },
+      position: { at: 'last' },
+    }, 'ui')
+    // 提交后清空日期段，下次打开重新预填历法
+    expect(store.createDraft.year).toBe('')
+    store.openCreateForm()
+    expect(store.createDraft.calendar).toBe('苍穹历')
+  })
+
+  it('storyTimeFromNewDraft：年份留空=不填；只填季节/月/日缺年份、非整数年份、越界日期都报错', () => {
+    const blank = { calendar: '', year: '', season: '', month: '', day: '' }
+    expect(storyTimeFromNewDraft(blank)).toEqual({ ok: true, value: null })
+    // 只有预填的历法名、没填年份 = 不填日期（不报错）
+    expect(storyTimeFromNewDraft({ ...blank, calendar: '苍穹历' })).toEqual({ ok: true, value: null })
+    expect(storyTimeFromNewDraft({ ...blank, season: '春' })).toMatchObject({ ok: false })
+    expect(storyTimeFromNewDraft({ ...blank, year: '3.5' })).toMatchObject({ ok: false })
+    expect(storyTimeFromNewDraft({ ...blank, year: '320', day: '32' })).toMatchObject({ ok: false })
+    expect(storyTimeFromNewDraft({ ...blank, calendar: ' 苍穹历 ', year: '-12', day: '31' }))
+      .toEqual({ ok: true, value: { calendar: '苍穹历', year: -12, day: 31 } })
   })
 
   it('新建区间事件：起止都先落尾部', async () => {
