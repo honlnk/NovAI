@@ -317,7 +317,8 @@ function onSelectEvent(eventId: string) {
 
       <!-- 时间轴 + 详情：宽屏左右分栏；窄屏上下堆叠 -->
       <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div class="relative min-h-[15rem] flex-1 border-b border-gray-100 lg:border-b-0 lg:border-r">
+        <!-- min-w-0：宽时间轴只在自身容器内横向滚动，不把详情区挤出视口 -->
+        <div class="relative min-h-[15rem] min-w-0 flex-1 border-b border-gray-100 lg:border-b-0 lg:border-r">
           <TimelineAxis
             :nodes="store.axisNodes"
             :entries="store.ganttEntries"
