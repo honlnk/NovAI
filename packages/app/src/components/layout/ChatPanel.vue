@@ -730,6 +730,17 @@ onBeforeUnmount(() => {
   unregisterTextRefs = null
   composer.unmount()
 })
+
+/**
+ * 预填草稿（「让 AI 写技能」等外部入口，§3.5）：插入当前光标处并聚焦，
+ * 不自动发送——作者补充需求后自行 Enter。
+ */
+function prefillDraft(text: string) {
+  composer.insertAtCaret(text)
+  composer.focus()
+}
+
+defineExpose({ prefillDraft })
 </script>
 
 <template>

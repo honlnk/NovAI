@@ -1,20 +1,29 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
-import type { BrokenSkillView, SkillView, SkillWarningView } from '@novai/core/services/types'
+import { scanImportSource } from '@novai/core/services/skill-service'
+import type {
+  BrokenSkillView,
+  SkillImportCandidateView,
+  SkillView,
+  SkillWarningView,
+} from '@novai/core/services/types'
 import { useSkillStore } from '../../stores/skill'
+import { useToast } from '../../composables/useToast'
 import { formatSkillFileSize } from '../../utils/skill-format'
 import Tooltip from '../ui/Tooltip.vue'
 import AppIcon from '../ui/AppIcon.vue'
+import SkillImportDialog from './SkillImportDialog.vue'
 
 /**
  * 技能分类面板（技能包 UI/UX 施工计划 §3.2）。
  *
  * 列表 = 合格技能（可展开文件清单）+ broken 技能（末尾灰显、行内人话原因）。
  * 文本文件（含 SKILL.md）点击走右侧现有文件详情；脚本/不支持文件灰显不可点
- * （决策 7）。删除走行尾删除入口 + 二次确认（决策 9：整夹删除不可撤销），
- * 执行在 skill store（删盘 + 刷文件树 + 重算），结果回填确认对话框。
- * 获取入口（新建/导入/让 AI 写）属阶段 2，届时接入头部操作区与空状态。
+ * （决策 7）。删除走行尾删除入口 + 二次确认（决策 9）；写操作（新建/导入/删除）
+ * 在 skill store 执行（删盘/复制 + 刷文件树 + 重算），结果回填对话框。
+ * 获取入口（决策 5/11）：新建下拉（空白技能 / 让 AI 写）、导入（目录选择器 +
+ * 单技能直接导入 / 合集勾选对话框）。
  */
 const props = defineProps<{
   projectId: string
@@ -27,6 +36,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   selectFile: [path: string]
   refresh: []
+  /** 让 AI 写技能：预填请求到聊天输入框（不自动发送，§3.5） */
+  askAi: []
 }>()
 
 /** 搜索词（技能多于 8 个时显示搜索框，按名称与描述过滤——决策 11） */
@@ -110,11 +121,106 @@ function cancelDelete() {
   deleteTarget.value = null
   deleteError.value = ''
 }
+
+/* ---------- 新建下拉（决策 11：「让 AI 写」放进新建按钮的下拉） ---------- */
+
+const isCreateMenuOpen = ref(false)
+
+/* ---------- 新建空白技能（命名对话框 + 模板 + 自动打开，§3.4） ---------- */
+
+const isCreateDialogOpen = ref(false)
+const createName = ref('')
+const isCreateBusy = ref(false)
+const createError = ref('')
+
+function openCreateDialog() {
+  createName.value = ''
+  createError.value = ''
+  isCreateDialogOpen.value = true
+}
+
+async function submitCreate() {
+  const name = createName.value.trim()
+  if (!name || isCreateBusy.value) return
+  isCreateBusy.value = true
+  createError.value = ''
+  const result = await skillStore.createBlank(props.projectId, name)
+  isCreateBusy.value = false
+  if (result instanceof Error) {
+    createError.value = result.message
+    return
+  }
+  isCreateDialogOpen.value = false
+  // 新建后立即在右侧打开 SKILL.md 进入编辑（§3.4）
+  emit('selectFile', result.skillFilePath)
+}
+
+/* ---------- 导入（决策 12：单技能直接导入 / 合集勾选对话框） ---------- */
+
+const importDialog = ref<{
+  sourceName: string
+  candidates: SkillImportCandidateView[]
+} | null>(null)
+const importDialogRef = ref<InstanceType<typeof SkillImportDialog> | null>(null)
+let importingSource: FileSystemDirectoryHandle | null = null
+
+const toast = useToast()
+
+/** 导入入口：选目录 → 扫描 → 单技能直接导入；合集弹勾选对话框；没有技能报错 */
+async function handleImport() {
+  let source: FileSystemDirectoryHandle
+  try {
+    source = await window.showDirectoryPicker({ mode: 'read' })
+  } catch {
+    return // 用户取消选择器（AbortError），不是错误
+  }
+
+  let scan: Awaited<ReturnType<typeof scanImportSource>>
+  try {
+    scan = await scanImportSource(props.projectId, source)
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : '扫描所选文件夹失败')
+    return
+  }
+
+  if (scan.mode === 'single') {
+    // 单技能：直接导入（跳过勾选对话框）
+    const outcome = await skillStore.importSkillsFrom(props.projectId, source, [
+      scan.candidates[0].folderName,
+    ])
+    if (outcome.imported.length > 0) {
+      toast.success(`已导入技能 ${outcome.imported.join('、')}`)
+    } else {
+      toast.error('同名技能已存在，未导入')
+    }
+    return
+  }
+
+  importingSource = source
+  importDialog.value = { sourceName: source.name, candidates: scan.candidates }
+}
+
+/** 合集勾选确认：执行导入并把逐个结果回填对话框结果态 */
+async function handleImportConfirm(folderNames: string[]) {
+  const source = importingSource
+  if (!source || !importDialogRef.value) return
+  try {
+    const outcome = await skillStore.importSkillsFrom(props.projectId, source, folderNames)
+    importDialogRef.value.complete(outcome)
+  } catch (error) {
+    importDialogRef.value.fail(error)
+  }
+}
+
+function closeImportDialog() {
+  importDialog.value = null
+  importingSource = null
+}
 </script>
 
 <template>
   <div class="relative flex h-full flex-col">
-    <!-- 头部：分组标题带数量 + 刷新（决策 11；导入/新建入口属阶段 2） -->
+    <!-- 头部：分组标题带数量 + 刷新 / 导入 / 新建 ▾（决策 11） -->
     <div class="flex items-center justify-between px-4 py-3">
       <h2 class="text-sm font-semibold text-white">已安装技能 · {{ skills.length + broken.length }}</h2>
       <div class="flex items-center gap-1">
@@ -129,6 +235,57 @@ function cancelDelete() {
             <AppIcon name="refresh-cw" :size="16" :class="['h-4 w-4', isLoading ? 'animate-spin' : '']" />
           </button>
         </Tooltip>
+        <Tooltip text="导入本地技能" :delay="300" preferred-placement="bottom">
+          <button
+            class="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+            aria-label="导入本地技能"
+            data-testid="skill-import-button"
+            @click="handleImport"
+          >
+            <AppIcon name="folder-open" :size="16" class="h-4 w-4" />
+          </button>
+        </Tooltip>
+        <div class="relative">
+          <Tooltip text="新建技能" :delay="300" preferred-placement="bottom">
+            <button
+              class="flex items-center gap-0.5 rounded-md p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
+              aria-label="新建技能"
+              aria-haspopup="menu"
+              :aria-expanded="isCreateMenuOpen"
+              data-testid="skill-create-button"
+              @click="isCreateMenuOpen = !isCreateMenuOpen"
+            >
+              <AppIcon name="plus" :size="16" class="h-4 w-4" />
+              <AppIcon name="chevron-down" :size="12" class="h-3 w-3" />
+            </button>
+          </Tooltip>
+          <!-- 点击外部关闭：透明遮罩兜底（菜单 z 更高） -->
+          <div v-if="isCreateMenuOpen" class="fixed inset-0 z-40" @click="isCreateMenuOpen = false" />
+          <div
+            v-if="isCreateMenuOpen"
+            class="absolute right-0 top-full z-50 mt-1 w-40 overflow-hidden rounded-md border border-white/10 bg-[#262626] py-1 shadow-lg"
+            role="menu"
+          >
+            <button
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+              role="menuitem"
+              data-testid="skill-create-blank"
+              @click="isCreateMenuOpen = false; openCreateDialog()"
+            >
+              <AppIcon name="square-pen" :size="14" class="h-3.5 w-3.5 shrink-0" />
+              空白技能
+            </button>
+            <button
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+              role="menuitem"
+              data-testid="skill-create-ai"
+              @click="isCreateMenuOpen = false; emit('askAi')"
+            >
+              <AppIcon name="sparkles" :size="14" class="h-3.5 w-3.5 shrink-0" />
+              让 AI 写
+            </button>
+          </div>
+        </div>
         <!-- 移动端关闭：由 CategoryPanel 注入 -->
         <slot name="mobile-close" />
       </div>
@@ -154,14 +311,40 @@ function cancelDelete() {
         正在读取技能…
       </p>
 
-      <!-- 空状态：说明技能是什么（§3.2；三个获取入口按钮属阶段 2） -->
+      <!-- 空状态：说明技能是什么 + 三个获取入口（§3.2） -->
       <div
         v-else-if="skills.length === 0 && broken.length === 0"
-        class="flex flex-col gap-2 px-3 py-6 text-xs leading-relaxed text-gray-500"
+        class="flex flex-col gap-3 px-3 py-6 text-xs leading-relaxed text-gray-500"
         data-testid="skill-empty-state"
       >
         <p>技能是可复用的写作方法包（一个文件夹 + SKILL.md）。AI 会在任务相符时自动加载，你也可以在输入框用 <span class="rounded bg-white/10 px-1 text-gray-300">#技能名</span> 点名使用。</p>
         <p>当前项目还没有任何技能。</p>
+        <div class="flex flex-col gap-1.5">
+          <button
+            class="flex items-center gap-1.5 rounded-md bg-white/5 px-3 py-2 text-left text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-gray-200"
+            data-testid="skill-empty-create"
+            @click="openCreateDialog()"
+          >
+            <AppIcon name="plus" :size="14" class="h-3.5 w-3.5 shrink-0" />
+            新建空白技能
+          </button>
+          <button
+            class="flex items-center gap-1.5 rounded-md bg-white/5 px-3 py-2 text-left text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-gray-200"
+            data-testid="skill-empty-import"
+            @click="handleImport"
+          >
+            <AppIcon name="folder-open" :size="14" class="h-3.5 w-3.5 shrink-0" />
+            导入本地技能文件夹
+          </button>
+          <button
+            class="flex items-center gap-1.5 rounded-md bg-white/5 px-3 py-2 text-left text-sm text-gray-300 transition-colors hover:bg-white/10 hover:text-gray-200"
+            data-testid="skill-empty-ai"
+            @click="emit('askAi')"
+          >
+            <AppIcon name="sparkles" :size="14" class="h-3.5 w-3.5 shrink-0" />
+            让 AI 写一个技能
+          </button>
+        </div>
       </div>
 
       <template v-else>
@@ -338,5 +521,57 @@ function cancelDelete() {
         </div>
       </div>
     </div>
+
+    <!-- 新建空白技能：命名对话框（重名/非法名错误留在框内） -->
+    <div
+      v-if="isCreateDialogOpen"
+      class="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="新建空白技能"
+      data-testid="skill-create-dialog"
+    >
+      <div class="w-full max-w-xs rounded-lg border border-white/10 bg-[#1f1f1f] p-4 shadow-xl">
+        <h3 class="mb-2 text-sm font-semibold text-white">新建空白技能</h3>
+        <p class="mb-2 text-xs leading-relaxed text-gray-500">将创建 <span class="rounded bg-white/10 px-1 font-mono text-[11px]">skills/&lt;名字&gt;/SKILL.md</span>（含方法步骤模板），创建后立即打开编辑。</p>
+        <input
+          v-model="createName"
+          type="text"
+          placeholder="技能名，如：文风仿写"
+          class="mb-1 w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-emerald-500/50 focus:outline-none"
+          :disabled="isCreateBusy"
+          data-testid="skill-create-name-input"
+          @keydown.enter.prevent="submitCreate"
+        />
+        <p v-if="createError" class="mb-2 text-xs text-red-400" data-testid="skill-create-error">{{ createError }}</p>
+        <div class="mt-3 flex justify-end gap-2">
+          <button
+            class="rounded-md px-3 py-1.5 text-xs text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="isCreateBusy"
+            @click="isCreateDialogOpen = false"
+          >
+            取消
+          </button>
+          <button
+            class="rounded-md bg-emerald-600/90 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="isCreateBusy || !createName.trim()"
+            data-testid="skill-create-confirm"
+            @click="submitCreate"
+          >
+            {{ isCreateBusy ? '创建中…' : '创建' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 合集导入：勾选对话框（决策 12） -->
+    <SkillImportDialog
+      v-if="importDialog"
+      ref="importDialogRef"
+      :source-name="importDialog.sourceName"
+      :candidates="importDialog.candidates"
+      @confirm="handleImportConfirm"
+      @close="closeImportDialog"
+    />
   </div>
 </template>

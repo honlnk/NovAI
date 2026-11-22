@@ -99,6 +99,8 @@ const emit = defineEmits<{
   openTimelineEvent: [eventId: string]
   /** 刷新技能列表（技能分类标题行入口） */
   refreshSkills: []
+  /** 让 AI 写技能（预填请求到聊天输入框，§3.5） */
+  askAiSkill: []
 }>()
 </script>
 
@@ -177,6 +179,7 @@ const emit = defineEmits<{
       :active-file-path="activeFilePath"
       @select-file="emit('selectFile', $event)"
       @refresh="emit('refreshSkills')"
+      @ask-ai="emit('askAiSkill')"
     >
       <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
     </SkillList>

@@ -709,6 +709,7 @@ function handleGuardResolved() {
 
 /** FilePanelBody 实例引用：AI 改动重读守卫读它的未保存草稿状态 */
 const filePanelRef = useTemplateRef('filePanelRef')
+const chatPanelRef = useTemplateRef('chatPanelRef')
 
 /** 内容面板选中文字后，把引用存入状态供 ChatPanel 显示 chip */
 function handleSelectQuote(payload: { path: string; name: string; text: string }) {
@@ -971,8 +972,13 @@ async function handleSkillRefresh() {
   try {
     await skillStore.refresh(projectId.value, true)
   } catch (error) {
-    toast(error instanceof Error ? error.message : '刷新技能失败', 'error')
+    toast.error(error instanceof Error ? error.message : '刷新技能失败')
   }
+}
+
+/** 让 AI 写技能（§3.5）：预填请求到输入框（不自动发送），光标落在末尾 */
+function handleAskAiSkill() {
+  chatPanelRef.value?.prefillDraft('请在 skills/ 下帮我新建一个技能：')
 }
 
 /** 新建面板提交（看板右上 / 空状态入口共用）：失败保留输入，成功由 store 转入详情预览 */
@@ -1594,6 +1600,7 @@ function handleGoToSettings() {
         @open-plan-board="selectCategory('plan')"
         @refresh-plan="handlePlanRefresh"
         @refresh-skills="handleSkillRefresh"
+        @ask-ai-skill="handleAskAiSkill"
         @open-plan-create="handleOpenPlanCreate"
         @open-plan-card="(id) => { selectCategory('plan'); handleOpenPlanCard(id) }"
         @open-foreshadowing-board="selectCategory('foreshadowing')"
@@ -1660,6 +1667,7 @@ function handleGoToSettings() {
       />
       <ChatPanel
         v-else
+        ref="chatPanelRef"
         :project-id="projectId"
         :is-sidebar-open="isCategoryOpen"
         :is-content-panel-open="workspacePanel.visible"

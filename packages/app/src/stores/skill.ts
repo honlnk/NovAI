@@ -1,7 +1,12 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import { deleteSkill, listSkills } from '@novai/core/services/skill-service'
+import {
+  createBlankSkill,
+  deleteSkill,
+  importSkills,
+  listSkills,
+} from '@novai/core/services/skill-service'
 import type { BrokenSkillView, SkillView } from '@novai/core/services/types'
 
 import { useProjectStore } from './project'
@@ -81,13 +86,50 @@ export const useSkillStore = defineStore('skill', () => {
       void refresh(projectId, true).catch(() => {})
       return error instanceof Error ? error : new Error('删除失败')
     }
+    await flushAfterWrite(projectId)
+    return null
+  }
+
+  /**
+   * 新建空白技能（§3.4 模板）：成功后刷文件树与技能列表，返回新技能的
+   * SKILL.md 路径（调用方随即在右侧打开进入编辑）；重名/非法名返回错误。
+   */
+  async function createBlank(
+    projectId: string,
+    folderName: string,
+  ): Promise<{ skillFilePath: string } | Error> {
+    try {
+      await createBlankSkill(projectId, folderName)
+    } catch (error) {
+      return error instanceof Error ? error : new Error('新建技能失败')
+    }
+    await flushAfterWrite(projectId)
+    return { skillFilePath: `skills/${folderName.trim()}/SKILL.md` }
+  }
+
+  /**
+   * 导入选中候选（§3.1 importSkills 的 store 接线）：复制 → 刷文件树与技能
+   * 列表，返回逐个成功/跳过结果（对话框结果态展示）。扫描（scanImportSource，
+   * 只读）由组件直调服务。
+   */
+  async function importSkillsFrom(
+    projectId: string,
+    sourceHandle: FileSystemDirectoryHandle,
+    folderNames: string[],
+  ) {
+    const outcome = await importSkills(projectId, sourceHandle, folderNames)
+    await flushAfterWrite(projectId)
+    return outcome
+  }
+
+  /** 写操作后的统一刷新通道：文件树 + 技能列表（§3.1）。 */
+  async function flushAfterWrite(projectId: string): Promise<void> {
     const projectStore = useProjectStore()
     await Promise.all([
       projectStore.refreshTree().catch(() => {}),
       refresh(projectId, true),
     ])
-    return null
   }
 
-  return { skills, broken, isLoading, refresh, markStale, removeSkill, reset }
+  return { skills, broken, isLoading, refresh, markStale, removeSkill, createBlank, importSkillsFrom, reset }
 })

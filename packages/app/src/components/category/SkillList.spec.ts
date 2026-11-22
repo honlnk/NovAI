@@ -16,6 +16,9 @@ import { useSkillStore } from '../../stores/skill'
 vi.mock('@novai/core/services/skill-service', () => ({
   deleteSkill: vi.fn(),
   listSkills: vi.fn(async () => ({ skills: [], broken: [] })),
+  createBlankSkill: vi.fn(),
+  importSkills: vi.fn(),
+  scanImportSource: vi.fn(),
 }))
 
 /* ---------- 工厂 ---------- */
@@ -204,11 +207,102 @@ describe('SkillList 搜索与空状态（决策 11）', () => {
     expect(many.findAll('[data-testid="skill-row"]')).toHaveLength(1)
   })
 
-  it('空状态说明技能是什么与 #技能名 用法', () => {
+  it('空状态说明技能是什么与 #技能名 用法，并提供三个获取入口', async () => {
     const wrapper = mountList()
 
     const empty = wrapper.find('[data-testid="skill-empty-state"]')
     expect(empty.exists()).toBe(true)
     expect(empty.text()).toContain('#技能名')
+    expect(wrapper.find('[data-testid="skill-empty-create"]').exists()).toBe(true)
+
+    // 让 AI 写：预填入口事件直达父级（不自动发送由 ChatPanel 承接）
+    await wrapper.find('[data-testid="skill-empty-ai"]').trigger('click')
+    expect(wrapper.emitted('askAi')).toHaveLength(1)
+  })
+})
+
+describe('SkillList 新建空白技能（§3.4）', () => {
+  it('命名对话框：成功创建后关闭并打开 SKILL.md；重名错误留在框内', async () => {
+    const store = useSkillStore()
+    const createBlank = vi
+      .spyOn(store, 'createBlank')
+      .mockResolvedValueOnce(new Error('已有同名技能 skills/去AI味，请换个名字'))
+      .mockResolvedValueOnce({ skillFilePath: 'skills/文风仿写/SKILL.md' })
+
+    const wrapper = mountList()
+    await wrapper.find('[data-testid="skill-empty-create"]').trigger('click')
+
+    const dialog = () => wrapper.find('[data-testid="skill-create-dialog"]')
+    expect(dialog().exists()).toBe(true)
+
+    await wrapper.find('[data-testid="skill-create-name-input"]').setValue('去AI味')
+    await wrapper.find('[data-testid="skill-create-confirm"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="skill-create-error"]').text()).toContain('已有同名技能')
+    })
+    expect(dialog().exists()).toBe(true)
+
+    await wrapper.find('[data-testid="skill-create-name-input"]').setValue('文风仿写')
+    await wrapper.find('[data-testid="skill-create-confirm"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="skill-create-dialog"]').exists()).toBe(false)
+    })
+    expect(createBlank).toHaveBeenCalledTimes(2)
+    expect(wrapper.emitted('selectFile')).toEqual([['skills/文风仿写/SKILL.md']])
+  })
+})
+
+describe('SkillList 导入（决策 12）', () => {
+  it('合集来源：扫描后弹勾选对话框；确认执行导入并展示结果态', async () => {
+    const source = { name: '外部技能集', kind: 'directory' } as FileSystemDirectoryHandle
+    window.showDirectoryPicker = vi.fn(async () => source)
+    const { scanImportSource } = await import('@novai/core/services/skill-service')
+    vi.mocked(scanImportSource).mockResolvedValue({
+      mode: 'collection',
+      candidates: [
+        { folderName: '去AI味', hasConflict: true },
+        { folderName: '文风仿写', hasConflict: false },
+      ],
+    })
+    const store = useSkillStore()
+    const importSkillsFrom = vi
+      .spyOn(store, 'importSkillsFrom')
+      .mockResolvedValue({ imported: ['文风仿写'], skipped: [] })
+
+    const wrapper = mountList()
+    await wrapper.find('[data-testid="skill-import-button"]').trigger('click')
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="skill-import-dialog"]').exists()).toBe(true)
+    })
+    expect(wrapper.find('[data-testid="skill-import-conflict"]').text()).toBe('同名已存在')
+
+    await wrapper.find('[data-testid="skill-import-confirm"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="skill-import-done"]').exists()).toBe(true)
+    })
+    expect(importSkillsFrom).toHaveBeenCalledWith('p1', source, ['文风仿写'])
+  })
+
+  it('单技能来源：不弹对话框直接导入并轻提示', async () => {
+    const source = { name: '外部技能集', kind: 'directory' } as FileSystemDirectoryHandle
+    window.showDirectoryPicker = vi.fn(async () => source)
+    const { scanImportSource } = await import('@novai/core/services/skill-service')
+    vi.mocked(scanImportSource).mockResolvedValue({
+      mode: 'single',
+      candidates: [{ folderName: '外部技能集', hasConflict: false }],
+    })
+    const store = useSkillStore()
+    const importSkillsFrom = vi
+      .spyOn(store, 'importSkillsFrom')
+      .mockResolvedValue({ imported: ['外部技能集'], skipped: [] })
+
+    const wrapper = mountList()
+    await wrapper.find('[data-testid="skill-import-button"]').trigger('click')
+
+    await vi.waitFor(() => {
+      expect(importSkillsFrom).toHaveBeenCalledWith('p1', source, ['外部技能集'])
+    })
+    expect(wrapper.find('[data-testid="skill-import-dialog"]').exists()).toBe(false)
   })
 })
