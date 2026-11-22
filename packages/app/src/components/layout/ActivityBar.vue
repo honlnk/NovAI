@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Category } from '../../constants/category'
 import Tooltip from '../ui/Tooltip.vue'
 import AppIcon from '../ui/AppIcon.vue'
@@ -77,87 +78,154 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
     case 'timeline': emit('timeline'); break
   }
 }
+
+/**
+ * 矮屏滚动提示：滚动区上/下缘还有被遮住的内容时亮起发光带（双向对称）。
+ * 纯 CSS 判定不了「是否可滚动」，由 scroll 事件 + ResizeObserver 维护该状态。
+ */
+const scrollArea = ref<HTMLElement | null>(null)
+const canScrollUp = ref(false)
+const canScrollDown = ref(false)
+
+function updateScrollHint() {
+  const el = scrollArea.value
+  if (!el) return
+  // 1px 容差防浮点误差；滚到头（该侧没有隐藏内容）即熄灭
+  canScrollUp.value = el.scrollTop > 1
+  canScrollDown.value = el.scrollTop + el.clientHeight < el.scrollHeight - 1
+}
+
+let hintObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  const el = scrollArea.value
+  if (!el) return
+  el.addEventListener('scroll', updateScrollHint, { passive: true })
+  // 观察滚动区自身（视口/布局变化）与两个内容组（将来增删图标项），高度变化后重算
+  const observer = new ResizeObserver(updateScrollHint)
+  hintObserver = observer
+  observer.observe(el)
+  Array.from(el.children).forEach((child) => observer.observe(child))
+})
+
+onBeforeUnmount(() => {
+  scrollArea.value?.removeEventListener('scroll', updateScrollHint)
+  hintObserver?.disconnect()
+  hintObserver = null
+})
 </script>
 
 <template>
   <!-- z-[46]：显式层级让分类抽屉（z-[45]）收起时从工具栏下方滑过而不是盖过它；
        仍低于全屏弹窗/tooltip 的 z-50（z 序：遮罩 40 < 抽屉 45 < 工具栏 46 < 弹窗 50） -->
-  <nav class="z-[46] flex w-14 shrink-0 flex-col items-center justify-between border-r border-white/10 bg-[#171717] py-2">
-    <!-- 顶部分类图标 -->
-    <div class="flex flex-col items-center gap-1">
-      <Tooltip
-        v-for="item in categoryItems"
-        :key="item.key"
-        :text="item.label"
-        preferred-placement="right"
-      >
-        <button
-          :aria-label="item.label"
-          :class="[
-            'group flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
-            activeCategory === item.key
-              ? 'bg-white/15 text-white'
-              : 'text-gray-400 hover:bg-white/10 hover:text-gray-200',
-          ]"
-          @click="emit('select', item.key)"
-        >
-          <!-- 对话 -->
-          <AppIcon name="message-circle-more" :size="20" class="h-5 w-5" v-if="item.icon === 'chat'" />
-          <!-- 章节 -->
-          <AppIcon name="book-open" :size="20" class="h-5 w-5" v-else-if="item.icon === 'book'" />
-          <!-- 要素 -->
-          <AppIcon name="tag" :size="20" class="h-5 w-5" v-else-if="item.icon === 'tag'" />
-          <!-- 提示词 -->
-          <AppIcon name="clipboard-check" :size="20" class="h-5 w-5" v-else-if="item.icon === 'note'" />
-          <!-- 技能（星火——可复用的写作方法素材） -->
-          <AppIcon name="sparkles" :size="20" class="h-5 w-5" v-else-if="item.icon === 'skill'" />
-          <!-- 计划（剪贴板清单） -->
-          <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'clipboard'" />
-          <!-- 伏笔（遮眼——隐藏的线索与真相） -->
-          <AppIcon name="eye-off" :size="20" class="h-5 w-5" v-else-if="item.icon === 'foreshadowing'" />
-          <!-- 节奏（心律波纹——全本节奏曲线） -->
-          <AppIcon name="activity" :size="20" class="h-5 w-5" v-else />
-        </button>
-      </Tooltip>
+  <!-- 矮屏溢出（两段式）：分隔线 + 设置 + 返回首页固定在底座、矮屏也不消失；
+       其余内容在中部滚动区内滚动。滚动区内部仍是 flex sticky-footer 模式——
+       不用 justify-between（负剩余空间下起点侧溢出不可达），动作组用 mt-auto：
+       规范规定 auto margin 在剩余空间为负时按 0 处理，空间充裕时动作组贴底
+       （视觉同 justify-between），溢出时与分类组合拢、区内滚动。 -->
+  <nav class="z-[46] flex w-14 shrink-0 flex-col border-r border-white/10 bg-[#171717] py-2">
+    <!-- 中部滚动区：外包 relative 壳挂发光提示层——提示层不能放进滚动容器，
+         否则 absolute bottom-0 会锚到内容末端、随内容一起滚走 -->
+    <div class="relative flex min-h-0 flex-1 flex-col">
+      <div ref="scrollArea" class="flex min-h-0 flex-1 flex-col items-center overflow-y-auto">
+        <!-- 顶部分类图标 -->
+        <div class="flex shrink-0 flex-col items-center gap-1">
+          <Tooltip
+            v-for="item in categoryItems"
+            :key="item.key"
+            :text="item.label"
+            preferred-placement="right"
+          >
+            <button
+              :aria-label="item.label"
+              :class="[
+                'group flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+                activeCategory === item.key
+                  ? 'bg-white/15 text-white'
+                  : 'text-gray-400 hover:bg-white/10 hover:text-gray-200',
+              ]"
+              @click="emit('select', item.key)"
+            >
+              <!-- 对话 -->
+              <AppIcon name="message-circle-more" :size="20" class="h-5 w-5" v-if="item.icon === 'chat'" />
+              <!-- 章节 -->
+              <AppIcon name="book-open" :size="20" class="h-5 w-5" v-else-if="item.icon === 'book'" />
+              <!-- 要素 -->
+              <AppIcon name="tag" :size="20" class="h-5 w-5" v-else-if="item.icon === 'tag'" />
+              <!-- 提示词 -->
+              <AppIcon name="clipboard-check" :size="20" class="h-5 w-5" v-else-if="item.icon === 'note'" />
+              <!-- 技能（星火——可复用的写作方法素材） -->
+              <AppIcon name="sparkles" :size="20" class="h-5 w-5" v-else-if="item.icon === 'skill'" />
+              <!-- 计划（剪贴板清单） -->
+              <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'clipboard'" />
+              <!-- 伏笔（遮眼——隐藏的线索与真相） -->
+              <AppIcon name="eye-off" :size="20" class="h-5 w-5" v-else-if="item.icon === 'foreshadowing'" />
+              <!-- 节奏（心律波纹——全本节奏曲线） -->
+              <AppIcon name="activity" :size="20" class="h-5 w-5" v-else />
+            </button>
+          </Tooltip>
+        </div>
+
+        <!-- 底部动作项：功能占位（mt-auto：贴底，溢出时自动合拢参与滚动区内滚动） -->
+        <div class="mt-auto flex shrink-0 flex-col items-center gap-1">
+          <!-- 功能项：已实现的正常态，未实现的灰一档提示「即将推出」 -->
+          <Tooltip
+            v-for="item in actionItems"
+            :key="item.key"
+            :text="item.enabled ? item.label : `${item.label}（即将推出）`"
+            :delay="300"
+            preferred-placement="right"
+          >
+            <button
+              :aria-label="item.enabled ? item.label : `${item.label}（即将推出）`"
+              :class="[
+                'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+                item.enabled
+                  ? 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
+                  : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
+              ]"
+              @click="emitAction(item.key)"
+            >
+              <!-- 校对 -->
+              <AppIcon name="circle-check" :size="20" class="h-5 w-5" v-if="item.icon === 'check'" />
+              <!-- 章节整理 -->
+              <AppIcon name="list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'list'" />
+              <!-- 版本管理 -->
+              <AppIcon name="arrows-right-left" :size="20" class="h-5 w-5" v-else-if="item.icon === 'branch'" />
+              <!-- 管理要素（书架，与聊天工具栏按钮同款） -->
+              <AppIcon name="library" :size="20" class="h-5 w-5" v-else-if="item.icon === 'library'" />
+              <!-- 向量索引（circle-stack） -->
+              <AppIcon name="database" :size="20" class="h-5 w-5" v-else-if="item.icon === 'database'" />
+              <!-- 关系图谱（节点连线网络） -->
+              <AppIcon name="network" :size="20" class="h-5 w-5" v-else-if="item.icon === 'network'" />
+              <!-- 时间线（时钟回溯——故事内时间轴） -->
+              <AppIcon name="timeline" :size="20" class="h-5 w-5" v-else />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+
+      <!-- 发光提示（双向）：该侧还有被遮住的内容时亮起；不挡点击/悬停、不随内容滚动。
+           各向越界 8px 贴住视觉边界——顶部贴 nav 顶缘（py-2）、底部亮缘正对分隔线
+           （底座 pt-1 + 分隔线 my-1），光从「内容消失线」发出 -->
+      <div
+        aria-hidden="true"
+        :class="[
+          'pointer-events-none absolute inset-x-0 -top-2 h-8 bg-linear-to-b from-white/15 via-white/5 to-transparent transition-opacity duration-200',
+          canScrollUp ? 'opacity-100' : 'opacity-0',
+        ]"
+      />
+      <div
+        aria-hidden="true"
+        :class="[
+          'pointer-events-none absolute inset-x-0 -bottom-2 h-8 bg-linear-to-t from-white/15 via-white/5 to-transparent transition-opacity duration-200',
+          canScrollDown ? 'opacity-100' : 'opacity-0',
+        ]"
+      />
     </div>
 
-    <!-- 底部动作项：功能占位 + 设置 + 返回首页 -->
-    <div class="flex flex-col items-center gap-1">
-      <!-- 功能项：已实现的正常态，未实现的灰一档提示「即将推出」 -->
-      <Tooltip
-        v-for="item in actionItems"
-        :key="item.key"
-        :text="item.enabled ? item.label : `${item.label}（即将推出）`"
-        :delay="300"
-        preferred-placement="right"
-      >
-        <button
-          :aria-label="item.enabled ? item.label : `${item.label}（即将推出）`"
-          :class="[
-            'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
-            item.enabled
-              ? 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
-              : 'text-gray-600 hover:bg-white/10 hover:text-gray-400',
-          ]"
-          @click="emitAction(item.key)"
-        >
-          <!-- 校对 -->
-          <AppIcon name="circle-check" :size="20" class="h-5 w-5" v-if="item.icon === 'check'" />
-          <!-- 章节整理 -->
-          <AppIcon name="list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'list'" />
-          <!-- 版本管理 -->
-          <AppIcon name="arrows-right-left" :size="20" class="h-5 w-5" v-else-if="item.icon === 'branch'" />
-          <!-- 管理要素（书架，与聊天工具栏按钮同款） -->
-          <AppIcon name="library" :size="20" class="h-5 w-5" v-else-if="item.icon === 'library'" />
-          <!-- 向量索引（circle-stack） -->
-          <AppIcon name="database" :size="20" class="h-5 w-5" v-else-if="item.icon === 'database'" />
-          <!-- 关系图谱（节点连线网络） -->
-          <AppIcon name="network" :size="20" class="h-5 w-5" v-else-if="item.icon === 'network'" />
-          <!-- 时间线（时钟回溯——故事内时间轴） -->
-          <AppIcon name="timeline" :size="20" class="h-5 w-5" v-else />
-        </button>
-      </Tooltip>
-
+    <!-- 固定底座：分隔线 + 设置 + 返回首页（矮屏也始终可见可点） -->
+    <div class="flex shrink-0 flex-col items-center gap-1 pt-1">
       <!-- 分隔线 -->
       <div class="my-1 h-px w-6 bg-white/10" />
 
