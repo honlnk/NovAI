@@ -416,6 +416,7 @@ export type ToolNameView =
   | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'LoadSkill'
   | 'ListPlans'
   | 'ReadPlan'
   | 'CreatePlan'

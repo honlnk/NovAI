@@ -18,6 +18,7 @@ export type ChatToolName =
   | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'LoadSkill'
   | 'ListPlans'
   | 'ReadPlan'
   | 'CreatePlan'
@@ -360,6 +361,8 @@ export type ChatSessionState = {
   constraintDocDigest?: string
   /** 要素目录 reminder 的 digest（name+summary 集，决策 0007）：要素集变化时原位替换、被压缩吞掉后重插。 */
   elementCatalogDigest?: string
+  /** 技能目录 reminder 的 digest（name+截断展示描述）：技能集变化时原位替换、被压缩吞掉后重插；旧会话无此字段按首注处理。 */
+  skillCatalogDigest?: string
   /** 最近一轮生效的大纲路径（null=未选择）；变化时向持久化历史追加切换留痕。 */
   lastOutlinePath?: string | null
   /** 会话标题，列表展示用；新建默认“新对话”，首轮用户消息后自动用首句截断更新 */

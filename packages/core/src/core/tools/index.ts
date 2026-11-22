@@ -9,6 +9,7 @@ import { findFilesTool, listDirectoryTool } from './directory-tools'
 import { searchFilesTool } from './search-text'
 import { ragSearchTool } from './rag-search'
 import { loadElementsTool } from './load-elements'
+import { loadSkillTool } from './load-skill'
 import {
   createPlanTool,
   deletePlanTool,
@@ -78,6 +79,8 @@ import type {
   LoadElementsInput,
   LoadElementsOutput,
   LoadedElement,
+  LoadSkillInput,
+  LoadSkillOutput,
   ListPlansInput,
   ListPlansOutput,
   ReadPlanInput,
@@ -183,6 +186,8 @@ export type {
   LoadElementsInput,
   LoadElementsOutput,
   LoadedElement,
+  LoadSkillInput,
+  LoadSkillOutput,
   ListPlansInput,
   ListPlansOutput,
   ReadPlanInput,
@@ -277,6 +282,7 @@ type ToolOutputMap = {
   SearchFiles: SearchFilesOutput
   RagSearch: RagSearchOutput
   LoadElements: LoadElementsOutput
+  LoadSkill: LoadSkillOutput
   ListPlans: ListPlansOutput
   ReadPlan: ReadPlanOutput
   CreatePlan: CreatePlanOutput
@@ -328,6 +334,7 @@ const tools = {
   SearchFiles: searchFilesTool,
   RagSearch: ragSearchTool,
   LoadElements: loadElementsTool,
+  LoadSkill: loadSkillTool,
   ListPlans: listPlansTool,
   ReadPlan: readPlanTool,
   CreatePlan: createPlanTool,

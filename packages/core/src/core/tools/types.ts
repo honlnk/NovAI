@@ -5,6 +5,7 @@ import type { PlanStatus } from '../../types/plans'
 import type { ForeshadowingStatus } from '../../types/foreshadowing'
 import type { RhythmHook, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
 import type { KnowledgePlatformName } from './knowledge-platforms'
+import type { SkillFileEntry } from '../skills/types'
 
 /**
  * core 工具注册表（tools/index.ts 的 `Record<CoreToolName, …>` 全键约束）的键集合。
@@ -22,6 +23,7 @@ export type CoreToolName =
   | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'LoadSkill'
   | 'ListPlans'
   | 'ReadPlan'
   | 'CreatePlan'
@@ -396,6 +398,53 @@ export type LoadedElement = {
 export type LoadElementsOutput = {
   elements: LoadedElement[]
 }
+
+/** ===== 技能包工具（技能包底层能力施工计划 §3.5：主 Agent 专属，要素管理员不装配） ===== */
+
+export type LoadSkillInput = {
+  /** 技能名（文件夹名，取自上下文技能清单），精确匹配。 */
+  name: string
+  /** 包内相对路径；省略 = L2（SKILL.md 正文 + 清单）；'SKILL.md' = 正文分页读取。 */
+  file?: string
+  /** 行号分页，语义与 ReadFile 相同；仅对 file 生效。 */
+  offset?: number
+  limit?: number
+}
+
+/** 技能加载结果；错误分支为教学式结果（不抛异常中断）。 */
+export type LoadSkillOutput =
+  | { kind: 'not-found'; name: string; availableNames: string[] }
+  | { kind: 'unavailable'; name: string; reason: string }
+  | {
+      kind: 'invalid-file'
+      name: string
+      file: string
+      message: string
+      /** 附带包内清单（帮助模型自我纠正）。 */
+      files?: SkillFileEntry[]
+      filesOmitted?: number
+    }
+  | {
+      kind: 'loaded'
+      name: string
+      /** 读取的包内相对路径（归一后）。 */
+      file: string
+      /** L2（不带 file 的总览）= true；L3 = false。 */
+      overview: boolean
+      content: string
+      /** L3 带 ReadFile 式行号；L2 为正文原样。 */
+      numbered: boolean
+      startLine: number
+      endLine: number
+      totalLines: number
+      truncated: boolean
+      truncatedByBytes: boolean
+      notice?: string
+      /** L2 附带：包内清单、清单截断计数与忽略键。 */
+      files?: SkillFileEntry[]
+      filesOmitted?: number
+      ignoredKeys?: string[]
+    }
 
 /** ===== 创作计划板工具（计划 §AI 工具） ===== */
 

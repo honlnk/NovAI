@@ -53,48 +53,22 @@ export const readFileTool: ToolDefinition<'ReadFile', ReadFileInput, ReadFileOut
     const readFileState = createReadFileState(input.path, content, file)
     runtime.readFileStates?.set(input.path, readFileState)
 
-    const lines = splitLines(content)
-    const startLine = input.offset ?? 1
-    const limit = input.limit ?? DEFAULT_READ_LIMIT
-    const startIndex = Math.max(startLine - 1, 0)
-    const selectedLines = lines.slice(startIndex, startIndex + limit)
-    const empty = content.length === 0
-    const offsetBeyondEnd = !empty && startIndex >= lines.length
-
-    // 第二道闸：单行截断（字符口径）
-    const lineCappedLines = selectedLines.map(truncateLongLine)
-    // 第三道闸：总字节封顶（字节口径，行粒度累加——不切开 UTF-8 多字节字符）
-    const { acceptedLines, truncatedByBytes } = capLinesByBytes(lineCappedLines, READ_MAX_BYTES)
-
-    const endLine = acceptedLines.length > 0 ? startIndex + acceptedLines.length : startLine
-    const numberedContent = acceptedLines
-      .map((line, index) => `${String(startIndex + index + 1).padStart(4, ' ')} | ${line}`)
-      .join('\n')
-    const truncatedByLines = startIndex + selectedLines.length < lines.length
-    const notice = getReadNotice({
-      empty,
-      offsetBeyondEnd,
-      startLine,
-      endLine,
-      totalLines: empty ? 0 : lines.length,
-      truncated: truncatedByLines,
-      truncatedByBytes,
-    })
+    const page = paginateLines(content, input.offset, input.limit)
 
     return {
       path: input.path,
-      content: acceptedLines.join('\n'),
-      numberedContent,
+      content: page.acceptedLines.join('\n'),
+      numberedContent: formatNumberedLines(page.acceptedLines, page.startLine - 1),
       readFileState,
-      startLine,
-      endLine,
-      totalLines: empty ? 0 : lines.length,
-      truncated: truncatedByLines,
-      truncatedByBytes,
-      empty,
-      offsetBeyondEnd,
+      startLine: page.startLine,
+      endLine: page.endLine,
+      totalLines: page.totalLines,
+      truncated: page.truncated,
+      truncatedByBytes: page.truncatedByBytes,
+      empty: page.empty,
+      offsetBeyondEnd: page.offsetBeyondEnd,
       fileSizeBytes: file.size,
-      notice,
+      notice: readNoticeFromPage(page),
     }
   },
   summarizeInput(input) {
@@ -128,11 +102,75 @@ export function truncateLongLine(line: string) {
     : line
 }
 
+/** 行分页结果：ReadFile 与 LoadSkill 共用（技能包施工计划 §3.5：分页语义对齐 ReadFile）。 */
+export type LinePage = {
+  acceptedLines: string[]
+  startLine: number
+  endLine: number
+  totalLines: number
+  /** 行数截断（选区之外还有行）。 */
+  truncated: boolean
+  /** 第三道闸命中：返回内容达单次字节上限被截断。 */
+  truncatedByBytes: boolean
+  empty: boolean
+  offsetBeyondEnd: boolean
+}
+
+/**
+ * 行分页原语（ReadFile 三道闸的公共实现）：offset/limit 行切片 → 单行字符截断 →
+ * 总字节封顶。LoadSkill 的 file 读取复用同一语义，不另写副本。
+ */
+export function paginateLines(content: string, offset?: number, limit?: number): LinePage {
+  const lines = splitLines(content)
+  const startLine = offset ?? 1
+  const lineLimit = limit ?? DEFAULT_READ_LIMIT
+  const startIndex = Math.max(startLine - 1, 0)
+  const selectedLines = lines.slice(startIndex, startIndex + lineLimit)
+  const empty = content.length === 0
+  const offsetBeyondEnd = !empty && startIndex >= lines.length
+
+  // 第二道闸：单行截断（字符口径）
+  const lineCappedLines = selectedLines.map(truncateLongLine)
+  // 第三道闸：总字节封顶（字节口径，行粒度累加——不切开 UTF-8 多字节字符）
+  const { acceptedLines, truncatedByBytes } = capLinesByBytes(lineCappedLines, READ_MAX_BYTES)
+
+  return {
+    acceptedLines,
+    startLine,
+    endLine: acceptedLines.length > 0 ? startIndex + acceptedLines.length : startLine,
+    totalLines: empty ? 0 : lines.length,
+    truncated: startIndex + selectedLines.length < lines.length,
+    truncatedByBytes,
+    empty,
+    offsetBeyondEnd,
+  }
+}
+
+/** ReadFile 式行号前缀渲染（startIndex 为 0-based 起始行下标）。 */
+export function formatNumberedLines(lines: string[], startIndex: number): string {
+  return lines
+    .map((line, index) => `${String(startIndex + index + 1).padStart(4, ' ')} | ${line}`)
+    .join('\n')
+}
+
+/** 分页结果 → ReadFile 的 notice 文案（越界/截断提示）。 */
+export function readNoticeFromPage(page: LinePage): string | undefined {
+  return getReadNotice({
+    empty: page.empty,
+    offsetBeyondEnd: page.offsetBeyondEnd,
+    startLine: page.startLine,
+    endLine: page.endLine,
+    totalLines: page.totalLines,
+    truncated: page.truncated,
+    truncatedByBytes: page.truncatedByBytes,
+  })
+}
+
 /**
  * 字节封顶：按行累加 UTF-8 字节数，再加一行会超 maxBytes 就停止接收并标记截断。
  * 行粒度累加天然不会切开多字节字符（dsh consumeLine 同款：字节数 = 行文本字节 + 换行符）。
  */
-function capLinesByBytes(lines: string[], maxBytes: number) {
+export function capLinesByBytes(lines: string[], maxBytes: number) {
   let outputBytes = 0
   const acceptedLines: string[] = []
 
@@ -202,7 +240,8 @@ function getReadNotice(input: {
   return undefined
 }
 
-function formatBytes(bytes: number) {
+/** 字节数的人类可读格式（ReadFile 报错/提示与 LoadSkill 清单共用）。 */
+export function formatBytes(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`
   }

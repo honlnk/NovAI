@@ -4,7 +4,9 @@ import {
   syncNovaiReminder,
 } from '../agent/prompt'
 import { syncElementCatalogReminder } from '../agent/element-catalog-reminder'
+import { syncSkillCatalogReminder } from '../agent/skill-catalog-reminder'
 import { scanElementCatalog } from '../elements/catalog'
+import { discoverSkills } from '../skills/discovery'
 import { buildSteeringContent, query } from '../agent/query'
 import {
   computeRetainTokens,
@@ -368,6 +370,14 @@ async function runDriverTurn(options: {
   if (role.injectElementCatalog) {
     const catalogEntries = await scanElementCatalog(input.project)
     syncElementCatalogReminder({ view: modelView, session, entries: catalogEntries })
+  }
+
+  // 技能目录 reminder（渐进式披露 L1，《技能包底层能力施工计划》）：skills/ 下合格
+  // 技能的 name+description 清单，排在要素目录之后（after-leading-reminders，决策 11）。
+  // 每 turn 用实时句柄重扫（同轮新建的技能下一轮即入目录）。
+  if (role.injectSkillCatalog) {
+    const skillOutcome = await discoverSkills(input.project)
+    syncSkillCatalogReminder({ view: modelView, session, skills: skillOutcome.skills })
   }
 
   if (role.injectOutline) {

@@ -11,6 +11,7 @@ export type AgentToolName =
   | 'SearchFiles'
   | 'RagSearch'
   | 'LoadElements'
+  | 'LoadSkill'
   | 'ListPlans'
   | 'ReadPlan'
   | 'CreatePlan'

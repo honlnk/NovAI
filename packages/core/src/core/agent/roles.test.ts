@@ -69,7 +69,7 @@ describe('主角色声明与重构前装配等价', () => {
   it('工具面 = 全量工具 + 委派工具 + 主动提问工具（主角色专属装配）', () => {
     const expectedFull = [
       'ReadFile', 'EditFile', 'CreateFile', 'RenameFile', 'DeleteFile',
-      'ListDirectory', 'FindFiles', 'SearchFiles', 'RagSearch', 'LoadElements',
+      'ListDirectory', 'FindFiles', 'SearchFiles', 'RagSearch', 'LoadElements', 'LoadSkill',
       'ListPlans', 'ReadPlan', 'CreatePlan', 'UpdatePlan', 'DeletePlan',
       'ListForeshadowing', 'ReadForeshadowing', 'ReadForeshadowingForPlanning',
       'CreateForeshadowing', 'UpdateForeshadowing', 'DeleteForeshadowing',
@@ -97,6 +97,8 @@ describe('主角色声明与重构前装配等价', () => {
   it('注入面声明：项目记忆与大纲都注入；不可被委派', () => {
     expect(AGENT_ROLES.main.injectNovaiOverview).toBe(true)
     expect(AGENT_ROLES.main.injectOutline).toBe(true)
+    expect(AGENT_ROLES.main.injectElementCatalog).toBe(true)
+    expect(AGENT_ROLES.main.injectSkillCatalog).toBe(true)
     expect(AGENT_ROLES.main.delegatable).toBe(false)
     expect(AGENT_ROLES.main.constraintDoc).toBeUndefined()
     expect(AGENT_ROLES.main.mergeConfig).toBeUndefined()
@@ -136,6 +138,8 @@ describe('要素管理员角色声明', () => {
     const role = AGENT_ROLES['element-manager']
     expect(role.injectNovaiOverview).toBe(false)
     expect(role.injectOutline).toBe(false)
+    expect(role.injectElementCatalog).toBe(false)
+    expect(role.injectSkillCatalog).toBe(false)
     expect(role.delegatable).toBe(true)
     expect(role.constraintDoc?.path).toBe('prompts/ELEMENT.md')
   })

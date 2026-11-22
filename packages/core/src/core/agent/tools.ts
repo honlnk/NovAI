@@ -9,6 +9,7 @@ import { findFilesTool, listDirectoryTool } from '../tools/directory-tools'
 import { searchFilesTool } from '../tools/search-text'
 import { ragSearchTool } from '../tools/rag-search'
 import { loadElementsTool, renderElementContent } from '../tools/load-elements'
+import { loadSkillTool, renderSkillContent } from '../tools/load-skill'
 import {
   createPlanTool,
   deletePlanTool,
@@ -77,6 +78,7 @@ import type {
   KnowledgeLookupOutput,
   ListDirectoryOutput,
   LoadElementsOutput,
+  LoadSkillOutput,
   ListPlansOutput,
   ReadPlanOutput,
   CreatePlanOutput,
@@ -748,6 +750,53 @@ export function createAgentTools(): AgentRunnableToolMap {
       core: loadElementsTool,
       formatResult(output: LoadElementsOutput) {
         return renderElementContent(output)
+      },
+    },
+    LoadSkill: {
+      name: 'LoadSkill',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      schema: {
+        type: 'function',
+        function: {
+          name: 'LoadSkill',
+          description: [
+            '加载项目技能包（可复用的写作方法素材，不是规则）。上下文技能清单中出现与当前任务相符的技能时，先用本工具加载再按其方法工作。',
+            '不带 file：返回 SKILL.md 正文与包内文件清单；带 file：读取包内单个文本文件（.md/.txt/.json 等），offset/limit 分页语义与 ReadFile 相同。',
+            '脚本类文件只列出不可读；只用技能清单中的名称，不要猜测。',
+            '',
+            '新建技能：在 skills/<技能名>/SKILL.md 写入，frontmatter 必须含 description（一句话说明做什么、何时用），可选 when_to_use；参考素材放在同一文件夹内，用 .md/.txt/.json。',
+          ].join('\n'),
+          parameters: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: '技能名（取自上下文技能清单，即技能文件夹名），精确匹配。',
+              },
+              file: {
+                type: 'string',
+                description: '可选，技能包内相对路径（如 references/词表.md）；省略则加载 SKILL.md 正文与清单。SKILL.md 过长时也可用 file: \'SKILL.md\' 配合分页。',
+              },
+              offset: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，从第几行开始读取（仅对 file 生效），默认 1。',
+              },
+              limit: {
+                type: 'integer',
+                minimum: 1,
+                description: '可选，最多读取多少行（仅对 file 生效）；默认 2000，超限会按字节封顶截断并提示继续读取的 offset。',
+              },
+            },
+            required: ['name'],
+            additionalProperties: false,
+          },
+        },
+      },
+      core: loadSkillTool,
+      formatResult(output: LoadSkillOutput) {
+        return renderSkillContent(output)
       },
     },
     ListPlans: {
@@ -2469,6 +2518,7 @@ export function isAgentToolName(value: string): value is AgentToolName {
     || value === 'SearchFiles'
     || value === 'RagSearch'
     || value === 'LoadElements'
+    || value === 'LoadSkill'
     || value === 'ListPlans'
     || value === 'ReadPlan'
     || value === 'CreatePlan'
