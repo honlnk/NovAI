@@ -5,6 +5,7 @@ import { useProjectStore } from '../stores/project'
 import { useChatStore } from '../stores/chat'
 import { useIndexStore } from '../stores/index'
 import { usePlanStore } from '../stores/plan'
+import { useSkillStore } from '../stores/skill'
 import { useToast } from '../composables/useToast'
 import { useConversationFilter } from '../composables/useConversationFilter'
 import {
@@ -73,6 +74,7 @@ const projectStore = useProjectStore()
 const chatStore = useChatStore()
 const indexStore = useIndexStore()
 const planStore = usePlanStore()
+const skillStore = useSkillStore()
 const foreshadowingStore = useForeshadowingStore()
 const rhythmStore = useRhythmStore()
 const timelineStore = useTimelineStore()
@@ -738,6 +740,9 @@ const planRecentCards = computed(() => {
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
 })
 
+/** 技能列表标脏（技能包 §3.2 刷新通道）：AI 经文件工具改动 skills/ 后文件树刷新时标记，回到技能分类或点刷新即重算（标脏 O(1)，高频文件变化零成本） */
+watch(() => projectStore.currentProject?.files, () => skillStore.markStale())
+
 /** 进入计划分类时加载看板；切回其他分类恢复原对话与文件面板状态（面板偏好都在本组件 ref，天然保留） */
 watch(activeCategory, async (category, previous) => {
   // 切换分类 = 离开当前编辑现场（§阶段 2 离开收口）：项目内待写内容立即收口；
@@ -751,6 +756,9 @@ watch(activeCategory, async (category, previous) => {
   }
   if (category === 'plan' && projectStore.currentProject) {
     await planStore.loadBoard(projectId.value)
+  } else if (category === 'skill' && projectStore.currentProject) {
+    // 技能分类：同项目幂等（force=false），AI 改动技能经文件树 watch 强制重算
+    await skillStore.refresh(projectId.value)
   } else if ((category === 'foreshadowing' || category === 'chapter') && projectStore.currentProject) {
     // 章节分类也要伏笔数据：章节侧栏「本章相关伏笔」实时反查依赖看板摘要
     await foreshadowingStore.loadBoard(projectId.value)
@@ -775,6 +783,7 @@ watch(() => projectStore.currentProject?.id, (_newId, previousId) => {
   }
   planStore.reset()
   isPlanPanelOpen.value = false
+  skillStore.reset()
   foreshadowingStore.reset()
   isForeshadowingPanelOpen.value = false
   rhythmStore.reset()
@@ -952,6 +961,18 @@ async function handlePlanRefresh() {
     return
   }
   await planStore.refreshBoard(projectId.value, { source: 'manual' })
+}
+
+/** 刷新技能列表（技能分类标题行入口）；失败轻提示（列表保持旧值） */
+async function handleSkillRefresh() {
+  if (!projectStore.currentProject) {
+    return
+  }
+  try {
+    await skillStore.refresh(projectId.value, true)
+  } catch (error) {
+    toast(error instanceof Error ? error.message : '刷新技能失败', 'error')
+  }
 }
 
 /** 新建面板提交（看板右上 / 空状态入口共用）：失败保留输入，成功由 store 转入详情预览 */
@@ -1537,6 +1558,7 @@ function handleGoToSettings() {
       <!-- 分类面板（随 Activity Bar 切换） -->
       <CategoryPanel
         :active-category="activeCategory"
+        :project-id="projectId"
         :files="projectStore.currentProject?.files ?? []"
         :active-file-path="projectStore.activeFile?.path"
         :active-outline-path="activeOutlinePath"
@@ -1555,6 +1577,9 @@ function handleGoToSettings() {
         :timeline-events="timelineStore.chapterEvents"
         :pending-question-ids="chatStore.sessionsWithPendingQuestions"
         :running-ids="chatStore.runningSessionIds"
+        :skills="skillStore.skills"
+        :broken-skills="skillStore.broken"
+        :is-skill-loading="skillStore.isLoading"
         :is-open="isCategoryOpen"
         :is-mobile-open="isMobileCategoryOpen"
         @select-file="handleSelectFile"
@@ -1568,6 +1593,7 @@ function handleGoToSettings() {
         @delete-session="(sessionId) => chatStore.deleteSession(projectId, sessionId)"
         @open-plan-board="selectCategory('plan')"
         @refresh-plan="handlePlanRefresh"
+        @refresh-skills="handleSkillRefresh"
         @open-plan-create="handleOpenPlanCreate"
         @open-plan-card="(id) => { selectCategory('plan'); handleOpenPlanCard(id) }"
         @open-foreshadowing-board="selectCategory('foreshadowing')"

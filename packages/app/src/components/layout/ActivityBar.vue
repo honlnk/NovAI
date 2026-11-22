@@ -27,13 +27,15 @@ const emit = defineEmits<{
 
 /**
  * 顶部分类项（设置走单独的 openSettings，不在此列）。
- * 顺序按产品决策：对话 → 章节 → 要素 → 提示词 → 计划 → 伏笔（提示词之后、设置之前）。
+ * 顺序按产品决策：对话 → 章节 → 要素 → 提示词 → 技能 → 计划 → 伏笔（提示词之后、设置之前）。
+ * 技能排在提示词之后、计划之前（技能包 UI/UX 施工计划决策 3）。
  */
 const categoryItems: { key: Category; label: string; icon: string }[] = [
   { key: 'conversation', label: '对话', icon: 'chat' },
   { key: 'chapter', label: '章节', icon: 'book' },
   { key: 'element', label: '要素', icon: 'tag' },
   { key: 'prompt', label: '提示词', icon: 'note' },
+  { key: 'skill', label: '技能', icon: 'skill' },
   { key: 'plan', label: '计划', icon: 'clipboard' },
   { key: 'foreshadowing', label: '伏笔', icon: 'foreshadowing' },
   { key: 'rhythm', label: '节奏', icon: 'rhythm' },
@@ -107,6 +109,8 @@ function emitAction(key: 'proofread' | 'organize' | 'version' | 'element-manager
           <AppIcon name="tag" :size="20" class="h-5 w-5" v-else-if="item.icon === 'tag'" />
           <!-- 提示词 -->
           <AppIcon name="clipboard-check" :size="20" class="h-5 w-5" v-else-if="item.icon === 'note'" />
+          <!-- 技能（星火——可复用的写作方法素材） -->
+          <AppIcon name="sparkles" :size="20" class="h-5 w-5" v-else-if="item.icon === 'skill'" />
           <!-- 计划（剪贴板清单） -->
           <AppIcon name="clipboard-list" :size="20" class="h-5 w-5" v-else-if="item.icon === 'clipboard'" />
           <!-- 伏笔（遮眼——隐藏的线索与真相） -->

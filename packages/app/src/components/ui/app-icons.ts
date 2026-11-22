@@ -43,6 +43,7 @@ import {
   MessageCircleMore,
   Plus,
   RefreshCw,
+  Sparkles,
   Scroll,
   Search,
   Settings,
@@ -123,6 +124,8 @@ export const APP_ICONS = {
   network: Network,
   // 时间线（时钟回溯——故事内时间轴）
   timeline: History,
+  // 技能包（星火——可复用的写作方法素材，AI 按需加载）
+  sparkles: Sparkles,
 } as const satisfies Record<string, Component>
 
 export type AppIconName = keyof typeof APP_ICONS

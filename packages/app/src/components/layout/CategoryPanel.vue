@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { ChatSessionSummaryView, ForeshadowingCardSummaryView, PlanCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView } from '@novai/core/services/types'
+import type { BrokenSkillView, ChatSessionSummaryView, ForeshadowingCardSummaryView, PlanCardSummaryView, ProjectFileNodeView, RhythmCardSummaryView, SkillListView, SkillView } from '@novai/core/services/types'
 import type { ChapterTimelineEventSummary } from '../../constants/timeline'
 import type { Category } from '../../constants/category'
 import ChapterList from '../category/ChapterList.vue'
 import ElementList from '../category/ElementList.vue'
 import PromptList from '../category/PromptList.vue'
+import SkillList from '../category/SkillList.vue'
 import ConversationList from '../category/ConversationList.vue'
 import PlanList from '../category/PlanList.vue'
 import ForeshadowingList from '../category/ForeshadowingList.vue'
@@ -13,6 +14,8 @@ import MobilePanelClose from './MobilePanelClose.vue'
 
 defineProps<{
   activeCategory: Category
+  /** 当前项目 id（技能面板 store 动作用） */
+  projectId: string
   files: ProjectFileNodeView[]
   activeFilePath?: string
   activeOutlinePath: string | null
@@ -46,6 +49,12 @@ defineProps<{
   pendingQuestionIds?: Set<string>
   /** 实时运行中的会话 id 集（会话列表「进行中」筛选与徽标） */
   runningIds?: Set<string>
+  /** 技能列表（技能分类面板） */
+  skills: SkillView[]
+  /** 被跳过的技能（技能分类面板末尾灰显） */
+  brokenSkills: BrokenSkillView[]
+  /** 技能列表读取中 */
+  isSkillLoading: boolean
   /** 移动端抽屉是否展开（沿用现有响应式方案） */
   isMobileOpen: boolean
   /** 面板是否展开（桌面端折叠/展开） */
@@ -88,6 +97,8 @@ const emit = defineEmits<{
   openRhythmCreate: []
   /** 打开时间轴并定位某事件详情（章节侧栏「本章相关事件」入口） */
   openTimelineEvent: [eventId: string]
+  /** 刷新技能列表（技能分类标题行入口） */
+  refreshSkills: []
 }>()
 </script>
 
@@ -157,6 +168,18 @@ const emit = defineEmits<{
     >
       <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
     </PromptList>
+    <SkillList
+      v-else-if="activeCategory === 'skill'"
+      :project-id="projectId"
+      :skills="skills"
+      :broken="brokenSkills"
+      :is-loading="isSkillLoading"
+      :active-file-path="activeFilePath"
+      @select-file="emit('selectFile', $event)"
+      @refresh="emit('refreshSkills')"
+    >
+      <template #mobile-close><MobilePanelClose @close="emit('closeMobile')" /></template>
+    </SkillList>
     <PlanList
       v-else-if="activeCategory === 'plan'"
       :cards="planCards"

@@ -38,7 +38,7 @@ const KEY_PREFIX = 'novai:workspace:'
 /** 迁移来源：面板宽度在此前的全局 key 下，按项目记录缺宽度时回退读它。 */
 export const LEGACY_CONTENT_PANEL_WIDTH_KEY = 'novai:contentPanelWidth'
 
-const VALID_CATEGORIES: readonly Category[] = ['conversation', 'chapter', 'element', 'prompt', 'plan', 'foreshadowing', 'rhythm']
+const VALID_CATEGORIES: readonly Category[] = ['conversation', 'chapter', 'element', 'prompt', 'skill', 'plan', 'foreshadowing', 'rhythm']
 
 function isCategory(value: unknown): value is Category {
   return typeof value === 'string' && (VALID_CATEGORIES as readonly string[]).includes(value)

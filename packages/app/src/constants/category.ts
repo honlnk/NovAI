@@ -8,8 +8,10 @@
  * 完整看板在主内容区（替换对话面板），见 PlanBoardPanel；计划详情与新建
  * 在右侧内容面板（布局统一计划）。`foreshadowing`（伏笔账本）与 `rhythm`（节奏卡账本）与计划同构，
  * 是创作心智模块（伏笔追踪 + 全本节奏卡）的看板分类。
+ * `skill`（技能包）排在提示词之后、计划之前（技能包 UI/UX 施工计划决策 3：
+ * prompts/ 是作者亲手写的宪法层，skills/ 是外部素材，心智分开）。
  */
-export type Category = 'conversation' | 'chapter' | 'element' | 'prompt' | 'plan' | 'foreshadowing' | 'rhythm'
+export type Category = 'conversation' | 'chapter' | 'element' | 'prompt' | 'skill' | 'plan' | 'foreshadowing' | 'rhythm'
 
 /**
  * 设置是动作型入口，不切换 CategoryPanel，单独标识以便 ActivityBar 区分行为。
