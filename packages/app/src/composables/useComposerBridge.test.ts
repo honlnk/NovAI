@@ -215,4 +215,17 @@ describe('useComposerBridge replaceTokenBeforeCaret', () => {
     expect(bridge.replaceTokenBeforeCaret(SLASH_COMMAND_RE, '/管理要素 ')).toBe(false)
     expect(bridge.draft.value).toBe('普通文本')
   })
+
+  it('#token 行首替换不残留触发符（#技能弹层选中场景，双井号回归）', () => {
+    const SKILL_COMMAND_RE = /(?:^|\s)#([^\s#]*)$/
+    const { bridge } = createBridge()
+    bridge.setDraft('#')
+    bridge.replaceTokenBeforeCaret(SKILL_COMMAND_RE, '#去AI味 ')
+    expect(bridge.draft.value).toBe('#去AI味 ')
+
+    // 句中替换：边界空白保留，触发符同样不残留
+    bridge.setDraft('帮我 #去')
+    bridge.replaceTokenBeforeCaret(SKILL_COMMAND_RE, '#去AI味 ')
+    expect(bridge.draft.value).toBe('帮我 #去AI味 ')
+  })
 })

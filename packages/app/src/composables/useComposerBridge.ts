@@ -304,7 +304,10 @@ export function useComposerBridge(options: ComposerBridgeOptions = {}): Composer
     let matched = false
     const cleaned = beforeCursor.replace(re, (match: string) => {
       matched = true
-      const boundary = match.startsWith('/') || match.startsWith('@') ? '' : match.slice(0, 1)
+      // 边界字符只可能是空白（(?:^|\s) 命中 \s 时 match 以该空白开头；命中 ^ 时
+      // match 直接以触发符开头，无边界）——按空白判定与触发符种类解耦，新增
+      // 触发符（如 #）不会再把触发符误留成「边界」（曾产生 `##技能名 ` 双井号）
+      const boundary = /^\s/.test(match) ? match.slice(0, 1) : ''
       return `${boundary}${replacement}`
     })
     if (!matched) return false
