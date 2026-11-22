@@ -1,256 +1,356 @@
 <script setup lang="ts">
 /**
- * 时间轴 SVG（时间线 JSON 化施工计划 §9.4）：全部合法标记沿横轴等距落位——
- * - 点事件画轴上圆点、区间事件画轨道横带（轨道由 store 贪心分配，重叠区间分道）；
- * - 携带详情的标记下挂标题与时间角标（明确时间或相对时间摘要）；
- * - 相对时间锚画轴下虚线箭头链；
- * - 缩放 = 相邻标记像素步距（父层注入）；平移 = 容器原生横向滚动；
- * - 拖拽标记落位：up 时换算为列表空隙序号交给父层（领域层校验配对约束）。
+ * 时间轴甘特视图（时间轴甘特图改造计划 §三、§四）：
+ * - 横轴 = 列表顺序：每个时间标记占一列（end 只占列，即区间横条右端）；表头不写列序号，
+ *   只在事件起始列写世界观日期（明确时间），无日期的列留空；日期放不下时排布自动加宽列宽；
+ * - 点事件 = 菱形 + 右侧标题；区间事件 = 从开始列画到结束列的横条，标题写在条内，
+ *   比横条长时越过右端继续写（横条长度不变）；
+ * - 行由纯函数 layoutTimelineGantt 动态排布（最多 6 行，放不下加宽列宽），任何数据变化整体重排；
+ * - 缩放滑块 = 最小列宽（父层注入），实际列宽只会更宽；
+ * - 平移：鼠标在轴上按住拖动即横纵平移（移动超过阈值后不再触发点选）；触屏走原生滚动；
+ * - 缩放：滚轮纵向滚动、Ctrl/⌘ + 滚轮、触控板双指捏合（浏览器以 ctrlKey 滚轮事件上报）
+ *   都改最小列宽，并以指针下的列为锚保持位置不动；横向滚轮（Shift + 滚轮、触控板左右滑）
+ *   仍是原生横向滚动；
+ * - 只读：点击选中事件，不提供拖拽调整顺序（甘特计划决策 6）；相对时间与锚点不上图。
  *
- * 哑组件：渲染模型（matched/dimmed）由 store 产出，这里只画。
+ * 哑组件：条目与命中态由 store 产出，这里只测宽、排布、绘制。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import type { TimelineAxisNode } from '../../stores/timeline'
+import {
+  GANTT_DATE_FONT,
+  GANTT_PAD_X,
+  GANTT_TITLE_FONT,
+  layoutTimelineGantt,
+  type GanttEntry,
+  type GanttLayoutItem,
+  type GanttMeasure,
+} from '../../stores/timeline-gantt'
 
 const props = defineProps<{
+  /** 全部标记（每个一列）：决定列数 */
   nodes: TimelineAxisNode[]
-  bands: Array<{ eventId: string; title: string; startIndex: number; endIndex: number; lane: number; dimmed: boolean }>
-  laneCount: number
-  links: Array<{ fromIndex: number; toIndex: number; eventId: string }>
+  /** 甘特条目（point / start 各一条） */
+  entries: GanttEntry[]
+  /** 最小列宽（缩放滑块） */
   stepPx: number
   selectedEventId: string
 }>()
 
 const emit = defineEmits<{
   'select-event': [eventId: string]
-  'move-marker': [markerId: string, targetIndex: number]
+  /** 滚轮/捏合缩放：新的最小列宽（父层写回滑块值） */
+  zoom: [stepPx: number]
 }>()
 
-/* ---------- 布局常量与几何 ---------- */
+/* ---------- 测宽（canvas measureText；无 canvas 环境按字符估算） ---------- */
 
-const PAD_LEFT = 90
-const PAD_RIGHT = 90
-const LANE_H = 34
-const TOP_PAD = 28
-/** 轴下区域：标题 + 时间角标 + 锚链带 */
-const BELOW_AXIS = 118
+let measureContext: CanvasRenderingContext2D | null | undefined
+const measureCache = new Map<string, number>()
 
-const axisY = computed(() => TOP_PAD + props.laneCount * LANE_H + 14)
-const svgWidth = computed(() => {
-  const last = props.nodes.length - 1
-  return last <= 0 ? PAD_LEFT + PAD_RIGHT : PAD_LEFT + last * props.stepPx + PAD_RIGHT
-})
-const svgHeight = computed(() => axisY.value + BELOW_AXIS)
-
-function x(index: number): number {
-  return PAD_LEFT + index * props.stepPx
-}
-
-function bandY(lane: number): number {
-  return axisY.value - 22 - (lane + 1) * LANE_H
-}
-
-/** 按像素宽度截断标题（SVG 文本无 ellipsis，手动截） */
-function truncate(title: string, maxWidth: number): string {
-  const max = Math.max(2, Math.floor(maxWidth / 13))
-  return title.length > max ? `${title.slice(0, Math.max(1, max - 1))}…` : title
-}
-
-/* ---------- 交互：点击选中 + 拖拽落位 ---------- */
-
-type DragState = {
-  markerId: string
-  index: number
-  startX: number
-  startY: number
-  currentX: number
-  moved: boolean
-}
-
-const drag = ref<DragState | null>(null)
-const svgRef = ref<SVGSVGElement | null>(null)
-
-/** 指针横坐标 → 列表空隙序号（0..n；空隙 i 在标记 i-1 与 i 之间） */
-function gapIndexAt(clientX: number): number {
-  const rect = svgRef.value?.getBoundingClientRect()
-  if (!rect) {
-    return 0
+function fontFamily(): string {
+  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') {
+    return 'sans-serif'
   }
-  const local = clientX - rect.left
-  return Math.max(0, Math.min(props.nodes.length, Math.round((local - PAD_LEFT) / props.stepPx + 0.5)))
+  return getComputedStyle(document.body).fontFamily || 'sans-serif'
 }
 
-const caretIndex = computed(() => (drag.value ? gapIndexAt(drag.value.currentX) : -1))
-
-function caretX(index: number): number {
-  return index <= 0
-    ? PAD_LEFT - props.stepPx / 2
-    : index >= props.nodes.length
-      ? x(props.nodes.length - 1) + props.stepPx / 2
-      : PAD_LEFT + (index - 0.5) * props.stepPx
+function estimateWidth(text: string, fontSize: number): number {
+  let width = 0
+  for (const char of text) {
+    width += char.charCodeAt(0) > 0xff ? fontSize : fontSize * 0.6
+  }
+  return width
 }
 
-function onMarkerDown(event: PointerEvent, node: TimelineAxisNode) {
-  if (event.button !== 0) {
+const measure: GanttMeasure = (text, fontSize) => {
+  const key = `${fontSize}\u0000${text}`
+  const cached = measureCache.get(key)
+  if (cached !== undefined) {
+    return cached
+  }
+  if (measureContext === undefined) {
+    try {
+      measureContext = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d')
+    } catch {
+      measureContext = null
+    }
+  }
+  let width: number
+  if (measureContext) {
+    measureContext.font = `${fontSize}px ${fontFamily()}`
+    width = measureContext.measureText(text).width
+  } else {
+    width = estimateWidth(text, fontSize)
+  }
+  measureCache.set(key, width)
+  return width
+}
+
+/* ---------- 排布与几何 ---------- */
+
+const HEADER_H = 24
+const ROW_H = 34
+const BOTTOM_PAD = 8
+
+const layout = computed(() => layoutTimelineGantt(props.entries, props.nodes.length, { minStep: props.stepPx, measure }))
+
+const svgWidth = computed(() => layout.value.width)
+const svgHeight = computed(() => HEADER_H + layout.value.rowCount * ROW_H + BOTTOM_PAD)
+
+function rowTop(row: number): number {
+  return HEADER_H + row * ROW_H
+}
+
+function isSelected(item: GanttLayoutItem): boolean {
+  return item.eventId === props.selectedEventId
+}
+
+function tooltip(item: GanttLayoutItem): string {
+  const kind = item.kind === 'span' ? '区间 ' : ''
+  return `${kind}${item.title}${item.dateLabel ? `（${item.dateLabel}）` : '（未填日期）'}`
+}
+
+function select(item: GanttLayoutItem) {
+  emit('select-event', item.eventId)
+}
+
+/** 菱形顶点（中心 cx/cy，半对角 6） */
+function diamondPoints(cx: number, cy: number, half = 6): string {
+  return `${cx},${cy - half} ${cx + half},${cy} ${cx},${cy + half} ${cx - half},${cy}`
+}
+
+
+/* ---------- 拖动平移 ---------- */
+
+const containerRef = ref<HTMLDivElement | null>(null)
+
+/** 移动超过该距离才算平移（以下仍按点击处理） */
+const PAN_THRESHOLD = 4
+
+type PanState = { pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number; moved: boolean }
+const pan = ref<PanState | null>(null)
+/** 刚结束一次平移：吞掉紧随其后的 click，避免松手时误选条目 */
+let suppressClick = false
+
+function onPointerDown(event: PointerEvent) {
+  // 触屏/触控笔走原生滚动；只处理鼠标左键
+  if (event.pointerType !== 'mouse' || event.button !== 0 || !containerRef.value) {
     return
   }
-  svgRef.value?.setPointerCapture(event.pointerId)
-  drag.value = {
-    markerId: node.marker.id,
-    index: node.ordinal - 1,
+  suppressClick = false
+  pan.value = {
+    pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
-    currentX: event.clientX,
+    scrollLeft: containerRef.value.scrollLeft,
+    scrollTop: containerRef.value.scrollTop,
     moved: false,
   }
 }
 
-function onSvgMove(event: PointerEvent) {
-  const state = drag.value
-  if (!state) {
+function onPointerMove(event: PointerEvent) {
+  const state = pan.value
+  const container = containerRef.value
+  if (!state || !container || event.pointerId !== state.pointerId) {
     return
   }
-  state.currentX = event.clientX
-  if (Math.abs(event.clientX - state.startX) > 4 || Math.abs(event.clientY - state.startY) > 4) {
-    state.moved = true
-  }
-}
-
-function onSvgUp() {
-  const state = drag.value
-  drag.value = null
-  if (!state) {
-    return
-  }
+  const dx = event.clientX - state.startX
+  const dy = event.clientY - state.startY
   if (!state.moved) {
-    // 未拖动 = 点击：选中事件（end 标记也回指事件）
-    const node = props.nodes[state.index]
-    if (node?.eventId) {
-      emit('select-event', node.eventId)
+    if (Math.abs(dx) <= PAN_THRESHOLD && Math.abs(dy) <= PAN_THRESHOLD) {
+      return
     }
+    state.moved = true
+    // 进入平移后才捕获指针：未移动的按下-松开仍是普通点击，落在条目上
+    container.setPointerCapture?.(event.pointerId)
+  }
+  container.scrollLeft = state.scrollLeft - dx
+  container.scrollTop = state.scrollTop - dy
+}
+
+function onPointerEnd(event: PointerEvent) {
+  const state = pan.value
+  if (!state || event.pointerId !== state.pointerId) {
     return
   }
-  emit('move-marker', state.markerId, gapIndexAt(state.currentX))
+  if (state.moved) {
+    suppressClick = true
+    containerRef.value?.releasePointerCapture?.(event.pointerId)
+  }
+  pan.value = null
 }
 
-function isDragged(node: TimelineAxisNode): boolean {
-  return drag.value?.markerId === node.marker.id && drag.value.moved
+function onClickCapture(event: MouseEvent) {
+  if (suppressClick) {
+    suppressClick = false
+    event.stopPropagation()
+    event.preventDefault()
+  }
 }
 
-function isSelected(node: TimelineAxisNode): boolean {
-  return Boolean(node.eventId) && node.eventId === props.selectedEventId
+/* ---------- 滚轮 / 捏合缩放（以指针下的列为锚） ---------- */
+
+const ZOOM_MIN = 48
+const ZOOM_MAX = 240
+/** 单次事件 deltaY 截断（鼠标一格约 100，捏合约 1–10）与灵敏度：鼠标一格约缩放 17% */
+const ZOOM_DELTA_CAP = 30
+const ZOOM_SENSITIVITY = 0.006
+
+/** 连续缩放中的未取整列宽（见 onWheel） */
+let zoomFloat: number | null = null
+
+/** 待恢复的锚点：缩放前指针下的「列坐标」与指针在容器内的横向偏移 */
+let zoomAnchor: { column: number; offsetX: number } | null = null
+
+function normalizedDeltaY(event: WheelEvent): number {
+  // deltaMode 1 = 行、2 = 页：换算成像素量级
+  return event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY
 }
+
+function onWheel(event: WheelEvent) {
+  const container = containerRef.value
+  if (!container || props.nodes.length === 0) {
+    return
+  }
+  const pinchOrModifier = event.ctrlKey || event.metaKey
+  // 横向为主的滚动（Shift + 滚轮、触控板左右滑）保持原生横向滚动
+  if (!pinchOrModifier && Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+    return
+  }
+  const deltaY = normalizedDeltaY(event)
+  if (deltaY === 0) {
+    return
+  }
+  // 接管：阻止页面滚动与浏览器自身的 Ctrl + 滚轮页面缩放
+  event.preventDefault()
+
+  const current = layout.value.step
+  // 累计小数部分：慢速捏合每次只有 1px 级 deltaY，逐次取整会被吃掉、永远缩不动；
+  // 只要实际列宽仍跟随上次缩放（相差不到 1px），就在上次的小数值上继续累计
+  const base = zoomFloat !== null && Math.abs(zoomFloat - current) < 1 ? zoomFloat : current
+  const capped = Math.max(-ZOOM_DELTA_CAP, Math.min(ZOOM_DELTA_CAP, deltaY))
+  zoomFloat = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, base * Math.exp(-capped * ZOOM_SENSITIVITY)))
+  const next = Math.round(zoomFloat)
+  if (next === props.stepPx) {
+    return
+  }
+  const rect = container.getBoundingClientRect()
+  const offsetX = event.clientX - rect.left
+  zoomAnchor = {
+    column: (container.scrollLeft + offsetX - GANTT_PAD_X) / current,
+    offsetX,
+  }
+  emit('zoom', next)
+}
+
+// 实际列宽变化后（重排完成、DOM 已更新）把锚点列滚回指针下方
+watch(
+  () => layout.value.step,
+  (step) => {
+    const container = containerRef.value
+    if (!zoomAnchor || !container) {
+      return
+    }
+    container.scrollLeft = Math.max(0, GANTT_PAD_X + zoomAnchor.column * step - zoomAnchor.offsetX)
+    zoomAnchor = null
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
-  <div class="timeline-axis h-full w-full overflow-x-auto overflow-y-hidden">
+  <div
+    ref="containerRef"
+    :class="['timeline-axis h-full w-full overflow-auto', nodes.length > 0 ? (pan?.moved ? 'cursor-grabbing [&_*]:cursor-grabbing' : 'cursor-grab') : '']"
+    data-testid="timeline-axis-scroll"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerEnd"
+    @pointercancel="onPointerEnd"
+    @click.capture="onClickCapture"
+    @wheel="onWheel"
+  >
     <svg
-      ref="svgRef"
+      v-if="nodes.length > 0"
       :width="svgWidth"
       :height="svgHeight"
       :viewBox="`0 0 ${svgWidth} ${svgHeight}`"
       class="block select-none"
       data-testid="timeline-axis-svg"
-      @pointermove="onSvgMove"
-      @pointerup="onSvgUp"
-      @pointercancel="onSvgUp"
     >
-      <!-- 区间横带（轨道自上而下编号，lane 0 最贴近轴） -->
-      <g v-for="band in bands" :key="`band-${band.eventId}`" class="cursor-pointer" :opacity="band.dimmed ? 0.25 : 1" @pointerdown.stop.prevent="emit('select-event', band.eventId)">
-        <rect
-          :x="x(band.startIndex) + 7"
-          :y="bandY(band.lane)"
-          :width="Math.max(14, x(band.endIndex) - x(band.startIndex) - 14)"
-          :height="22"
-          rx="11"
-          :fill="band.eventId === selectedEventId ? '#4f46e5' : '#c7d2fe'"
-        />
-        <text
-          :x="(x(band.startIndex) + x(band.endIndex)) / 2"
-          :y="bandY(band.lane) + 15"
-          text-anchor="middle"
-          class="pointer-events-none"
-          :fill="band.eventId === selectedEventId ? '#ffffff' : '#3730a3'"
-          font-size="12"
-        >{{ truncate(band.title, x(band.endIndex) - x(band.startIndex) - 24) }}</text>
-      </g>
+      <!-- 表头：世界观日期（事件起始列；无日期的列留空） -->
+      <text
+        v-for="label in layout.labels"
+        :key="`date-${label.index}`"
+        :data-testid="`timeline-date-${label.index}`"
+        :x="label.x"
+        :y="15"
+        text-anchor="middle"
+        :font-size="GANTT_DATE_FONT"
+        fill="#6b7280"
+        class="pointer-events-none"
+      >{{ label.text }}</text>
 
-      <!-- 横轴主线 -->
-      <line :x1="PAD_LEFT - 40" :y1="axisY" :x2="svgWidth - PAD_RIGHT + 40" :y2="axisY" stroke="#d1d5db" stroke-width="2" />
+      <!-- 行分隔线 -->
+      <line
+        v-for="row in layout.rowCount"
+        :key="`row-${row}`"
+        x1="0"
+        :y1="rowTop(row - 1) + 0.5"
+        :x2="svgWidth"
+        :y2="rowTop(row - 1) + 0.5"
+        stroke="#e5e7eb"
+        stroke-dasharray="3 3"
+      />
 
-      <!-- 相对时间锚链（轴下虚线箭头） -->
-      <g v-for="(link, index) in links" :key="`link-${link.eventId}`" class="cursor-pointer" @pointerdown.stop.prevent="emit('select-event', link.eventId)">
-        <path
-          :d="`M ${x(link.fromIndex)} ${axisY + 10} Q ${(x(link.fromIndex) + x(link.toIndex)) / 2} ${axisY + 44 + (index % 3) * 10} ${x(link.toIndex)} ${axisY + 10}`"
-          fill="none"
-          stroke="#a5b4fc"
-          stroke-width="1.5"
-          stroke-dasharray="4 3"
-        />
-        <circle :cx="x(link.fromIndex)" :cy="axisY + 10" r="2.5" fill="#a5b4fc" />
-        <circle :cx="x(link.toIndex)" :cy="axisY + 10" r="2.5" fill="#6366f1" />
-        <title>相对时间锚链</title>
-      </g>
-
-      <!-- 标记位：点 = 圆点 / 区间开始 = 圆角方 / 区间结束 = 竖刻 -->
+      <!-- 条目 -->
       <g
-        v-for="node in nodes"
-        :key="node.marker.id"
-        :data-testid="`timeline-marker-${node.ordinal}`"
-        :opacity="node.matched ? 1 : 0.25"
-        :cursor="isDragged(node) ? 'grabbing' : 'grab'"
-        @pointerdown.stop.prevent="onMarkerDown($event, node)"
+        v-for="item in layout.items"
+        :key="item.eventId"
+        :data-testid="`timeline-item-${item.eventId}`"
+        :data-row="item.row"
+        :opacity="item.matched ? 1 : 0.25"
+        class="cursor-pointer outline-none"
+        role="button"
+        tabindex="0"
+        :aria-label="tooltip(item)"
+        :aria-pressed="isSelected(item)"
+        @click="select(item)"
+        @keydown.enter.prevent="select(item)"
+        @keydown.space.prevent="select(item)"
       >
-        <!-- 拖拽中的原位淡出 -->
-        <g v-if="isDragged(node)" opacity="0.35">
-          <circle v-if="node.marker.kind === 'point'" :cx="x(node.ordinal - 1)" :cy="axisY" r="7" fill="#6366f1" />
-          <rect v-else-if="node.marker.kind === 'start'" :x="x(node.ordinal - 1) - 6" :y="axisY - 6" width="12" height="12" rx="3" fill="#6366f1" />
-          <line v-else :x1="x(node.ordinal - 1)" :y1="axisY - 8" :x2="x(node.ordinal - 1)" :y2="axisY + 8" stroke="#6366f1" stroke-width="3" />
-        </g>
+        <title>{{ tooltip(item) }}</title>
+
+        <!-- 区间：横条从开始列到结束列 -->
+        <template v-if="item.kind === 'span'">
+          <rect
+            :x="item.barLeft"
+            :y="rowTop(item.row) + 5"
+            :width="item.barRight - item.barLeft"
+            height="24"
+            rx="6"
+            :fill="isSelected(item) ? '#c7d2fe' : '#e0e7ff'"
+            :stroke="isSelected(item) ? '#4f46e5' : '#a5b4fc'"
+            :stroke-width="isSelected(item) ? 2 : 1"
+          />
+          <!-- 透明命中区：越出横条的标题也可点 -->
+          <rect :x="item.left" :y="rowTop(item.row) + 5" :width="item.right - item.left" height="24" fill="transparent" />
+          <text :x="item.barLeft + 8" :y="rowTop(item.row) + 21" font-size="12" fill="#3730a3" :font-weight="isSelected(item) ? 600 : 400" class="pointer-events-none">{{ item.title }}</text>
+        </template>
+
+        <!-- 点：菱形 + 右侧标题 -->
         <template v-else>
-          <!-- 选中环 -->
-          <circle v-if="isSelected(node)" :cx="x(node.ordinal - 1)" :cy="axisY" r="12" fill="none" stroke="#4f46e5" stroke-width="2" class="pointer-events-none" />
-          <circle v-if="node.marker.kind === 'point'" :cx="x(node.ordinal - 1)" :cy="axisY" r="6.5" :fill="node.eventId === selectedEventId ? '#4f46e5' : '#6366f1'" />
-          <rect v-else-if="node.marker.kind === 'start'" :x="x(node.ordinal - 1) - 6" :y="axisY - 6" width="12" height="12" rx="3" :fill="node.eventId === selectedEventId ? '#4f46e5' : '#6366f1'" />
-          <line v-else :x1="x(node.ordinal - 1)" :y1="axisY - 8" :x2="x(node.ordinal - 1)" :y2="axisY + 8" :stroke="node.eventId === selectedEventId ? '#4f46e5' : '#6366f1'" stroke-width="3" />
+          <rect :x="item.left" :y="rowTop(item.row) + 5" :width="item.right - item.left" height="24" fill="transparent" />
+          <circle v-if="isSelected(item)" :cx="item.x" :cy="rowTop(item.row) + 17" r="10" fill="none" stroke="#4f46e5" stroke-width="2" />
+          <polygon :points="diamondPoints(item.x, rowTop(item.row) + 17)" :fill="isSelected(item) ? '#4f46e5' : '#6366f1'" />
+          <text :x="item.x + 13" :y="rowTop(item.row) + 21" :font-size="GANTT_TITLE_FONT" :fill="isSelected(item) ? '#4f46e5' : '#374151'" :font-weight="isSelected(item) ? 600 : 400" class="pointer-events-none">{{ item.title }}</text>
         </template>
-
-        <!-- 携带详情的标记：序号 + 标题 + 时间角标（轴下） -->
-        <template v-if="node.title !== null">
-          <text :x="x(node.ordinal - 1)" :y="axisY - 18" text-anchor="middle" font-size="10" fill="#9ca3af" class="pointer-events-none">{{ node.ordinal }}</text>
-          <text
-            :x="x(node.ordinal - 1)"
-            :y="axisY + 26"
-            text-anchor="middle"
-            font-size="12"
-            :fill="node.eventId === selectedEventId ? '#4f46e5' : '#374151'"
-            :font-weight="node.eventId === selectedEventId ? 600 : 400"
-            class="pointer-events-none"
-          >{{ truncate(node.title, stepPx - 6) }}</text>
-          <text
-            v-if="node.timeLabel"
-            :x="x(node.ordinal - 1)"
-            :y="axisY + 42"
-            text-anchor="middle"
-            font-size="10"
-            fill="#9ca3af"
-            class="pointer-events-none"
-          >{{ truncate(node.timeLabel, stepPx - 4) }}</text>
-        </template>
-
-        <!-- 命中态角标（拖拽/悬停提示走原生 title） -->
-        <title>{{ node.title ? `#${node.ordinal} ${node.title}` : `#${node.ordinal} 区间结束` }}</title>
-      </g>
-
-      <!-- 拖拽落位指示（空隙插入选中的竖线） -->
-      <g v-if="drag && drag.moved && caretIndex >= 0" class="pointer-events-none">
-        <line :x1="caretX(caretIndex)" :y1="TOP_PAD - 8" :x2="caretX(caretIndex)" :y2="axisY + 14" stroke="#4f46e5" stroke-width="2" stroke-dasharray="5 3" />
-        <circle :cx="caretX(caretIndex)" :cy="axisY" r="4" fill="#4f46e5" />
       </g>
     </svg>
 
-    <!-- 空轴兜底（弹窗空态之外：账本只有 issue、没有任何合法标记时） -->
-    <p v-if="nodes.length === 0" class="px-4 py-6 text-center text-xs text-gray-400">时间轴为空；新建事件后在此按故事内顺序显示。</p>
+    <!-- 空轴兜底（弹窗空态之外：账本只有 issue、没有任何合法标记时）；不渲染 SVG，无残留线 -->
+    <p v-else class="px-4 py-6 text-center text-xs text-gray-400">时间轴为空；新建事件后在此按故事内顺序显示。</p>
   </div>
 </template>

@@ -69,7 +69,7 @@ _setTimelineBackupStoreForTest({
   },
 } satisfies TimelineBackupStore)
 
-import { allocateSpanLanes, useTimelineStore } from './timeline'
+import { storyTimeFromNewDraft, useTimelineStore } from './timeline'
 
 /* ---------- 测试数据 ---------- */
 
@@ -172,42 +172,10 @@ function emitChange(event: TimelineChangeEvent) {
   }
 }
 
-/* ---------- 纯函数：轨道分配 ---------- */
-
-describe('allocateSpanLanes（贪心分轨）', () => {
-  it('无区间零轨道；不重叠的区间共用 lane 0', () => {
-    expect(allocateSpanLanes([])).toEqual({ lanes: [], laneCount: 0 })
-    const { lanes, laneCount } = allocateSpanLanes([
-      { startIndex: 0, endIndex: 1 },
-      { startIndex: 2, endIndex: 3 },
-    ])
-    expect(lanes).toEqual([0, 0])
-    expect(laneCount).toBe(1)
-  })
-
-  it('重叠区间分道：首个把下个挤到 lane 1，错开后回到 lane 0', () => {
-    const { lanes, laneCount } = allocateSpanLanes([
-      { startIndex: 0, endIndex: 3 },
-      { startIndex: 1, endIndex: 2 },
-      { startIndex: 4, endIndex: 5 },
-    ])
-    expect(lanes).toEqual([0, 1, 0])
-    expect(laneCount).toBe(2)
-  })
-
-  it('紧邻（endIndex === 下个 startIndex）不算重叠', () => {
-    const { lanes } = allocateSpanLanes([
-      { startIndex: 0, endIndex: 2 },
-      { startIndex: 2, endIndex: 4 },
-    ])
-    expect(lanes).toEqual([0, 0])
-  })
-})
-
 /* ---------- 时间轴渲染模型 ---------- */
 
 describe('时间轴渲染模型', () => {
-  it('open 加载视图：等距节点、区间跨点分轨、相对时间锚链、时间角标', async () => {
+  it('open 加载视图：每个标记一列；甘特条目只取 point/start，区间带配对结束列；只上图明确时间', async () => {
     const store = useTimelineStore()
     await store.open('proj-1')
 
@@ -219,17 +187,24 @@ describe('时间轴渲染模型', () => {
     expect(store.axisNodes[3]!.title).toBeNull()
     expect(store.axisNodes[3]!.eventId).toBe(EVENT_B)
 
-    // B 区间（下标 1 → 3）横带 + 独占 lane 0；C 在区间内部不产生横带
-    expect(store.spanBands).toHaveLength(1)
-    expect(store.spanBands[0]).toMatchObject({ eventId: EVENT_B, startIndex: 1, endIndex: 3, lane: 0 })
-    expect(store.laneCount).toBe(1)
+    // 甘特条目：A 点（列 0）、B 区间（列 1 → 3，结束标记只贡献右端列）、C 点（列 2）
+    expect(store.ganttEntries).toEqual([
+      { eventId: EVENT_A, kind: 'point', title: '北境之战', dateLabel: '', startIndex: 0, endIndex: 0, matched: true },
+      { eventId: EVENT_B, kind: 'span', title: '铁剑门兴起', dateLabel: '', startIndex: 1, endIndex: 3, matched: true },
+      { eventId: EVENT_C, kind: 'point', title: '战前三日', dateLabel: '', startIndex: 2, endIndex: 2, matched: true },
+    ])
 
-    // C 的相对时间锚链指向 A（下标 0 → 2）
-    expect(store.anchorLinks).toEqual([{ fromIndex: 0, toIndex: 2, eventId: EVENT_C }])
+    // C 只有相对时间：不上图（甘特计划决策 9），日期文字为空
+    expect(store.axisNodes[2]!.dateLabel).toBe('')
+  })
 
-    // C 有相对时间角标；A 无时间角标
-    expect(store.axisNodes[2]!.timeLabel).toBe('前 3 天')
-    expect(store.axisNodes[0]!.timeLabel).toBe('')
+  it('明确时间写入甘特条目的日期文字（格式与详情一致）', async () => {
+    vi.mocked(getTimeline).mockResolvedValue(timelineView([
+      { id: MARKER_A, kind: 'point', eventId: EVENT_A, event: event(EVENT_A, { title: '北境之战', storyTime: { calendar: '苍穹历', year: 320, season: '春' } }) },
+    ]))
+    const store = useTimelineStore()
+    await store.open('proj-1')
+    expect(store.ganttEntries[0]!.dateLabel).toBe('苍穹历·320年（春）')
   })
 
   it('chapterEvents 章节反查摘要：id/标题/形态/关联章号（结束标记不产出条目）', async () => {
@@ -253,7 +228,7 @@ describe('时间轴渲染模型', () => {
     expect(store.axisNodes.find((node) => node.eventId === EVENT_A)!.matched).toBe(true)
     expect(store.axisNodes.find((node) => node.eventId === EVENT_B)!.matched).toBe(false)
     expect(store.axisNodes).toHaveLength(4)
-    expect(store.spanBands[0]!.dimmed).toBe(true)
+    expect(store.ganttEntries.find((entry) => entry.eventId === EVENT_B)!.matched).toBe(false)
 
     store.searchQuery = ''
     store.filterKind = 'span'
@@ -451,6 +426,52 @@ describe('写入动作', () => {
     expect(createTimelinePointEvent).toHaveBeenCalledWith('proj-1', { event: { title: '新事件', summary: '新摘要' }, position: { at: 'last' } }, 'ui')
     expect(store.selectedEventId).toBe('EVT-newpoint11')
     expect(store.createOpen).toBe(false)
+  })
+
+  it('新建表单带日期：预填最近用过的历法名，提交时转成明确时间；日期填错不提交', async () => {
+    vi.mocked(getTimeline).mockResolvedValue(timelineView([
+      { id: MARKER_A, kind: 'point', eventId: EVENT_A, event: event(EVENT_A, { storyTime: { calendar: '苍穹历', year: 318 } }) },
+      { id: MARKER_C, kind: 'point', eventId: EVENT_C, event: event(EVENT_C, { storyTime: { calendar: '苍穹历', year: 320, season: '春' } }) },
+    ]))
+    const store = useTimelineStore()
+    await store.open('proj-1')
+
+    store.openCreateForm()
+    expect(store.createDraft.calendar).toBe('苍穹历')
+    expect(store.lastStoryTime).toEqual({ calendar: '苍穹历', year: 320, season: '春' })
+
+    store.createDraft.title = '拜入外门'
+    store.createDraft.month = '13'
+    store.createDraft.year = '320'
+    expect(await store.submitCreate()).toBe(false)
+    expect(store.actionError).toContain('月份')
+    expect(createTimelinePointEvent).not.toHaveBeenCalled()
+
+    // v-model 对 number 输入框给的是数字：同样接受
+    ;(store.createDraft as unknown as { year: number }).year = 320
+    store.createDraft.season = '夏'
+    store.createDraft.month = '6'
+    expect(await store.submitCreate()).toBe(true)
+    expect(createTimelinePointEvent).toHaveBeenCalledWith('proj-1', {
+      event: { title: '拜入外门', summary: '', storyTime: { calendar: '苍穹历', year: 320, season: '夏', month: 6 } },
+      position: { at: 'last' },
+    }, 'ui')
+    // 提交后清空日期段，下次打开重新预填历法
+    expect(store.createDraft.year).toBe('')
+    store.openCreateForm()
+    expect(store.createDraft.calendar).toBe('苍穹历')
+  })
+
+  it('storyTimeFromNewDraft：年份留空=不填；只填季节/月/日缺年份、非整数年份、越界日期都报错', () => {
+    const blank = { calendar: '', year: '', season: '', month: '', day: '' }
+    expect(storyTimeFromNewDraft(blank)).toEqual({ ok: true, value: null })
+    // 只有预填的历法名、没填年份 = 不填日期（不报错）
+    expect(storyTimeFromNewDraft({ ...blank, calendar: '苍穹历' })).toEqual({ ok: true, value: null })
+    expect(storyTimeFromNewDraft({ ...blank, season: '春' })).toMatchObject({ ok: false })
+    expect(storyTimeFromNewDraft({ ...blank, year: '3.5' })).toMatchObject({ ok: false })
+    expect(storyTimeFromNewDraft({ ...blank, year: '320', day: '32' })).toMatchObject({ ok: false })
+    expect(storyTimeFromNewDraft({ ...blank, calendar: ' 苍穹历 ', year: '-12', day: '31' }))
+      .toEqual({ ok: true, value: { calendar: '苍穹历', year: -12, day: 31 } })
   })
 
   it('新建区间事件：起止都先落尾部', async () => {

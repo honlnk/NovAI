@@ -262,7 +262,7 @@ function timelineEventProperties(): Record<string, unknown> {
     summary: { type: 'string', description: '可选，事件摘要（自然语言）。' },
     storyTime: {
       ...timelineStoryTimeSchema(),
-      description: '可选，明确时间（历法自由文本 + 数值段）；传 null 清空。不填 = 无明确时间（纯顺序，合法）。',
+      description: '强烈建议填写：明确时间（历法名 + 年，可细到季节/月/日；全书历法名保持一致），时间轴表头按它显示日期。原文没写时根据前后事件与世界观推断一个，并在 summary 注明「（时间为推断）」；确实无从推断才不填。传 null 清空。',
     },
     relativeTime: {
       ...timelineRelativeTimeSchema(),
@@ -2214,7 +2214,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'TimelineCreatePoint',
-          description: '登记一个点事件（瞬间发生：遭遇、决定、死亡）。event.title 必填；时间三态可选（明确时间 / 相对时间 / 都不填=纯顺序）。position 缺省追加到末尾。',
+          description: '登记一个点事件（瞬间发生：遭遇、决定、死亡）。event.title 必填；event.storyTime（明确时间）尽量填写，原文没写就推断并在 summary 注明，确实无从推断才留空。position 缺省追加到末尾。',
           parameters: {
             type: 'object',
             properties: {
@@ -2252,7 +2252,7 @@ export function createAgentTools(): AgentRunnableToolMap {
         type: 'function',
         function: {
           name: 'TimelineCreateSpan',
-          description: '登记一个区间事件（持续一段故事时间：战争、旅途、修行）。结束位置必须在开始位置之后（可跨任意多事件，表达并行与嵌套）。event.title 必填。',
+          description: '登记一个区间事件（持续一段故事时间：战争、旅途、修行）。结束位置必须在开始位置之后（可跨任意多事件，表达并行与嵌套）。event.title 必填；event.storyTime 填开始时的明确时间，尽量填写（规则同 TimelineCreatePoint）。',
           parameters: {
             type: 'object',
             properties: {

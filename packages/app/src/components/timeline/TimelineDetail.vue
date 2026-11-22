@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 事件详情区（时间线 JSON 化施工计划 §9.4）：右侧内嵌面板，三个形态——
- * - 新建事件表单（点/区间 + 标题 + 摘要；落位默认尾部，位置靠拖拽调整）；
+ * - 新建事件表单（点/区间 + 标题 + 摘要；落位默认尾部，界面暂不提供调整顺序，交 AI 移动）；
  * - 编辑中的事件（save-session 会话：两秒自动保存、状态灯、失败重试、
  *   冲突冻结 + 四出口：采用磁盘 / 采用我的 / 返回编辑 / 重新读取）；
  * - 空态（引导点击标记或新建）。
@@ -300,6 +300,37 @@ async function removeEvent() {
           class="rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm text-gray-800 outline-none focus:border-gray-500"
         >
       </label>
+      <!-- 明确时间：建议填写（时间轴表头按它显示）；年份留空 = 不填日期 -->
+      <fieldset class="flex flex-col gap-2 rounded-lg border border-gray-200 px-3 py-2.5" data-testid="timeline-create-date">
+        <legend class="px-1 text-xs text-gray-500">日期（建议填写，时间轴表头按它显示；年份留空 = 不填）</legend>
+        <div class="grid grid-cols-2 gap-2 text-xs text-gray-500">
+          <label class="flex flex-col gap-1">
+            历法
+            <input v-model="store.createDraft.calendar" type="text" maxlength="20" placeholder="苍穹历" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+          <label class="flex flex-col gap-1">
+            年（可为负）
+            <input
+              v-model="store.createDraft.year"
+              type="number"
+              :placeholder="store.lastStoryTime ? `上一条：${store.lastStoryTime.year}` : '如 320'"
+              class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500"
+            >
+          </label>
+          <label class="flex flex-col gap-1">
+            季节
+            <input v-model="store.createDraft.season" type="text" maxlength="6" placeholder="春" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+          <label class="flex flex-col gap-1">
+            月
+            <input v-model="store.createDraft.month" type="number" min="1" max="12" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+          <label class="col-span-2 flex flex-col gap-1">
+            日
+            <input v-model="store.createDraft.day" type="number" min="1" max="31" class="rounded-lg border border-gray-300 px-2 py-1 text-sm text-gray-800 outline-none focus:border-gray-500">
+          </label>
+        </div>
+      </fieldset>
       <label class="flex flex-col gap-1 text-xs text-gray-500">
         摘要（可选，其余字段建好后在详情里补）
         <textarea
@@ -309,7 +340,7 @@ async function removeEvent() {
         />
       </label>
       <p v-if="store.actionError" role="alert" class="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{{ store.actionError }}</p>
-      <p class="text-[11px] text-gray-400">新事件先落在时间轴末尾，创建后可拖拽调整位置。</p>
+      <p class="text-[11px] text-gray-400">新事件落在时间轴末尾；需要调整先后顺序时，可以让 AI 帮你移动。</p>
       <div class="mt-auto flex gap-2">
         <button
           type="button"
@@ -495,7 +526,7 @@ async function removeEvent() {
               >
             </label>
           </div>
-          <p v-else class="text-[11px] text-gray-400">无明确时间的纯顺序事件合法且常见；时间轴只按列表顺序呈现。</p>
+          <p v-else class="text-[11px] text-gray-400">建议填写：时间轴表头按明确时间显示日期，不填只剩列表顺序，事件多了难以分辨发生在何时。</p>
         </fieldset>
 
         <!-- 相对时间（锚事件 + 偏移；锚链画在轴下） -->
@@ -708,7 +739,7 @@ async function removeEvent() {
         </fieldset>
 
         <p class="text-[11px] text-gray-400">
-          区间事件在时间轴上显示为横带；两端都可拖拽，中间可插入其他事件。
+          区间事件在时间轴上显示为横条，从开始位置画到结束位置；中间可以插入其他事件。
         </p>
       </div>
 
@@ -731,7 +762,7 @@ async function removeEvent() {
     <!-- 空态 -->
     <div v-else class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
       <p class="text-sm text-gray-500">点击时间轴上的标记查看事件详情</p>
-      <p class="text-xs text-gray-400">或点击上方「新建事件」；拖拽标记可调整故事内顺序</p>
+      <p class="text-xs text-gray-400">或点击上方「新建事件」</p>
     </div>
   </section>
 </template>
