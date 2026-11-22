@@ -49,6 +49,7 @@ import {
   scheduleTimelineBackup,
 } from '../composables/timeline-backup'
 import { elementRefKey, elementRefSelector } from '../utils/element-ref-key'
+import type { GanttEntry } from './timeline-gantt'
 
 /**
  * 时间线 store（时间线 JSON 化施工计划 §9.4）：对齐 relation store 的分层——
@@ -62,7 +63,7 @@ import { elementRefKey, elementRefSelector } from '../utils/element-ref-key'
 
 export type TimelineLoadState = 'idle' | 'loading' | 'ready' | 'error' | 'corrupt'
 
-/** 新建事件表单（位置一律先落尾部，落位后用拖拽调整） */
+/** 新建事件表单（位置一律落尾部；界面暂不提供调整顺序，交 AI 移动） */
 export type TimelineNewDraft = {
   kind: 'point' | 'span'
   title: string
@@ -89,40 +90,17 @@ type TimelineDetailSession = {
 /** 磁盘版本：事件详情 + 这一条事件的版本令牌 */
 type TimelineDisk = { event: TimelineEvent; version: string }
 
-/* ---------- 纯函数：渲染模型与轨道分配（测试直测） ---------- */
+/* ---------- 纯函数：渲染模型（测试直测；甘特排布见 timeline-gantt.ts） ---------- */
 
-/**
- * 区间事件的贪心分轨：按开始序扫描，放入第一条「最后区间结束不晚于本区间开始」
- * 的轨道（紧邻区间可同轨——横带两端留白，视觉上不粘连）；都不满足则开新轨道。
- * 返回各区间轨道号与轨道总数（零区间 = 0）。
- */
-export function allocateSpanLanes(
-  spans: Array<{ startIndex: number; endIndex: number }>,
-): { lanes: number[]; laneCount: number } {
-  const laneLastEnd: number[] = []
-  const lanes: number[] = []
-  for (const span of spans) {
-    let lane = laneLastEnd.findIndex((lastEnd) => lastEnd <= span.startIndex)
-    if (lane === -1) {
-      lane = laneLastEnd.length
-      laneLastEnd.push(span.endIndex)
-    } else {
-      laneLastEnd[lane] = span.endIndex
-    }
-    lanes.push(lane)
-  }
-  return { lanes, laneCount: laneLastEnd.length }
-}
-
-/** 横轴上的一个标记位（store 产出纯数据，SVG 形状由 TimelineAxis 映射） */
+/** 横轴上的一个标记位（一列）；甘特视图的条目由 ganttEntries 产出 */
 export type TimelineAxisNode = {
   marker: TimelineMarker
   ordinal: number
   /** 携带详情的标记（point/start）才有；end 标记为 null */
   eventId: string | null
   title: string | null
-  /** 时间角标：明确时间或相对时间的短摘要（无则空串） */
-  timeLabel: string
+  /** 明确时间展示文字（无则空串）；相对时间不上图，只在详情面板显示 */
+  dateLabel: string
   /** 区间开始标记到结束标记的跨度（含两端）；非区间开始为 null */
   spanEndIndex: number | null
   /** 搜索/筛选命中（false 时轴上降透明度，不移除——顺序上下文是时间线的意义） */
@@ -344,90 +322,59 @@ export const useTimelineStore = defineStore('timeline', () => {
     return map
   })
 
-  /** 横轴渲染模型：全部合法标记等距落位（命中判定做透明度，不移除） */
+  /** 横轴列模型：全部合法标记各占一列（命中判定做透明度，不移除） */
   const axisNodes = computed<TimelineAxisNode[]>(() => {
     const matches = matchedEventIds.value
     const spans = spanEndIndex.value
-    return markers.value.map((item, index) => {
+    return markers.value.map((item) => {
       const marker = item.marker
       if (marker.kind === 'end') {
-        // end 标记不可携带详情，但同样可选中（回指事件）并跟随事件命中态淡出
+        // end 标记不可携带详情，只占列（甘特视图里就是区间横条的右端）
         return {
           marker,
           ordinal: item.ordinal,
           eventId: marker.eventId,
           title: null,
-          timeLabel: '',
+          dateLabel: '',
           spanEndIndex: null,
           matched: matches.size === 0 ? true : matches.has(marker.eventId),
         }
       }
-      const time = marker.event.storyTime
-        ? formatStoryTime(marker.event.storyTime)
-        : marker.event.relativeTime
-          ? formatRelativeTime(marker.event.relativeTime)
-          : ''
       return {
         marker,
         ordinal: item.ordinal,
         eventId: marker.eventId,
         title: marker.event.title,
-        timeLabel: time,
+        // 只上图明确时间（甘特计划决策 8、9）：相对时间留在详情面板
+        dateLabel: marker.event.storyTime ? formatStoryTime(marker.event.storyTime) : '',
         spanEndIndex: marker.kind === 'start' ? (spans.get(marker.id) ?? null) : null,
         matched: matches.size === 0 ? true : matches.has(marker.eventId),
       }
     })
   })
 
-  /** 区间横带（含轨道分配）：按开始位置排序后贪心分轨 */
-  const spanBands = computed<Array<{ eventId: string; title: string; startIndex: number; endIndex: number; lane: number; dimmed: boolean }>>(() => {
-    const nodes = axisNodes.value
-    const spans = nodes
-      .map((node, index) => ({ node, index }))
-      .filter((entry) => entry.node.spanEndIndex !== null)
-      .map((entry) => ({
-        eventId: entry.node.eventId!,
-        title: entry.node.title ?? '',
-        startIndex: entry.index,
-        endIndex: entry.node.spanEndIndex!,
-      }))
-    const { lanes } = allocateSpanLanes(spans)
-    return spans.map((span, index) => ({
-      ...span,
-      lane: lanes[index]!,
-      dimmed: !(matchedEventIds.value.size === 0 || matchedEventIds.value.has(span.eventId)),
-    }))
-  })
-
-  /** 轨道数（SVG 高度与横带 y 坐标用） */
-  const laneCount = computed(() => spanBands.value.reduce((max, band) => Math.max(max, band.lane + 1), 0))
-
-  /** 相对时间锚连线：from 锚标记下标 → to 依赖标记下标（详情标记上的 relativeTime） */
-  const anchorLinks = computed<Array<{ fromIndex: number; toIndex: number; eventId: string }>>(() => {
-    const nodes = axisNodes.value
-    const eventIdToIndex = new Map<string, number>()
-    nodes.forEach((node, index) => {
-      if (node.eventId !== null && !eventIdToIndex.has(node.eventId)) {
-        eventIdToIndex.set(node.eventId, index)
+  /**
+   * 甘特视图排布输入：每个携带详情的标记（point / start）一条。排布本身依赖文字测宽，
+   * 在组件侧调用纯函数 layoutTimelineGantt 完成（store 不碰 DOM）。
+   * 区间开始找不到配对结束时（账本加载已隔离，理论不出现）按单列处理，不丢事件。
+   */
+  const ganttEntries = computed<GanttEntry[]>(() =>
+    axisNodes.value.flatMap((node, index): GanttEntry[] => {
+      if (node.marker.kind === 'end' || node.eventId === null) {
+        return []
       }
-    })
-    const links: Array<{ fromIndex: number; toIndex: number; eventId: string }> = []
-    for (const node of nodes) {
-      if (node.eventId === null) {
-        continue
-      }
-      const event = node.marker.kind === 'end' ? null : node.marker.event
-      if (!event?.relativeTime) {
-        continue
-      }
-      const fromIndex = eventIdToIndex.get(event.relativeTime.anchorEventId)
-      if (fromIndex === undefined || fromIndex === node.ordinal - 1) {
-        continue
-      }
-      links.push({ fromIndex, toIndex: node.ordinal - 1, eventId: node.eventId })
-    }
-    return links
-  })
+      const isSpan = node.marker.kind === 'start'
+      return [{
+        eventId: node.eventId,
+        kind: isSpan ? 'span' : 'point',
+        title: node.title ?? '',
+        dateLabel: node.dateLabel,
+        startIndex: index,
+        endIndex: isSpan ? (node.spanEndIndex ?? index) : index,
+        matched: node.matched,
+      }]
+    }),
+  )
 
   /** 当前选中的事件视图（详情面板数据源：三态引用解析在这里） */
   const selectedMarkerView = computed<TimelineMarkerView | null>(
@@ -821,7 +768,7 @@ export const useTimelineStore = defineStore('timeline', () => {
 
   /* ---------- 写入动作（UI 入口） ---------- */
 
-  /** 新建事件（点/区间；先落尾部，落位后拖拽调整） */
+  /** 新建事件（点/区间；落尾部） */
   async function submitCreate(): Promise<boolean> {
     const pid = projectId.value
     const title = createDraft.title.trim()
@@ -857,7 +804,8 @@ export const useTimelineStore = defineStore('timeline', () => {
   }
 
   /**
-   * 拖拽落位：把标记移到当前列表的第 targetIndex 个空隙（0..n）。
+   * 落位：把标记移到当前列表的第 targetIndex 个空隙（0..n）。
+   * 甘特视图暂不允许用户拖动（甘特计划决策 6），当前无界面调用方；保留供日后接回调整入口。
    * 换算成锚点定位交给领域层（锚点语义在移除原位后的列表上解析，配对约束由领域重校验）。
    */
   async function moveMarkerToIndex(markerId: string, targetIndex: number): Promise<boolean> {
@@ -1040,9 +988,7 @@ export const useTimelineStore = defineStore('timeline', () => {
     view,
     markers,
     axisNodes,
-    spanBands,
-    laneCount,
-    anchorLinks,
+    ganttEntries,
     eventCount,
     chapterEvents,
     issueCount,

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 时间轴弹窗（时间线 JSON 化施工计划 §9.4）：组合 WorkspaceModal 外壳，
- * 内部左时间轴（TimelineAxis）右详情（TimelineDetail），工具条含搜索、
- * 类型/叙述方式筛选、参与要素筛选（人物/情节）、缩放、检查入口
+ * 内部左时间轴（TimelineAxis，甘特视图，只读不可拖动）右详情（TimelineDetail），工具条含搜索、
+ * 类型/叙述方式筛选、参与要素筛选（人物/情节）、缩放（最小列宽）、检查入口
  * （账本 issue 徽标 + 一键清理 + 全量检查）、新建事件。
  *
  * 损坏态：主体替换为只读原始内容 + 「重新初始化（副本入回收站）」出口。
@@ -120,10 +120,6 @@ async function handleClose() {
 
 function onSelectEvent(eventId: string) {
   void store.openDetail(eventId)
-}
-
-function onMoveMarker(markerId: string, targetIndex: number) {
-  void store.moveMarkerToIndex(markerId, targetIndex)
 }
 </script>
 
@@ -244,7 +240,7 @@ function onMoveMarker(markerId: string, targetIndex: number) {
           清除筛选
         </button>
 
-        <!-- 缩放（步距像素） -->
+        <!-- 缩放 = 最小列宽（甘特排布放不下时实际列宽自动更宽） -->
         <label class="ml-auto flex items-center gap-1.5 text-xs text-gray-500">
           缩放
           <input
@@ -324,13 +320,10 @@ function onMoveMarker(markerId: string, targetIndex: number) {
         <div class="relative min-h-[15rem] flex-1 border-b border-gray-100 lg:border-b-0 lg:border-r">
           <TimelineAxis
             :nodes="store.axisNodes"
-            :bands="store.spanBands"
-            :lane-count="store.laneCount"
-            :links="store.anchorLinks"
+            :entries="store.ganttEntries"
             :step-px="store.stepPx"
             :selected-event-id="store.selectedEventId"
             @select-event="onSelectEvent"
-            @move-marker="onMoveMarker"
           />
           <p v-if="store.hasFilter && store.matchedEventIds.size === 0" class="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-xs text-gray-400">
             当前筛选条件下没有匹配事件（标记已淡出显示）

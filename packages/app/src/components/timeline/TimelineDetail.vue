@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 事件详情区（时间线 JSON 化施工计划 §9.4）：右侧内嵌面板，三个形态——
- * - 新建事件表单（点/区间 + 标题 + 摘要；落位默认尾部，位置靠拖拽调整）；
+ * - 新建事件表单（点/区间 + 标题 + 摘要；落位默认尾部，界面暂不提供调整顺序，交 AI 移动）；
  * - 编辑中的事件（save-session 会话：两秒自动保存、状态灯、失败重试、
  *   冲突冻结 + 四出口：采用磁盘 / 采用我的 / 返回编辑 / 重新读取）；
  * - 空态（引导点击标记或新建）。
@@ -309,7 +309,7 @@ async function removeEvent() {
         />
       </label>
       <p v-if="store.actionError" role="alert" class="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{{ store.actionError }}</p>
-      <p class="text-[11px] text-gray-400">新事件先落在时间轴末尾，创建后可拖拽调整位置。</p>
+      <p class="text-[11px] text-gray-400">新事件落在时间轴末尾；需要调整先后顺序时，可以让 AI 帮你移动。</p>
       <div class="mt-auto flex gap-2">
         <button
           type="button"
@@ -708,7 +708,7 @@ async function removeEvent() {
         </fieldset>
 
         <p class="text-[11px] text-gray-400">
-          区间事件在时间轴上显示为横带；两端都可拖拽，中间可插入其他事件。
+          区间事件在时间轴上显示为横条，从开始位置画到结束位置；中间可以插入其他事件。
         </p>
       </div>
 
@@ -731,7 +731,7 @@ async function removeEvent() {
     <!-- 空态 -->
     <div v-else class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
       <p class="text-sm text-gray-500">点击时间轴上的标记查看事件详情</p>
-      <p class="text-xs text-gray-400">或点击上方「新建事件」；拖拽标记可调整故事内顺序</p>
+      <p class="text-xs text-gray-400">或点击上方「新建事件」</p>
     </div>
   </section>
 </template>
