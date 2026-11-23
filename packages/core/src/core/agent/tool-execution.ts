@@ -115,7 +115,7 @@ export async function executeAgentTool(input: {
     const permission = decideWriteToolPermission(input.call.name, validatedInput, input.project)
 
     if (permission.kind === 'ask') {
-      const confirmation = tool.core.buildConfirmation(validatedInput)
+      const confirmation = await tool.core.buildConfirmation(validatedInput, input.project)
       let decision: ConfirmDecision
       try {
         decision = await input.confirm({ call: input.call, confirmation })

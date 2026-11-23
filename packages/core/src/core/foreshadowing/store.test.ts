@@ -194,7 +194,7 @@ describe('updateForeshadowingCard', () => {
     expect(updated?.card.relatedChapters).toEqual(['第一卷/第028章', '第一卷/第051章'])
   })
 
-  it('状态推进到 resolved 登记回收章节；退回进行中时清残留', async () => {
+  it('状态推进到 resolved 登记回收章节；退回进行中时保留（不隐式清空，由界面提示不一致）', async () => {
     const card = await seed()
     const resolved = await updateForeshadowingCard(project(), {
       id: card.id,
@@ -203,8 +203,13 @@ describe('updateForeshadowingCard', () => {
     })
     expect(resolved.resolvedAt).toBe('第二卷/第085章')
 
+    // 作者字段控制权计划 §三.3：状态变更不得顺带删除实际回收章节（作者的事实记录）
     const reverted = await updateForeshadowingCard(project(), { id: card.id, status: 'developed' })
-    expect(reverted.resolvedAt).toBeNull()
+    expect(reverted.resolvedAt).toBe('第二卷/第085章')
+
+    // 显式传入 null 才清除
+    const cleared = await updateForeshadowingCard(project(), { id: card.id, resolvedAt: null })
+    expect(cleared.resolvedAt).toBeNull()
   })
 
   it('放弃必须给原因', async () => {
@@ -300,3 +305,218 @@ describe('scanForeshadowingCards', () => {
     ])
   })
 })
+
+describe('updateForeshadowingCard（作者字段控制权计划阶段 2）', () => {
+  async function seedAdvanced() {
+    return createForeshadowingCard(project(), {
+      name: '锈钥匙',
+      readerView: '门后挂着一把锈钥匙。',
+      authorTruth: '钥匙通向地下档案室。',
+      plantedAt: '第一卷/第003章',
+      payoffWindow: ['第一卷/第020章', '第一卷/第030章'],
+      relatedCharacters: ['林凡'],
+      relatedEntities: ['锈钥匙'],
+    })
+  }
+
+  it('作者完整替换关联章节：去空白、去重保首次位置、保留作者排列；AI 追加不恢复已删除项', async () => {
+    const card = await seedAdvanced()
+    await updateForeshadowingCard(project(), { id: card.id, addRelatedChapters: ['第一卷/第021章', '第一卷/第022章'] })
+
+    // 作者整理：删掉 021、重排，加入重复项验证去重保首
+    const replaced = await updateForeshadowingCard(project(), {
+      id: card.id,
+      relatedChapters: ['第一卷/第022章', ' 第一卷/第021章 ', '第一卷/第022章', '第一卷/第040章'],
+    })
+    expect(replaced.relatedChapters).toEqual(['第一卷/第022章', '第一卷/第021章', '第一卷/第040章'])
+
+    // 后续普通追加只追加新项，不恢复被作者删除的旧项
+    const appended = await updateForeshadowingCard(project(), { id: card.id, addRelatedChapters: ['第一卷/第050章'] })
+    expect(appended.relatedChapters).toEqual(['第一卷/第022章', '第一卷/第021章', '第一卷/第040章', '第一卷/第050章'])
+
+    // 清空
+    const cleared = await updateForeshadowingCard(project(), { id: card.id, relatedChapters: [] })
+    expect(cleared.relatedChapters).toEqual([])
+
+    // 两条链路互斥
+    await expect(updateForeshadowingCard(project(), {
+      id: card.id,
+      relatedChapters: ['a'],
+      addRelatedChapters: ['b'],
+    })).rejects.toThrow('不能同时提供')
+  })
+
+  it('关联角色/实体替换时去空白去重', async () => {
+    const card = await seedAdvanced()
+    const updated = await updateForeshadowingCard(project(), {
+      id: card.id,
+      relatedCharacters: [' 林凡 ', '苏离', '林凡', ''],
+      relatedEntities: [],
+    })
+    expect(updated.relatedCharacters).toEqual(['林凡', '苏离'])
+    expect(updated.relatedEntities).toEqual([])
+  })
+
+  it('结构化窗口更新：校验通过并同步重写可读旧字段（开放终点占位）', async () => {
+    const card = await seedAdvanced()
+    const updated = await updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffStart: { kind: 'relative', target: 35, base: 30, offset: 5 },
+      payoffEnd: { kind: 'open' },
+    })
+
+    expect(updated.payoffStart).toEqual({ kind: 'relative', target: 35, base: 30, offset: 5 })
+    expect(updated.payoffEnd).toEqual({ kind: 'open' })
+    expect(updated.payoffWindow).toEqual(['第35章', '开放终点'])
+
+    // 只更新一端：另一端沿用当前有效值
+    const endOnly = await updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffEnd: { kind: 'future', target: 60 },
+    })
+    expect(endOnly.payoffStart).toEqual({ kind: 'relative', target: 35, base: 30, offset: 5 })
+    expect(endOnly.payoffWindow).toEqual(['第35章', '第60章'])
+
+    // 全部清空
+    const cleared = await updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffStart: { kind: 'none' },
+      payoffEnd: { kind: 'none' },
+    })
+    expect(cleared.payoffWindow).toBeNull()
+  })
+
+  it('窗口校验：缺起点有终点、倒置区间、非法相对位置均拒绝且不落盘', async () => {
+    const card = await seedAdvanced()
+
+    await expect(updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffStart: { kind: 'none' },
+      payoffEnd: { kind: 'future', target: 20 },
+    })).rejects.toThrow(/起点/)
+
+    await expect(updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffStart: { kind: 'future', target: 40 },
+      payoffEnd: { kind: 'future', target: 20 },
+    })).rejects.toThrow(/晚于终点/)
+
+    await expect(updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffStart: { kind: 'relative', target: 40, base: 30, offset: 20 },
+      payoffEnd: { kind: 'open' },
+    })).rejects.toThrow(/相对位置/)
+
+    // 旧字段保持原值（拒绝不落盘）
+    const after = await readForeshadowingCard(project(), card.id)
+    expect(after?.card.payoffWindow).toEqual(['第一卷/第020章', '第一卷/第030章'])
+  })
+
+  it('AI 旧窗口链路：反向推导结构化数据，两套保持一致（原相对位置不保留）', async () => {
+    const card = await seedAdvanced()
+    await updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffStart: { kind: 'relative', target: 35, base: 30, offset: 5 },
+      payoffEnd: { kind: 'open' },
+    })
+
+    const viaLegacy = await updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffWindow: ['第一卷/第025章', '开放终点'],
+    })
+    expect(viaLegacy.payoffStart).toEqual({ kind: 'chapter', ref: '第一卷/第025章' })
+    expect(viaLegacy.payoffEnd).toEqual({ kind: 'open' })
+    expect(viaLegacy.payoffWindow).toEqual(['第一卷/第025章', '开放终点'])
+
+    // 两套链路互斥
+    await expect(updateForeshadowingCard(project(), {
+      id: card.id,
+      payoffWindow: ['第010章', '第020章'],
+      payoffStart: { kind: 'none' },
+    })).rejects.toThrow('不能同时提供')
+  })
+
+  it('旧卡（无结构化数据）首次保存不迁移：保存无关字段不写 payoff_start', async () => {
+    const seed = await seedAdvanced()
+    // 手工构造旧卡文件：不带 payoff_start/payoff_end
+    const files = collectFiles()
+    const legacy = files[seed.sourcePath]!
+      .replace(/^payoff_start: .*\n/m, '')
+      .replace(/^payoff_end: .*\n/m, '')
+    await writeProjectTextFile(project().handle, seed.sourcePath, legacy)
+
+    // 保存一个与窗口无关的字段（isRedHerring，不改名避免文件移动）
+    await updateForeshadowingCard(project(), { id: seed.id, isRedHerring: true })
+
+    const after = collectFiles()[seed.sourcePath]!
+    expect(after).not.toContain('payoff_start:')
+    expect(after).not.toContain('payoff_end:')
+    expect(after).toContain('payoff_window: [第一卷/第020章, 第一卷/第030章]')
+
+    // 作者保存窗口相关字段时才转换为新表达
+    await updateForeshadowingCard(project(), { id: seed.id, payoffEnd: { kind: 'open' } })
+    const converted = collectFiles()[seed.sourcePath]!
+    expect(converted).toContain('payoff_start: chapter:第一卷/第020章')
+    expect(converted).toContain('payoff_end: open')
+    expect(converted).toContain('payoff_window: [第一卷/第020章, 开放终点]')
+  })
+
+  it('创建带结构化计划窗口与暗示历史：直接落新表达并派生可读旧字段', async () => {
+    const card = await createForeshadowingCard(project(), {
+      name: '茶馆暗号',
+      readerView: '茶馆伙计敲了三下桌角。',
+      authorTruth: '三响是联络暗号。',
+      plantedAt: '第一卷/第005章',
+      payoffStart: { kind: 'relative', target: 15, base: 12, offset: 3 },
+      payoffEnd: { kind: 'future', target: 20 },
+      relatedCharacters: [' 林掌柜 ', '阿四', '林掌柜'],
+      relatedChapters: ['第一卷/第006章', '', '第一卷/第006章'],
+    })
+
+    expect(card.payoffStart).toEqual({ kind: 'relative', target: 15, base: 12, offset: 3 })
+    expect(card.payoffEnd).toEqual({ kind: 'future', target: 20 })
+    // 相对位置在可读旧字段里落确定目标章号，不落「3 章之后」这种无法还原的文本
+    expect(card.payoffWindow).toEqual(['第15章', '第20章'])
+    expect(card.relatedChapters).toEqual(['第一卷/第006章'])
+    expect(card.relatedCharacters).toEqual(['林掌柜', '阿四'])
+
+    const roundTrip = parseForeshadowingFile(card.sourcePath, collectFiles()[card.sourcePath]!)
+    expect(roundTrip.card.payoffStart).toEqual({ kind: 'relative', target: 15, base: 12, offset: 3 })
+    expect(roundTrip.card.payoffEnd).toEqual({ kind: 'future', target: 20 })
+
+    // 双链路互斥
+    await expect(createForeshadowingCard(project(), {
+      name: '互斥',
+      readerView: 'x',
+      plantedAt: '第001章',
+      payoffWindow: ['第010章', '第020章'],
+      payoffStart: { kind: 'chapter', ref: '第010章' },
+    })).rejects.toThrow('不能同时提供')
+
+    // 结构化链路同样执行窗口校验（缺起点）
+    await expect(createForeshadowingCard(project(), {
+      name: '倒置',
+      readerView: 'x',
+      plantedAt: '第001章',
+      payoffStart: { kind: 'none' },
+      payoffEnd: { kind: 'future', target: 20 },
+    })).rejects.toThrow(/起点/)
+  })
+
+  it('已放弃卡的历史原因修订：空值拒绝、非空立即生效；普通状态下可为空', async () => {
+    const card = await seedAdvanced()
+    await updateForeshadowingCard(project(), { id: card.id, status: 'abandoned', abandonedReason: '主线改动，不再回收' })
+
+    await expect(updateForeshadowingCard(project(), { id: card.id, abandonedReason: '  ' }))
+      .rejects.toThrow(/原因/)
+
+    const revised = await updateForeshadowingCard(project(), { id: card.id, abandonedReason: '修订后的原因' })
+    expect(revised.abandonedReason).toBe('修订后的原因')
+    expect(revised.status).toBe('abandoned')
+
+    // 恢复普通状态后原因可为空或保留
+    const restored = await updateForeshadowingCard(project(), { id: card.id, status: 'planted', abandonedReason: null })
+    expect(restored.abandonedReason).toBeNull()
+  })
+})
+

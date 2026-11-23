@@ -3,7 +3,7 @@ import type { FileChangeCoords, FileChangeRecord } from '../../types/chat'
 import type { ElementType } from '../../types/rag'
 import type { PlanStatus } from '../../types/plans'
 import type { ForeshadowingStatus } from '../../types/foreshadowing'
-import type { RhythmHook, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
+import type { RhythmHook, RhythmJudgmentSource, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
 import type { KnowledgePlatformName } from './knowledge-platforms'
 import type { SkillFileEntry } from '../skills/types'
 
@@ -174,9 +174,11 @@ export type ToolDefinition<TName extends string, TInput, TOutput> = {
   extractExtraFileChanges?(output: TOutput): FileChange[] | undefined
   /**
    * 写工具用它构造写入前确认预览；只读工具不实现。
-   * 入参是经过 validateInput 校验的强类型 input，执行前调用。
+   * 入参是经过 validateInput 校验的强类型 input，执行前调用；project 供需要读当前
+   * 文件才能拼出预览的工具使用（如 RhythmUpdate 展示判定来源变化），读取失败时
+   * 工具自行降级为仅凭 input 的预览。允许返回 Promise（异步读取）。
    */
-  buildConfirmation?(input: TInput): WriteConfirmation
+  buildConfirmation?(input: TInput, project?: ProjectSnapshot): WriteConfirmation | Promise<WriteConfirmation>
 }
 
 export type ReadFileInput = {
@@ -772,6 +774,8 @@ export type RhythmListOutput = {
     plannedHook: RhythmHook
     plannedPayoff: RhythmPayoff
     deviationFlag: boolean
+    /** 判定来源（阶段 4）：author = 状态与偏差结论是作者明确校正的，尊重且勿轻率推翻。 */
+    judgmentSource: RhythmJudgmentSource
     updatedAt: string
     /** 摘要（节奏意图首个非空行）。 */
     summary: string
@@ -803,6 +807,10 @@ export type RhythmReadOutput =
       actualNote: string | null
       deviationFlag: boolean
       deviationNote: string | null
+      /** 判定来源（阶段 4）：author = 作者校正结论，说明在 authorDeviationNote。 */
+      judgmentSource: RhythmJudgmentSource
+      /** 作者校正的偏差说明（作者模式的有效说明；恢复自动后为历史说明）。 */
+      authorDeviationNote: string | null
       /** 正文三节（节奏意图 / 上下文衔接 / 作者备注）。 */
       intentBody: string
       linkBody: string
@@ -904,6 +912,8 @@ type RhythmCheckCardBase = {
   actualHook: RhythmHook | null
   actualPayoff: RhythmPayoff | null
   deviationFlag: boolean
+  /** 判定来源（阶段 4）：author = 作者校正结论。 */
+  judgmentSource: RhythmJudgmentSource
 }
 
 export type RhythmCheckInput = {
@@ -953,6 +963,12 @@ export type RhythmSyncOutput =
       actualPayoff: RhythmPayoff | null
       deviationFlag: boolean
       deviationNote: string | null
+      /** 判定来源（阶段 4）：author = 作者校正结论，说明在 authorDeviationNote。 */
+      judgmentSource: RhythmJudgmentSource
+      /** 作者校正的偏差说明（作者模式的有效说明；恢复自动后为历史说明）。 */
+      authorDeviationNote: string | null
+      /** 最近一次判定采用的冲突阈值；null = 旧卡未记录（按默认 3 解释）。 */
+      lastJudgmentThreshold: number | null
       contentHash: string
       /** 当前生效的冲突强度偏差阈值（来自项目设置，默认 3）。 */
       conflictThreshold: number

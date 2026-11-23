@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { RHYTHM_HOOKS, RHYTHM_MOODS, RHYTHM_MOOD_DESCRIPTIONS, RHYTHM_PAYOFFS } from '@novai/core/types/rhythm'
+import type { ChapterCatalog } from '@novai/core/types/chapters'
+import ChapterPicker from '../card-board/ChapterPicker.vue'
+import type { ChapterCreateHandler } from '../card-board/chapter-picker-state'
 import PanelHeader from '../layout/PanelHeader.vue'
 
 /**
- * 新建节奏卡面板（右侧内容面板）：章节引用与四个计划值必填（卡名缺省按章段
- * 生成，角色与节奏意图可选）。草稿真值在 rhythm store：创建等待真实结果，
- * 失败保留全部输入；取消不清输入（与计划/伏笔新建面板同一交互约定）。
+ * 新建节奏卡面板（右侧内容面板）：关联章节走阶段 1/2 的选择器（可搜索、真实
+ * 新建、一章一卡在提交时校验），四个计划值必填（卡名缺省按章段生成，角色与
+ * 节奏意图可选）。草稿真值在 rhythm store：创建等待真实结果，失败保留全部
+ * 输入；取消不清输入（与计划/伏笔新建面板同一交互约定）。
  */
 defineProps<{
   newName: string
@@ -16,6 +20,17 @@ defineProps<{
   newPlannedPayoff: string
   newPlannedCharacters: string
   newIntentBody: string
+  /** 章节选择器接线（目录、真实新建与重试来自视图层的同一 composable） */
+  picker: {
+    catalog: ChapterCatalog
+    catalogReady: boolean
+    loading: boolean
+    loadError: string | null
+    suggestedNumber: number | null
+    createHandler: ChapterCreateHandler | null
+    sessionKey: string
+    latestChapterNumber: number | null
+  }
   canSubmit: boolean
   isCreating: boolean
   actionError: string
@@ -34,11 +49,18 @@ const emit = defineEmits<{
     intentBody?: string
   }]
   submitCreate: []
+  retryChapterLoad: []
   cancel: []
 }>()
 
-function onTextField(field: 'name' | 'chapterRef' | 'plannedCharacters' | 'intentBody', event: Event) {
+function onTextField(field: 'name' | 'plannedCharacters' | 'intentBody', event: Event) {
   emit('updateCreateDraft', { [field]: (event.target as HTMLInputElement | HTMLTextAreaElement).value })
+}
+
+function onChapterPick(value: string | string[] | null) {
+  if (typeof value === 'string' && value !== '') {
+    emit('updateCreateDraft', { chapterRef: value })
+  }
 }
 </script>
 
@@ -52,14 +74,23 @@ function onTextField(field: 'name' | 'chapterRef' | 'plannedCharacters' | 'inten
 
     <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
       <div class="grid shrink-0 grid-cols-2 gap-2">
-        <input
-          type="text"
-          class="col-span-2 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          placeholder="关联章节（必填，如：第083章）"
-          data-testid="rhythm-new-chapter-ref"
-          :value="newChapterRef"
-          @input="onTextField('chapterRef', $event)"
-        >
+        <div class="col-span-2">
+          <p class="mb-1 text-[11px] font-medium text-gray-500">关联章节（必填，一章一卡）</p>
+          <ChapterPicker
+            :model-value="newChapterRef === '' ? null : newChapterRef"
+            :entries="picker.catalog.entries"
+            :catalog-ready="picker.catalogReady"
+            :loading="picker.loading"
+            :load-error="picker.loadError"
+            allow-create
+            :suggested-number="picker.suggestedNumber"
+            :session-key="`${picker.sessionKey}:chapter`"
+            :create-handler="picker.createHandler"
+            placeholder="搜索并选择关联章节…"
+            @update:model-value="onChapterPick"
+            @retry-load="emit('retryChapterLoad')"
+          />
+        </div>
         <input
           type="text"
           class="col-span-2 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"

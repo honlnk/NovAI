@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 /**
- * 节奏详情面板的领域接线基线（六个模块布局统一计划 阶段 0）：
- * 节奏领域专有约束——不提供普通状态按钮（状态由回写偏差自动判定）、计划值
- * 控件只在编辑态可用、实际值只读对比、节奏意图双态正文。迁移统一布局后保留。
+ * 节奏详情面板的领域接线（作者字段控制权计划 阶段 3 全面升级）：
+ * 只读状态徽标（状态由回写偏差自动判定，作者校正入口属阶段 4）、
+ * 关联章节走选择器（编辑态）与统一位置描述（预览态）、写后实际值
+ * 常驻可补填（清除哨兵 0/''）、更多正文折叠区、判定与说明区。
  *
  * 运行方式：pnpm --filter @novai/app exec vitest run src/components/rhythm
  */
@@ -30,12 +31,16 @@ function activeCard(overrides: Partial<RhythmCardView> = {}): RhythmCardView {
     actualHook: '悬念',
     actualPayoff: '揭秘',
     deviationFlag: true,
+    judgmentSource: 'auto',
+    thresholdPending: false,
     summary: '',
     sourcePath: 'rhythm/r1.md',
     plannedCharacters: ['林远', '苏晚'],
     plannedNote: '铺垫要短',
     actualNote: '写长了',
     deviationNote: '冲突强度偏高',
+    authorDeviationNote: null,
+    lastJudgmentThreshold: 3,
     intentBody: '本章要绷紧。',
     linkBody: '',
     authorNoteBody: '',
@@ -49,6 +54,7 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
     props: {
       activeCard: activeCard(),
       draftName: null,
+      draftChapterRef: null,
       draftPlannedConflict: null,
       draftPlannedMood: null,
       draftPlannedHook: null,
@@ -56,6 +62,24 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       draftPlannedCharacters: null,
       draftPlannedNote: null,
       draftIntentBody: null,
+      draftActualConflict: null,
+      draftActualMood: null,
+      draftActualHook: null,
+      draftActualPayoff: null,
+      draftActualNote: null,
+      draftLinkBody: null,
+      draftAuthorNoteBody: null,
+      picker: {
+        catalog: { entries: [], duplicateNumbers: new Set<number>(), maxNumber: 0 },
+        catalogReady: false,
+        loading: false,
+        loadError: null,
+        suggestedNumber: null,
+        createHandler: null,
+        sessionKey: 'spec',
+        latestChapterNumber: null,
+      },
+      chapterCreateNotice: null,
       detailMode: 'preview',
       savePhase: 'clean',
       conflict: null,
@@ -64,6 +88,17 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       conflictCopyBusy: false,
       conflictCopyError: '',
       actionError: '',
+      judgmentSource: 'auto',
+      thresholdPending: false,
+      historicalAuthorNote: null,
+      comparisonEditWarning: false,
+      restoreAutoPreview: null,
+      authorCorrection: null,
+      correctionPlacement: null,
+      restoreAutoPending: false,
+      canConfirmAuthorCorrection: true,
+      canConfirmRestoreAuto: true,
+      isConfirmingJudgment: false,
       ...overrides,
     },
   })
@@ -74,6 +109,12 @@ function statusButtonsAbsent(wrapper: ReturnType<typeof mountPanel>) {
   // 节奏三列标签不该以状态按钮形态出现（状态徽标是只读 span，不是按钮）
   const buttonTexts = wrapper.findAll('button').map((b) => b.text())
   return !buttonTexts.includes('规划中') && !buttonTexts.includes('已写') && !buttonTexts.includes('偏差')
+}
+
+/** 最近一次 updateDraft 事件的负载（spec tsconfig lib 早于 es2022，不用 Array.at） */
+function lastUpdateDraft(wrapper: ReturnType<typeof mountPanel>) {
+  const events = wrapper.emitted('updateDraft')!
+  return events[events.length - 1]
 }
 
 describe('节奏详情：只读状态与计划值控件', () => {
@@ -105,19 +146,6 @@ describe('节奏详情：只读状态与计划值控件', () => {
     const wrapper = mountPanel({ detailMode: 'edit', guard: { kind: 'deleted' } })
     expect((wrapper.find('[data-testid="rhythm-detail-conflict-slider"]').element as HTMLInputElement).disabled).toBe(true)
     expect((wrapper.find('[data-testid="rhythm-detail-mood"]').element as HTMLSelectElement).disabled).toBe(true)
-  })
-
-  it('实际值只读对比与偏差说明展示（计划 vs 实际）', () => {
-    const wrapper = mountPanel()
-    const actual = wrapper.find('[data-testid="rhythm-detail-actual"]')
-    expect(actual.text()).toContain('实际值（写后回写，只读）')
-    expect(actual.text()).toContain('冲突强度')
-    expect(actual.text()).toContain('计划 5')
-    expect(actual.text()).toContain('实际 7')
-    expect(actual.text()).toContain('冲突强度偏高')
-    // 无实际值（规划中）不渲染实际值区
-    const planned = mountPanel({ activeCard: activeCard({ status: 'planned', actualConflict: null }) })
-    expect(planned.find('[data-testid="rhythm-detail-actual"]').exists()).toBe(false)
   })
 
   it('节奏意图预览双击进编辑；编辑态输入发出 updateDraft', async () => {
@@ -178,5 +206,249 @@ describe('节奏详情：只读状态与计划值控件', () => {
     expect(editScroll.classes()).toContain('overflow-y-auto')
     expect(editScroll.find('[data-testid="rhythm-detail-intent-input"]').exists()).toBe(true)
     expect(edit.find('[data-testid="detail-footer-path"]').exists()).toBe(true)
+  })
+})
+
+describe('节奏详情：关联章节（阶段 3 选择器接线）', () => {
+  it('预览态显示原文描述与判定提示；「章节已创建」提示透传', () => {
+    const wrapper = mountPanel({ chapterCreateNotice: '章节已创建（第084章-新章），卡片引用尚未保存。' })
+    const section = wrapper.find('[data-testid="rhythm-detail-chapter"]')
+    expect(section.text()).toContain('第083章')
+    expect(section.find('[data-testid="rhythm-detail-chapter-created-notice"]').text()).toContain('卡片引用尚未保存')
+  })
+
+  it('目录就绪且引用无法归类时给出兼容原文提示（琥珀条，编辑态）', () => {
+    const wrapper = mountPanel({
+      activeCard: activeCard({ chapterRef: '序章' }),
+      detailMode: 'edit',
+      picker: {
+        catalog: { entries: [], duplicateNumbers: new Set<number>(), maxNumber: 0 },
+        catalogReady: true,
+        loading: false,
+        loadError: null,
+        suggestedNumber: null,
+        createHandler: null,
+        sessionKey: 'spec',
+        latestChapterNumber: null,
+      },
+    })
+    expect(wrapper.find('[data-testid="rhythm-detail-chapter"]').text()).toContain('兼容原文')
+    expect(wrapper.find('[data-testid="rhythm-detail-chapter"]').text()).toContain('序章')
+  })
+})
+
+describe('节奏详情：写后实际值（常驻区，阶段 3 可编辑）', () => {
+  it('预览态展示计划↔实际对照与自评；规划中卡也常驻展示并提示可补填', () => {
+    const wrapper = mountPanel()
+    const actual = wrapper.find('[data-testid="rhythm-detail-actual"]')
+    expect(actual.text()).toContain('写后实际值')
+    expect(actual.text()).toContain('冲突强度')
+    expect(actual.text()).toContain('计划 5')
+    expect(actual.text()).toContain('实际 7')
+    expect(actual.text()).toContain('本章自评：写长了')
+
+    const planned = mountPanel({ activeCard: activeCard({ status: 'planned', actualConflict: null, actualMood: null, actualHook: null, actualPayoff: null, actualNote: null, deviationFlag: false }) })
+    const plannedActual = planned.find('[data-testid="rhythm-detail-actual"]')
+    expect(plannedActual.exists()).toBe(true)
+    expect(plannedActual.text()).toContain('尚未回写实际值')
+    expect(plannedActual.text()).toContain('实际 —')
+  })
+
+  it('编辑态实际冲突滑块发出数值；「未填写」按钮发出清除哨兵 0；未填时「按计划值填写」从计划值起步', async () => {
+    const wrapper = mountPanel({ detailMode: 'edit' })
+    await wrapper.find('[data-testid="rhythm-detail-actual-conflict-slider"]').setValue('9')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualConflict: 9 }])
+    await wrapper.find('[data-testid="rhythm-detail-actual-conflict-clear"]').trigger('click')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualConflict: 0 }])
+
+    const empty = mountPanel({
+      detailMode: 'edit',
+      activeCard: activeCard({ actualConflict: null, actualMood: null, actualHook: null, actualPayoff: null }),
+    })
+    await empty.find('[data-testid="rhythm-detail-actual-conflict-fill"]').trigger('click')
+    expect(lastUpdateDraft(empty)).toEqual([{ actualConflict: 5 }])
+  })
+
+  it('实际枚举下拉含「未填写」清除选项（发出空串哨兵）；自评输入透传', async () => {
+    const wrapper = mountPanel({ detailMode: 'edit' })
+    await wrapper.find('[data-testid="rhythm-detail-actual-mood"]').setValue('轻松')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualMood: '轻松' }])
+    await wrapper.find('[data-testid="rhythm-detail-actual-mood"]').setValue('')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualMood: '' }])
+    await wrapper.find('[data-testid="rhythm-detail-actual-hook"]').setValue('')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualHook: '' }])
+    await wrapper.find('[data-testid="rhythm-detail-actual-payoff"]').setValue('')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualPayoff: '' }])
+
+    await wrapper.find('[data-testid="rhythm-detail-actual-note"]').setValue('按计划落地')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ actualNote: '按计划落地' }])
+  })
+
+  it('判定与说明区：偏差自动说明常驻；保存期间提示将按阈值重判', () => {
+    const wrapper = mountPanel()
+    const judgment = wrapper.find('[data-testid="rhythm-detail-judgment"]')
+    expect(judgment.text()).toContain('偏差（自动判定）')
+    expect(judgment.text()).toContain('冲突强度偏高')
+
+    const pending = mountPanel({ savePhase: 'pending' })
+    expect(pending.find('[data-testid="rhythm-detail-judgment"]').text()).toContain('保存后将按项目阈值重新判定')
+
+    const consistent = mountPanel({ activeCard: activeCard({ deviationFlag: false }) })
+    expect(consistent.find('[data-testid="rhythm-detail-judgment"]').text()).toContain('已写：与计划一致（自动判定）')
+  })
+})
+
+describe('节奏详情：更多正文折叠区（上下文衔接 / 作者备注）', () => {
+  it('默认折叠；展开后预览态显示正文、编辑态输入发出 updateDraft', async () => {
+    const wrapper = mountPanel({ activeCard: activeCard({ linkBody: '上一章冷开场，本章升温。', authorNoteBody: '别再用倒叙。' }) })
+    const more = wrapper.find('[data-testid="rhythm-detail-more"]')
+    expect(more.find('[data-testid="rhythm-detail-link"]').exists()).toBe(false)
+    expect(more.find('[data-testid="rhythm-detail-author-note"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="rhythm-detail-more-toggle"]').trigger('click')
+    expect(more.find('[data-testid="rhythm-detail-link"]').text()).toContain('上一章冷开场')
+    expect(more.find('[data-testid="rhythm-detail-author-note"]').text()).toContain('别再用倒叙')
+
+    await wrapper.setProps({ detailMode: 'edit' })
+    await wrapper.find('[data-testid="rhythm-detail-link-input"]').setValue('新的衔接说明')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ linkBody: '新的衔接说明' }])
+    await wrapper.find('[data-testid="rhythm-detail-author-note-input"]').setValue('新的作者备注')
+    expect(lastUpdateDraft(wrapper)).toEqual([{ authorNoteBody: '新的作者备注' }])
+  })
+
+  it('纯文本预览：多行自由文本保留换行，两区不走 markdown 渲染（合并配套口径对齐）', async () => {
+    const MULTILINE = '上一章冷开场。\n本章升温。\n\n结尾留钩子。'
+    const NOTE = '别再用倒叙。\n第二行备注。'
+    const wrapper = mountPanel({
+      activeCard: activeCard({ linkBody: MULTILINE, authorNoteBody: NOTE }),
+    })
+
+    await wrapper.find('[data-testid="rhythm-detail-more-toggle"]').trigger('click')
+    const link = wrapper.find('[data-testid="rhythm-detail-link"]')
+    const note = wrapper.find('[data-testid="rhythm-detail-author-note"]')
+
+    // 两区内不再有 markdown 渲染容器；插值保留原始换行（呈现交给 whitespace-pre-wrap）
+    expect(link.find('.markdown-body').exists()).toBe(false)
+    expect(note.find('.markdown-body').exists()).toBe(false)
+    const linkText = link.findAll('.whitespace-pre-wrap').filter(node => node.element.textContent === MULTILINE)
+    const noteText = note.findAll('.whitespace-pre-wrap').filter(node => node.element.textContent === NOTE)
+    expect(linkText.length).toBeGreaterThan(0)
+    expect(noteText.length).toBeGreaterThan(0)
+  })
+})
+
+describe('节奏详情：判定操作态（阶段 4 §五）', () => {
+  it('自动卡：无作者徽标，提供「作者校正」入口、无「恢复自动判定」', () => {
+    const wrapper = mountPanel()
+    expect(wrapper.find('[data-testid="rhythm-detail-judgment-badge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="rhythm-detail-correct-button"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="rhythm-detail-restore-auto-button"]').exists()).toBe(false)
+  })
+
+  it('作者卡：状态旁显示作者校正徽标；判定区展示作者说明与恢复自动入口', async () => {
+    const wrapper = mountPanel({
+      activeCard: activeCard({ judgmentSource: 'author', authorDeviationNote: '刻意升温，别动' }),
+      judgmentSource: 'author',
+    })
+    expect(wrapper.find('[data-testid="rhythm-detail-judgment-badge"]').text()).toBe('作者校正')
+    expect(wrapper.find('[data-testid="rhythm-detail-judgment"]').text()).toContain('刻意升温，别动')
+    expect(wrapper.find('[data-testid="rhythm-detail-restore-auto-button"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="rhythm-detail-correct-button"]').trigger('click')
+    expect(wrapper.emitted('startAuthorCorrection')).toHaveLength(1)
+    await wrapper.find('[data-testid="rhythm-detail-restore-auto-button"]').trigger('click')
+    expect(wrapper.emitted('startRestoreAuto')).toHaveLength(1)
+  })
+
+  it('阈值待复核与比较值警告：轻量提示各自呈现（作者卡注明人工结论保留）', () => {
+    const wrapper = mountPanel({ thresholdPending: true, comparisonEditWarning: true, judgmentSource: 'author' })
+    const judgment = wrapper.find('[data-testid="rhythm-detail-judgment"]')
+    expect(judgment.find('[data-testid="rhythm-detail-threshold-pending"]').text()).toContain('阈值已变化，可重新检查')
+    expect(judgment.find('[data-testid="rhythm-detail-threshold-pending"]').text()).toContain('人工结论保留')
+    expect(judgment.find('[data-testid="rhythm-detail-comparison-warning"]').text()).toContain('保存后将按新值重算并恢复自动判定')
+  })
+
+  it('校正表单：状态联动偏差结论（规划中锁无偏差/偏差锁有偏差），说明输入上抛', async () => {
+    const wrapper = mountPanel({ authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' } })
+    const form = wrapper.find('[data-testid="rhythm-detail-correction-form"]')
+    expect(form.exists()).toBe(true)
+    // 表单出现时入口按钮隐藏
+    expect(wrapper.find('[data-testid="rhythm-detail-correct-button"]').exists()).toBe(false)
+
+    await form.find('[data-testid="rhythm-detail-correction-status"]').setValue('planned')
+    expect(wrapper.emitted('updateAuthorCorrection')![0]).toEqual([{ status: 'planned', deviationFlag: false }])
+    await form.find('[data-testid="rhythm-detail-correction-status"]').setValue('deviated')
+    expect(wrapper.emitted('updateAuthorCorrection')![1]).toEqual([{ status: 'deviated', deviationFlag: true }])
+
+    await form.find('[data-testid="rhythm-detail-correction-note"]').setValue('走样说明')
+    expect(wrapper.emitted('updateAuthorCorrection')![2]).toEqual([{ deviationNote: '走样说明' }])
+  })
+
+  it('校正表单门禁：有偏差缺说明禁用应用并就地说明；缺实际比较值提示先补', async () => {
+    const missing = mountPanel({ authorCorrection: { status: 'deviated', deviationFlag: true, deviationNote: '   ' } })
+    expect((missing.find('[data-testid="rhythm-detail-correction-apply"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(missing.find('[data-testid="rhythm-detail-correction-note-missing"]').text()).toContain('必须填写偏差说明')
+
+    // 已写/偏差需要实际比较值（默认卡 actualConflict=7 满足）→ 无先补提示
+    const ok = mountPanel({ authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' } })
+    expect(ok.find('[data-testid="rhythm-detail-correction-needs-actual"]').exists()).toBe(false)
+
+    const plannedNoActual = mountPanel({
+      activeCard: activeCard({ status: 'planned', actualConflict: null, actualMood: null, actualHook: null, actualPayoff: null, deviationFlag: false }),
+      authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' },
+    })
+    expect((plannedNoActual.find('[data-testid="rhythm-detail-correction-apply"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(plannedNoActual.find('[data-testid="rhythm-detail-correction-needs-actual"]').text()).toContain('本章自评不计入')
+
+    await ok.find('[data-testid="rhythm-detail-correction-apply"]').trigger('click')
+    expect(ok.emitted('confirmAuthorCorrection')).toHaveLength(1)
+    await ok.find('[data-testid="rhythm-detail-correction-cancel"]').trigger('click')
+    expect(ok.emitted('cancelAuthorCorrection')).toHaveLength(1)
+
+    // 冲突/守护冻结确认（门禁 prop 透传）
+    const frozen = mountPanel({ authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' }, canConfirmAuthorCorrection: false })
+    expect((frozen.find('[data-testid="rhythm-detail-correction-apply"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('恢复自动两步确认：展示当前作者结论与预演对照；确认/取消上抛', async () => {
+    const wrapper = mountPanel({
+      activeCard: activeCard({ judgmentSource: 'author', deviationFlag: false, authorDeviationNote: '先压着' }),
+      judgmentSource: 'author',
+      restoreAutoPending: true,
+      restoreAutoPreview: { status: 'deviated', deviationFlag: true, deviationNote: '情绪基调偏差：计划 紧张 实际 悲壮' },
+    })
+    const block = wrapper.find('[data-testid="rhythm-detail-restore-auto"]')
+    expect(block.exists()).toBe(true)
+    expect(block.text()).toContain('当前作者结论：已写 · 无偏差')
+    expect(block.find('[data-testid="rhythm-detail-restore-auto-preview"]').text()).toContain('恢复后自动结论：偏差 · 有偏差')
+    expect(block.find('[data-testid="rhythm-detail-restore-auto-preview"]').text()).toContain('情绪基调偏差')
+
+    await block.find('[data-testid="rhythm-detail-restore-auto-confirm"]').trigger('click')
+    expect(wrapper.emitted('confirmRestoreAuto')).toHaveLength(1)
+    await block.find('[data-testid="rhythm-detail-restore-auto-cancel"]').trigger('click')
+    expect(wrapper.emitted('cancelRestoreAuto')).toHaveLength(1)
+  })
+
+  it('跨列拖拽落点提示（阶段 5）：校正表单上方展示应用后的落点说明，无落点时不渲染', () => {
+    const placement = '应用后将移动到「已写」列（「第082章 节奏」之后）；取消或离开不动原位'
+    const wrapper = mountPanel({
+      authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' },
+      correctionPlacement: placement,
+    })
+    const hint = wrapper.find('[data-testid="rhythm-detail-correction-placement"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toBe(placement)
+
+    // 非拖拽进入的校正（无落点）不渲染该提示
+    const plain = mountPanel({ authorCorrection: { status: 'written', deviationFlag: false, deviationNote: '' } })
+    expect(plain.find('[data-testid="rhythm-detail-correction-placement"]').exists()).toBe(false)
+  })
+
+  it('历史人工说明：恢复自动后默认折叠展示作者历史说明', () => {
+    const wrapper = mountPanel({ historicalAuthorNote: '恢复自动前的作者说明' })
+    const details = wrapper.find('[data-testid="rhythm-detail-historical-note"]')
+    expect(details.exists()).toBe(true)
+    expect(details.text()).toContain('恢复自动前的作者说明')
+    expect(details.find('summary').text()).toContain('历史人工说明')
   })
 })

@@ -26,7 +26,7 @@ function expectPlaintextBody(wrapper: ReturnType<typeof mount>, text: string) {
 }
 
 describe('卡片详情正文纯文本预览', () => {
-  it('节奏意图：多行自由文本换行保留，不再走 markdown 渲染', () => {
+  it('节奏意图：多行自由文本换行保留，不再走 markdown 渲染', async () => {
     const wrapper = mount(RhythmDetailPanel, {
       props: {
         activeCard: {
@@ -46,6 +46,10 @@ describe('卡片详情正文纯文本预览', () => {
           actualHook: null,
           actualPayoff: null,
           deviationFlag: false,
+          judgmentSource: 'auto',
+          thresholdPending: false,
+          authorDeviationNote: null,
+          lastJudgmentThreshold: null,
           summary: '',
           sourcePath: 'rhythm/r1.md',
           plannedCharacters: [],
@@ -53,8 +57,8 @@ describe('卡片详情正文纯文本预览', () => {
           actualNote: '',
           deviationNote: '',
           intentBody: MULTILINE,
-          linkBody: '',
-          authorNoteBody: '',
+          linkBody: `衔接：${MULTILINE}`,
+          authorNoteBody: `备注：${MULTILINE}`,
           contentHash: 'h1',
         },
         draftName: null,
@@ -65,6 +69,36 @@ describe('卡片详情正文纯文本预览', () => {
         draftPlannedCharacters: null,
         draftPlannedNote: null,
         draftIntentBody: null,
+        judgmentSource: 'auto',
+        thresholdPending: false,
+        historicalAuthorNote: null,
+        comparisonEditWarning: false,
+        restoreAutoPreview: null,
+        authorCorrection: null,
+        correctionPlacement: null,
+        restoreAutoPending: false,
+        canConfirmAuthorCorrection: false,
+        canConfirmRestoreAuto: false,
+        isConfirmingJudgment: false,
+        draftChapterRef: null,
+        draftActualConflict: null,
+        draftActualMood: null,
+        draftActualHook: null,
+        draftActualPayoff: null,
+        draftActualNote: null,
+        draftLinkBody: null,
+        draftAuthorNoteBody: null,
+        picker: {
+          catalog: { entries: [], duplicateNumbers: new Set<number>(), maxNumber: null },
+          catalogReady: false,
+          loading: false,
+          loadError: null,
+          suggestedNumber: null,
+          createHandler: null,
+          sessionKey: 'spec',
+          latestChapterNumber: null,
+        },
+        chapterCreateNotice: null,
         detailMode: 'preview',
         savePhase: 'clean',
         conflict: null,
@@ -76,6 +110,11 @@ describe('卡片详情正文纯文本预览', () => {
       },
     })
     expectPlaintextBody(wrapper, MULTILINE)
+
+    // 上下文衔接/作者备注默认折叠在「更多正文」里，展开后同口径断言（合并配套修复）
+    await wrapper.find('[data-testid="rhythm-detail-more-toggle"]').trigger('click')
+    expectPlaintextBody(wrapper, `衔接：${MULTILINE}`)
+    expectPlaintextBody(wrapper, `备注：${MULTILINE}`)
     wrapper.unmount()
   })
 
@@ -120,6 +159,8 @@ describe('卡片详情正文纯文本预览', () => {
           plantedAt: '第一卷/第003章',
           payoffWindow: ['第一卷/第010章', '第一卷/第020章'],
           isRedHerring: false,
+          payoffStart: null,
+          payoffEnd: null,
           relatedChapters: ['第一卷/第005章'],
           summary: '',
           sourcePath: 'foreshadowings/f1.md',
@@ -135,6 +176,31 @@ describe('卡片详情正文纯文本预览', () => {
         draftReaderView: null,
         draftAuthorTruth: null,
         draftStatus: null,
+        draftPlantedAt: null,
+        draftPayoffStart: null,
+        draftPayoffEnd: null,
+        draftRelatedCharactersText: null,
+        draftRelatedEntitiesText: null,
+        draftRelatedChapters: null,
+        draftIsRedHerring: null,
+        draftResolvedAt: null,
+        picker: {
+          catalog: { entries: [], duplicateNumbers: new Set<number>(), maxNumber: null },
+          catalogReady: false,
+          loading: false,
+          loadError: null,
+          suggestedNumber: null,
+          createHandler: null,
+          sessionKey: 'spec',
+          latestChapterNumber: null,
+        },
+        chapterCreateNotice: null,
+        windowMismatch: false,
+        windowMismatchViews: null,
+        canAdoptWindow: false,
+        reasonRevision: null,
+        canConfirmReasonRevision: false,
+        isConfirmingReasonRevision: false,
         detailMode: 'preview',
         savePhase: 'clean',
         conflict: null,

@@ -23,6 +23,8 @@ function activeCard(overrides: Partial<ForeshadowingCardView> = {}): Foreshadowi
     createdAt: '2026-11-01T00:00:00Z',
     updatedAt: '2026-11-20T10:00:00Z',
     plantedAt: '第一卷/第003章',
+    payoffStart: null,
+    payoffEnd: null,
     payoffWindow: ['第一卷/第010章', '第一卷/第020章'] as [string, string],
     isRedHerring: false,
     relatedChapters: ['第一卷/第005章'],
@@ -50,6 +52,31 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       draftReaderView: null,
       draftAuthorTruth: null,
       draftStatus: null,
+      draftPlantedAt: null,
+      draftPayoffStart: null,
+      draftPayoffEnd: null,
+      draftRelatedCharactersText: null,
+      draftRelatedEntitiesText: null,
+      draftRelatedChapters: null,
+      draftIsRedHerring: null,
+      draftResolvedAt: null,
+      picker: {
+        catalog: { entries: [], duplicateNumbers: new Set<number>(), maxNumber: 0 },
+        catalogReady: false,
+        loading: false,
+        loadError: null,
+        suggestedNumber: null,
+        createHandler: null,
+        sessionKey: 'spec',
+        latestChapterNumber: null,
+      },
+      chapterCreateNotice: null,
+      windowMismatch: false,
+      windowMismatchViews: null,
+      canAdoptWindow: true,
+      reasonRevision: null,
+      canConfirmReasonRevision: true,
+      isConfirmingReasonRevision: false,
       detailMode: 'preview',
       savePhase: 'clean',
       conflict: null,
@@ -167,11 +194,12 @@ describe('伏笔详情：状态与放弃操作态', () => {
     }
   })
 
-  it('已放弃状态展示历史放弃原因', () => {
+  it('已放弃状态展示历史放弃原因（高级信息展开后只读展示）', async () => {
     const wrapper = mountPanel({
       activeCard: activeCard({ status: 'abandoned', abandonedReason: '线索已失效' }),
     })
     try {
+      await wrapper.find('[data-testid="foreshadowing-detail-advanced-toggle"]').trigger('click')
       expect(wrapper.text()).toContain('放弃原因')
       expect(wrapper.text()).toContain('线索已失效')
     } finally {
@@ -181,12 +209,17 @@ describe('伏笔详情：状态与放弃操作态', () => {
 })
 
 describe('伏笔详情：结构信息与骨架接线', () => {
-  it('结构字段只读展示（埋设章节/回收窗口/关联角色）', () => {
+  it('结构字段默认折叠、展开后只读展示（埋设章节/回收窗口/关联角色）', async () => {
     const wrapper = mountPanel()
+    // 默认折叠：只显示辅助说明，不展示具体字段值
+    expect(wrapper.find('[data-testid="foreshadowing-detail-advanced-toggle"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('第一卷/第003章')
+    await wrapper.find('[data-testid="foreshadowing-detail-advanced-toggle"]').trigger('click')
     expect(wrapper.text()).toContain('埋设章节')
     expect(wrapper.text()).toContain('第一卷/第003章')
     expect(wrapper.text()).toContain('第一卷/第010章 ~ 第一卷/第020章')
     expect(wrapper.text()).toContain('林远')
+    wrapper.unmount()
   })
 
   it('保存失败重试与冲突比较入口透传', async () => {
@@ -216,5 +249,117 @@ describe('伏笔详情：结构信息与骨架接线', () => {
     expect(wrapper.find('[data-testid="card-status-tools"]').exists()).toBe(false)
     wrapper.unmount()
     document.body.innerHTML = ''
+  })
+})
+
+describe('伏笔详情：高级信息编辑与明确操作（阶段 2）', () => {
+  async function mountEdit(overrides: Record<string, unknown> = {}) {
+    const wrapper = mountPanel({ detailMode: 'edit', ...overrides })
+    await wrapper.find('[data-testid="foreshadowing-detail-advanced-toggle"]').trigger('click')
+    return wrapper
+  }
+
+  it('编辑模式展示控件：红鲱鱼/关联角色输入发出草稿事件；实际回收不一致就地说明', async () => {
+    const wrapper = await mountEdit({
+      activeCard: activeCard({ status: 'planted', resolvedAt: '第一卷/第009章' }),
+    })
+    try {
+      await wrapper.get('[data-testid="foreshadowing-detail-red-herring"]').setValue(true)
+      expect(wrapper.emitted('updateDraftIsRedHerring')).toEqual([[true]])
+
+      await wrapper.get('[data-testid="foreshadowing-detail-related-characters"]').setValue('林远、阿四')
+      expect(wrapper.emitted('updateDraftRelatedCharactersText')).toEqual([['林远、阿四']])
+
+      // 普通未收状态登记了实际回收章节：就地说明，不阻止保存
+      expect(wrapper.text()).toContain('当前状态不是已揭晓或已解决')
+    } finally {
+      unmount(wrapper)
+    }
+  })
+
+  it('窗口不一致三出口：并列展示两套数据，按钮发出明确操作，返回收起横幅', async () => {
+    const wrapper = await mountEdit({
+      windowMismatch: true,
+      windowMismatchViews: { structured: '第15章 ~ 开放终点', legacy: '第020章 ~ 开放终点' },
+    })
+    try {
+      const banner = wrapper.get('[data-testid="foreshadowing-detail-window-mismatch"]')
+      expect(banner.text()).toContain('第15章')
+      expect(banner.text()).toContain('第020章')
+      expect(banner.text()).toContain('相对位置记录不保留')
+
+      await wrapper.get('[data-testid="foreshadowing-detail-mismatch-structured"]').trigger('click')
+      expect(wrapper.emitted('adoptStructuredWindow')).toHaveLength(1)
+      await wrapper.get('[data-testid="foreshadowing-detail-mismatch-legacy"]').trigger('click')
+      expect(wrapper.emitted('adoptLegacyWindow')).toHaveLength(1)
+
+      // 返回：收起横幅（两套数据与当前输入保留）
+      await wrapper.get('[data-testid="foreshadowing-detail-mismatch-back"]').trigger('click')
+      expect(wrapper.find('[data-testid="foreshadowing-detail-window-mismatch"]').exists()).toBe(false)
+    } finally {
+      unmount(wrapper)
+    }
+  })
+
+  it('未收口时窗口出口禁用（等 clean）', async () => {
+    const wrapper = await mountEdit({
+      windowMismatch: true,
+      windowMismatchViews: { structured: '第15章 ~ 开放终点', legacy: '第020章 ~ 开放终点' },
+      canAdoptWindow: false,
+    })
+    try {
+      expect((wrapper.get('[data-testid="foreshadowing-detail-mismatch-structured"]').element as HTMLButtonElement).disabled).toBe(true)
+    } finally {
+      unmount(wrapper)
+    }
+  })
+
+  it('已放弃卡的历史原因修订：入口→原位输入→空值禁用应用→应用/取消事件', async () => {
+    const wrapper = await mountEdit({
+      activeCard: activeCard({ status: 'abandoned', abandonedReason: '旧原因' }),
+    })
+    try {
+      // 未进操作态：只读展示 + 入口
+      expect(wrapper.text()).toContain('旧原因')
+      await wrapper.get('[data-testid="foreshadowing-detail-revision-start"]').trigger('click')
+      expect(wrapper.emitted('startReasonRevision')).toHaveLength(1)
+    } finally {
+      unmount(wrapper)
+    }
+
+    // 操作态激活会自动展开高级信息（不再手动点开，避免把展开态切回折叠）
+    const revising = mountPanel({
+      detailMode: 'edit',
+      activeCard: activeCard({ status: 'abandoned', abandonedReason: '旧原因' }),
+      reasonRevision: { reason: '' },
+    })
+    try {
+      // 操作态由 reasonRevision 驱动（面板只渲染）
+      const confirm = revising.get('[data-testid="foreshadowing-detail-revision-confirm"]')
+      expect((confirm.element as HTMLButtonElement).disabled).toBe(true)
+
+      await revising.get('[data-testid="foreshadowing-detail-revision-reason"]').setValue('修订后的原因')
+      expect(revising.emitted('updateReasonRevision')).toEqual([['修订后的原因']])
+      // 挂载测试没有 v-model 回灌：手动回传父层会同步的状态
+      await revising.setProps({ reasonRevision: { reason: '修订后的原因' } })
+      expect((confirm.element as HTMLButtonElement).disabled).toBe(false)
+
+      await revising.get('[data-testid="foreshadowing-detail-revision-cancel"]').trigger('click')
+      expect(revising.emitted('cancelReasonRevision')).toHaveLength(1)
+      await confirm.trigger('click')
+      expect(revising.emitted('confirmReasonRevision')).toHaveLength(1)
+    } finally {
+      unmount(revising)
+    }
+  })
+
+  it('章节已创建提示按 prop 展示', async () => {
+    const wrapper = await mountEdit({ chapterCreateNotice: '章节已创建（第021章），卡片引用尚未保存。' })
+    try {
+      expect(wrapper.get('[data-testid="foreshadowing-detail-chapter-created-notice"]').text())
+        .toContain('卡片引用尚未保存')
+    } finally {
+      unmount(wrapper)
+    }
   })
 })

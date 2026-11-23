@@ -11,6 +11,7 @@ import {
   rhythmUpdateTool,
 } from './rhythm-tools'
 import type { ToolRuntime } from './types'
+import { updateRhythmCard } from '../rhythm'
 
 /* ---------- 内存文件系统（与其他工具测试同款内联实现） ---------- */
 
@@ -246,13 +247,13 @@ describe('RhythmUpdate', () => {
   })
 
   it('确认卡：改正文走预览分支；回写实际值注明系统自动判定', async () => {
-    const bodyConfirmation = rhythmUpdateTool.buildConfirmation(
+    const bodyConfirmation = await rhythmUpdateTool.buildConfirmation(
       rhythmUpdateTool.validateInput({ id: 'R-001', intentBody: '新意图', expectedContentHash: 'x' }),
     )!
     expect(bodyConfirmation.kind).toBe('edit')
     expect(bodyConfirmation.newText).toContain('新意图')
 
-    const actualConfirmation = rhythmUpdateTool.buildConfirmation(
+    const actualConfirmation = await rhythmUpdateTool.buildConfirmation(
       rhythmUpdateTool.validateInput({ id: 'R-001', actualConflict: 7 }),
     )!
     expect(actualConfirmation.newText).toContain('系统自动判定')
@@ -350,15 +351,94 @@ describe('RhythmCheck / RhythmSync / RhythmCurve', () => {
     )
     expect(defaultOutcome.deviationFlag).toBe(false)
 
-    // 收紧到 1：|3-4|=1 ≥ 1 判偏差
+    // 收紧到 1：|3-4|=1 ≥ 1 判偏差（一章一卡：第二张样本用另一章）
     const strictRuntime = (): ToolRuntime => ({
       project: { handle: root, config: { settings: { rhythmDeviationThreshold: 1 } } } as never,
     })
-    await createSample()
+    await rhythmCreateTool.run(
+      rhythmCreateTool.validateInput({
+        chapterRef: '第二卷/第084章',
+        plannedConflict: 3,
+        plannedMood: '温馨',
+        plannedHook: '无',
+        plannedPayoff: '收获',
+      }),
+      runtime(),
+    )
     const strict = await rhythmUpdateTool.run(
       rhythmUpdateTool.validateInput({ id: 'R-002', actualConflict: 4 }),
       strictRuntime(),
     )
     expect(strict.deviationFlag).toBe(true)
+  })
+})
+
+describe('判定来源保护（阶段 4 §五.4）', () => {
+  it('RhythmUpdate 不接受作者校正 / 恢复自动参数', () => {
+    expect(() => rhythmUpdateTool.validateInput({ id: 'R-001', authorJudgment: { status: 'written', deviationFlag: false } }))
+      .toThrow('不接受判定来源参数')
+    expect(() => rhythmUpdateTool.validateInput({ id: 'R-001', restoreAutoJudgment: true }))
+      .toThrow('不接受判定来源参数')
+  })
+
+  it('Read 输出判定来源元数据（纯规划卡：auto / 无人工说明 / 未记录阈值）', async () => {
+    await createSample()
+    const output = await rhythmReadTool.run(rhythmReadTool.validateInput({ id: 'R-001' }), runtime())
+    expect('notFound' in output && output.notFound).toBeFalsy()
+    if (!('notFound' in output)) {
+      expect(output.judgmentSource).toBe('auto')
+      expect(output.authorDeviationNote).toBeNull()
+      expect(output.lastJudgmentThreshold).toBeNull()
+    }
+  })
+
+  it('List 行携带判定来源', async () => {
+    await createSample()
+    const list = await rhythmListTool.run(rhythmListTool.validateInput({}), runtime())
+    expect(list.rhythm[0]!.judgmentSource).toBe('auto')
+  })
+
+  it('作者校正卡：Sync 带人工结论与重算提示；确认卡固定展示结论变化；仅自评不误称重算', async () => {
+    await createSample()
+    await rhythmUpdateTool.run(
+      rhythmUpdateTool.validateInput({ id: 'R-001', actualConflict: 7 }),
+      runtime(),
+    )
+    // 作者校正只能来自作者详情的明确操作（领域层直连，不走 AI 工具）
+    await updateRhythmCard(runtime().project, {
+      id: 'R-001',
+      authorJudgment: { status: 'written', deviationFlag: false },
+      conflictThreshold: 3,
+    })
+
+    const sync = await rhythmSyncTool.run(rhythmSyncTool.validateInput({ chapter: 83 }), runtime())
+    expect('notFound' in sync && sync.notFound).toBeFalsy()
+    if (!('notFound' in sync)) {
+      expect(sync.judgmentSource).toBe('author')
+      expect(sync.authorDeviationNote).toBeNull()
+      expect(sync.lastJudgmentThreshold).toBe(3)
+      expect(sync.guidance).toContain('作者校正结论（已写 · 无偏差）')
+      expect(sync.guidance).toContain('回到自动判定')
+      expect(sync.guidance).toContain('不在同一次回写里混改计划比较值')
+    }
+
+    // 实际比较值提案：确认界面固定展示「当前作者结论 → 按提案重算的自动结论」
+    const confirmation = await rhythmUpdateTool.buildConfirmation(
+      rhythmUpdateTool.validateInput({ id: 'R-001', actualConflict: 7, actualMood: '温馨' }),
+      runtime().project,
+    )!
+    expect(confirmation.kind).toBe('edit')
+    expect(confirmation.newText).toContain('当前作者结论（已写 · 无偏差）')
+    expect(confirmation.newText).toContain('按本提案重算的自动结论（偏差 · 有偏差')
+    expect(confirmation.newText).toContain('恢复自动判定')
+
+    // 仅自评（非比较值）：确认文案不得声称会重算
+    const noteOnly = await rhythmUpdateTool.buildConfirmation(
+      rhythmUpdateTool.validateInput({ id: 'R-001', actualNote: '按作者口径' }),
+      runtime().project,
+    )!
+    expect(noteOnly.newText).toContain('自评 （已填）')
+    expect(noteOnly.newText).not.toContain('系统自动判定')
+    expect(noteOnly.newText).not.toContain('恢复自动判定')
   })
 })

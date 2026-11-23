@@ -9,6 +9,22 @@ import {
   toForeshadowingCardView as toCardView,
   updateForeshadowingCard,
 } from '../core/foreshadowing'
+
+// 计划位置纯函数再导出：app 经 `@novai/core/services/foreshadowing-service`
+// 合法子路径取用（详情高级信息 / 「该收了」/ 窗口不一致三出口共用同一语义）
+export {
+  OPEN_END_PLACEHOLDER,
+  deriveLegacyPayoffWindow,
+  derivePositionsFromLegacyWindow,
+  effectivePlannedWindow,
+  formatPlannedPosition,
+  hasStructuredPayoffWindow,
+  parsePlannedPosition,
+  parsePlannedStart,
+  payoffWindowMismatch,
+  plannedPositionTarget,
+  validatePlannedWindow,
+} from '../core/foreshadowing'
 import type {
   CreateForeshadowingOptions,
   UpdateForeshadowingOptions,
@@ -53,6 +69,8 @@ function toForeshadowingCardView(card: ForeshadowingCard, contentHash: string): 
     updatedAt: view.updatedAt,
     plantedAt: view.plantedAt,
     payoffWindow: view.payoffWindow,
+    payoffStart: view.payoffStart,
+    payoffEnd: view.payoffEnd,
     isRedHerring: view.isRedHerring,
     summary: view.summary,
     sourcePath: view.sourcePath,
@@ -78,6 +96,8 @@ function toForeshadowingCardSummaryView(card: ForeshadowingCard): ForeshadowingC
     updatedAt: view.updatedAt,
     plantedAt: view.plantedAt,
     payoffWindow: view.payoffWindow,
+    payoffStart: view.payoffStart,
+    payoffEnd: view.payoffEnd,
     isRedHerring: view.isRedHerring,
     relatedChapters: [...view.relatedChapters],
     summary: view.summary,

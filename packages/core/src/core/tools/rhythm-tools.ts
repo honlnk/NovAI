@@ -1,4 +1,5 @@
 import {
+  computeRhythmDeviation,
   createRhythmCard,
   deleteRhythmCard,
   readRhythmCard,
@@ -19,8 +20,9 @@ import {
   RHYTHM_HOOKS,
   RHYTHM_PAYOFFS,
 } from '../../types/rhythm'
-import type { RhythmHook, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
+import type { RhythmCard, RhythmHook, RhythmMood, RhythmPayoff, RhythmStatus } from '../../types/rhythm'
 import type { RhythmCardView } from '../../types/rhythm'
+import type { ProjectSnapshot } from '../../types/project'
 import type {
   RhythmCreateInput,
   RhythmCreateOutput,
@@ -230,6 +232,7 @@ export const rhythmListTool: ToolDefinition<'RhythmList', RhythmListInput, Rhyth
         plannedHook: card.plannedHook,
         plannedPayoff: card.plannedPayoff,
         deviationFlag: card.deviationFlag,
+        judgmentSource: card.judgmentSource,
         updatedAt: card.updatedAt,
         summary: card.summary,
       })),
@@ -284,6 +287,9 @@ export const rhythmReadTool: ToolDefinition<'RhythmRead', RhythmReadInput, Rhyth
       actualNote: result.card.actualNote,
       deviationFlag: result.card.deviationFlag,
       deviationNote: result.card.deviationNote,
+      judgmentSource: result.card.judgmentSource,
+      authorDeviationNote: result.card.authorDeviationNote,
+      lastJudgmentThreshold: result.card.lastJudgmentThreshold,
       intentBody,
       linkBody,
       authorNoteBody,
@@ -400,12 +406,17 @@ export const rhythmCreateTool: ToolDefinition<'RhythmCreate', RhythmCreateInput,
 
 export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput, RhythmUpdateOutput> = {
   name: 'RhythmUpdate',
-  description: '按稳定标识更新一张节奏卡：计划值各字段、正文三节（节奏意图/上下文衔接/作者备注）、写后回写实际值（actual_*）分别可选。改正文前必须先读取并回传 contentHash；只改计划值时不传正文。回写任一 actual_* 时系统自动计算偏差并流转状态（written/deviated）——status 与偏差标记不接受外部设置；五项 actual_* 全传 null 可撤销回写（回到规划中）。',
+  description: '按稳定标识更新一张节奏卡：计划值各字段、正文三节（节奏意图/上下文衔接/作者备注）、写后回写实际值（actual_*）分别可选。改正文前必须先读取并回传 contentHash；只改计划值时不传正文。保存任一比较值（计划四项/实际四项）时系统按当时阈值重算偏差并流转状态——status 与偏差标记不接受外部设置，作者校正/恢复自动也只能由作者在详情中明确操作；五项 actual_* 全传 null 可撤销回写（回到规划中）。',
   validateInput(input) {
     const value = asRecord(input)
     const id = readString(value.id, 'RhythmUpdate.id').trim()
     if (!id) {
       throw new Error('RhythmUpdate.id 不能为空')
+    }
+
+    // 判定来源不是 AI 可写参数（阶段 4 §五.4）：静默丢弃会让模型误以为已代为校正
+    if (value.authorJudgment !== undefined || value.restoreAutoJudgment !== undefined) {
+      throw new Error('RhythmUpdate 不接受判定来源参数（authorJudgment / restoreAutoJudgment）：作者校正与恢复自动只能由作者在卡片详情中明确操作；请只提交计划值、实际值或非比较字段')
     }
 
     const name = value.name === undefined ? undefined : readString(value.name, 'RhythmUpdate.name').trim()
@@ -520,18 +531,28 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
       linesRemoved: 0,
     }
   },
-  buildConfirmation(input) {
+  async buildConfirmation(input, project) {
     const path = `rhythm/（节奏卡 ${input.id}）`
     const bodyFields: string[] = []
     if (input.intentBody !== undefined) bodyFields.push('节奏意图')
     if (input.linkBody !== undefined) bodyFields.push(input.linkBody ? '上下文衔接' : '清除上下文衔接')
     if (input.authorNoteBody !== undefined) bodyFields.push(input.authorNoteBody ? '作者备注' : '清除作者备注')
 
+    // 判定去向说明（阶段 4 §五.4）：比较值变更会重算。对作者校正卡固定展示
+    // 「当前作者结论 → 按提案重算的自动结论」（即使相同也不隐藏来源将改变的事实）；
+    // 只改非比较字段（含仅自评）时不附判定说明，避免误称会重算。
+    const hasComparisonUpdate = [
+      input.plannedConflict, input.plannedMood, input.plannedHook, input.plannedPayoff,
+      input.actualConflict, input.actualMood, input.actualHook, input.actualPayoff,
+    ].some((field) => field !== undefined)
+    const judgmentNote = hasComparisonUpdate ? await buildJudgmentNote(input, project) : ''
+
     if (bodyFields.length > 0) {
       const preview = [
         input.intentBody !== undefined ? input.intentBody : '（节奏意图不变）',
         input.linkBody !== undefined ? (input.linkBody || '（清除上下文衔接）') : '（上下文衔接不变）',
         input.authorNoteBody !== undefined ? (input.authorNoteBody || '（清除作者备注）') : '（作者备注不变）',
+        ...(judgmentNote ? ['', judgmentNote] : []),
       ].join('\n\n')
       return { kind: 'edit', path, oldText: '（正文节替换，差异以执行结果为准）', newText: preview }
     }
@@ -551,7 +572,8 @@ export const rhythmUpdateTool: ToolDefinition<'RhythmUpdate', RhythmUpdateInput,
     if (input.actualHook !== undefined) actualParts.push(`钩子 ${input.actualHook ?? '清除'}`)
     if (input.actualPayoff !== undefined) actualParts.push(`爽点 ${input.actualPayoff ?? '清除'}`)
     if (input.actualNote !== undefined) actualParts.push(`自评 ${input.actualNote ? '（已填）' : '清除'}`)
-    if (actualParts.length) metaParts.push(`回写实际值：${actualParts.join(' · ')}（偏差与状态由系统自动判定）`)
+    if (actualParts.length) metaParts.push(`回写实际值：${actualParts.join(' · ')}`)
+    if (judgmentNote) metaParts.push(judgmentNote)
     const extra = [input.plannedCharacters, input.plannedNote].some((field) => field !== undefined)
     if (extra) metaParts.push('（其余元数据字段）')
 
@@ -617,6 +639,69 @@ function readConflictThreshold(runtime: ToolRuntime): number {
   return runtime.project.config?.settings?.rhythmDeviationThreshold ?? 3
 }
 
+/**
+ * 确认预览用的当前卡片快照：卡不存在或读取失败（IO 异常）时降级为 null，
+ * 预览退回仅凭 input 的文案（确认内容不因读不到卡而中断）。
+ */
+async function readConfirmationCard(project: ProjectSnapshot, id: string): Promise<RhythmCard | null> {
+  try {
+    const result = await readRhythmCard(project, id)
+    return result ? result.card : null
+  } catch {
+    return null
+  }
+}
+
+/** 把提案的比较值合并到当前卡上，按当前阈值预判执行后的自动判定结果。 */
+function projectAutoJudgment(
+  input: RhythmUpdateInput,
+  card: RhythmCard,
+  threshold: number,
+): { status: RhythmStatus; deviationFlag: boolean; note: string | null } {
+  const plannedConflict = input.plannedConflict ?? card.plannedConflict
+  const plannedMood = input.plannedMood ?? card.plannedMood
+  const plannedHook = input.plannedHook ?? card.plannedHook
+  const plannedPayoff = input.plannedPayoff ?? card.plannedPayoff
+  const actualConflict = input.actualConflict !== undefined ? input.actualConflict : card.actualConflict
+  const actualMood = input.actualMood !== undefined ? input.actualMood : card.actualMood
+  const actualHook = input.actualHook !== undefined ? input.actualHook : card.actualHook
+  const actualPayoff = input.actualPayoff !== undefined ? input.actualPayoff : card.actualPayoff
+  const hasComparisonActual = actualConflict !== null || actualMood !== null
+    || actualHook !== null || actualPayoff !== null
+  const deviation = hasComparisonActual
+    ? computeRhythmDeviation({ plannedConflict, plannedMood, plannedHook, plannedPayoff, actualConflict, actualMood, actualHook, actualPayoff }, threshold)
+    : { deviationFlag: false, deviationNote: null }
+  const status: RhythmStatus = !hasComparisonActual ? 'planned' : deviation.deviationFlag ? 'deviated' : 'written'
+  return { status, deviationFlag: deviation.deviationFlag, note: deviation.deviationNote }
+}
+
+/** 结论一行式：状态中文 · 偏差结论。 */
+function judgmentLabel(status: RhythmStatus, deviationFlag: boolean): string {
+  const statusLabel = status === 'planned' ? '规划中' : status === 'written' ? '已写' : '偏差'
+  return `${statusLabel} · ${deviationFlag ? '有偏差' : '无偏差'}`
+}
+
+/**
+ * 比较值提案的判定去向说明（阶段 4 §五.4）。作者校正卡固定展示结论变化；
+ * 自动卡沿用一句系统判定说明（与阶段 3 前文案一致）。
+ */
+async function buildJudgmentNote(
+  input: RhythmUpdateInput,
+  project: ProjectSnapshot | undefined,
+): Promise<string> {
+  if (!project) {
+    return '偏差与状态由系统自动判定'
+  }
+  const card = await readConfirmationCard(project, input.id)
+  if (card?.judgmentSource !== 'author') {
+    return '偏差与状态由系统自动判定'
+  }
+  const projected = projectAutoJudgment(input, card, readConflictThreshold({ project }))
+  const currentNote = card.authorDeviationNote ? `，说明：${card.authorDeviationNote}` : ''
+  const projectedNote = projected.note ? `，说明按规则生成（${projected.note}）` : ''
+  return `判定来源将变化：当前作者结论（${judgmentLabel(card.status, card.deviationFlag)}${currentNote}）→ 按本提案重算的自动结论（${judgmentLabel(projected.status, projected.deviationFlag)}${projectedNote}）；确认本提案即表示接受按新值重算并恢复自动判定`
+}
+
 function deviationRulesText(threshold: number): string {
   return [
     `偏差判定规则（当前冲突强度阈值 ${threshold}）：`,
@@ -643,6 +728,7 @@ function toCheckCardBase(card: RhythmCardView) {
     actualHook: card.actualHook,
     actualPayoff: card.actualPayoff,
     deviationFlag: card.deviationFlag,
+    judgmentSource: card.judgmentSource,
   }
 }
 
@@ -702,7 +788,7 @@ export const rhythmCheckTool: ToolDefinition<'RhythmCheck', RhythmCheckInput, Rh
 
 export const rhythmSyncTool: ToolDefinition<'RhythmSync', RhythmSyncInput, RhythmSyncOutput> = {
   name: 'RhythmSync',
-  description: '写后同步（写完第 N 章后主动调用）：组装节奏回写提案——本章节奏卡完整内容（含 contentHash）+ 偏差判定规则与当前阈值。本工具只读不落盘：对照本章正文整理 actual_* 回写提案（一组回写，不拆半组），先列给作者审阅，批准后用 RhythmUpdate 落盘（contentHash 直接回传）。',
+  description: '写后同步（写完第 N 章后主动调用）：组装节奏回写提案——本章节奏卡完整内容（含 contentHash、判定来源与人工说明）+ 偏差判定规则与当前阈值。本工具只读不落盘：对照本章正文整理 actual_* 回写提案（一组回写，不拆半组），先列给作者审阅，批准后用 RhythmUpdate 落盘（contentHash 直接回传）。作者校正卡提交实际比较值会按新值重算并回到自动判定——提案必须向作者明示这一变化。',
   validateInput(input) {
     const value = asRecord(input)
     const chapter = readChapterRange(value.chapter, 'RhythmSync.chapter')
@@ -756,14 +842,25 @@ export const rhythmSyncTool: ToolDefinition<'RhythmSync', RhythmSyncInput, Rhyth
       actualPayoff: result.card.actualPayoff,
       deviationFlag: result.card.deviationFlag,
       deviationNote: result.card.deviationNote,
+      judgmentSource: result.card.judgmentSource,
+      authorDeviationNote: result.card.authorDeviationNote,
+      lastJudgmentThreshold: result.card.lastJudgmentThreshold,
       contentHash: result.contentHash,
       conflictThreshold: threshold,
       deviationRules: deviationRulesText(threshold),
-      guidance: [
-        '对照本章正文如实整理 actual_* 一组回写值（冲突强度/情绪/钩子/爽点 + 本章自评 actualNote）；',
-        '系统按偏差规则自动判定状态与偏差说明——status 与偏差标记不手填；',
-        '提案先列给作者审阅（写超了也要如实报，偏差不是错误），批准后用 RhythmUpdate 落盘，contentHash 直接作为 expectedContentHash 回传。',
-      ].join('\n'),
+      guidance: result.card.judgmentSource === 'author'
+        ? [
+          `本卡当前是作者校正结论（${judgmentLabel(result.card.status, result.card.deviationFlag)}${result.card.authorDeviationNote ? `，说明：${result.card.authorDeviationNote}` : ''}）——尊重作者结论，不要在提案里质疑或顺手推翻；`,
+          '只提交一组实际比较值回写，不在同一次回写里混改计划比较值（确需改计划另列独立提案）；',
+          '提交任何实际比较值都会按新值重算并回到自动判定——提案里明确写出「当前作者结论 → 按提案重算的自动结论」，由作者确认；只改非比较字段（含自评）则保留作者结论。',
+          '对照本章正文如实整理 actual_* 一组回写值（冲突强度/情绪/钩子/爽点 + 本章自评 actualNote）；status 与偏差标记不手填；',
+          '提案先列给作者审阅（写超了也要如实报，偏差不是错误），批准后用 RhythmUpdate 落盘，contentHash 直接作为 expectedContentHash 回传。',
+        ].join('\n')
+        : [
+          '对照本章正文如实整理 actual_* 一组回写值（冲突强度/情绪/钩子/爽点 + 本章自评 actualNote）；',
+          '系统按偏差规则自动判定状态与偏差说明——status 与偏差标记不手填；',
+          '提案先列给作者审阅（写超了也要如实报，偏差不是错误），批准后用 RhythmUpdate 落盘，contentHash 直接作为 expectedContentHash 回传。',
+        ].join('\n'),
     }
   },
   summarizeInput(input) {

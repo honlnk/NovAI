@@ -1,6 +1,8 @@
 import {
   createForeshadowingCard,
   deleteForeshadowingCard,
+  effectivePlannedWindow,
+  plannedPositionTarget,
   readForeshadowingCard,
   scanForeshadowingCards,
   updateForeshadowingCard,
@@ -532,17 +534,19 @@ function isForeshadowingUnresolved(status: ForeshadowingStatus): boolean {
   return status === 'planted' || status === 'hinted' || status === 'developed'
 }
 
-/** 窗口是否覆盖某章：起点可解析且 ≤ N；终点可解析时 N ≤ 终点（不可解析按开放区间）。 */
-function payoffWindowCovers(window: readonly [string, string] | null, chapter: number): boolean {
-  if (!window) {
-    return false
-  }
-  const start = parseChapterNumber(window[0])
-  if (start === null || chapter < start) {
-    return false
-  }
-  const end = parseChapterNumber(window[1])
-  return end === null || chapter <= end
+/**
+ * 窗口是否已到达某章（作者字段控制权计划阶段 2 的统一位置语义）：
+ * 按结构化计划位置（无结构化数据时按旧窗口反向推导）解析出起点目标章号，
+ * 进入起点且未收即提示；存在终点时超过终点仍继续提示逾期，
+ * 不因有终点就停止关注。
+ */
+function payoffWindowReached(
+  card: Pick<ForeshadowingCardView, 'payoffWindow' | 'payoffStart' | 'payoffEnd'>,
+  chapter: number,
+): boolean {
+  const { start } = effectivePlannedWindow(card)
+  const startTarget = plannedPositionTarget(start)
+  return startTarget !== null && chapter >= startTarget
 }
 
 function toCheckCard(card: ForeshadowingCardView): ForeshadowingCheckCard {
@@ -588,7 +592,7 @@ function findChapterPath(tree: readonly TreeNode[], chapter: number): string | n
 
 export const foreshadowingCheckTool: ToolDefinition<'ForeshadowingCheck', ForeshadowingCheckInput, ForeshadowingCheckOutput> = {
   name: 'ForeshadowingCheck',
-  description: '写前检查（写第 N 章前主动调用）：返回预计在本章回收的伏笔（回收窗口覆盖本章且未收）+ 本章已埋/已提及的伏笔（读者视角摘要）。结果只含读者视角，防剧透边界不变；设计具体回收方案需要真相时再用 ReadForeshadowingForPlanning 单条读取。',
+  description: '写前检查（写第 N 章前主动调用）：返回该收的伏笔（已进入回收窗口且未收；超过终点的继续提示为逾期）+ 本章已埋/已提及的伏笔（读者视角摘要）。结果只含读者视角，防剧透边界不变；设计具体回收方案需要真相时再用 ReadForeshadowingForPlanning 单条读取。',
   validateInput(input) {
     const value = asRecord(input)
     return { chapter: readChapterInput(value.chapter, 'ForeshadowingCheck.chapter') }
@@ -598,7 +602,7 @@ export const foreshadowingCheckTool: ToolDefinition<'ForeshadowingCheck', Foresh
     const chapter = input.chapter
 
     const dueForPayoff = scan.cards
-      .filter((card) => isForeshadowingUnresolved(card.status) && payoffWindowCovers(card.payoffWindow, chapter))
+      .filter((card) => isForeshadowingUnresolved(card.status) && payoffWindowReached(card, chapter))
       .map(toCheckCard)
 
     const relatedToChapter = scan.cards
@@ -673,7 +677,7 @@ export const foreshadowingSyncTool: ToolDefinition<'ForeshadowingSync', Foreshad
     }
 
     const dueUnresolved = scan.cards
-      .filter((card) => isForeshadowingUnresolved(card.status) && payoffWindowCovers(card.payoffWindow, chapter))
+      .filter((card) => isForeshadowingUnresolved(card.status) && payoffWindowReached(card, chapter))
       .map((card) => ({
         id: card.id,
         name: card.name,

@@ -7,10 +7,10 @@ import {
 import type { RhythmCardSummaryView } from '@novai/core/services/types'
 
 /**
- * 节奏看板的展示口径（创作心智模块施工计划 §七）：固定三列（规划中 / 已写 /
- * 偏差），状态即列——与伏笔不同，没有折叠模式。三列之间的流转只由 actual_*
- * 回写的偏差判定驱动（§四 状态机），看板拖拽仅支持列内重排：偏差列不可手动
- * 拖出，规划中/已写之间也不允许手动互拖（跨列 = 手工改状态，领域层不收）。
+ * 节奏看板的展示口径：固定三列（规划中 / 已写 / 偏差），状态即列——与伏笔
+ * 不同，没有折叠模式。三列之间的流转由偏差判定驱动；跨列拖拽不放行静默无效，
+ * 而是进入作者校正操作态（作者字段控制权计划阶段 5 §六）：松手打开详情、
+ * 目标状态已选、落点暂存，「应用校正」一次保存判定与目标落点后才移动看板。
  */
 
 export type RhythmDisplayColumn = {
@@ -34,8 +34,21 @@ export function rhythmDisplayColumns(
 }
 
 /**
- * 看板拖拽落点是否放行：状态不由 UI 手改——落点列 ≠ 卡片当前列一律忽略
- * （偏差列不可拖出，其他列之间也不可互拖），只有同列重排生效。
+ * 看板拖拽落点是否放行（阶段 5 §六）：三列都显示合法落点——同列松手即时重排，
+ * 跨列松手打开该卡详情的作者校正操作态（目标状态已选、落点暂存待确认），
+ * 应用前真实看板保持原位。列 key 非法才不放行。
+ */
+export function isRhythmDropAllowed(
+  board: { columns: Record<RhythmStatus, readonly RhythmCardSummaryView[]> } | null,
+  _cardId: string,
+  columnKey: string,
+): boolean {
+  return Boolean(board) && RHYTHM_COLUMNS.includes(columnKey as RhythmColumn)
+}
+
+/**
+ * 是否同列重排（即时生效路径）：落点列 = 卡片当前列。跨列走作者校正操作态，
+ * 由 RhythmBoardPanel 分流上抛，不直接改状态。
  */
 export function isRhythmReorderOnly(
   board: { columns: Record<RhythmStatus, readonly RhythmCardSummaryView[]> } | null,

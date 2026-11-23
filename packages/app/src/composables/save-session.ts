@@ -438,7 +438,7 @@ export function createSaveSessionRealm<
   function requestSave(
     projectId: string,
     key: string,
-    options?: { trigger?: 'manual' | 'debounce' | 'flush'; snapshot?: TSnapshot },
+    options?: { trigger?: 'manual' | 'debounce' | 'flush'; snapshot?: TSnapshot; explicit?: boolean },
   ): Promise<SaveSessionRequestResult<TDisk>> {
     const trigger = options?.trigger ?? 'manual'
     const composite = realmKey(projectId, key)
@@ -457,9 +457,21 @@ export function createSaveSessionRealm<
         force: false,
         ...(pinAtRequest && sessionAtRequest !== undefined ? { session: sessionAtRequest } : {}),
         ...(submitted !== undefined ? { submitted } : {}),
+        ...(options?.explicit ? { explicit: true } : {}),
       })
     })
     return run.then(() => result)
+  }
+
+  /**
+   * 显式操作保存（阶段 4 作者校正/恢复自动）：与手动保存同一编排（请求时固定
+   * 快照、同键串行、版本校验、结果回执），差异只有两点——
+   * - 不受「无待写内容」短路：操作本身的差异在快照之外（领域经会话携带操作
+   *   载荷，保存适配层消费），草稿全空也要执行；
+   * - 失败不自动补试：明确操作由用户重试，输入与操作态全部保留。
+   */
+  function requestExplicitSave(projectId: string, key: string): Promise<SaveSessionRequestResult<TDisk>> {
+    return requestSave(projectId, key, { trigger: 'manual', explicit: true })
   }
 
   /** 等待该键在途与排队的写盘全部完成（不发起保存；确认复检用） */
@@ -478,6 +490,8 @@ export function createSaveSessionRealm<
       session?: TSession
       /** 请求时固定的提交快照（缺省在写盘开始时读取） */
       submitted?: TSnapshot
+      /** 显式操作保存：差异在快照之外（不短路无待写），失败不自动补试 */
+      explicit?: boolean
     },
   ): Promise<SaveSessionRequestResult<TDisk>> {
     const session = options.session ?? getSession(projectId, key)
@@ -494,12 +508,14 @@ export function createSaveSessionRealm<
     }
     if (
       !options.force
+      && !options.explicit
       && adapter.isSameSnapshot(
         options.submitted ?? adapter.getSnapshot(session),
         adapter.getBaseSnapshot(session),
       )
     ) {
-      // 无待写内容；在途失败态不因无内容请求清除（由重试/新输入重新触发）
+      // 无待写内容；在途失败态不因无内容请求清除（由重试/新输入重新触发）。
+      // 显式操作保存例外：操作载荷在快照之外（如作者校正），草稿全空也要执行。
       return { status: 'skipped' }
     }
 
@@ -566,8 +582,12 @@ export function createSaveSessionRealm<
     if (options.trigger === 'manual') {
       clearAutoRetryCycle(realmKey(projectId, key))
     }
-    // 普通失败自动补试一次：持久错误必须可见，补试失败后不再自动打扰
-    scheduleAutoRetry(projectId, key)
+    // 普通失败自动补试一次：持久错误必须可见，补试失败后不再自动打扰。
+    // 显式操作保存（作者校正/恢复自动）不自动补试：输入与操作态全部保留，
+    // 由用户明确重试（自动补试会在无操作载荷的情况下落盘字段修改，语义漂移）。
+    if (!options.explicit) {
+      scheduleAutoRetry(projectId, key)
+    }
     await adapter.onSettled?.(projectId, key, { status: 'failed', message: outcome.message })
     return { status: 'failed', message: outcome.message }
   }
@@ -1086,6 +1106,7 @@ export function createSaveSessionRealm<
     getGuardedSession,
     setGuard,
     requestSave,
+    requestExplicitSave,
     settleSave,
     freezeForExternal,
     expandConflict,

@@ -6,7 +6,10 @@ import {
   FORESHADOWING_STATUS_LABELS,
   type ForeshadowingColumn,
   type ForeshadowingStatus,
+  type PlannedPosition,
+  type PlannedWindowEnd,
 } from '@novai/core/types/foreshadowing'
+import { effectivePlannedWindow, plannedPositionTarget } from '@novai/core/services/foreshadowing-service'
 import type { ForeshadowingCardSummaryView } from '@novai/core/services/types'
 
 /**
@@ -95,7 +98,7 @@ export function resolveForeshadowingMoveStatus(
   return column ? FORESHADOWING_COLUMN_ENTRY_STATUS[column] : null
 }
 
-/* ---------- 「该收了」高亮（§七：payoff_window 包含当前最新章号） ---------- */
+/* ---------- 「该收了」高亮（统一位置语义：结构化计划位置优先，旧窗口兜底） ---------- */
 
 /** 从章节引用（如「第二卷/第080章」或文件名）解析章号；无法解析返回 null */
 export function foreshadowingChapterNumber(ref: string): number | null {
@@ -104,35 +107,45 @@ export function foreshadowingChapterNumber(ref: string): number | null {
 }
 
 /**
- * 是否已进入回收窗口：最新章号 ≥ 窗口起点的章号，且状态尚未揭晓/解决/放弃。
- * 简化按章号数值比较（全本连续编号是主流）；卷内独立编号的作品可能漏报/误报。
+ * 是否已进入回收窗口：按有效计划窗口（结构化 payoffStart/payoffEnd 优先，无结构化
+ * 数据时按旧窗口反向推导）解析起点目标章号，最新章号进入起点且尚未揭晓/解决/放弃
+ * 即提示；存在终点时超过终点继续提示逾期（不因有终点就停止关注）。
  */
 export function isForeshadowingDue(
-  card: { status: ForeshadowingStatus; payoffWindow: readonly [string, string] | null },
+  card: {
+    status: ForeshadowingStatus
+    payoffWindow: readonly [string, string] | null
+    payoffStart: PlannedPosition | null
+    payoffEnd: PlannedWindowEnd | null
+  },
   latestChapterNumber: number | null,
 ): boolean {
-  if (latestChapterNumber === null || !card.payoffWindow) {
+  if (latestChapterNumber === null) {
     return false
   }
   if (card.status === 'revealed' || card.status === 'resolved' || card.status === 'abandoned') {
     return false
   }
-  const start = foreshadowingChapterNumber(card.payoffWindow[0])
-  return start !== null && latestChapterNumber >= start
+  const { start } = effectivePlannedWindow(card)
+  const startTarget = plannedPositionTarget(start)
+  return startTarget !== null && latestChapterNumber >= startTarget
 }
 
 /* ---------- 章节侧栏「本章相关伏笔」实时反查（§七/§九：不写入章节文件） ---------- */
 
 /**
  * 章节文件路径（如 chapters/第一卷/第012章-夜行.txt）→ 伏笔引用形态（第一卷/第012章-夜行）。
- * 伏笔 frontmatter 的 plantedAt/relatedChapters 存「卷/章」引用，与路径去掉
- * chapters/ 前缀和扩展名后比对。
+ * 伏笔 frontmatter 的 plantedAt/relatedChapters 存「卷/章」引用。
  */
 export function chapterPathToForeshadowingRef(path: string): string {
   return path.replace(/^chapters\//, '').replace(/\.[^.]+$/, '')
 }
 
-/** 本章相关伏笔：埋设章是本章，或暗示历史包含本章（实时计算，不改任何文件） */
+/**
+ * 本章相关伏笔：埋设章是本章，或暗示历史包含本章（实时计算，不改任何文件）。
+ * 按全本章号位置匹配（统一位置语义）：章号不变时改名/换卷目录仍指向同一位置，
+ * 只关联已经存在的章节，不为未来目标制造空白关联。
+ */
 export function chapterRelatedForeshadowing(
   cards: readonly ForeshadowingCardSummaryView[],
   chapterPath: string | null | undefined,
@@ -140,6 +153,12 @@ export function chapterRelatedForeshadowing(
   if (!chapterPath) {
     return []
   }
-  const ref = chapterPathToForeshadowingRef(chapterPath)
-  return cards.filter((card) => card.plantedAt === ref || card.relatedChapters.includes(ref))
+  const chapterNumber = foreshadowingChapterNumber(chapterPath)
+  if (chapterNumber === null) {
+    return []
+  }
+  return cards.filter((card) =>
+    foreshadowingChapterNumber(card.plantedAt) === chapterNumber
+    || card.relatedChapters.some((ref) => foreshadowingChapterNumber(ref) === chapterNumber),
+  )
 }

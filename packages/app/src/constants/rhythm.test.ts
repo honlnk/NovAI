@@ -4,6 +4,7 @@ import type { RhythmCardSummaryView } from '@novai/core/services/types'
 import {
   chapterRhythmCard,
   conflictIntensityClass,
+  isRhythmDropAllowed,
   isRhythmReorderOnly,
   rhythmChapterNumber,
   rhythmDisplayColumns,
@@ -27,6 +28,8 @@ function summary(partial: Partial<RhythmCardSummaryView>): RhythmCardSummaryView
     actualHook: null,
     actualPayoff: null,
     deviationFlag: false,
+    judgmentSource: 'auto',
+    thresholdPending: false,
     summary: '',
     sourcePath: 'rhythm/R-001-第083章节奏.md',
     ...partial,
@@ -51,7 +54,7 @@ describe('rhythmDisplayColumns', () => {
   })
 })
 
-describe('isRhythmReorderOnly（拖拽只放行同列重排）', () => {
+describe('isRhythmReorderOnly（同列重排判定：即时重排路径）', () => {
   const board = {
     columns: {
       planned: [summary({ id: 'R-001' })],
@@ -60,12 +63,12 @@ describe('isRhythmReorderOnly（拖拽只放行同列重排）', () => {
     },
   }
 
-  it('同列重排放行（偏差列内、规划列内都算重排）', () => {
+  it('同列重排识别（偏差列内、规划列内都算重排）', () => {
     expect(isRhythmReorderOnly(board, 'R-003', 'deviated')).toBe(true)
     expect(isRhythmReorderOnly(board, 'R-001', 'planned')).toBe(true)
   })
 
-  it('跨列一律拒绝：偏差不可拖出，规划中/已写不可互拖', () => {
+  it('跨列不是重排（走作者校正操作态，由 isRhythmDropAllowed 放行显示落点）', () => {
     expect(isRhythmReorderOnly(board, 'R-003', 'planned')).toBe(false)
     expect(isRhythmReorderOnly(board, 'R-003', 'written')).toBe(false)
     expect(isRhythmReorderOnly(board, 'R-001', 'written')).toBe(false)
@@ -76,6 +79,29 @@ describe('isRhythmReorderOnly（拖拽只放行同列重排）', () => {
     expect(isRhythmReorderOnly(board, 'R-001', 'unknown')).toBe(false)
     expect(isRhythmReorderOnly(null, 'R-001', 'planned')).toBe(false)
     expect(isRhythmReorderOnly(board, 'R-999', 'planned')).toBe(false)
+  })
+})
+
+describe('isRhythmDropAllowed（阶段 5 落点放行：三列都显示合法落点）', () => {
+  const board = {
+    columns: {
+      planned: [summary({ id: 'R-001' })],
+      written: [summary({ id: 'R-002', status: 'written' })],
+      deviated: [summary({ id: 'R-003', status: 'deviated' })],
+    },
+  }
+
+  it('同列与跨列都放行（跨列松手进作者校正操作态，应用前看板不动）', () => {
+    expect(isRhythmDropAllowed(board, 'R-003', 'planned')).toBe(true)
+    expect(isRhythmDropAllowed(board, 'R-003', 'written')).toBe(true)
+    expect(isRhythmDropAllowed(board, 'R-001', 'deviated')).toBe(true)
+    expect(isRhythmDropAllowed(board, 'R-002', 'planned')).toBe(true)
+    expect(isRhythmDropAllowed(board, 'R-001', 'planned')).toBe(true)
+  })
+
+  it('未知列或 board 为 null 不放行', () => {
+    expect(isRhythmDropAllowed(board, 'R-001', 'unknown')).toBe(false)
+    expect(isRhythmDropAllowed(null, 'R-001', 'planned')).toBe(false)
   })
 })
 

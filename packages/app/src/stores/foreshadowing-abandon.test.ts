@@ -53,6 +53,8 @@ function view(overrides: Partial<ForeshadowingCardView> = {}): ForeshadowingCard
     createdAt: '2026-11-03T10:00:00.000Z',
     updatedAt: '2026-11-03T10:00:00.000Z',
     plantedAt: '第一卷/第一章',
+    payoffStart: null,
+    payoffEnd: null,
     payoffWindow: null,
     isRedHerring: false,
     relatedChapters: [],
@@ -394,5 +396,27 @@ describe('伏笔主动放弃（阶段 4：原因操作态与原子提交）', ()
       PROJECT,
       expect.objectContaining({ status: 'abandoned', abandonedReason: '节奏拖沓', expectedContentHash: 'hash-x' }),
     )
+  })
+})
+
+describe('待确认原因修订的镜像回归（阶段 4 修复批）', () => {
+  it('修订操作态随镜像持久化并跨刷新回填（scheduleCardBackup 曾丢失该字段）', async () => {
+    const store = await openCardWithAutosave()
+
+    expect(store.startReasonRevision(PROJECT)).toBe(true)
+    store.updateReasonRevision(PROJECT, '修订后的放弃原因')
+    vi.advanceTimersByTime(800)
+    await drainBackupWrites()
+    // 回归点：镜像记录必须携带待确认修订操作态（此前经条件展开绕过类型检查后被静默丢弃）
+    expect(memoryStore.records.get(buildCardDraftKey(PROJECT, 'f1'))?.reasonRevision).toEqual({ reason: '修订后的放弃原因' })
+
+    // 模拟刷新：全新 store 按生产路径恢复镜像，修订操作态仍待确认且不自动写盘
+    setActivePinia(createPinia())
+    const store2 = useForeshadowingStore()
+    readForeshadowing.mockResolvedValue(view())
+    await store2.restoreCardDrafts(PROJECT)
+    await store2.openCard(PROJECT, 'f1')
+    expect(store2.reasonRevisionIntent).toEqual({ reason: '修订后的放弃原因' })
+    expect(updateForeshadowing).not.toHaveBeenCalled()
   })
 })

@@ -6,11 +6,13 @@ import {
   setRuntimeProject,
 } from './project-runtime'
 import {
+  computeRhythmJudgmentPreview,
   createRhythm,
   deleteRhythm,
   getRhythmBoard,
   listRhythmCards,
   readRhythm,
+  readRhythmDeviationThreshold,
   splitRhythmBody,
   updateRhythm,
 } from './rhythm-service'
@@ -348,5 +350,105 @@ describe('项目运行时隔离', () => {
   it('未打开的项目：报「项目未打开」', async () => {
     removeRuntimeProject(PROJECT_B)
     await expect(getRhythmBoard(PROJECT_B)).rejects.toThrow('项目未打开')
+  })
+})
+
+describe('判定来源视图与阈值待复核（阶段 4）', () => {
+  it('视图携带判定来源元数据；判定保存后记录项目阈值', async () => {
+    const card = await createRhythm(PROJECT_A, sampleCreateInput())
+    expect(card.judgmentSource).toBe('auto')
+    expect(card.thresholdPending).toBe(false)
+    expect(card.lastJudgmentThreshold).toBeNull()
+
+    const updated = await updateRhythm(PROJECT_A, {
+      id: card.id,
+      actualConflict: 3,
+      actualMood: '温馨',
+      actualHook: '无',
+      actualPayoff: '收获',
+    })
+    expect(updated.lastJudgmentThreshold).toBe(3)
+    expect(updated.status).toBe('written')
+  })
+
+  it('作者校正经服务层透传；看板摘要与详情读同一份有效结论', async () => {
+    const card = await createRhythm(PROJECT_A, sampleCreateInput())
+    await updateRhythm(PROJECT_A, { id: card.id, actualConflict: 7 })
+
+    const corrected = await updateRhythm(PROJECT_A, {
+      id: card.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+    })
+    expect(corrected.judgmentSource).toBe('author')
+    expect(corrected.status).toBe('written')
+
+    const board = await getRhythmBoard(PROJECT_A)
+    expect(board.columns.written).toHaveLength(1)
+    expect(board.columns.written[0]!.judgmentSource).toBe('author')
+
+    const read = await readRhythm(PROJECT_A, card.id)
+    expect(read?.judgmentSource).toBe('author')
+    expect(read?.deviationNote).toContain('冲突强度偏差')
+  })
+
+  it('恢复自动判定经服务层透传：重算回 auto，人工说明保留为历史', async () => {
+    const card = await createRhythm(PROJECT_A, sampleCreateInput())
+    await updateRhythm(PROJECT_A, { id: card.id, actualConflict: 7 })
+    await updateRhythm(PROJECT_A, {
+      id: card.id,
+      authorJudgment: { status: 'written', deviationFlag: false },
+    })
+
+    const restored = await updateRhythm(PROJECT_A, { id: card.id, restoreAutoJudgment: true })
+    expect(restored.judgmentSource).toBe('auto')
+    expect(restored.status).toBe('deviated')
+    expect(restored.authorDeviationNote).toBeNull()
+  })
+
+  it('阈值待复核：判定后项目阈值变化 → thresholdPending；未判定卡按默认 3 解释', async () => {
+    const card = await createRhythm(PROJECT_A, sampleCreateInput())
+    // 纯规划卡（未判定，null 阈值）在默认阈值 3 下不提示
+    let read = await readRhythm(PROJECT_A, card.id)
+    expect(read?.thresholdPending).toBe(false)
+
+    // 判定后把项目阈值改成 5：该卡记录的是 3 → 待复核；纯规划卡没有可复核判定，不提示
+    await updateRhythm(PROJECT_A, { id: card.id, actualConflict: 3, actualMood: '温馨', actualHook: '无', actualPayoff: '收获' })
+    const other = await createRhythm(PROJECT_B, sampleCreateInput())
+    setRuntimeProject({ ...snapshotA, config: { settings: { rhythmDeviationThreshold: 5 } } as ProjectSnapshot['config'] })
+    setRuntimeProject({ ...snapshotB, config: { settings: { rhythmDeviationThreshold: 5 } } as ProjectSnapshot['config'] })
+
+    read = await readRhythm(PROJECT_A, card.id)
+    expect(read?.thresholdPending).toBe(true)
+    const otherRead = await readRhythm(PROJECT_B, other.id)
+    expect(otherRead?.thresholdPending).toBe(false)
+
+    const board = await getRhythmBoard(PROJECT_A)
+    expect(board.columns.written[0]!.thresholdPending).toBe(true)
+
+    // 下一次保存比较值后按新阈值重算并补记，提示消除
+    const resaved = await updateRhythm(PROJECT_A, { id: card.id, actualConflict: 4 })
+    expect(resaved.lastJudgmentThreshold).toBe(5)
+    expect(resaved.thresholdPending).toBe(false)
+  })
+
+  it('readRhythmDeviationThreshold 导出当前阈值（app 提示文案共用口径）', async () => {
+    setRuntimeProject(createProjectSnapshot(PROJECT_A, 7))
+    expect(readRhythmDeviationThreshold(PROJECT_A)).toBe(7)
+  })
+
+  it('computeRhythmJudgmentPreview 纯计算：与 store 自动重算同一推导（不读运行时项目）', () => {
+    const planned = { plannedConflict: 5, plannedMood: '紧张' as const, plannedHook: '悬念' as const, plannedPayoff: '揭秘' as const }
+    // 无实际比较值 → 规划中
+    expect(computeRhythmJudgmentPreview({ ...planned, actualConflict: null, actualMood: null, actualHook: null, actualPayoff: null }, 3))
+      .toEqual({ status: 'planned', deviationFlag: false, deviationNote: null })
+    // 冲突 |5-7|=2 < 3 且其余一致 → 已写
+    expect(computeRhythmJudgmentPreview({ ...planned, actualConflict: 7, actualMood: '紧张', actualHook: '悬念', actualPayoff: '揭秘' }, 3))
+      .toEqual({ status: 'written', deviationFlag: false, deviationNote: null })
+    // 阈值收紧到 1 → 偏差并给出系统说明
+    expect(computeRhythmJudgmentPreview({ ...planned, actualConflict: 7, actualMood: '紧张', actualHook: '悬念', actualPayoff: '揭秘' }, 1))
+      .toEqual({ status: 'deviated', deviationFlag: true, deviationNote: '冲突强度偏差：计划 5 实际 7' })
+    // 情绪不一致（阈值无关的维度）
+    expect(computeRhythmJudgmentPreview({ ...planned, actualConflict: 5, actualMood: '悲壮', actualHook: '悬念', actualPayoff: '揭秘' }, 3))
+      .toEqual({ status: 'deviated', deviationFlag: true, deviationNote: '情绪基调偏差：计划 紧张 实际 悲壮' })
   })
 })
