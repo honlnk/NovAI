@@ -760,7 +760,12 @@ function fillActualConflict() {
           <div class="flex flex-col gap-1">
             <p class="text-[11px] font-medium text-gray-500">上下文衔接（前后章的温度差）</p>
             <PlainBodySurface v-if="!isEditing" variant="preview" data-testid="rhythm-detail-link">
-              <MarkdownRenderer v-if="linkBodyValue" :content="linkBodyValue" />
+              <!-- 纯文本预览（whitespace-pre-wrap）：上下文衔接是 textarea 自由文本而非
+                   markdown 源——markdown 渲染会折叠段内单换行，与 txt 文件预览同语义 -->
+              <div
+                v-if="linkBodyValue"
+                class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
+              >{{ linkBodyValue }}</div>
               <p v-else class="text-sm text-gray-400">未填写。</p>
             </PlainBodySurface>
             <textarea
@@ -776,7 +781,12 @@ function fillActualConflict() {
           <div class="flex flex-col gap-1">
             <p class="text-[11px] font-medium text-gray-500">作者备注</p>
             <PlainBodySurface v-if="!isEditing" variant="preview" data-testid="rhythm-detail-author-note">
-              <MarkdownRenderer v-if="authorNoteBodyValue" :content="authorNoteBodyValue" />
+              <!-- 纯文本预览（whitespace-pre-wrap）：作者备注是 textarea 自由文本而非
+                   markdown 源——markdown 渲染会折叠段内单换行，与 txt 文件预览同语义 -->
+              <div
+                v-if="authorNoteBodyValue"
+                class="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800"
+              >{{ authorNoteBodyValue }}</div>
               <p v-else class="text-sm text-gray-400">未填写。</p>
             </PlainBodySurface>
             <textarea

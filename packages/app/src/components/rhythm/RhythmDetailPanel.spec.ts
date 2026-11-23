@@ -315,6 +315,26 @@ describe('节奏详情：更多正文折叠区（上下文衔接 / 作者备注�
     await wrapper.find('[data-testid="rhythm-detail-author-note-input"]').setValue('新的作者备注')
     expect(lastUpdateDraft(wrapper)).toEqual([{ authorNoteBody: '新的作者备注' }])
   })
+
+  it('纯文本预览：多行自由文本保留换行，两区不走 markdown 渲染（合并配套口径对齐）', async () => {
+    const MULTILINE = '上一章冷开场。\n本章升温。\n\n结尾留钩子。'
+    const NOTE = '别再用倒叙。\n第二行备注。'
+    const wrapper = mountPanel({
+      activeCard: activeCard({ linkBody: MULTILINE, authorNoteBody: NOTE }),
+    })
+
+    await wrapper.find('[data-testid="rhythm-detail-more-toggle"]').trigger('click')
+    const link = wrapper.find('[data-testid="rhythm-detail-link"]')
+    const note = wrapper.find('[data-testid="rhythm-detail-author-note"]')
+
+    // 两区内不再有 markdown 渲染容器；插值保留原始换行（呈现交给 whitespace-pre-wrap）
+    expect(link.find('.markdown-body').exists()).toBe(false)
+    expect(note.find('.markdown-body').exists()).toBe(false)
+    const linkText = link.findAll('.whitespace-pre-wrap').filter(node => node.element.textContent === MULTILINE)
+    const noteText = note.findAll('.whitespace-pre-wrap').filter(node => node.element.textContent === NOTE)
+    expect(linkText.length).toBeGreaterThan(0)
+    expect(noteText.length).toBeGreaterThan(0)
+  })
 })
 
 describe('节奏详情：判定操作态（阶段 4 §五）', () => {
