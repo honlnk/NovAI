@@ -31,7 +31,7 @@ async function handleCopyLink() {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col bg-gray-50">
+  <div class="flex h-dvh flex-col bg-gray-50">
     <!-- 顶栏：与 HomeView 一致的品牌标识 -->
     <header class="flex items-center gap-3 border-b border-gray-200 bg-white px-6 py-4">
       <svg class="h-7 w-7" viewBox="0 0 48 48" fill="none" aria-hidden="true">

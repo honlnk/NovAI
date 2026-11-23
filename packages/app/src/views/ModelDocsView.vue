@@ -19,7 +19,7 @@ function copyModelId(model: DashScopeModelDoc) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-50 py-10">
+  <div class="min-h-dvh bg-gray-50 py-10">
     <main class="mx-auto max-w-3xl px-6">
       <!-- 页头 -->
       <header>

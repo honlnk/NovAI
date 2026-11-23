@@ -183,7 +183,7 @@ async function handleConfirmDeleteProject() {
 
 <template>
   <BrowserUnsupportedView v-if="!environmentReport.usable" :report="environmentReport" />
-  <div v-else class="flex h-screen flex-col bg-gray-50">
+  <div v-else class="flex h-dvh flex-col bg-gray-50">
     <!-- 顶栏 -->
     <header class="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
       <div class="flex items-center gap-3">

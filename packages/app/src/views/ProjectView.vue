@@ -1736,7 +1736,9 @@ function handleGoToSettings() {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col bg-white">
+  <!-- h-dvh 而非 h-screen：手机浏览器地址栏占掉一段屏幕，100vh 是地址栏收起时的大视口，
+       会让底部输入区等被挡住；100dvh 跟随真实可见高度（内核门槛 ≥111，dvh 必然支持） -->
+  <div class="flex h-dvh flex-col bg-white">
     <!-- 工作区载入细条：占据文档流的最顶部整行（项目打开进度与移动端授权修复计划 §5） -->
     <WorkspaceLoadStrip v-if="showWorkspaceStrip" />
 
