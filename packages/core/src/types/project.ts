@@ -222,6 +222,27 @@ export type ProjectSnapshot = {
   metadata: RecentProject
 }
 
+/**
+ * 项目打开类动作（打开 / 恢复 / 新建）的加载阶段。核心只报事实，阶段文案与进度权重由界面决定。
+ */
+export type ProjectLoadPhase = 'permission' | 'structure' | 'scan' | 'activate'
+
+export type ProjectLoadProgress = {
+  phase: ProjectLoadPhase
+  /** 阶段内已知总量时的已完成数与总量（structure / activate 恒有）。 */
+  current?: number
+  total?: number
+  /** scan 阶段累计发现的文件数与文件夹数（跨目录递归累加）。 */
+  files?: number
+  directories?: number
+  /** structure：刚处理完的目录或文件；scan：正在列出的目录，项目根目录为空串。 */
+  currentPath?: string
+  /** 仅 activate 阶段最后一步携带，供界面显示项目名。 */
+  projectName?: string
+}
+
+export type ProjectLoadReporter = (progress: ProjectLoadProgress) => void
+
 export type ProjectFileContent = {
   path: string
   name: string

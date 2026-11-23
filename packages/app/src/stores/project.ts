@@ -33,14 +33,23 @@ import type {
 } from '@novai/core/services/types'
 import { ProjectPermissionRequiredError } from '@novai/core/types/project'
 import type { ReasoningEffort } from '@novai/core/types/ai'
-import type { ForeshadowingStatusMode, PermissionPreset } from '@novai/core/types/project'
-import type { RecentProject } from '@novai/core/types/project'
+import type {
+  ForeshadowingStatusMode,
+  PermissionPreset,
+  ProjectLoadProgress,
+  RecentProject,
+} from '@novai/core/types/project'
+import { toLoadProgressView } from '../utils/project-load-progress'
+import type { ProjectLoadAction, ProjectLoadProgressView } from '../utils/project-load-progress'
 
 /**
  * 首屏计数刷新的并发开关。
  * onMounted 等场景可能多次触发 loadRecentProjects，用 module 级 flag 保证同一时刻只跑一次后台刷新。
  */
 let isRefreshingCounts = false
+
+/** 打开类动作的进度刷新间隔：桌面端大项目每个条目都报一次，不必每次都刷新界面。 */
+const LOAD_PROGRESS_THROTTLE_MS = 60
 
 /**
  * 项目操作的非失败反馈：用户主动取消、待重新授权、无记录等中性/提醒级信息。
@@ -51,6 +60,8 @@ export type ProjectActionNotice = {
   message: string
   /** kind='permission' 时提供重新授权的重跑目标：'last'=上次项目，其余为最近项目 id */
   retryTarget?: string
+  /** kind='permission' 时：待授权的项目名，供授权卡片显示 */
+  projectName?: string
 }
 
 /**
@@ -79,6 +90,10 @@ export const useProjectStore = defineStore('project', () => {
   const errorMessage = ref('')
   const statusMessage = ref('等待选择小说项目')
   const notice = ref<ProjectActionNotice | null>(null)
+  /** 打开类动作（打开 / 恢复 / 新建）的进度；进行中才有值。 */
+  const loadProgress = ref<ProjectLoadProgressView | null>(null)
+  /** 小说页工作区初始化进行中（打开成功之后的会话、看板等加载）。 */
+  const isWorkspaceLoading = ref(false)
 
   function dismissNotice() {
     notice.value = null
@@ -86,6 +101,8 @@ export const useProjectStore = defineStore('project', () => {
 
   const isReady = computed(() => currentProject.value !== null)
   const isFileSystemSupported = computed(() => isProjectAccessSupported())
+  /** 打开类动作进行中：首页各入口据此置灰。 */
+  const isOpenLoading = computed(() => loadProgress.value !== null)
 
   /**
    * 项目选择代次（数据安全计划 F6）：每次发起打开/创建/恢复项目递增，关闭项目同样
@@ -94,80 +111,192 @@ export const useProjectStore = defineStore('project', () => {
    */
   let projectSelectionGeneration = 0
 
+  /**
+   * 打开类动作的进度归属令牌：每次动作递增，进度只属于最新的一次。
+   * 晚到的旧动作既不上报进度，结束时也不清掉新动作的进度——与项目选择代次同一条纪律。
+   */
+  let loadProgressOwner = 0
+
+  /**
+   * 一次性标记：刚完成一次打开，接下来挂载的小说页应立即显示顶部细条（挂载时读取并清除）。
+   * 其它方式进入小说页时初始化很快，细条延迟出现，避免闪一下。
+   */
+  let pendingWorkspaceInit = false
+
+  /** 小说页挂载时调用：读取并清除「刚完成一次打开」标记。 */
+  function consumePendingWorkspaceInit() {
+    const pending = pendingWorkspaceInit
+    pendingWorkspaceInit = false
+    return pending
+  }
+
+  function setWorkspaceLoading(value: boolean) {
+    isWorkspaceLoading.value = value
+  }
+
+  /** 最近项目卡片对应的项目名：先看上次项目摘要，再看最近项目列表。 */
+  function findRememberedProjectName(projectId: string) {
+    if (lastProjectSummary.value?.projectId === projectId) {
+      return lastProjectSummary.value.name
+    }
+    return recentProjects.value.find((item) => item.id === projectId)?.name
+  }
+
+  /**
+   * 开始一次打开类动作：立刻把进度置为「等待授权」（首页入口随之置灰），返回上报器与收尾函数。
+   * 阶段切换立即刷新；同一阶段内按间隔节流，且最后一次更新总是生效。
+   * `projectName` 是动作开始时已知的项目名（恢复取自记录、新建取自输入），核心层报出
+   * 更准确的名字后以核心层为准。
+   */
+  function beginLoadProgress(action: ProjectLoadAction, projectName?: string) {
+    const token = ++loadProgressOwner
+    let finished = false
+    let appliedPhase: ProjectLoadProgressView['phase'] | undefined
+    let lastAppliedAt = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const apply = (progress: ProjectLoadProgress) => {
+      clearTimeout(timer)
+      timer = undefined
+      appliedPhase = progress.phase
+      lastAppliedAt = Date.now()
+      if (finished || token !== loadProgressOwner) {
+        return
+      }
+      const view = toLoadProgressView(action, progress)
+      loadProgress.value = view.projectName === undefined && projectName !== undefined
+        ? { ...view, projectName }
+        : view
+    }
+
+    apply({ phase: 'permission' })
+
+    return {
+      onProgress(progress: ProjectLoadProgress) {
+        if (finished || token !== loadProgressOwner) {
+          return
+        }
+        if (progress.phase !== appliedPhase) {
+          apply(progress)
+          return
+        }
+        const elapsed = Date.now() - lastAppliedAt
+        if (elapsed >= LOAD_PROGRESS_THROTTLE_MS) {
+          apply(progress)
+          return
+        }
+        // 窗口内只保留指向最新一次事件的计时器，到点显示的是最后的状态
+        clearTimeout(timer)
+        timer = setTimeout(() => apply(progress), LOAD_PROGRESS_THROTTLE_MS - elapsed)
+      },
+      finish() {
+        finished = true
+        clearTimeout(timer)
+        if (token === loadProgressOwner) {
+          loadProgress.value = null
+        }
+      },
+    }
+  }
+
   async function createNewProject(projectName: string) {
     const generation = ++projectSelectionGeneration
-    return runProjectAction(
-      async () => {
-        const project = await createProject(projectName)
-        if (generation !== projectSelectionGeneration) {
-          return null
-        }
-        await setCurrentProject(project)
-        statusMessage.value = `已创建项目「${project.name}」`
-        return project
-      },
-      { cancelNotice: '未选择目录，项目未创建' },
-    )
+    const progress = beginLoadProgress('create', projectName)
+    try {
+      return await runProjectAction(
+        async () => {
+          const project = await createProject(projectName, { onProgress: progress.onProgress })
+          if (generation !== projectSelectionGeneration) {
+            return null
+          }
+          await setCurrentProject(project)
+          pendingWorkspaceInit = true
+          statusMessage.value = `已创建项目「${project.name}」`
+          return project
+        },
+        { cancelNotice: '未选择目录，项目未创建' },
+      )
+    } finally {
+      progress.finish()
+    }
   }
 
   async function openExistingProject() {
     const generation = ++projectSelectionGeneration
-    return runProjectAction(
-      async () => {
-        const project = await openProject()
-        if (generation !== projectSelectionGeneration) {
-          return null
-        }
-        await setCurrentProject(project)
-        statusMessage.value = `已打开项目「${project.name}」`
-        return project
-      },
-      { cancelNotice: '未选择目录，项目未打开' },
-    )
+    const progress = beginLoadProgress('open')
+    try {
+      return await runProjectAction(
+        async () => {
+          const project = await openProject({ onProgress: progress.onProgress })
+          if (generation !== projectSelectionGeneration) {
+            return null
+          }
+          await setCurrentProject(project)
+          pendingWorkspaceInit = true
+          statusMessage.value = `已打开项目「${project.name}」`
+          return project
+        },
+        { cancelNotice: '未选择目录，项目未打开' },
+      )
+    } finally {
+      progress.finish()
+    }
   }
 
   async function restoreLastOpenedProject() {
     const generation = ++projectSelectionGeneration
-    return runProjectAction(
-      async () => {
-        const project = await restoreLastProject()
+    const progress = beginLoadProgress('restore', lastProjectSummary.value?.name)
+    try {
+      return await runProjectAction(
+        async () => {
+          const project = await restoreLastProject({ onProgress: progress.onProgress })
 
-        if (!project) {
-          notice.value = { kind: 'info', message: '没有可恢复的上次项目记录' }
-          return null
-        }
-        if (generation !== projectSelectionGeneration) {
-          return null
-        }
+          if (!project) {
+            notice.value = { kind: 'info', message: '没有可恢复的上次项目记录' }
+            return null
+          }
+          if (generation !== projectSelectionGeneration) {
+            return null
+          }
 
-        await setCurrentProject(project)
-        statusMessage.value = `已恢复上次项目「${project.name}」`
-        return project
-      },
-      { permissionRetryTarget: 'last' },
-    )
+          await setCurrentProject(project)
+          pendingWorkspaceInit = true
+          statusMessage.value = `已恢复上次项目「${project.name}」`
+          return project
+        },
+        { permissionRetryTarget: 'last' },
+      )
+    } finally {
+      progress.finish()
+    }
   }
 
   async function openRecentProject(projectId: string) {
     const generation = ++projectSelectionGeneration
-    return runProjectAction(
-      async () => {
-        const project = await restoreRecentProject(projectId)
+    const progress = beginLoadProgress('restore', findRememberedProjectName(projectId))
+    try {
+      return await runProjectAction(
+        async () => {
+          const project = await restoreRecentProject(projectId, { onProgress: progress.onProgress })
 
-        if (!project) {
-          notice.value = { kind: 'info', message: '没有找到该最近项目记录' }
-          return null
-        }
-        if (generation !== projectSelectionGeneration) {
-          return null
-        }
+          if (!project) {
+            notice.value = { kind: 'info', message: '没有找到该最近项目记录' }
+            return null
+          }
+          if (generation !== projectSelectionGeneration) {
+            return null
+          }
 
-        await setCurrentProject(project)
-        statusMessage.value = `已打开最近项目「${project.name}」`
-        return project
-      },
-      { permissionRetryTarget: projectId },
-    )
+          await setCurrentProject(project)
+          pendingWorkspaceInit = true
+          statusMessage.value = `已打开最近项目「${project.name}」`
+          return project
+        },
+        { permissionRetryTarget: projectId },
+      )
+    } finally {
+      progress.finish()
+    }
   }
 
   async function loadLastProjectSummary() {
@@ -655,6 +784,7 @@ export const useProjectStore = defineStore('project', () => {
           kind: 'permission',
           message: error.message,
           retryTarget: options.permissionRetryTarget,
+          projectName: error.projectName,
         }
         return null
       }
@@ -672,8 +802,11 @@ export const useProjectStore = defineStore('project', () => {
     errorMessage,
     isBusy,
     isFileSystemSupported,
+    isOpenLoading,
     isReady,
+    isWorkspaceLoading,
     lastProjectSummary,
+    loadProgress,
     notice,
     recentProjects,
     statusMessage,
@@ -683,6 +816,7 @@ export const useProjectStore = defineStore('project', () => {
     changeForeshadowingStatusMode,
     clearActiveFile,
     closeCurrentProject,
+    consumePendingWorkspaceInit,
     createFileCopy,
     createNewProject,
     dismissNotice,
@@ -698,6 +832,7 @@ export const useProjectStore = defineStore('project', () => {
     removeRecentProject,
     restoreLastOpenedProject,
     saveFile,
+    setWorkspaceLoading,
     updateCurrentProjectConfig,
   }
 })

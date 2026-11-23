@@ -2,6 +2,7 @@ import { createDefaultConfig, createDefaultManifest, DEFAULT_CONFIG, DEFAULT_ELE
 
 import type {
   ProjectInspection,
+  ProjectLoadReporter,
   ProjectConfig,
   ProjectFileContent,
   ProjectManifest,
@@ -31,6 +32,56 @@ const OUTLINES_DIRECTORY = 'prompts/outlines'
 const LEGACY_SCENES_DIRECTORY = 'prompts/scenes'
 
 /**
+ * 结构阶段各段的步数。服务层把多段拼成一个动作（如「打开项目」= 体检 + 修复 + 读取）时
+ * 据此算总步数；各段的区间起点由调用方传入。
+ */
+const INSPECT_STEPS = 9
+const REPAIR_DIRECTORY_STEPS = REQUIRED_DIRECTORY_PATHS.length
+const REPAIR_FILE_STEPS = 5
+const REPAIR_STEPS = REPAIR_DIRECTORY_STEPS + REPAIR_FILE_STEPS
+const CREATE_FILE_STEPS = 6
+const CREATE_STEPS = REPAIR_DIRECTORY_STEPS + CREATE_FILE_STEPS
+const LOAD_STEPS = 3
+
+export const STRUCTURE_STEP_COUNTS = {
+  inspect: INSPECT_STEPS,
+  repair: REPAIR_STEPS,
+  create: CREATE_STEPS,
+  load: LOAD_STEPS,
+} as const
+
+/** 本段在动作结构阶段中的位置：offset 为起点（已完成数从此起算），total 为动作的结构阶段总步数。 */
+type StructureStepRange = { offset: number; total: number }
+
+/**
+ * 结构阶段的上报器：动作的第一段进入结构阶段时先报一次起点，之后每完成一步推进一次
+ * ——步数反映真正做完的事。没有回调时全部是空操作。
+ */
+function createStructureReporter(onProgress: ProjectLoadReporter | undefined, range: StructureStepRange) {
+  let current = range.offset
+
+  const report = (currentPath?: string) => {
+    onProgress?.({
+      phase: 'structure',
+      current,
+      total: range.total,
+      ...(currentPath === undefined ? {} : { currentPath }),
+    })
+  }
+
+  if (range.offset === 0) {
+    report()
+  }
+
+  return {
+    step(currentPath: string) {
+      current += 1
+      report(currentPath)
+    },
+  }
+}
+
+/**
  * 判断当前运行环境是否支持浏览器目录读写能力。
  * 测试页在执行任何项目级操作前都应先用它做兜底判断。
  */
@@ -42,25 +93,38 @@ export function isFileSystemAccessSupported() {
  * 创建一个新的小说项目目录，并写入最小可用的默认结构与配置文件。
  * 返回值会携带完整快照，调用方可以直接把它当作“当前项目”使用。
  */
-export async function createProject(projectName: string): Promise<ProjectSnapshot> {
+export async function createProject(
+  projectName: string,
+  onProgress?: ProjectLoadReporter,
+): Promise<ProjectSnapshot> {
+  onProgress?.({ phase: 'permission' })
   const parentHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
+  const total = CREATE_STEPS + LOAD_STEPS
+  const structure = createStructureReporter(onProgress, { offset: 0, total })
   const rootHandle = await parentHandle.getDirectoryHandle(projectName, { create: true })
   const projectId = createProjectId()
 
   for (const directoryPath of REQUIRED_DIRECTORY_PATHS) {
     await ensureDirectory(rootHandle, directoryPath)
+    structure.step(directoryPath)
   }
 
   await writeJson(rootHandle, 'novel.config.json', createDefaultConfig(projectName))
+  structure.step('novel.config.json')
   await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(projectId))
+  structure.step('.novel/manifest.json')
   await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
+  structure.step('prompts/system.md')
   await writeText(rootHandle, 'prompts/outlines/outline-001.md', DEFAULT_OUTLINE_TEMPLATE)
+  structure.step('prompts/outlines/outline-001.md')
   // 项目记忆无默认模板（W2 起非空即注入为 user-role reminder）：新项目留空占位，
   // 内容交给 /生成项目记忆 或用户手写，避免「待补充」骨架每轮灌进上下文。
   await writeText(rootHandle, 'prompts/NovAI.md', '')
+  structure.step('prompts/NovAI.md')
   await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
+  structure.step('prompts/ELEMENT.md')
 
-  return loadProjectFromHandle(rootHandle)
+  return loadProjectFromHandle(rootHandle, onProgress, { offset: CREATE_STEPS, total })
 }
 
 /**
@@ -84,28 +148,39 @@ export async function pickProjectDirectory() {
  * 检查一个目录是否满足 NovAI 最小项目结构。
  * 返回的 issues 会区分“文件缺失”和“文件存在但已损坏”两种情况，便于测试页决定是否提供修复入口。
  */
-export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Promise<ProjectInspection> {
+export async function inspectProject(
+  rootHandle: FileSystemDirectoryHandle,
+  onProgress?: ProjectLoadReporter,
+  stepRange: StructureStepRange = { offset: 0, total: INSPECT_STEPS },
+): Promise<ProjectInspection> {
   const issues: ProjectInspection['issues'] = []
+  const structure = createStructureReporter(onProgress, stepRange)
 
   // 配置和清单除了要存在，也要能成功解析，否则后续加载仍会失败。
   const hasConfig = await pathExists(rootHandle, 'novel.config.json', 'file')
-  const hasManifest = await pathExists(rootHandle, '.novel/manifest.json', 'file')
+  structure.step('novel.config.json')
 
   if (!hasConfig) {
     issues.push('missing-config')
   } else if (!(await isJsonFileValid<ProjectConfig>(rootHandle, 'novel.config.json'))) {
     issues.push('invalid-config')
   }
+  structure.step('novel.config.json')
+
+  const hasManifest = await pathExists(rootHandle, '.novel/manifest.json', 'file')
+  structure.step('.novel/manifest.json')
 
   if (!hasManifest) {
     issues.push('missing-manifest')
   } else if (!(await isJsonFileValid<ProjectManifest>(rootHandle, '.novel/manifest.json'))) {
     issues.push('invalid-manifest')
   }
+  structure.step('.novel/manifest.json')
 
   if (!(await pathExists(rootHandle, 'prompts/system.md', 'file'))) {
     issues.push('missing-prompts-system')
   }
+  structure.step('prompts/system.md')
 
   // 兼容旧目录：未迁移的旧项目仍是 prompts/scenes/（loadProjectFromHandle 会自动迁移），
   // 不能因此判损坏——两目录任一存在即通过。
@@ -115,18 +190,22 @@ export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Pro
   ) {
     issues.push('missing-prompts-outlines')
   }
+  structure.step(OUTLINES_DIRECTORY)
 
   if (!(await pathExists(rootHandle, 'chapters', 'directory'))) {
     issues.push('missing-chapters')
   }
+  structure.step('chapters')
 
   if (!(await hasRequiredElementDirectories(rootHandle))) {
     issues.push('missing-elements')
   }
+  structure.step('elements')
 
   if (!(await pathExists(rootHandle, '.novel', 'directory'))) {
     issues.push('missing-internal-directory')
   }
+  structure.step('.novel')
 
   return {
     rootName: rootHandle.name,
@@ -141,9 +220,14 @@ export async function inspectProject(rootHandle: FileSystemDirectoryHandle): Pro
  */
 export async function repairProject(
   rootHandle: FileSystemDirectoryHandle,
+  onProgress?: ProjectLoadReporter,
+  stepRange: StructureStepRange = { offset: 0, total: REPAIR_STEPS + LOAD_STEPS },
 ): Promise<ProjectSnapshot> {
+  const structure = createStructureReporter(onProgress, stepRange)
+
   for (const directoryPath of REQUIRED_DIRECTORY_PATHS) {
     await ensureDirectory(rootHandle, directoryPath)
+    structure.step(directoryPath)
   }
 
   const hasConfig = await pathExists(rootHandle, 'novel.config.json', 'file')
@@ -167,14 +251,17 @@ export async function repairProject(
       })
     }
   }
+  structure.step('novel.config.json')
 
   if (!hasManifest || !(await isJsonFileValid<ProjectManifest>(rootHandle, '.novel/manifest.json'))) {
     await writeJson(rootHandle, '.novel/manifest.json', createDefaultManifest(createProjectId()))
   }
+  structure.step('.novel/manifest.json')
 
   if (!(await pathExists(rootHandle, 'prompts/system.md', 'file'))) {
     await writeText(rootHandle, 'prompts/system.md', DEFAULT_SYSTEM_PROMPT)
   }
+  structure.step('prompts/system.md')
 
   // 项目总览 NovAI.md 缺失时补空占位（同新项目：无默认模板，非空即注入）。
   // 它是可选文件（缺失时读取返回空串，Agent 仍能正常工作），因此不纳入 inspectProject
@@ -182,14 +269,19 @@ export async function repairProject(
   if (!(await pathExists(rootHandle, 'prompts/NovAI.md', 'file'))) {
     await writeText(rootHandle, 'prompts/NovAI.md', '')
   }
+  structure.step('prompts/NovAI.md')
 
   // 要素库规范 ELEMENT.md 缺失时补默认内容（要素管理员子代理的唯一注入文件，随要素园丁 Phase 1 引入）。
   // 与 NovAI.md 同策略：温和补齐、不覆盖用户已修改的版本、不纳入强制检测项。
   if (!(await pathExists(rootHandle, 'prompts/ELEMENT.md', 'file'))) {
     await writeText(rootHandle, 'prompts/ELEMENT.md', DEFAULT_ELEMENT_SCHEMA)
   }
+  structure.step('prompts/ELEMENT.md')
 
-  return loadProjectFromHandle(rootHandle)
+  return loadProjectFromHandle(rootHandle, onProgress, {
+    offset: stepRange.offset + REPAIR_STEPS,
+    total: stepRange.total,
+  })
 }
 
 /**
@@ -199,8 +291,14 @@ export async function repairProject(
  * W3 起打开旧项目时先做 scenes→outlines 迁移（幂等），config 的大纲路径前缀与
  * 旧字段名随迁移/归一化自动映射，用户文件只改名不动内容。
  */
-export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandle): Promise<ProjectSnapshot> {
+export async function loadProjectFromHandle(
+  rootHandle: FileSystemDirectoryHandle,
+  onProgress?: ProjectLoadReporter,
+  stepRange: StructureStepRange = { offset: 0, total: LOAD_STEPS },
+): Promise<ProjectSnapshot> {
+  const structure = createStructureReporter(onProgress, stepRange)
   const migrated = await migrateScenesToOutlines(rootHandle)
+  structure.step(LEGACY_SCENES_DIRECTORY)
   const rawConfig = await readJson<ProjectConfig>(rootHandle, 'novel.config.json')
   // 旧字段只要存在（哪怕值为 null）就触发写回——null 是合法的「未选大纲」，
   // 按真值判断会让已迁移项目的死字段永远留在盘上。
@@ -211,8 +309,10 @@ export async function loadProjectFromHandle(rootHandle: FileSystemDirectoryHandl
   if (migrated || hasLegacyOutlineReference) {
     await writeJson(rootHandle, 'novel.config.json', config)
   }
+  structure.step('novel.config.json')
   const manifest = await readJson<ProjectManifest>(rootHandle, '.novel/manifest.json')
-  const tree = await scanDirectory(rootHandle)
+  structure.step('.novel/manifest.json')
+  const tree = await scanDirectory(rootHandle, '', onProgress)
 
   return {
     id: manifest.projectId,
@@ -675,6 +775,9 @@ function inferFormat(name: string): ProjectFileContent['format'] {
 async function scanDirectory(
   rootHandle: FileSystemDirectoryHandle,
   parentPath = '',
+  onProgress?: ProjectLoadReporter,
+  // 跨目录递归累加的计数，由最外层调用方传入同一个对象
+  tally: { files: number; directories: number } = { files: 0, directories: 0 },
 ): Promise<TreeNode[]> {
   const entries: TreeNode[] = []
 
@@ -682,16 +785,20 @@ async function scanDirectory(
     const path = parentPath ? `${parentPath}/${entry.name}` : entry.name
 
     if (isDirectoryHandle(entry)) {
+      tally.directories += 1
+      onProgress?.({ phase: 'scan', ...tally, currentPath: path })
       entries.push({
         name: entry.name,
         path,
         kind: 'directory',
         // 文件树在这里一次性递归展开，测试页后面就只负责展示和选择。
-        children: await scanDirectory(entry, path),
+        children: await scanDirectory(entry, path, onProgress, tally),
       })
       continue
     }
 
+    tally.files += 1
+    onProgress?.({ phase: 'scan', ...tally, currentPath: parentPath })
     entries.push({
       name: entry.name,
       path,

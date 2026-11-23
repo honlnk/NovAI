@@ -5,6 +5,7 @@ import {
   SKILL_DESCRIPTION_MAX_LENGTH,
   type SkillDiagnostic,
 } from '../core/skills/types'
+import { removeDirectoryEntry } from '../core/fs/remove-directory'
 import { writeProjectTextFile } from '../core/fs/project-fs'
 
 import { requireRuntimeProject } from './project-runtime'
@@ -242,7 +243,7 @@ export async function deleteSkill(projectId: string, name: string): Promise<void
     throw new SkillNotFoundError(folderName)
   }
   try {
-    await skillsDir.removeEntry(folderName, { recursive: true })
+    await removeDirectoryEntry(skillsDir, folderName)
   } catch (error) {
     if (error instanceof DOMException && error.name === 'NotFoundError') {
       throw new SkillNotFoundError(folderName)

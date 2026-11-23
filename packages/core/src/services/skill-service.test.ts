@@ -34,6 +34,12 @@ type MemoryDirectoryHandle = FileSystemDirectoryHandle & {
   __entry: MemoryDirectoryEntry
 }
 
+/**
+ * 手机版 Chrome 模式：一次性递归删除非空目录直接报类型不匹配错误
+ * （单文件、空文件夹的删除正常）。默认关闭 = 桌面行为。
+ */
+let phoneStyleRecursiveRemove = false
+
 function createDirectoryHandle(entry: MemoryDirectoryEntry): MemoryDirectoryHandle {
   return {
     kind: 'directory',
@@ -73,6 +79,14 @@ function createDirectoryHandle(entry: MemoryDirectoryEntry): MemoryDirectoryHand
       const current = entry.entries.get(name)
       if (!current) {
         throw new DOMException(`Not found: ${name}`, 'NotFoundError')
+      }
+      if (
+        phoneStyleRecursiveRemove
+        && current.kind === 'directory'
+        && options?.recursive
+        && current.entries.size > 0
+      ) {
+        throw new DOMException('Type mismatch', 'TypeMismatchError')
       }
       if (current.kind === 'directory' && !options?.recursive && current.entries.size > 0) {
         throw new DOMException('Directory not empty', 'InvalidModificationError')
@@ -384,5 +398,35 @@ describe('deleteSkill', () => {
 
   it('无 skills/ 目录：同样按不存在报错', async () => {
     await expect(deleteSkill(PROJECT_ID, '去AI味')).rejects.toBeInstanceOf(SkillNotFoundError)
+  })
+
+  it('手机版 Chrome（递归删除报类型不匹配）：回退逐项删除，技能照样删干净', async () => {
+    phoneStyleRecursiveRemove = true
+    try {
+      seedFile('skills/去AI味/SKILL.md', skillMd('待删'))
+      seedFile('skills/去AI味/references/词表.md', '词表')
+      seedFile('skills/保留/SKILL.md', skillMd('不动'))
+
+      await deleteSkill(PROJECT_ID, '去AI味')
+
+      expect(await readFile('skills/去AI味/SKILL.md')).toBeNull()
+      expect(await readFile('skills/去AI味/references/词表.md')).toBeNull()
+      // 同级的其它技能不受影响
+      expect(await readFile('skills/保留/SKILL.md')).not.toBeNull()
+      const view = await listSkills(PROJECT_ID)
+      expect(view.skills.map((s) => s.name)).toEqual(['保留'])
+    } finally {
+      phoneStyleRecursiveRemove = false
+    }
+  })
+
+  it('手机版 Chrome：技能文件夹不存在时仍报 SkillNotFoundError', async () => {
+    phoneStyleRecursiveRemove = true
+    try {
+      seedFile('skills/保留/SKILL.md', skillMd('不动'))
+      await expect(deleteSkill(PROJECT_ID, '不存在')).rejects.toBeInstanceOf(SkillNotFoundError)
+    } finally {
+      phoneStyleRecursiveRemove = false
+    }
   })
 })

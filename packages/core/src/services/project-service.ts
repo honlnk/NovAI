@@ -6,7 +6,10 @@ import {
   pickProjectDirectory,
   repairProject,
   rescanProject,
+  STRUCTURE_STEP_COUNTS,
 } from '../core/fs/project-fs'
+import { removeDirectoryTree } from '../core/fs/remove-directory'
+import type { RemovableDirectoryHandle } from '../core/fs/remove-directory'
 import { inspectBrowserEnvironment } from './environment-service'
 import { writeAgentLog } from '../core/logging/agent-log'
 import { sweepExpiredSpillFiles } from '../core/agent/spill'
@@ -22,7 +25,7 @@ import {
   toLastProjectSummary,
   updateRecentProjectCounts,
 } from '../core/project/recent-projects'
-import type { ProjectSnapshot } from '../types/project'
+import type { ProjectLoadReporter, ProjectSnapshot } from '../types/project'
 import { ProjectPermissionRequiredError } from '../types/project'
 
 import {
@@ -38,40 +41,52 @@ import type { LastProjectSummaryView, ProjectStatusView, ProjectView } from './t
 // 透出给 app 层：文件树刷新时回写最近项目计数（与 refreshRecentProjectCounts 共用同一条底层写入）。
 export { updateRecentProjectCounts }
 
+/** 打开类动作的可选项：`onProgress` 接收「正在做什么」的进度事件（见 `ProjectLoadProgress`）。 */
+export type ProjectLoadOptions = { onProgress?: ProjectLoadReporter }
+
 export function isProjectAccessSupported(): boolean {
   return inspectBrowserEnvironment().usable
 }
 
-export async function createProject(name: string): Promise<ProjectView> {
+export async function createProject(name: string, options: ProjectLoadOptions = {}): Promise<ProjectView> {
   assertBrowserEnvironmentSupported()
 
-  const project = await createCoreProject(name)
-  await activateProject(project, 'project_created', `创建项目「${project.name}」`)
+  const project = await createCoreProject(name, options.onProgress)
+  await activateProject(project, 'project_created', `创建项目「${project.name}」`, undefined, options.onProgress)
   return toProjectView(project, {
     activeFilePath: findFirstReadableFile(project.tree) ?? undefined,
   })
 }
 
-export async function openProject(): Promise<ProjectView> {
+export async function openProject(options: ProjectLoadOptions = {}): Promise<ProjectView> {
   assertBrowserEnvironmentSupported()
+  const { onProgress } = options
 
+  onProgress?.({ phase: 'permission' })
   const handle = await pickProjectDirectory()
-  const inspection = await inspectCoreProject(handle)
+  // 结构阶段 = 体检 + 修复 + 读取，三段共用一个总步数，各段按步数接着报
+  const total = STRUCTURE_STEP_COUNTS.inspect + STRUCTURE_STEP_COUNTS.repair + STRUCTURE_STEP_COUNTS.load
+  const inspection = await inspectCoreProject(handle, onProgress, { offset: 0, total })
   // repairProject is intentionally used for both valid and incomplete projects:
   // it loads valid projects and gently fills the structure required for loading.
-  const project = await repairProject(handle)
+  const project = await repairProject(handle, onProgress, { offset: STRUCTURE_STEP_COUNTS.inspect, total })
 
-  await activateProject(project, 'project_opened', `打开项目「${project.name}」`, {
-    inspectionIssues: inspection.issues,
-  })
+  await activateProject(
+    project,
+    'project_opened',
+    `打开项目「${project.name}」`,
+    { inspectionIssues: inspection.issues },
+    onProgress,
+  )
 
   return toProjectView(project, {
     activeFilePath: findFirstReadableFile(project.tree) ?? undefined,
   })
 }
 
-export async function restoreLastProject(): Promise<ProjectView | null> {
+export async function restoreLastProject(options: ProjectLoadOptions = {}): Promise<ProjectView | null> {
   assertBrowserEnvironmentSupported()
+  const { onProgress } = options
 
   const record = await readLastProject()
 
@@ -79,6 +94,7 @@ export async function restoreLastProject(): Promise<ProjectView | null> {
     return null
   }
 
+  onProgress?.({ phase: 'permission' })
   const hasPermission = await hasProjectPermission(record.handle)
     || await requestProjectPermission(record.handle)
 
@@ -90,18 +106,26 @@ export async function restoreLastProject(): Promise<ProjectView | null> {
     )
   }
 
-  const project = await repairProject(record.handle)
-  await activateProject(project, 'project_restored', `恢复上次项目「${project.name}」`, {
-    rememberedAt: record.lastOpenedAt,
-  })
+  const project = await repairProject(record.handle, onProgress)
+  await activateProject(
+    project,
+    'project_restored',
+    `恢复上次项目「${project.name}」`,
+    { rememberedAt: record.lastOpenedAt },
+    onProgress,
+  )
 
   return toProjectView(project, {
     activeFilePath: findFirstReadableFile(project.tree) ?? undefined,
   })
 }
 
-export async function restoreRecentProject(projectId: string): Promise<ProjectView | null> {
+export async function restoreRecentProject(
+  projectId: string,
+  options: ProjectLoadOptions = {},
+): Promise<ProjectView | null> {
   assertBrowserEnvironmentSupported()
+  const { onProgress } = options
 
   const record = await readRecentProject(projectId)
 
@@ -109,6 +133,7 @@ export async function restoreRecentProject(projectId: string): Promise<ProjectVi
     return null
   }
 
+  onProgress?.({ phase: 'permission' })
   const hasPermission = await hasProjectPermission(record.handle)
     || await requestProjectPermission(record.handle)
 
@@ -119,11 +144,14 @@ export async function restoreRecentProject(projectId: string): Promise<ProjectVi
     )
   }
 
-  const project = await repairProject(record.handle)
-  await activateProject(project, 'project_restored_from_recent', `恢复最近项目「${project.name}」`, {
-    rememberedAt: record.lastOpenedAt,
-    requestedProjectId: projectId,
-  })
+  const project = await repairProject(record.handle, onProgress)
+  await activateProject(
+    project,
+    'project_restored_from_recent',
+    `恢复最近项目「${project.name}」`,
+    { rememberedAt: record.lastOpenedAt, requestedProjectId: projectId },
+    onProgress,
+  )
 
   return toProjectView(project, {
     activeFilePath: findFirstReadableFile(project.tree) ?? undefined,
@@ -275,6 +303,7 @@ async function activateProject(
   event: string,
   message: string,
   data?: unknown,
+  onProgress?: ProjectLoadReporter,
 ) {
   setRuntimeProject(project)
 
@@ -289,6 +318,7 @@ async function activateProject(
     chapterCount: project.metadata.chapterCount,
     elementCount: project.metadata.elementCount,
   })
+  onProgress?.({ phase: 'activate', current: 1, total: 2 })
 
   await writeAgentLog(project, {
     level: 'info',
@@ -299,6 +329,7 @@ async function activateProject(
       ...asRecord(data),
     },
   })
+  onProgress?.({ phase: 'activate', current: 2, total: 2, projectName: project.name })
 }
 
 function assertBrowserEnvironmentSupported() {
@@ -309,15 +340,13 @@ function assertBrowserEnvironmentSupported() {
 }
 
 async function removeProjectDirectory(handle: FileSystemDirectoryHandle) {
-  const removableHandle = handle as FileSystemDirectoryHandle & {
-    remove?: (options?: { recursive?: boolean }) => Promise<void>
-  }
+  const removableHandle = handle as RemovableDirectoryHandle
 
   if (!removableHandle.remove) {
     throw new Error('当前浏览器不支持直接删除已记住的项目目录，请在系统文件管理器中手动删除。')
   }
 
-  await removableHandle.remove({ recursive: true })
+  await removeDirectoryTree(handle)
 }
 
 function asRecord(value: unknown) {

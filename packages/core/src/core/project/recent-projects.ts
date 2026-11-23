@@ -196,9 +196,14 @@ export async function hasProjectPermission(handle: FileSystemDirectoryHandle) {
     return false
   }
 
-  return (await target.queryPermission({ mode: 'readwrite' })) === 'granted'
+  return (await target.queryPermission({ mode: 'readwrite' }).catch(() => null)) === 'granted'
 }
 
+/**
+ * 请求目录读写权限。查询与请求抛出异常都按「未获授权」处理：浏览器要求授权请求由
+ * 一次用户点击触发，没有点击时（如手机版 Chrome 冷启动后的自动恢复）会直接抛错，
+ * 这不是真实失败，由上层转成待授权提醒。
+ */
 export async function requestProjectPermission(handle: FileSystemDirectoryHandle) {
   const target = handle as PersistableDirectoryHandle
 
@@ -210,7 +215,7 @@ export async function requestProjectPermission(handle: FileSystemDirectoryHandle
     return false
   }
 
-  return (await target.requestPermission({ mode: 'readwrite' })) === 'granted'
+  return (await target.requestPermission({ mode: 'readwrite' }).catch(() => null)) === 'granted'
 }
 
 export function toLastProjectSummary(record: LastProjectRecord): LastProjectSummary {

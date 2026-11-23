@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/project'
 import { REPO_URL } from '../constants/repo'
+import { useDelayedFlag } from '../composables/use-delayed-flag'
 import { useEnvironmentCheck } from '../composables/useEnvironmentCheck'
 import AppIcon from '../components/ui/AppIcon.vue'
+import ProjectLoadProgress from '../components/project/ProjectLoadProgress.vue'
 import BrowserUnsupportedView from './BrowserUnsupportedView.vue'
 import type { RecentProject } from '@novai/core/types/project'
 
@@ -17,6 +19,12 @@ const newProjectName = ref('')
 const isCreating = ref(false)
 const isDeleting = ref(false)
 const shouldDeleteDirectory = ref(false)
+
+/**
+ * 打开类动作（恢复、打开、新建）持续超过 300 毫秒才显示进度面板：桌面端基本在这个时间内完成，不闪现。
+ * 置灰与各处理函数开头的守卫从动作一开始就生效，不等这 300 毫秒。
+ */
+const isOpenDelayed = useDelayedFlag(computed(() => projectStore.isOpenLoading))
 
 /**
  * 原操作附近的黄色轻提醒（交互优化计划 §5）：取消与待授权不是错误，不进红色错误区。
@@ -88,6 +96,8 @@ onMounted(async () => {
 })
 
 async function handleOpenProject() {
+  if (projectStore.isOpenLoading) return
+
   const project = await projectStore.openExistingProject()
   if (project) {
     router.push(`/project/${project.id}`)
@@ -95,6 +105,8 @@ async function handleOpenProject() {
 }
 
 async function handleRestoreProject() {
+  if (projectStore.isOpenLoading) return
+
   const project = await projectStore.restoreLastOpenedProject()
   if (project) {
     router.push(`/project/${project.id}`)
@@ -102,7 +114,7 @@ async function handleRestoreProject() {
 }
 
 async function handleCreateProject() {
-  if (!newProjectName.value.trim()) return
+  if (!newProjectName.value.trim() || isCreating.value || projectStore.isOpenLoading) return
 
   isCreating.value = true
   try {
@@ -118,6 +130,8 @@ async function handleCreateProject() {
 }
 
 async function handleSelectProject(projectId: string) {
+  if (projectStore.isOpenLoading) return
+
   const project = await projectStore.openRecentProject(projectId)
   if (project) {
     router.push(`/project/${project.id}`)
@@ -125,8 +139,17 @@ async function handleSelectProject(projectId: string) {
 }
 
 function handleAskDeleteProject(project: RecentProject) {
+  if (projectStore.isOpenLoading || isDeleting.value) return
+
   projectPendingDelete.value = project
   shouldDeleteDirectory.value = false
+}
+
+/** 新建对话框的关闭入口（遮罩点击与「取消」共用）：创建进行中不可关闭。 */
+function closeCreateDialog() {
+  if (isCreating.value) return
+
+  showCreateDialog.value = false
 }
 
 function handleCancelDeleteProject() {
@@ -211,9 +234,18 @@ async function handleConfirmDeleteProject() {
           {{ projectStore.errorMessage }}
         </div>
 
+        <!--
+          恢复、打开进行中且超过 300 毫秒：在这个位置换成进度面板（新建的进度面板在对话框内）。
+          不足 300 毫秒（桌面端的常态）不闪现，横幅照常显示。
+        -->
+        <ProjectLoadProgress
+          v-if="isOpenDelayed && projectStore.loadProgress && projectStore.loadProgress.action !== 'create'"
+          class="mb-6"
+          :progress="projectStore.loadProgress"
+        />
         <!-- 恢复上次项目提示 -->
         <div
-          v-if="projectStore.lastProjectSummary"
+          v-else-if="projectStore.lastProjectSummary"
           class="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4"
         >
           <div class="flex items-center justify-between">
@@ -222,7 +254,8 @@ async function handleConfirmDeleteProject() {
               <p class="text-sm text-blue-700">{{ projectStore.lastProjectSummary.name }}</p>
             </div>
             <button
-              class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+              class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-600"
+              :disabled="projectStore.isOpenLoading"
               @click="handleRestoreProject"
             >
               恢复项目
@@ -233,14 +266,16 @@ async function handleConfirmDeleteProject() {
         <!-- 操作按钮（黄色轻提醒悬浮在按钮行下方，不推移页面内容） -->
         <div class="relative mb-6 flex gap-3">
           <button
-            class="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+            class="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-gray-900"
+            :disabled="projectStore.isOpenLoading"
             @click="showCreateDialog = true"
           >
             <AppIcon name="plus" :size="16" class="h-4 w-4" />
             新建项目
           </button>
           <button
-            class="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            class="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+            :disabled="projectStore.isOpenLoading"
             @click="handleOpenProject"
           >
             <AppIcon name="folder-open" :size="16" class="h-4 w-4" />
@@ -285,9 +320,11 @@ async function handleConfirmDeleteProject() {
             <div
               v-for="project in projectStore.recentProjects"
               :key="project.id"
-              class="group cursor-pointer rounded-lg border border-gray-200 bg-white p-4 transition-all hover:border-gray-300 hover:shadow-sm"
+              class="group rounded-lg border border-gray-200 bg-white p-4 transition-all"
+              :class="projectStore.isOpenLoading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:border-gray-300 hover:shadow-sm'"
               role="button"
               :aria-label="`打开项目 ${project.name}`"
+              :aria-disabled="projectStore.isOpenLoading"
               @click="handleSelectProject(project.id)"
             >
               <div class="flex items-start justify-between gap-3">
@@ -298,8 +335,9 @@ async function handleConfirmDeleteProject() {
                   </p>
                 </div>
                 <button
-                  class="rounded-md p-1.5 text-gray-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 group-hover:opacity-100"
+                  class="rounded-md p-1.5 text-gray-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 group-hover:opacity-100 disabled:pointer-events-none"
                   title="移除最近项目"
+                  :disabled="projectStore.isOpenLoading"
                   @click.stop="handleAskDeleteProject(project)"
                 >
                   <AppIcon name="trash" :size="16" class="h-4 w-4" />
@@ -325,7 +363,7 @@ async function handleConfirmDeleteProject() {
     <div
       v-if="showCreateDialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showCreateDialog = false"
+      @click.self="closeCreateDialog"
     >
       <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
         <h2 class="mb-4 text-lg font-semibold text-gray-900">新建项目</h2>
@@ -333,15 +371,23 @@ async function handleConfirmDeleteProject() {
           <label class="mb-1 block text-sm font-medium text-gray-700">项目名称</label>
           <input
             v-model="newProjectName"
-            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
             placeholder="输入小说项目名称"
+            :disabled="isCreating"
             @keyup.enter="handleCreateProject"
           />
         </div>
+        <!-- 创建超过 300 毫秒才出现；创建期间对话框不可关闭 -->
+        <ProjectLoadProgress
+          v-if="isCreating && isOpenDelayed && projectStore.loadProgress"
+          class="mb-4"
+          :progress="projectStore.loadProgress"
+        />
         <div class="flex justify-end gap-3">
           <button
-            class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-            @click="showCreateDialog = false"
+            class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+            :disabled="isCreating"
+            @click="closeCreateDialog"
           >
             取消
           </button>

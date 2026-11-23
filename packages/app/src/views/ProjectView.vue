@@ -21,6 +21,7 @@ import {
 } from '../composables/editor-session'
 import { setupDraftBackupLifecycle } from '../composables/draft-backup'
 import { setupCardBackupLifecycle } from '../composables/card-backup'
+import { useDelayedFlag } from '../composables/use-delayed-flag'
 import { flushTimelineBackup, setupTimelineBackupLifecycle } from '../composables/timeline-backup'
 import { clearChangeHighlights } from '../composables/useChangeHighlights'
 import { useCardChangeFeedback } from '../composables/useCardChangeFeedback'
@@ -52,6 +53,9 @@ import SettingsModal from '../components/settings/SettingsModal.vue'
 import RagIndexModal from '../components/rag/RagIndexModal.vue'
 import RelationModal from '../components/relation/RelationModal.vue'
 import TimelineModal from '../components/timeline/TimelineModal.vue'
+import ProjectLoadProgress from '../components/project/ProjectLoadProgress.vue'
+import ProjectPermissionGate from '../components/project/ProjectPermissionGate.vue'
+import WorkspaceLoadStrip from '../components/project/WorkspaceLoadStrip.vue'
 import Toast from '../components/ui/Toast.vue'
 import FirstTimeGuide from '../components/ui/FirstTimeGuide.vue'
 import type { Category } from '../constants/category'
@@ -60,6 +64,8 @@ import {
   loadWorkspaceState,
   saveWorkspaceState,
 } from '../utils/workspace-state'
+import { resolveProjectEntryOutcome } from '../utils/project-load-progress'
+import type { ProjectEntryOutcome } from '../utils/project-load-progress'
 import type { ChangedFileView, ForeshadowingStatusView, PlanStatusView, RhythmStatusView } from '@novai/core/services/types'
 import { pickDirectoryChildren } from '../utils/file-tree'
 import { panelCloseTarget, resolveWorkspacePanel } from '../utils/workspace-panel'
@@ -274,18 +280,94 @@ const activeOutlineName = computed(() => {
   return node ? node.name.replace(/\.md$/i, '') : null
 })
 
-onMounted(async () => {
-  // 如果没有当前项目，尝试恢复
-  if (!projectStore.currentProject) {
-    await projectStore.loadLastProjectSummary()
-    const restored = await projectStore.openRecentProject(projectId.value)
+// —— 进入流程（项目打开进度与移动端授权修复计划 §7）——
+
+/** 恢复结果分流：项目一致进工作区；未获授权留在小说页显示整页授权卡片；其它失败回首页 */
+const entryOutcome = ref<ProjectEntryOutcome | null>(null)
+
+/** 整页进度：恢复持续超过 300 毫秒才显示；点授权卡片重试后立刻显示 */
+const pageProgressSource = ref(false)
+const pageProgressImmediate = ref(false)
+const pageProgressDelayed = useDelayedFlag(pageProgressSource)
+const showPageProgress = computed(
+  () => pageProgressSource.value && (pageProgressImmediate.value || pageProgressDelayed.value),
+)
+
+/** 顶部细条：从「刚完成一次打开」进入时立即显示，其它情况延迟 300 毫秒 */
+const workspaceInitActive = ref(false)
+const workspaceInitImmediate = ref(false)
+const workspaceInitDelayed = useDelayedFlag(workspaceInitActive)
+const showWorkspaceStrip = computed(
+  () => workspaceInitActive.value && (workspaceInitImmediate.value || workspaceInitDelayed.value),
+)
+
+/** 尝试恢复本项目（最近项目记录），失败再尝试恢复上次项目 */
+async function restoreForEntry() {
+  await projectStore.loadLastProjectSummary()
+  pageProgressSource.value = true
+  try {
+    return await projectStore.openRecentProject(projectId.value)
       || await projectStore.restoreLastOpenedProject()
-    if (!restored || restored.id !== projectId.value) {
-      router.push('/')
+  } finally {
+    pageProgressSource.value = false
+  }
+}
+
+/** 恢复并按结果分流；「进入工作区」由调用方接续初始化 */
+async function enterProject() {
+  const restored = await restoreForEntry()
+  const outcome = resolveProjectEntryOutcome(restored, projectId.value, projectStore.notice)
+  entryOutcome.value = outcome
+  if (outcome === 'home') {
+    router.push('/')
+  }
+}
+
+/** 授权卡片「重新授权并打开」：在点击手势内重新恢复，立刻显示整页进度 */
+async function handleGateAuthorize() {
+  entryOutcome.value = null
+  pageProgressImmediate.value = true
+  try {
+    await enterProject()
+    if (projectStore.currentProject) {
+      await initWorkspace()
+    }
+  } finally {
+    pageProgressImmediate.value = false
+  }
+}
+
+function handleGateBack() {
+  router.push('/')
+}
+
+/** 工作区初始化：顶部细条期间执行，结束（含失败）必定收起 */
+async function initWorkspace() {
+  workspaceInitImmediate.value = projectStore.consumePendingWorkspaceInit()
+  workspaceInitActive.value = true
+  projectStore.setWorkspaceLoading(true)
+  try {
+    await runWorkspaceInit()
+  } finally {
+    workspaceInitActive.value = false
+    workspaceInitImmediate.value = false
+    projectStore.setWorkspaceLoading(false)
+  }
+}
+
+onMounted(async () => {
+  // 如果没有当前项目，尝试恢复：未获授权停在授权卡片，其它失败已回首页
+  if (!projectStore.currentProject) {
+    await enterProject()
+    if (!projectStore.currentProject) {
       return
     }
   }
 
+  await initWorkspace()
+})
+
+async function runWorkspaceInit() {
   // 初始化聊天会话并恢复上次工作区现场（恢复内部含会话首选/回退与文件恢复）
   await restoreWorkspaceState()
 
@@ -381,7 +463,7 @@ onMounted(async () => {
       showGuide.value = true
     }
   }
-})
+}
 
 onUnmounted(() => {
   if (mobileReopenTimer !== null) window.clearTimeout(mobileReopenTimer)
@@ -1541,6 +1623,9 @@ function handleGoToSettings() {
 
 <template>
   <div class="flex h-screen flex-col bg-white">
+    <!-- 工作区载入细条：占据文档流的最顶部整行（项目打开进度与移动端授权修复计划 §5） -->
+    <WorkspaceLoadStrip v-if="showWorkspaceStrip" />
+
     <div class="flex min-h-0 flex-1">
       <!-- 移动端分类面板遮罩：全屏铺满（与右侧内容面板遮罩一致）。工具栏 z-[46]
            高于遮罩 z-40，侧栏始终可见可点——展开态点其他分类触发「关旧开新」，
@@ -1915,6 +2000,19 @@ function handleGoToSettings() {
       v-if="isTimelineOpen"
       :project-id="projectId"
       @close="isTimelineOpen = false"
+    />
+
+    <!-- 进入小说页时的恢复进度与授权卡片：铺满屏幕的覆盖层，叠在工作区之上 -->
+    <ProjectLoadProgress
+      v-if="showPageProgress && projectStore.loadProgress"
+      variant="page"
+      :progress="projectStore.loadProgress"
+    />
+    <ProjectPermissionGate
+      v-if="entryOutcome === 'permission'"
+      :project-name="projectStore.notice?.projectName"
+      @authorize="handleGateAuthorize"
+      @back="handleGateBack"
     />
 
     <!-- Toast 提示：容器统一定位，多条并存纵向堆叠不遮挡（交互优化计划 §3） -->

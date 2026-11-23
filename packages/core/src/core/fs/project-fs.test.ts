@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { createDefaultConfig, DEFAULT_ELEMENT_SCHEMA } from '../project/defaults'
-import { loadProjectFromHandle, readElementSchema, readOutlinePrompt, readProjectConfig, repairProject, writeProjectConfig } from './project-fs'
+import {
+  createProject,
+  inspectProject,
+  loadProjectFromHandle,
+  readElementSchema,
+  readOutlinePrompt,
+  readProjectConfig,
+  repairProject,
+  STRUCTURE_STEP_COUNTS,
+  writeProjectConfig,
+} from './project-fs'
+import type { ProjectLoadProgress, ProjectLoadReporter, TreeNode } from '../../types/project'
 
 describe('project fs repair', () => {
   it('does not recreate the default outline template after it has been deleted or renamed', async () => {
@@ -328,6 +339,237 @@ describe('scenes→outlines 迁移（W3）', () => {
     expect((await readProjectConfig(rootHandle)).settings.activeOutlinePath).toBeNull()
   })
 })
+
+/* ---------- 打开类动作的进度上报 ---------- */
+
+describe('project fs load progress', () => {
+  it('各段步数是验收口径，不得随意增减', () => {
+    expect(STRUCTURE_STEP_COUNTS).toEqual({ inspect: 9, repair: 17, create: 18, load: 3 })
+  })
+
+  it('repairProject：结构阶段从 0 报到 20（修复 17 + 读取 3），之后才进入扫描', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+    writeProjectTextSync(rootHandle, 'chapters/chapter-001.md', '# 第一章')
+    writeProjectTextSync(rootHandle, 'elements/characters/主角.md', '# 主角')
+
+    const { events, result } = await collectProgress((onProgress) => repairProject(rootHandle, onProgress))
+
+    const structure = events.filter((event) => event.phase === 'structure')
+    // 起点 + 20 步 = 21 次；每一步的总量都是 20
+    expect(structure.map((event) => event.current)).toEqual(countUp(0, 20))
+    expect(new Set(structure.map((event) => event.total))).toEqual(new Set([20]))
+    // 起点不带路径；之后每一步带刚处理完的路径
+    expect(structure[0].currentPath).toBeUndefined()
+    expect(structure.slice(1).map((event) => event.currentPath)).toEqual([
+      'chapters',
+      'elements',
+      'elements/characters',
+      'elements/locations',
+      'elements/entities',
+      'elements/plots',
+      'elements/worldbuilding',
+      'prompts',
+      'prompts/outlines',
+      'plans',
+      '.novel',
+      '.novel/logs',
+      'novel.config.json',
+      '.novel/manifest.json',
+      'prompts/system.md',
+      'prompts/NovAI.md',
+      'prompts/ELEMENT.md',
+      'prompts/scenes',
+      'novel.config.json',
+      '.novel/manifest.json',
+    ])
+
+    // 结构阶段全部报完才开始扫描，两段不交错
+    const scan = events.filter((event) => event.phase === 'scan')
+    expect(events).toHaveLength(structure.length + scan.length)
+    expect(events[structure.length].phase).toBe('scan')
+
+    // 扫描：每发现一个条目上报一次，计数从第一个条目起逐条加一
+    expect(scan[0]).toMatchObject(
+      scan[0].files === 1 ? { files: 1, directories: 0 } : { files: 0, directories: 1 },
+    )
+    expect(scan.every((event, index) => index === 0 || isOneMoreEntry(event, scan[index - 1]))).toBe(true)
+    expect(scan.every((event) => typeof event.currentPath === 'string')).toBe(true)
+    // 最终计数与文件树的节点数一致
+    expect(scan.at(-1)).toMatchObject(countTreeNodes(result.tree))
+  })
+
+  it('扫描：发现文件夹时切到该文件夹，发现文件时是它所在的目录', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+    writeProjectTextSync(rootHandle, 'prompts/outlines/outline-001.md', '# 大纲')
+
+    const { events } = await collectProgress((onProgress) => loadProjectFromHandle(rootHandle, onProgress))
+
+    expect(events.filter((event) => event.phase === 'scan').map((event) => ({
+      files: event.files,
+      directories: event.directories,
+      currentPath: event.currentPath,
+    }))).toEqual([
+      { files: 1, directories: 0, currentPath: '' },
+      { files: 1, directories: 1, currentPath: '.novel' },
+      { files: 2, directories: 1, currentPath: '.novel' },
+      { files: 2, directories: 2, currentPath: 'prompts' },
+      { files: 3, directories: 2, currentPath: 'prompts' },
+      { files: 3, directories: 3, currentPath: 'prompts/outlines' },
+      { files: 4, directories: 3, currentPath: 'prompts/outlines' },
+    ])
+  })
+
+  it('loadProjectFromHandle 单独调用：读取 3 步从 0 报到 3', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+
+    const { events } = await collectProgress((onProgress) => loadProjectFromHandle(rootHandle, onProgress))
+
+    const structure = events.filter((event) => event.phase === 'structure')
+    expect(structure.map((event) => event.current)).toEqual([0, 1, 2, 3])
+    expect(structure.every((event) => event.total === 3)).toBe(true)
+    expect(structure.slice(1).map((event) => event.currentPath)).toEqual([
+      'prompts/scenes',
+      'novel.config.json',
+      '.novel/manifest.json',
+    ])
+  })
+
+  it('loadProjectFromHandle 接在修复段之后：接着 17 报到 20，不重复报起点', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+
+    const { events } = await collectProgress((onProgress) =>
+      loadProjectFromHandle(rootHandle, onProgress, { offset: 17, total: 20 }))
+
+    const structure = events.filter((event) => event.phase === 'structure')
+    expect(structure.map((event) => event.current)).toEqual([18, 19, 20])
+    expect(structure.every((event) => event.total === 20)).toBe(true)
+  })
+
+  it('inspectProject：结构体检 9 步从 0 报到 9', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+
+    const { events } = await collectProgress((onProgress) => inspectProject(rootHandle, onProgress))
+
+    // 最小项目缺章节等目录：体检照常走完 9 步，不因发现问题而提前结束
+    expect(events.map((event) => event.current)).toEqual(countUp(0, 9))
+    expect(events.every((event) => event.phase === 'structure' && event.total === 9)).toBe(true)
+    expect(events.slice(1).map((event) => event.currentPath)).toEqual([
+      'novel.config.json',
+      'novel.config.json',
+      '.novel/manifest.json',
+      '.novel/manifest.json',
+      'prompts/system.md',
+      'prompts/outlines',
+      'chapters',
+      'elements',
+      '.novel',
+    ])
+  })
+
+  it('inspectProject 接在多段动作开头：按传入的总量上报，下一步报 1', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+
+    const { events } = await collectProgress((onProgress) =>
+      inspectProject(rootHandle, onProgress, { offset: 0, total: 29 }))
+
+    expect(events.map((event) => event.current)).toEqual(countUp(0, 9))
+    expect(events.every((event) => event.total === 29)).toBe(true)
+  })
+
+  it('inspectProject 接在别的段之后：从 9 接着报到 18，不重复报起点', async () => {
+    const rootHandle = createMemoryDirectory('novel')
+    seedMinimalProject(rootHandle)
+
+    const { events } = await collectProgress((onProgress) =>
+      inspectProject(rootHandle, onProgress, { offset: 9, total: 29 }))
+
+    expect(events.map((event) => event.current)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18])
+    expect(events.every((event) => event.total === 29)).toBe(true)
+  })
+
+  it('createProject：先报等待授权，结构阶段从 0 报到 21（创建 18 + 读取 3）', async () => {
+    const parentHandle = createMemoryDirectory('books')
+    vi.stubGlobal('window', { showDirectoryPicker: vi.fn(async () => parentHandle) })
+
+    try {
+      const { events, result } = await collectProgress((onProgress) => createProject('我的小说', onProgress))
+
+      expect(events[0]).toEqual({ phase: 'permission' })
+      const structure = events.filter((event) => event.phase === 'structure')
+      expect(structure.map((event) => event.current)).toEqual(countUp(0, 21))
+      expect(new Set(structure.map((event) => event.total))).toEqual(new Set([21]))
+      expect(structure.slice(13, 19).map((event) => event.currentPath)).toEqual([
+        'novel.config.json',
+        '.novel/manifest.json',
+        'prompts/system.md',
+        'prompts/outlines/outline-001.md',
+        'prompts/NovAI.md',
+        'prompts/ELEMENT.md',
+      ])
+      expect(events.at(-1)?.phase).toBe('scan')
+      expect(events.at(-1)).toMatchObject(countTreeNodes(result.tree))
+
+      expect(result.name).toBe('我的小说')
+      expect([...parentHandle.__entry.entries.keys()]).toEqual(['我的小说'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+function seedMinimalProject(rootHandle: MemoryDirectoryHandle) {
+  writeProjectTextSync(rootHandle, 'novel.config.json', JSON.stringify({
+    project: { name: 'Test Novel', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+  }))
+  writeProjectTextSync(rootHandle, '.novel/manifest.json', JSON.stringify({
+    projectId: 'test-project',
+    version: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastOpenedAt: '2026-01-01T00:00:00.000Z',
+  }))
+  writeProjectTextSync(rootHandle, 'prompts/system.md', '# System Prompt')
+}
+
+/** 执行动作并收集全部进度事件。 */
+async function collectProgress<T>(run: (onProgress: ProjectLoadReporter) => Promise<T>) {
+  const events: ProjectLoadProgress[] = []
+  const result = await run((progress) => events.push(progress))
+  return { events, result }
+}
+
+/** `[from, from + 1, …, to]`。 */
+function countUp(from: number, to: number) {
+  return Array.from({ length: to - from + 1 }, (_, index) => from + index)
+}
+
+/** 相比上一条事件，恰好多发现了一个条目（文件或文件夹二选一）。 */
+function isOneMoreEntry(event: ProjectLoadProgress, previous: ProjectLoadProgress) {
+  const fileDelta = (event.files ?? 0) - (previous.files ?? 0)
+  const directoryDelta = (event.directories ?? 0) - (previous.directories ?? 0)
+  return (fileDelta === 1 && directoryDelta === 0) || (fileDelta === 0 && directoryDelta === 1)
+}
+
+function countTreeNodes(nodes: TreeNode[]): { files: number; directories: number } {
+  return nodes.reduce(
+    (counts, node) => {
+      const own = node.kind === 'directory'
+        ? { files: 0, directories: 1 }
+        : { files: 1, directories: 0 }
+      const nested = node.children ? countTreeNodes(node.children) : { files: 0, directories: 0 }
+      return {
+        files: counts.files + own.files + nested.files,
+        directories: counts.directories + own.directories + nested.directories,
+      }
+    },
+    { files: 0, directories: 0 },
+  )
+}
 
 type MemoryFileEntry = {
   kind: 'file'
