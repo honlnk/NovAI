@@ -584,6 +584,11 @@ export async function enqueueMessage(input: {
   const hadNoUserMessage = !session.messages.some((m) => m.role === 'user')
   const titleBeforeRun = session.title
 
+  // 呈现归属在发送那一刻定（dsh 同款）：driver 在跑 → 真排队，排队栏要立刻显示它；
+  // 空闲 → 唤醒后首批即被取走开跑，不算排队。装配 turn 输入要读文件，唤醒有一段
+  // 窗口，空闲发送在这段窗口里不得以「排队」形态广播（排队栏会闪一下再跳成气泡）
+  const driverActive = isChatDriverActive(session.sessionId)
+
   enqueueChatMessage(session, input.mode === 'steer' ? 'next-step' : 'next-turn', {
     text: input.text,
     quote: input.quote,
@@ -594,7 +599,9 @@ export async function enqueueMessage(input: {
   })
   // 耐久入队先于唤醒（刷新后队列还在，不自动消费）
   await enqueueSessionSave({ project, session })
-  broadcastQueueUpdated(session)
+  if (driverActive) {
+    broadcastQueueUpdated(session)
+  }
 
   void wakeSessionDriver({
     project,
@@ -606,6 +613,11 @@ export async function enqueueMessage(input: {
       // 自动标题取用户原草稿（斜杠命令显示命令名+参数，不暴露内部 prompt 全文）
       firstUserText: input.displayLabel ?? input.text,
     },
+  }).catch((error) => {
+    // 唤醒在 driver-start 之前失败（装配 turn 输入读文件出错）：消息已耐久入队，
+    // 补发排队快照让它留在排队栏可见，而不是静默消失
+    broadcastQueueUpdated(session)
+    console.error('唤醒 driver 失败，消息保留在队列中', error)
   })
   return { sessionId: session.sessionId }
 }
