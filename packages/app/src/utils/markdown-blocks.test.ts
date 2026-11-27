@@ -139,3 +139,48 @@ describe('parseMarkdownBlocks frontmatter 识别', () => {
     expect(blocks[1].html).toContain('<h1>陈砚</h1>')
   })
 })
+
+/**
+ * 顶层代码围栏标记（代码块一键复制）：恰为一个 fence token 的顶层组带 kind/code/lang；
+ * html 仍是 markdown-it 产出的 pre/code，复制栏由渲染方加在 html 之外。
+ */
+describe('parseMarkdownBlocks 代码围栏标记', () => {
+  it('顶层围栏：kind/code/lang 齐全，lang 取信息串首词，html 照常转义', () => {
+    const blocks = parseMarkdownBlocks('说明\n\n```ts title="a.ts"\nconst a = 1\n& <b>\n```\n\n后文')
+    expect(blocks).toHaveLength(3)
+    expect(blocks[1]).toMatchObject({ key: 2, kind: 'code', code: 'const a = 1\n& <b>\n', lang: 'ts' })
+    expect(blocks[1].html).toContain('<pre><code class="language-ts">const a = 1')
+    expect(blocks[1].html).toContain('&amp; &lt;b&gt;')
+    // 其余块不带标记
+    expect(blocks[0].kind).toBeUndefined()
+    expect(blocks[2].kind).toBeUndefined()
+  })
+
+  it('没写语言：lang 缺省；空围栏 code 为空串', () => {
+    const blocks = parseMarkdownBlocks('```\nplain\n```\n\n```js\n```')
+    expect(blocks[0]).toMatchObject({ kind: 'code', code: 'plain\n' })
+    expect(blocks[0].lang).toBeUndefined()
+    expect(blocks[1]).toMatchObject({ kind: 'code', code: '', lang: 'js' })
+  })
+
+  it('流式未闭合围栏同样标记（复制到当时为止的内容），闭合后 key 不变', () => {
+    const open = parseMarkdownBlocks('先说结论\n\n```yaml\nname: x')
+    const closed = parseMarkdownBlocks('先说结论\n\n```yaml\nname: x\nage: 3\n```\n\n后文')
+    expect(open[1]).toMatchObject({ kind: 'code', code: 'name: x', lang: 'yaml' })
+    expect(closed[1].key).toBe(open[1].key)
+    expect(closed[1]).toMatchObject({ kind: 'code', code: 'name: x\nage: 3\n' })
+  })
+
+  it('嵌在列表里的围栏不单独标记（随列表整组渲染，没有复制栏）', () => {
+    const blocks = parseMarkdownBlocks('- 项一\n\n  ```js\n  code\n  ```\n')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].html).toContain('<pre>')
+    expect(blocks[0].kind).toBeUndefined()
+  })
+
+  it('行内 code 与缩进式代码块不受影响', () => {
+    expect(parseMarkdownBlocks('行内 `code`')[0].kind).toBeUndefined()
+    // 4 空格缩进的是 code_block token，不是围栏
+    expect(parseMarkdownBlocks('    indented')[0].kind).toBeUndefined()
+  })
+})

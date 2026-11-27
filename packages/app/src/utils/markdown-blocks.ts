@@ -9,13 +9,21 @@ import { splitFrontmatter } from './frontmatter-display'
 export type MarkdownBlock = {
   key: number
   html: string
-  /** frontmatter 特殊块：html 恒为空串，渲染方以卡片呈现 raw（文件预览卡片化计划 Step 1） */
-  kind?: 'frontmatter'
+  /**
+   * frontmatter 特殊块：html 恒为空串，渲染方以卡片呈现 raw（文件预览卡片化计划 Step 1）；
+   * code：顶层代码围栏，html 照常是 pre/code，渲染方额外加复制栏
+   */
+  kind?: 'frontmatter' | 'code'
   /** kind === 'frontmatter' 时的围栏全文（含两行分隔线） */
   raw?: string
+  /** kind === 'code' 时的围栏内原文（含结尾换行；流式中未闭合的围栏没有），复制用 */
+  code?: string
+  /** kind === 'code' 时的语言名（围栏信息串首词）；没写语言则缺省 */
+  lang?: string
 }
 
 type ParsedTokens = ReturnType<typeof sharedMarkdown.parse>
+type RenderEnv = Parameters<typeof sharedMarkdown.renderer.render>[2]
 
 /**
  * 按顶层块边界切块渲染（借鉴 dsh 的冻结前缀防线，Vue 版）。
@@ -57,19 +65,33 @@ export function parseMarkdownBlocks(
         if (start !== null && start <= closeLine) {
           continue
         }
-        blocks.push({
-          key: start ?? -(index + 1),
-          html: sharedMarkdown.renderer.render(group, sharedMarkdown.options, env),
-        })
+        blocks.push(renderBlock(group, index, env))
       }
       return blocks
     }
   }
 
-  return groups.map((group, index) => ({
+  return groups.map((group, index) => renderBlock(group, index, env))
+}
+
+/** 一个顶层 token 组 → 渲染结果（key 取组起始行号；顶层代码围栏附带原文与语言） */
+function renderBlock(group: ParsedTokens, index: number, env: RenderEnv): MarkdownBlock {
+  const block: MarkdownBlock = {
     key: blockStartLine(group) ?? -(index + 1),
     html: sharedMarkdown.renderer.render(group, sharedMarkdown.options, env),
-  }))
+  }
+  // 顶层代码围栏自成一个 token 组：标为代码块，渲染方据此加复制栏（嵌在列表/引用里的围栏不算）
+  const fence = group.length === 1 ? group[0] : undefined
+  if (fence?.type !== 'fence') {
+    return block
+  }
+  const lang = fence.info.trim().split(/\s+/)[0]
+  return {
+    ...block,
+    kind: 'code',
+    code: fence.content,
+    ...(lang ? { lang } : {}),
+  }
 }
 
 /** 深度回到 0 的连续 token 段为一个顶层块 */

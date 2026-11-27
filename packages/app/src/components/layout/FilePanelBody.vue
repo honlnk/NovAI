@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { FileContentView } from '@novai/core/services/types'
 import { countContentChars } from '@novai/core'
+import CodeBlock from '../ui/CodeBlock.vue'
 import FrontmatterCard from '../ui/FrontmatterCard.vue'
 import MarkdownRenderer from '../ui/MarkdownRenderer.vue'
 import DetailLayout from './DetailLayout.vue'
@@ -911,6 +912,17 @@ function handlePreviewDblClick(event: MouseEvent) {
                     }"
                   >
                     <FrontmatterCard :raw="block.raw ?? ''" :path="file.path" />
+                  </div>
+                  <!-- 代码围栏：带复制栏的代码块（高亮类同样挂包装层） -->
+                  <div
+                    v-else-if="block.kind === 'code'"
+                    class="markdown-block"
+                    :class="{
+                      'change-hl-green': mdGreenSet.has(index),
+                      'change-hl-target': mdGreenSet.size === 0 && mdTargetIndex === index,
+                    }"
+                  >
+                    <CodeBlock :html="block.html" :code="block.code ?? ''" :lang="block.lang" />
                   </div>
                   <div
                     v-else

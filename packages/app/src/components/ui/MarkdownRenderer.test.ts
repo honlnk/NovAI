@@ -70,3 +70,41 @@ describe('MarkdownRenderer frontmatter 透传', () => {
     wrapper.unmount()
   })
 })
+
+/**
+ * 顶层代码围栏走 CodeBlock（带复制栏，代码块一键复制）；其余块仍是 v-html。
+ * 流式追加时围栏块的 key 稳定 → CodeBlock 实例复用，复制按钮不重建。
+ */
+describe('MarkdownRenderer 代码围栏', () => {
+  it('顶层代码围栏渲染为带复制栏的代码块，复制栏只出现在代码块里', () => {
+    const wrapper = mount(MarkdownRenderer, {
+      props: { content: '说明\n\n```yaml\nname: 陈砚\n```\n\n后文' },
+    })
+    const block = wrapper.find('.md-code-block')
+    expect(block.exists()).toBe(true)
+    expect(block.find('span').text()).toBe('yaml')
+    expect(block.find('pre code').classes()).toContain('language-yaml')
+    expect(block.find('pre code').element.textContent).toBe('name: 陈砚\n')
+    expect(block.find('button').text()).toBe('复制')
+    expect(wrapper.findAll('button')).toHaveLength(1)
+    expect(wrapper.findAll('.markdown-block').map((node) => node.text())).toEqual(['说明', '后文'])
+    wrapper.unmount()
+  })
+
+  it('流式追加：围栏增长、闭合时复制按钮不重建（同一 DOM 节点）', async () => {
+    const wrapper = mount(MarkdownRenderer, {
+      props: { content: '说明\n\n```yaml\nname: 陈砚', streaming: true },
+    })
+    const button = wrapper.find('.md-code-block button')
+    expect(button.exists()).toBe(true)
+    const element = button.element
+
+    await wrapper.setProps({
+      content: '说明\n\n```yaml\nname: 陈砚\nage: 26\n```\n\n后文',
+      streaming: false,
+    })
+    expect(wrapper.find('.md-code-block button').element).toBe(element)
+    expect(wrapper.find('.md-code-block pre code').element.textContent).toBe('name: 陈砚\nage: 26\n')
+    wrapper.unmount()
+  })
+})

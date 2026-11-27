@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import CodeBlock from './CodeBlock.vue'
 import FrontmatterCard from './FrontmatterCard.vue'
 import { parseMarkdownBlocks } from '../../utils/markdown-blocks'
 
@@ -32,6 +33,12 @@ const blocks = computed(() =>
         v-if="block.kind === 'frontmatter'"
         :raw="block.raw ?? ''"
         :path="path"
+      />
+      <CodeBlock
+        v-else-if="block.kind === 'code'"
+        :html="block.html"
+        :code="block.code ?? ''"
+        :lang="block.lang"
       />
       <div v-else class="markdown-block" v-html="block.html" />
     </template>
