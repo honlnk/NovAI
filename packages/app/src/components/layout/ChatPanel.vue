@@ -22,6 +22,7 @@ import {
   type TextRefLexicon,
 } from '../chat/text-ref'
 import GhostTextOverlay from '../chat/GhostTextOverlay.vue'
+import { fitComposerHeight } from '../chat/composer-height'
 import ToolCallRow from '../chat/ToolCallRow.vue'
 import TurnProcessGroup from '../chat/TurnProcessGroup.vue'
 import WriteActionTakeover from '../chat/WriteActionTakeover.vue'
@@ -546,12 +547,10 @@ function handleKeydown(event: KeyboardEvent) {
   // Shift+Enter 换行：默认行为即可（Lexical insertParagraph），无需处理
 }
 
-/** 编辑区自适应高度：与旧 textarea 同语义（auto → scrollHeight，上限 200px） */
+/** 编辑区自适应高度：与旧 textarea 同语义（auto → scrollHeight 钳上限），量完保住滚动位置 */
 function autoResizeEditor() {
   const host = editorHostRef.value
-  if (!host) return
-  host.style.height = 'auto'
-  host.style.height = `${Math.min(host.scrollHeight, 200)}px`
+  if (host) fitComposerHeight(host)
 }
 
 /**
