@@ -1067,9 +1067,12 @@ defineExpose({ prefillDraft })
               />
             </div>
             <!-- 工具行：左侧权限档位，右侧发送（模式感知文案）/ 停止按钮（独立位置，仅运行中显示）。
-                 思考强度入口紧贴发送按钮左侧（各家 agent 产品的习惯位），弹层右锚向上弹出 -->
-            <div class="mt-1 flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2">
+                 思考强度入口紧贴发送按钮左侧（各家 agent 产品的习惯位），弹层右锚向上弹出。
+                 行可换行（移动适配）：左组 mr-auto 吃掉本行余量，其余动作靠右；宽度不够时放不下的动作换到
+                 下一行右对齐——按钮不压窄（标签是 CJK，压窄会一字一行），也不伸出卡片（工具行超出视口时
+                 手机浏览器会把整页缩小以塞进屏幕）。思考强度与发送绑成一组不拆开，保持「紧贴发送按钮左侧」 -->
+            <div class="mt-1 flex flex-wrap items-center justify-end gap-2">
+              <div class="mr-auto flex items-center gap-2">
                 <PermissionPresetPicker
                   :preset="currentPermissionPreset"
                   @select="handlePermissionPresetSelect"
@@ -1102,36 +1105,36 @@ defineExpose({ prefillDraft })
                   </button>
                 </Transition>
               </div>
+              <button
+                v-if="isStopping"
+                class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
+                title="正在停止…"
+                disabled
+              >
+                <AppIcon name="loader-circle" :size="20" class="h-5 w-5 animate-spin" />
+              </button>
+              <button
+                v-else-if="chatStore.isRunning"
+                class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                title="停止运行"
+                @click="handleStop"
+              >
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+                </svg>
+              </button>
+              <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示；
+                   等待提问期间输入区整体被提问接管，本就不可见 -->
+              <button
+                v-if="chatStore.isRunning && !chatStore.pendingQuestion"
+                class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
+                :disabled="!draft.trim()"
+                title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
+                @click="handleSend('steer')"
+              >
+                插话
+              </button>
               <div class="flex items-center gap-2">
-                <button
-                  v-if="isStopping"
-                  class="shrink-0 rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-400"
-                  title="正在停止…"
-                  disabled
-                >
-                  <AppIcon name="loader-circle" :size="20" class="h-5 w-5 animate-spin" />
-                </button>
-                <button
-                  v-else-if="chatStore.isRunning"
-                  class="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                  title="停止运行"
-                  @click="handleStop"
-                >
-                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
-                  </svg>
-                </button>
-                <!-- 插话鼠标入口（与 Ctrl/Cmd+Enter 同一条 handleSend('steer') 链路）：运行中才显示；
-                     等待提问期间输入区整体被提问接管，本就不可见 -->
-                <button
-                  v-if="chatStore.isRunning && !chatStore.pendingQuestion"
-                  class="shrink-0 cursor-pointer rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
-                  :disabled="!draft.trim()"
-                  title="插话：下一个工具边界生效，不打断当前任务（等同 Ctrl/Cmd+Enter）"
-                  @click="handleSend('steer')"
-                >
-                  插话
-                </button>
                 <ReasoningEffortPicker
                   :effort="currentReasoningEffort"
                   :options="reasoningEffortOptionList"

@@ -33,21 +33,25 @@ const rows = computed<DiffRow[]>(() => {
 </script>
 
 <template>
-  <div class="overflow-x-auto rounded-md border border-gray-100 bg-gray-50 font-mono text-xs leading-5">
-    <div
-      v-for="(row, index) in rows"
-      :key="index"
-      :class="[
-        'px-2 whitespace-pre',
-        row.kind === 'added' ? 'bg-green-50 text-green-800'
-          : row.kind === 'removed' ? 'bg-red-50 text-red-800'
-            : 'text-gray-500',
-      ]"
-    >
-      <span
-        v-if="row.kind !== 'context'"
-        class="mr-1 select-none text-gray-400"
-      >{{ row.kind === 'added' ? '+' : '−' }}</span><span v-else class="mr-1 select-none">&nbsp;</span>{{ row.text }}
+  <div class="overflow-x-auto rounded-md border border-gray-100 font-mono text-xs leading-5">
+    <!-- 内层撑到最宽一行（且不窄于滚动容器）：行背景铺满整个可滚动宽度。
+         少了这一层，行宽只等于容器可见宽度，窄屏横向滚动后红绿背景只盖住左侧一段 -->
+    <div class="w-max min-w-full bg-gray-50">
+      <div
+        v-for="(row, index) in rows"
+        :key="index"
+        :class="[
+          'px-2 whitespace-pre',
+          row.kind === 'added' ? 'bg-green-50 text-green-800'
+            : row.kind === 'removed' ? 'bg-red-50 text-red-800'
+              : 'text-gray-500',
+        ]"
+      >
+        <span
+          v-if="row.kind !== 'context'"
+          class="mr-1 select-none text-gray-400"
+        >{{ row.kind === 'added' ? '+' : '−' }}</span><span v-else class="mr-1 select-none">&nbsp;</span>{{ row.text }}
+      </div>
     </div>
   </div>
 </template>
